@@ -1,0 +1,2 @@
+# Local dev stack data dir created by `make dev` (intentd socket + SQLite DB)
+.dev/
