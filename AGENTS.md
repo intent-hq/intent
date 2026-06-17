@@ -66,6 +66,13 @@ Breadcrumb edits are docs-only and follow the same conventional-commit / PR conv
 above (use a `docs:` commit). They typically ship in the monorepo PR that bumps the
 submodule, so the recorded HEAD matches the gitlink.
 
+## Terminology
+
+Do **not** use "wave" / "Wave N" terminology in committed documentation. It is
+coordinator-internal vocabulary specific to a single agent's delegation flow and must not
+leak into the repo. Describe progress as capabilities/milestones instead (e.g. "Repo & CI
+bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
+
 ## Local Setup
 
 ```bash
