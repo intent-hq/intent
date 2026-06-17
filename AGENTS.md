@@ -10,7 +10,8 @@ submodules:
 - `packages/intentd` → [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) — Rust backend daemon
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
-The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`.
+The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`; see
+`docs/README.md` for how the porting documents relate.
 
 ## Commit & PR Workflow
 
@@ -43,6 +44,27 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 - **Rust**: keep `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo build`
   green in `packages/intentd` before opening a PR. The `Makefile` exposes `make check` and
   `make test` for this.
+
+## Breadcrumbs (initial porting)
+
+For the duration of the **`00_initial_porting`** effort — the initial port of Intent's
+backend to the Rust daemon (`intentd`) — keep the breadcrumb trail at
+`docs/00_initial_porting/BREADCRUMBS.md` current.
+
+- **When**: whenever you complete a meaningful unit of porting work (a crate, a method or
+  group of methods, a transport/persistence change, a submodule bump).
+- **What**: append a dated entry to the changelog, newest first. Keep it concise — what
+  changed, which crates/methods were touched, and the resulting `packages/intentd` HEAD.
+  Also update the "Current submodule HEAD" and "Implemented surface" sections when they
+  change, and move items out of "Deferred / planned" as they ship.
+- **Accuracy**: never overstate. Only list surface that is actually implemented; everything
+  else stays under deferred/planned.
+- **Scope**: this policy applies only until the initial Rust-BE port is complete; it does
+  not extend to later efforts.
+
+Breadcrumb edits are docs-only and follow the same conventional-commit / PR conventions
+above (use a `docs:` commit). They typically ship in the monorepo PR that bumps the
+submodule, so the recorded HEAD matches the gitlink.
 
 ## Local Setup
 
