@@ -10,26 +10,31 @@ Port Intent's backend to a standalone, headless Rust daemon (`intentd`) speaking
 
 ## Current submodule HEAD
 
-- `packages/intentd` @ `c989aeb` (after the Milestone 1 — core domain CRUD milestone)
+- `packages/intentd` @ `3238a73` (after the Milestone 2 — Events milestone)
 
 ## Implemented surface so far
 
-- **JSON-RPC methods (34):** full CRUD across four domains over UDS, backed by SQLite —
+- **JSON-RPC methods (43 request methods + 1 server-initiated notification):** full CRUD across four domains plus the event surface over UDS, backed by SQLite —
   - `workspace.*` (9): `list`, `get`, `create`, `update`, `archive`, `unarchive`, `delete`, `markSeen`, `dismissAttention`.
   - `note.*` (12): `list`, `get`, `create`, `update`, `setContent`, `add`, `edit`, `editLines`, `updateMetadata`, `listTasks`, `readAsset`, `delete`.
   - `task.*` (8): `markAsTask`, `update`, `updateStatus`, `updateNoteStatus`, `getMyTask`, `createPrerequisite`, `assignAgent`, `convertBlocks`.
   - `comment.*` (5): `add`, `list`, `getThread`, `respond`, `delete`.
+  - `event.*` (7): `recentFiles`, `agentActivity`, `workspaceSummary`, `directoryChanges`, `query` (query/aggregation), plus the deprecated singular `subscribe`/`unsubscribe` aliases.
+  - `events.*` (2 + notification): the `events.subscribe`/`events.unsubscribe` subscription fast-path and the server-initiated `events.event` push notification.
+- **Events:** append-only `Event` domain + event-type taxonomy (`intent-core`); durable append-only event log via the `0003_events` migration + `event_repo` (`intent-store`); in-process `EventBus` + filter engine with `subscriber_count` observability (`intent-services`); bidirectional UDS transport that pushes `events.event` and serves the `events.subscribe`/`unsubscribe` fast-path (`intent-transport`); a notify-based file watcher emitting debounced `file:changed` events (`intent-services`); and the M1 workspace/note/task/comment CRUD mutations now emit change events onto the bus.
 - **CLI:** `intentd serve`, `intentd call`, `intentd status`, `intentd doctor` (doctor now verifies migrations are applied).
-- **Transport:** JSON-RPC 2.0 router over UDS (newline-delimited, mode `0600`, stale-socket cleanup, SIGINT/SIGTERM handling), error codes `-32700`/`-32600`/`-32601`/`-32602`/`-32603`. UDS listener + control client are `cfg`-gated so non-Unix targets (Windows) build cleanly.
-- **Persistence:** SQLite via `sqlx` with embedded migrations (WAL, `foreign_keys`, `busy_timeout`), incl. the `0002_comments` migration for the comment/thread model.
-- **Tests:** end-to-end UDS lifecycle integration test plus camelCase wire-parity fixtures.
+- **Transport:** JSON-RPC 2.0 router over UDS (newline-delimited, mode `0600`, stale-socket cleanup, SIGINT/SIGTERM handling), error codes `-32700`/`-32600`/`-32601`/`-32602`/`-32603`, plus server-initiated `events.event` notifications. UDS listener + control client are `cfg`-gated so non-Unix targets (Windows) build cleanly.
+- **Persistence:** SQLite via `sqlx` with embedded migrations (WAL, `foreign_keys`, `busy_timeout`), incl. the `0002_comments` and `0003_events` migrations.
+- **Tests:** end-to-end UDS lifecycle + events integration tests plus camelCase wire-parity fixtures.
 
 ## Deferred / planned (NOT yet built)
 
-- The remaining ~72 PROTOCOL methods (106 total in the contract; 34 implemented).
+- The remaining PROTOCOL methods (106 total in the contract; ~43 implemented after Milestone 2).
 - TCP / TLS / WSS transports, mDNS discovery, bearer-token auth.
-- ACP / provider spawning, GitHub (octocrab), context engine, PTY, search, event bus.
+- ACP / provider spawning, GitHub (octocrab), context engine, PTY, search.
 - Transport panic-safety via `catch_unwind` → `-32603` (currently relies on per-connection `tokio::spawn` isolation).
+- Event surface follow-ups deferred (verified parity-safe): `task:ready-tasks-changed` emission, saga-driven `workspace:*` events, and the `Event.metadata` field.
+- `file:*` distinct-type modelling deferred to Milestone 8 (the watcher currently emits `file:changed`).
 - The entire frontend (Tauri/Svelte).
 
 ## Milestone history
@@ -62,10 +67,13 @@ This milestone: added `docs/00_initial_porting/BREADCRUMBS.md`, `docs/README.md`
 
 Implemented full create/read/update/delete across the four core domains over UDS: `workspace.*` (9), `note.*` (12), `task.*` (8), `comment.*` (5) — 34 JSON-RPC methods total. Added the `0002_comments` SQLite migration (comment/thread model + repo), end-to-end UDS lifecycle integration test, camelCase wire-parity fixtures, a `doctor` migration-applied check, and `cfg`-gating of the UDS listener + control client so Windows (`x86_64-pc-windows-msvc`) builds cleanly. Spans `intent-core`, `intent-services` (incl. `note_ops`), `intent-store` (incl. `comment_repo`), `intent-transport`, and the `intentd` CLI. CI green on all three build targets (incl. Windows). Submodule HEAD `c989aeb`.
 
+### Milestone 2 — Events
+
+Ported Intent's event system to `intentd`. Added an append-only `Event` domain + event-type taxonomy (`intent-core`) and a durable event log via the `0003_events` migration + `event_repo` (`intent-store`). Built an in-process `EventBus` + filter engine with `subscriber_count` observability (`intent-services`), and extended the UDS transport to be bidirectional — server-initiated `events.event` notifications plus an `events.subscribe`/`events.unsubscribe` subscription fast-path (`intent-transport`). Added the seven `event.*` methods (`recentFiles`, `agentActivity`, `workspaceSummary`, `directoryChanges`, `query`, plus the deprecated singular `subscribe`/`unsubscribe` aliases), a notify-based file watcher emitting debounced `file:changed` events, and wired the M1 CRUD mutations to emit change events onto the bus. Deferred parity-safe: `task:ready-tasks-changed`, saga-driven `workspace:*` events, and `Event.metadata`; distinct `file:*` event types deferred to Milestone 8. CI green on all three build targets (incl. Windows). Submodule HEAD `3238a73`.
+
 ## Next steps / open questions
 
-- Begin expanding the JSON-RPC method catalog beyond the read-only slice (write paths for workspaces/notes), driven by PROTOCOL.md.
-- Decide when to introduce the event bus + `events.subscribe`/`events.event` (needed by most live-update methods).
+- Continue expanding the JSON-RPC method catalog beyond the core CRUD + event surface, driven by PROTOCOL.md.
 - Harden transport panic-safety (`catch_unwind` → `-32603`) before the full method catalog.
 - Revisit transports (TCP/TLS/WSS) + auth + mDNS once UDS reads/writes are solid.
 
@@ -73,6 +81,7 @@ Implemented full create/read/update/delete across the four core domains over UDS
 
 Append a dated entry (newest first) whenever a meaningful unit of porting work lands. Keep each entry concise: what changed, which crates/methods, and the resulting submodule HEAD.
 
+- **2026-06-18** — Milestone 2 — Events: append-only `Event` domain + `0003_events` log migration/repo; in-process `EventBus` + filter engine; bidirectional UDS transport (server-initiated `events.event` + `events.subscribe`/`unsubscribe` fast-path); seven `event.*` methods (incl. deprecated singular aliases); notify-based file watcher emitting `file:changed`; M1 CRUD mutations now emit change events. Deferred parity-safe: `task:ready-tasks-changed`, saga-driven `workspace:*`, `Event.metadata`; distinct `file:*` types → Milestone 8. Touched `intent-core`, `intent-store`, `intent-services`, `intent-transport`, `intentd`. Submodule HEAD `3238a73`.
 - **2026-06-18** — Milestone 1 — core domain CRUD: 34 JSON-RPC methods (`workspace.*` 9, `note.*` 12, `task.*` 8, `comment.*` 5) over UDS; `0002_comments` migration; e2e UDS lifecycle test + camelCase parity fixtures; `doctor` migration check; Windows `cfg`-gating. Touched `intent-core`, `intent-services`, `intent-store`, `intent-transport`, `intentd`. Submodule HEAD `c989aeb`.
 - **2026-06-17** — Breadcrumbs, docs index & `make dev`: added breadcrumbs trail, `docs/README.md` index, and AGENTS.md breadcrumb-update policy. Docs-only (monorepo); submodule HEAD unchanged @ `8e13a25`.
 - **2026-06-17** — READMEs: wrote README.md for both repos. Submodule HEAD `8e13a25`.
