@@ -1,4 +1,4 @@
 [submodule "packages/intentd"]
 	path = packages/intentd
-	url = https://github.com/cloudlands-ai/intentd
+	url = https://github.com/Cloudlands-AI/intentd.git
 	branch = main
