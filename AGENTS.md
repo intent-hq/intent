@@ -42,8 +42,8 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 â†
   `refactor`, `test`, `ci`, `perf`.
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: keep `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo build`
-  green in `packages/intentd` before opening a PR. The `Makefile` exposes `make check` and
-  `make test` for this.
+  green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
+  `make check` and `make test`, which run those checks against `packages/intentd`.
 
 ## Breadcrumbs (initial porting)
 
