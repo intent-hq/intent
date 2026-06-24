@@ -8,7 +8,7 @@
     <script>
       // Apply theme immediately to prevent a flash of unstyled content.
       (function () {
-        const theme = localStorage.getItem('theme') || 'system';
+        const theme = localStorage.getItem('theme') || 'dark';
         const root = document.documentElement;
         if (theme === 'light') {
           root.classList.add('light');
