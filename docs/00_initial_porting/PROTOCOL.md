@@ -166,7 +166,7 @@ The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
-> **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed in v1 (deferred until a memories UI exists — see §5.22). See §6.8.
+> **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed — it is **not ported** (a vestigial in-memory stub; cancelled, not deferred — see §5.22). See §6.8.
 
 > **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** and **Sentry** integrations are **deferred** (no `linear.*` / `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
 
@@ -703,7 +703,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 | search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log (§10.2 of IMPLEMENTATION_SPEC.md) |
 | search.memories | query (req), workspaceId?, requestId? | { requestId, matches: MemoryMatch[] } — over the BE memories store |
 | search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
-| search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **semantic/symbol** search; v1 ripgrep/symbol-backed, future wired to the context engine (§8 of IMPLEMENTATION_SPEC.md); replaces the empty `codebase:search` placeholder |
+| search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search; replaces the empty `codebase:search` placeholder (a never-implemented stub with no caller). auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait (§8 of IMPLEMENTATION_SPEC.md) is retained as forward-looking infra |
 | search.cancel | requestId (req) | { ok: true } — aborts an in-flight search by its `requestId` |
 
 **`requestId` & cancellation.** Every search method accepts an optional caller-supplied
@@ -893,7 +893,8 @@ attribution** from `file-tracking` (§5.19) on each step. Every method requires 
 | accept-changes.addRemote | workspaceId (req), remoteUrl (req) | WorkspaceGitStatus (refreshed after adding `origin`) |
 
 `action` is one of `commit \| push \| create-pr \| merge \| export \| undo-push \| undo-commit \|
-reset-to-trunk \| rebase-onto-trunk`. A step that fails sets `success:false` and the offending
+reset-to-trunk \| rebase-onto-trunk` — except **`export` is NOT PORTING** (no UI consumer; absent
+from the new FE), so `execute` rejects `action:"export"`. A step that fails sets `success:false` and the offending
 `steps[].status:"failed"` with `error`; malformed params → `-32602`, underlying service throws →
 `-32603`.
 
@@ -1046,7 +1047,9 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 
 - **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
   env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace" }`. `command`
-  / `args` / `env` apply to `stdio`; `url` / `headers` apply to `http`/`sse`. Sensitive `env` and
+  / `args` / `env` apply to `stdio`; `url` / `headers` describe `http`/`sse`. **Only `stdio` is
+  ported — `http`/`sse` are NOT PORTING** (such a server returns an error status rather than
+  connecting). Sensitive `env` and
   `headers` values are **redacted** (presence/placeholder only) on `list`/`create`/`update`
   responses, mirroring `settings.*` (§5.12).
 - **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"error", pid?,
@@ -1062,11 +1065,12 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 } } }
 ```
 
-> **Deferred: `memories.*`.** Long-term agent **memories** exist as an internal context source the
-> agent runtime consumes; they are **not** exposed over the wire in v1 (no renderer caller today).
-> RPC methods are **deferred** until a memories UI exists — at which point a `memories.*` namespace
-> (list/create/search/delete) and a §9 `memories` table would be added additively. Until then,
-> memory lookup is internal (cf. the internal `search.memories` path, IMPLEMENTATION_SPEC.md).
+> **NOT PORTED: `memories.*`.** Long-term agent **memories** exist as an internal context source the
+> agent runtime consumes; they are **not** exposed over the wire (no renderer caller, and the original
+> `augmentcode/intent` feature is a vestigial non-persisted in-memory stub). The `memories.*` RPC is
+> **cancelled, not deferred** — it is not on the porting roadmap. The §9 `memories` table ships and the
+> internal `search.memories` path (IMPLEMENTATION_SPEC.md §5.15) scans it; a `memories.*` namespace
+> (list/create/search/delete) could be added additively later **only if** a memories UI ever ships.
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 106)*
 
