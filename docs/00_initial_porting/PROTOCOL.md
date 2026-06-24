@@ -91,7 +91,7 @@ Browser-origin upgrades are gated to prevent cross-origin attacks; native client
 
 ### 2.3 Where the token lives
 
-The token, the API-enabled flag, and the discovery-enabled flag are persisted in the host app'ssettings store (electron-store in the reference impl). Clients obtain the token out-of-band via apairing flow (the host surfaces token + fingerprint together).
+The token, the API-enabled flag, and the discovery-enabled flag are persisted in the host app'ssettings store (electron-store in the reference impl). Clients obtain the token out-of-band via apairing flow (the host surfaces token + fingerprint together). In intentd, an operator can run `intentd token` to print the current bearer token and TLS certificate fingerprint together for pairing (and `intentd token --rotate` to regenerate the token).
 
 ## 3. Message Envelope (JSON-RPC 2.0)
 
