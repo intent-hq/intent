@@ -2,3 +2,7 @@
 	path = packages/intentd
 	url = https://github.com/Cloudlands-AI/intentd.git
 	branch = main
+[submodule "packages/cloudlands-fe"]
+	path = packages/cloudlands-fe
+	url = https://github.com/Cloudlands-AI/cloudlands-fe.git
+	branch = main
