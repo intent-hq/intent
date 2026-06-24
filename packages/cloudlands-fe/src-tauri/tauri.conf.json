@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeDevCommand": "pnpm sidecar && pnpm dev",
+    "beforeBuildCommand": "pnpm sidecar && pnpm build"
   },
   "app": {
     "windows": [
@@ -28,6 +28,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/intentd"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

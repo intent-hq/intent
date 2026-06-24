@@ -9,6 +9,9 @@ build
 # Tauri / Rust build output
 src-tauri/target
 
+# Bundled intentd sidecar binary (built by scripts/prepare-sidecar.mjs)
+src-tauri/binaries
+
 # Logs & OS files
 *.log
 .DS_Store
