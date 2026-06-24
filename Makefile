@@ -1,6 +1,7 @@
 # Cloudlands Monorepo Makefile
 
 INTENTD_DIR = packages/intentd
+FE_DIR = packages/cloudlands-fe
 
 SUBMODULES = $(INTENTD_DIR)
 
@@ -9,7 +10,7 @@ SUBMODULES = $(INTENTD_DIR)
 DEV_DATA_DIR ?= $(PWD)/.dev/intentd
 DEV_PORT ?= 5180
 
-.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev
+.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev dev-daemon
 
 all: build
 
@@ -44,14 +45,26 @@ test-intentd: ensure-submodules
 clean:
 	rm -rf $(INTENTD_DIR)/target
 
-dev: ensure-submodules ## Run the local dev stack against a dedicated dev data dir
+dev: ensure-submodules ## Run the full FE+daemon dev stack (builds intentd, launches cloudlands-fe)
 	@mkdir -p $(DEV_DATA_DIR)
+	@echo "[dev] starting cloudlands-fe + intentd dev stack"
 	@echo "[dev] intentd dev data dir: $(DEV_DATA_DIR) (UDS socket: $(DEV_DATA_DIR)/intentd.sock)"
+	# `pnpm tauri dev` runs the FE's `beforeDevCommand` (`pnpm sidecar && pnpm dev`):
+	# scripts/prepare-sidecar.mjs cargo-builds intentd (release) and stages it as the
+	# Tauri sidecar, then src-tauri/src/daemon.rs spawns that bundled intentd over UDS on
+	# app startup. So this one command builds intentd + launches the FE + spawns the daemon.
+	# INTENTD_DATA_DIR is honored by both the FE's rpc client and the spawned daemon (which
+	# inherits this env), so dev stays on the dedicated gitignored data dir. This target is
+	# long-running and does not exit until you stop the dev app (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	cd $(FE_DIR) && INTENTD_DATA_DIR=$(DEV_DATA_DIR) pnpm tauri dev
+
+dev-daemon: ensure-submodules ## Run intentd alone (UDS) against a dedicated dev data dir
+	@mkdir -p $(DEV_DATA_DIR)
+	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS socket: $(DEV_DATA_DIR)/intentd.sock)"
 	# intentd is UDS-only today (TCP/port deferred per §5.2): the dev socket + SQLite DB
 	# live under $(DEV_DATA_DIR). DEV_PORT is reserved/forward-looking for the planned TCP
 	# listener (§5.2) and the future Tauri/Svelte FE dev server; it is exported as
 	# INTENTD_DEV_PORT now so downstream startup can pick it up without a Makefile change.
-	# TODO: when TCP (§5.2) and the Tauri/Svelte FE dev server land, start them here
-	# (alongside intentd) so `make dev` ultimately runs the whole stack.
 	INTENTD_DATA_DIR=$(DEV_DATA_DIR) INTENTD_DEV_PORT=$(DEV_PORT) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen uds

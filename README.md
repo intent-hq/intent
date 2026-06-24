@@ -83,6 +83,12 @@ make check      # cargo fmt --check + cargo clippy -- -D warnings
 make test       # cargo test --workspace
 make build      # cargo build --workspace
 make clean      # remove build artifacts
+
+# Run the full desktop dev stack in one command (builds intentd, launches the
+# cloudlands-fe Tauri app, and spawns the bundled daemon over UDS on a
+# dedicated gitignored dev data dir). Long-running; Ctrl-C to stop.
+make dev        # FE + intentd dev stack
+make dev-daemon # intentd alone (UDS) against the dev data dir
 ```
 
 ## Contributing & Workflow
