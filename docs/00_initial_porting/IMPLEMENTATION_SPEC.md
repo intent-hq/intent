@@ -1056,7 +1056,7 @@ CREATE INDEX idx_agent_metrics_agent ON agent_metrics(agent_id);
 
 -- Long-term agent memory (§9.12, §18.5). DEFERRED as a wire surface — there is NO `memories.*`
 -- RPC in v1; rows are written/read INTERNALLY and exposed to agents through the agent→BE MCP
--- callback (§6.8) as a context source. Ports src/features/memories/main/memories.service.ts.
+-- callback (§6.8) as a context source. Upgrades src/features/memories/main/memories.service.ts (originally a non-persisted in-memory Map stub) to a durable table.
 CREATE TABLE memories (
   id            TEXT PRIMARY KEY,
   workspace_id  TEXT REFERENCES workspace(id) ON DELETE CASCADE,
@@ -1253,7 +1253,7 @@ This is the persistence behind the **Agent Ecosystem** domain (§18). Three stor
 - **User-rule overrides — settings store.** The per-rule-type user overrides (`base-system-prompt`, the per-agent-type specialization rules, `workspace`, …) that `EndUserRulesManager` keeps in electron-store under `endUserRules` (ports `src/features/rules/user-rules.service.ts`) port onto the `settings` table (§9.2) under an `endUserRules` key — `{ enabled, content, updatedAt }` per rule type. This is the **only** rules data with a wire surface (`rules.*`, §18.1).
 - **Specialists — files, not DB.** Specialist definitions are markdown-with-frontmatter files resolved 3-tier (project > user > bundled): `<ws>/.augment/specialists/` (project), `~/.augment/specialists/` (user), `resources/specialists/` (bundled). `specialist.*` CRUD (§18.2) writes user/project files; nothing is stored in SQLite (ports `src/features/specialists/main/specialist-file-loader.ts`).
 - **External MCP servers — config in settings (sensitive).** `mcp.servers` (plus `mcp.enableUserServers`/`mcp.disabledServers`) is the `mcp.servers.*` (§18.3) source of truth and is already declared **sensitive** in §9.8 group A (stored in the OS keychain, redacted over the wire; ports `src/features/mcp/main/user-mcp-settings.ts`). Running-server status is **runtime-only** (not persisted) and surfaced via the `mcp.servers:status-changed` event.
-- **`memories` table (new) — internal, deferred wire surface.** A `memories` table (§9.2) backs long-term agent memory. In v1 it has **no `memories.*` RPC** (§18.5): rows are written/read internally and exposed to agents through the agent→BE MCP callback (§6.8) as a context source. The table exists now so the surface can be promoted to RPC later without a migration.
+- **`memories` table (new) — internal, deferred wire surface.** A `memories` table (§9.2) backs long-term agent memory. In v1 it has **no `memories.*` RPC** (§18.5): rows are written/read internally and exposed to agents through the agent→BE MCP callback (§6.8) as a context source. The table exists now so the surface can be promoted to RPC later without a migration. Note: in `augmentcode/intent` this feature is only a non-persisted in-memory `Map` stub (`memories.service.ts`) seeded with a few hardcoded demo entries and exposed via Electron IPC, with no live renderer consumers and no SQLite backing; giving it a real `memories` table here is a deliberate forward-looking upgrade so `search.memories` has a durable store to scan.
 
 ### 9.13 Integrations & Ops state (usage metrics, session stats, setup scripts)
 
@@ -1444,7 +1444,7 @@ A single BE-owned namespace consolidates the scattered FE/IPC searches. Each met
 | `search.fileNames { workspaceId, pattern, limit? }` | the `list-files`/`searchFiles` path — `src/lib/components/chat/input/context-api.ts` | `ignore` walker + `globset` path/glob matching. |
 | `search.messages { workspaceId, agentId?, query, role? }` | renderer message search — `src/lib/utils/messageSearch.ts` | scan over the BE-owned append-only `agent_message` log (§9.2). |
 | `search.events { workspaceId?, query, limit? }` | `src/features/events/main/event-query-engine.ts` | query over the `event` table (§9.2/§10.2). |
-| `search.memories { workspaceId?, query }` | `src/features/memories/main/memories.service.ts` | scan over BE-owned memory store. |
+| `search.memories { workspaceId?, query }` | `src/features/memories/main/memories.service.ts` | scan over the BE-owned `memories` table (§9.2). NOTE: the original had no unified search.memories — only a standalone in-memory MEMORIES.SEARCH IPC channel; this folds it into search.* over a real store. |
 | `search.notes { query }` | renderer note search + mentions (`src/lib/services/mentions/search-service.ts`) | query over the `note` table (§9.2). |
 | `search.codebase { workspaceId, query }` | `codebase:search` **placeholder returning `[]`** — `src/features/notes/main/notes-primitives.ipc.ts` | v1: ripgrep/symbol-backed (same engine as `inFiles` + a symbol pass). Future: wired to the **Augment context engine / auggie** retrieval via the `ContextEngine` trait (§8), degrading gracefully when unavailable. |
 
