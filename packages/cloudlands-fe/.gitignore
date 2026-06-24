@@ -1,0 +1,19 @@
+# Dependencies
+node_modules
+
+# SvelteKit / Vite build output
+build
+.svelte-kit
+.vite
+
+# Tauri / Rust build output
+src-tauri/target
+
+# Logs & OS files
+*.log
+.DS_Store
+
+# Local env
+.env
+.env.*
+!.env.example
