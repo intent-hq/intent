@@ -11,9 +11,10 @@ CI/CD. The **Rust backend (`intentd`) comes first**; the desktop frontend lands 
 
 `intentd` is a local-first Rust daemon that owns the Intent domain model — workspaces, notes,
 tasks, comments, agents, git, pull requests, scripts, terminals, files, and events — and
-exposes it over a JSON-RPC 2.0 API. Clients are thin; all business logic lives in the daemon.
-A Tauri/Svelte desktop frontend is **planned** and will live in this monorepo as a second
-submodule once it exists.
+exposes it over a JSON-RPC 2.0 API on a Unix-domain socket plus a secure WSS/TLS LAN
+transport. Clients are thin; all business logic lives in the daemon, including the ACP agent
+runtime. A Tauri/Svelte desktop frontend is **planned** and will live in this monorepo as a
+second submodule once it exists.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -40,7 +41,7 @@ for the full design.
 
 | Component | Status |
 | --- | --- |
-| `packages/intentd` | **Thin UDS vertical slice.** JSON-RPC `workspace.list` + `note.list` over SQLite, served on a Unix-domain socket, with a `serve`/`call`/`status`/`doctor` CLI. The rest of the protocol surface (TCP/TLS, ACP, git, context, search, events, ~104 more methods) is planned. |
+| `packages/intentd` | **Backend port — Milestones 1–10 implemented.** ~143 JSON-RPC methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, the settings/rules/specialist/`mcp.servers` agent ecosystem, the ACP agent runtime (`agent.*`), and intentd transport extensions. Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
 | Desktop frontend | **Planned.** Tauri + Svelte; not yet a submodule. |
 
 ## Repository Layout
