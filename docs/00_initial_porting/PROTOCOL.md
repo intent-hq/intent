@@ -160,9 +160,9 @@ The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`
 - `drafts.*` (§5.16) — 3 methods (`get` / `set` / `clear`) for BE-persisted, per-client message drafts, with the `draft:changed` event.
 - `client.hello` (§5.17) — stable client-identity handshake; the disambiguation key for `drafts.*` and future per-viewer read cursors.
 - `system.status` / `system.shutdown` (control fast-path) — a **UDS-only** transport/process-control pair: `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown. Like `events.subscribe`/`unsubscribe`, they are intercepted **before** the JSON-RPC dispatcher; they are intentd-only ops methods, **not** part of the ported 106 and **not** advertised by `getSupportedMethods`. Consumed by `intentd status` / `intentd stop`.
-- **Code Changes Review** (Wave 1) — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
-- **Agent Ecosystem** (Wave 2) — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
-- **Integrations & Ops** (Wave 3) — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Linear/Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26).
+- **Code Changes Review** — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
+- **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
+- **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Linear/Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26).
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -170,7 +170,7 @@ The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`
 
 > **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** and **Sentry** integrations are **deferred** (no `linear.*` / `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
 
-Framing stays: **"106 ported from `augmentcode/intent` + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Wave-1 Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Wave-2 Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Wave-3 Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`)"**. The ported 106 count is unchanged — every namespace in the count table below is part of the verified 106; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Wave-3 usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact.
+Framing stays: **"106 ported from `augmentcode/intent` + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`)"**. The ported 106 count is unchanged — every namespace in the count table below is part of the verified 106; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact.
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -230,6 +230,38 @@ each with a dedicated change event (§6.5) that carries the new value:
   surfaces via `workspace:attention-changed` (§6.5). This folds the reference app's per-client
   localStorage "unread" into shared BE state (the daemon is single-user in v1; per-viewer
   cursors are a future extension).
+
+**`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
+string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
+the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
+`Workspace` fields (`statusMessage`, `baseRef`, `prNumber`, `prStatus`, `activePullRequest`,
+`lastActivity`, `archivedAt`, repository/worktree fields, …) are **omitted when absent**
+(`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
+
+**Card aggregates (`taskStats` / `agentSummary` / `diffSummary`).** `workspace.list` and
+`workspace.get` enrich each `Workspace` with the nested rollup objects the iOS coverflow cards
+read, computed fresh from live state on the emit path (never persisted). They are decoded as
+optional by iOS and each is **omitted when not computable** (`skip_serializing_if`) rather than
+emitted as `null`, so absent simply yields a sparser card:
+
+- `taskStats: { total, completed, inProgress }` — ports the canonical `computeTaskStats`
+  (`task-stats.ts`) over the spec-linked direct-child task notes: `cancelled` is excluded from
+  `total`, `complete` counts as `completed`, and `in_progress` + `review_required` count as
+  `inProgress`. The renderer-only per-task `tasks` array is omitted.
+- `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
+  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding }`.
+  This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
+  `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
+  the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
+  `agentSummary?.agentIds ?? []`) and lists the same agents (same order) used to build `agents`.
+  `status` carries the same wire strings as `agent.list`; `isStreaming`/`isResponding` are always
+  `false` (the headless backend has no live stream state — `status` carries liveness, matching the
+  `AgentLite` decision); `lastActivity` is the session `updatedAt`.
+- `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
+  ports the on-demand `computeWorkspaceDiffSummary` (`workspace-summaries.ts`): `totalFiles` counts
+  changed-vs-`HEAD` (staged+unstaged) plus untracked files; line totals sum the tracked diff;
+  `files` mirrors the on-demand source (empty array). Omitted entirely when the workspace has no git
+  worktree or no changes.
 
 See IMPLEMENTATION_SPEC.md §9.1 (Workspace entity) for the persisted field definitions and
 §10 (Events) for emission.
@@ -305,18 +337,18 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, digest |
-| agent.get | agentId (req), workspaceId? | { agent: AgentLite } — -32602 if not found (falls back to disk) |
+| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId? } |
+| agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list; -32602 if not found (falls back to disk) |
 | agent.getConversation | agentId (req), limit?: number, workspaceId? | { agentId, messages, truncated, totalMessages } (capped to most-recent limit) |
 | agent.create | workspaceId (req), name?, model?, specialistId? | { agent: { id, name } } |
 | agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result |
 | agent.sendToTask | taskNoteId (req), message (req), priority? | service result |
 | agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks? | { success, queued, messageId? |
 | agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, noteIds? | service result (stops current stream first) |
-| agent.queueMessage | agentId (req), content (req), imageBlocks? | { success, queuedMessage } |
-| agent.editQueuedMessage | agentId (req), messageId (req), content (req) | service result |
+| agent.queueMessage | agentId (req), content (req), imageBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks? } |
+| agent.editQueuedMessage | agentId (req), messageId (req), content (req) | { success, queuedMessage } (QueuedMessage shape as above) |
 | agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
-| agent.getQueue | agentId (req) | { queue: [...] } |
+| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks? } |
 | agent.stop | agentId (req) | { success: true } |
 | agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result |
 | agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
