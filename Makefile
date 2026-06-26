@@ -10,7 +10,11 @@ SUBMODULES = $(INTENTD_DIR)
 DEV_DATA_DIR ?= $(PWD)/.dev/intentd
 DEV_PORT ?= 5180
 
-.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev dev-daemon
+# Transport for `run-intentd`. Defaults to `uds` (matching intentd's own `serve` default).
+# Override to serve WSS/TCP for the iOS app, e.g. `make run-intentd LISTEN=both` or `LISTEN=tcp`.
+LISTEN ?= uds
+
+.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev dev-daemon run-intentd
 
 all: build
 
@@ -68,3 +72,11 @@ dev-daemon: ensure-submodules ## Run intentd alone (UDS) against a dedicated dev
 	# INTENTD_DEV_PORT now so downstream startup can pick it up without a Makefile change.
 	INTENTD_DATA_DIR=$(DEV_DATA_DIR) INTENTD_DEV_PORT=$(DEV_PORT) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen uds
+
+run-intentd: ensure-submodules ## Run intentd with default settings (real data dir; LISTEN=uds|tcp|both)
+	# Runs intentd against its DEFAULT data dir (no dev override): Config::resolve picks
+	# $$HOME/Library/Application Support/intentd on macOS for the socket + SQLite DB. This
+	# target is long-running and does not exit until you stop it (Ctrl-C). LISTEN selects the
+	# transport: `uds` (default) serves the local Unix socket; `tcp`/`both` also bring up
+	# HTTPS+WSS on 0.0.0.0:5180 for the iOS app.
+	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
