@@ -1207,6 +1207,244 @@ method requires `workspaceId`.
 > surface, and none is planned for v1. Clients observe backend work through domain **events** (§6.5),
 > not through a logging API.
 
+### 5.27 `github.*` namespace *(new in intentd — not part of the ported 106)*
+
+> **⚠️ TARGET contract — BE implementation in progress.** This section documents the **agreed
+> wire shape** for the `github.*` namespace so the frontend can build against it **in parallel**
+> with the backend work (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B). It is the contract,
+> not a status report — methods land incrementally and return `-32601` until wired. Field names
+> and shapes here are the source of truth for both sides.
+
+> **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the GitHub +
+> identity surface is served by the Augment Cloud `augment-api.client.ts` (a hosted proxy +
+> `agents/run-remote-tool` `github-api` bypass). `intentd` re-provides that surface **daemon-owned**
+> against `api.github.com` directly, reusing the existing `intent-sourcecontrol` **octocrab** engine
+> (IMPLEMENTATION_SPEC.md §7) — the same engine that already backs `pr.*`.
+>
+> **Namespace split (decided 2026-06-27).** Local git operations stay on `git.*` (§5.6). Everything
+> that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
+> **auth** and GitHub-**derived identity** live on `github.*`. The existing `pr.*` methods (§5.7) are
+> deliberately **workspace/active-PR scoped** (`ws` → owner/repo/number) and are left **untouched**;
+> `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
+> rather than resolving from the workspace.
+
+> **Auth model — PAT from the environment (no OAuth/device flow, no credential store).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Personal Access Token resolved
+> from the environment**: `GITHUB_TOKEN`, falling back to `GH_TOKEN` (the existing
+> `intent-sourcecontrol` token resolution; explicit `sourceControl.github.token` / `gh auth token`
+> remain as lower-priority fallbacks per §5.12).
+>
+> - `github.authStatus` validates the resolved token via `GET /user` and reports connection state.
+> - `github.connect` / `github.revoke` are **no-ops / guidance** (the FE buttons are inert, like
+>   Linear): there is nothing to connect/revoke when the token comes from the environment.
+> - **Identity** is GitHub-derived: `github.getUser` returns the authenticated user from `GET /user`.
+>
+> **🔒 Secret guardrail.** The PAT is a secret: it is **never logged, echoed, or returned** over the
+> wire. Only **derived identity** fields (login, avatar, profile URL) and the boolean
+> connection state cross the wire — never the token itself.
+
+**Field naming.** The DTOs below mirror the FE `shared/types.ts` GitHub shapes
+(`GithubRepo` / `GithubUser` / `GithubPullRequest` / `GithubIssue`, and the review-comment /
+review-thread shapes) **field-for-field**, rendered in this protocol's **camelCase** convention
+(serde `rename_all = "camelCase"`, matching `pr.*` in §5.7 and the rest of the catalog). The FE's
+Augment-proxy passthrough exposed GitHub-native **snake_case**; on the `github.*` wire those keys
+are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`, `updated_at → updatedAt`,
+`merged_at → mergedAt`, `closed_at → closedAt`, `default_branch → defaultBranch`, `head_ref → headRef`,
+`base_ref → baseRef`, `head_sha → headSha`, `base_sha → baseSha`, `mergeable_state → mergeableState`,
+`review_comments → reviewComments`, `changed_files → changedFiles`, `avatar_url → avatarUrl`,
+`in_reply_to_id → inReplyToId`. The set of fields is otherwise identical to the FE types.
+
+**Conventions.** Unless noted, `owner` + `repo` are **(req)** string params (and `number` is the
+**(req)** PR/issue number where applicable). Reads that paginate follow the §5.5 uniform pagination
+contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
+in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
+missing/invalid params and "not found" (404) lookups → `-32602`; a token that is absent or fails
+`GET /user`, and any other GitHub/service failure → `-32603` with a descriptive `message`
+(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
+
+#### Repos & branches
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.repos.list | limit?, nextToken? | { repos: GithubRepo[], nextToken? } — the authenticated user's repositories (`GET /user/repos`) |
+| github.repos.search | query (req), limit?, nextToken? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
+| github.repos.get | owner (req), repo (req) | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
+| github.branches.list | owner (req), repo (req), limit?, nextToken? | { branches: string[], nextToken? } — **remote** branch names (`GET /repos/{owner}/{repo}/branches`) |
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes } — `isConfigured` = env PAT resolves **and** `GET /user` succeeds. `oauthUrl` is `""` and `configuredButNeedsUpdate` is `false` in the PAT-from-env model (fields kept for FE shape parity) |
+| github.connect | — | { ok: false, guidance } — **no-op**; `guidance` explains setting `GITHUB_TOKEN` (no OAuth/device flow) |
+| github.revoke | — | { ok: false, guidance } — **no-op**; token is environment-owned, nothing to revoke |
+| github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the PAT |
+
+#### Pulls
+
+`createPullRequest` sends `head` **verbatim** (no `owner:branch` login prefix) — preserving the
+FE's "bypass the buggy backend" behavior for same-repo branches.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.pulls.create | owner (req), repo (req), title (req), body (req), head (req), base (req), draft? | { pull: GithubPullRequest \| null } — `POST /repos/{owner}/{repo}/pulls` (head verbatim) |
+| github.pulls.get | owner (req), repo (req), number (req) | { pull: GithubPullRequest \| null } — `GET /repos/{owner}/{repo}/pulls/{number}` |
+| github.pulls.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", head?, base?, sort?: "created"\|"updated"\|"popularity"\|"long-running", direction?: "asc"\|"desc", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /repos/{owner}/{repo}/pulls` |
+| github.pulls.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"review-requested"\|"involves", state?: "open"\|"closed", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /search/issues?q=is:pr repo:{o}/{r} is:{state} {author\|assignee\|review-requested\|involves}:@me`; `filter:"all"`+`state:"open"` delegates to `github.pulls.list` |
+| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
+| github.pulls.updateBranch | owner (req), repo (req), number (req), expectedHeadSha? | { message, url? } — `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
+
+#### Issues
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.issues.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", assignee?, creator?, labels?, sort?: "created"\|"updated"\|"comments", direction?: "asc"\|"desc", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /repos/{owner}/{repo}/issues` (items carrying `pull_request` are filtered out) |
+| github.issues.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"involves", state?: "open"\|"closed", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /search/issues?q=is:issue repo:{o}/{r} …` |
+
+#### Review comments & threads
+
+Review **comments** are the REST inline comments (`/pulls/{n}/comments`); review **threads** are the
+GraphQL `pullRequest.reviewThreads` with resolve state — `resolveThread` / `unresolveThread` map to
+the GraphQL `resolveReviewThread` / `unresolveReviewThread` mutations (parity with the FE's
+`pr-comment.service.ts`).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.listReviewComments | owner (req), repo (req), number (req), limit?, nextToken? | { comments: ReviewComment[], nextToken? } — `GET /repos/{owner}/{repo}/pulls/{number}/comments` |
+| github.replyReviewComment | owner (req), repo (req), number (req), commentId (req), body (req) | { comment: ReviewComment } — `POST /repos/{owner}/{repo}/pulls/{number}/comments` (`inReplyToId = commentId`) |
+| github.getReviewThreads | owner (req), repo (req), number (req), limit?, nextToken? | { threads: ReviewThread[], nextToken? } — GraphQL `pullRequest.reviewThreads` |
+| github.resolveThread | threadId (req) | { isResolved: true } — GraphQL `resolveReviewThread` |
+| github.unresolveThread | threadId (req) | { isResolved: false } — GraphQL `unresolveReviewThread` |
+
+#### DTO schemas
+
+```ts
+interface GithubRepo {
+  owner: string;
+  name: string;
+  htmlUrl?: string;
+  createdAt?: string;     // ISO 8601
+  updatedAt?: string;     // ISO 8601
+  defaultBranch?: string;
+}
+
+interface GithubUser {     // derived identity — never carries the PAT
+  login: string;
+  avatarUrl: string;
+  htmlUrl: string;
+}
+
+interface GithubPullRequest {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt?: string;
+  closedAt?: string;
+  user: GithubUser;
+  headRef: string;
+  baseRef: string;
+  headSha: string;
+  baseSha: string;
+  merged: boolean;
+  draft: boolean;
+  mergeable?: boolean | null;
+  mergeableState?: string;
+  labels: string[];
+  assignees?: GithubUser[];
+  comments: number;
+  reviewComments: number;
+  commits: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+interface GithubIssue {
+  number: number;
+  title: string;
+  body?: string;
+  state: "open" | "closed";
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  user: GithubUser;
+  labels: string[];
+  comments: number;
+  owner?: string;          // repository owner (echoed for convenience)
+  repo?: string;           // repository name
+}
+
+interface ReviewComment {  // REST inline review comment
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  user: { login: string; avatarUrl?: string };
+  createdAt: string;
+  updatedAt: string;
+  inReplyToId?: number;
+  htmlUrl: string;
+}
+
+interface ReviewThread {   // GraphQL review thread
+  id: string;
+  isResolved: boolean;
+  comments: ReviewThreadComment[];
+}
+
+interface ReviewThreadComment {
+  id: string;
+  body: string;
+  author: { login: string };
+  path: string;
+  line: number | null;
+  createdAt: string;
+}
+```
+
+#### Examples
+
+```json
+// → check GitHub auth (validates the env PAT via GET /user)
+{ "jsonrpc":"2.0","id":50,"method":"github.authStatus","params":{} }
+// ← response (GITHUB_TOKEN present and valid)
+{ "jsonrpc":"2.0","id":50,"result":{
+  "isConfigured": true, "oauthUrl": "", "configuredButNeedsUpdate": false, "updatedScopes": "" } }
+```
+
+```json
+// → derived identity (no token ever returned)
+{ "jsonrpc":"2.0","id":51,"method":"github.getUser","params":{} }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "user":{
+  "login":"octocat","avatarUrl":"https://avatars.githubusercontent.com/u/1","htmlUrl":"https://github.com/octocat" } } }
+```
+
+```json
+// → create a PR with the head ref sent verbatim (no login prefix)
+{ "jsonrpc":"2.0","id":52,"method":"github.pulls.create",
+  "params":{ "owner":"octocat","repo":"hello","title":"Add feature","body":"…",
+    "head":"feature/x","base":"main","draft":false } }
+// ← response
+{ "jsonrpc":"2.0","id":52,"result":{ "pull":{
+  "number":42,"title":"Add feature","state":"open","htmlUrl":"https://github.com/octocat/hello/pull/42",
+  "headRef":"feature/x","baseRef":"main","draft":false,"merged":false,
+  "user":{ "login":"octocat","avatarUrl":"…","htmlUrl":"…" } } } }
+```
+
+```json
+// → connect is inert in the PAT-from-env model
+{ "jsonrpc":"2.0","id":53,"method":"github.connect","params":{} }
+// ← response (guidance only — nothing to connect)
+{ "jsonrpc":"2.0","id":53,"result":{
+  "ok": false, "guidance": "GitHub uses a Personal Access Token from the environment. Set GITHUB_TOKEN (or GH_TOKEN) and restart." } }
+```
+
 ## 6. Events & Subscriptions
 
 Live event streaming is the **canonical** way a thin client stays in sync. It uses twoserver-handled methods (the plural `events.` prefix) plus a server-pushed notification.
