@@ -1357,6 +1357,89 @@ Notes for client implementers:
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
+### 7.1 `chat.subscribe` — structured live transcript channel *(new in intentd)*
+
+The `agent:stream:*` firehose (above) stays UI sugar (§10.1): a joiner that misses earlier chunks
+cannot reconstruct the turn, and the client must re-fetch `agent.getConversation` after every
+`stream:end`. `chat.subscribe` is the **canonical** alternative — an **agent-scoped** channel on the
+snapshot+delta subscription engine (§6, TB-0) that delivers a self-healing transcript a thin client
+can render directly, with **no follow-up fetch**. It **coexists** additively with the firehose: both
+observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
+
+- **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
+  before the JSON-RPC dispatcher (like `events.subscribe`). `params` is `{ agentId }` — a
+  missing/empty `agentId` is a `-32602` error. `chat.subscribe` returns `{ subscriptionId }`, then
+  pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
+  `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
+- **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
+  `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
+  Each subsequent delta upserts individual **content blocks** within a message.
+- **Stable block ids.** Every assistant block carries a synthetic `id` of `{messageId}:{blockIndex}`
+  (the assistant message UUIDv7 minted at turn start + the 0-based index in the coalesced block
+  array). Snapshot blocks and live deltas derive the same id, so deltas patch the snapshot exactly.
+- **Mid-turn (re)subscribe.** When a turn is streaming, the seq-0 snapshot appends a synthetic
+  in-flight `assistant` message (`isStreaming: true`) whose `contentBlocks` are the current partial
+  blocks, so a subscriber arriving mid-turn renders a coherent partial rather than a gap. The
+  terminal delta clears it to `streamingComplete: true`.
+
+**Delta envelope.** Reuses the frozen `{ added, updated, removedIds }` envelope with content blocks
+as the id-bearing entities. Each entity carries the **full current block** (not a text diff) plus a
+`{ agentId, messageId, role }` pointer (and `messageSeq` + `timestamp` on the authoritative terminal
+frame):
+
+- `added` — a block's first appearance this turn (e.g. a text block's first chunk, or a `tool_use`).
+- `updated` — an existing block grown/changed, matched by `id` (e.g. each subsequent text chunk
+  carries the full accumulated text; full-block replace is idempotent under re-delivery).
+- `removedIds` — a block emitted **live** that the finally-persisted message does **not** contain.
+  This is non-empty only for orphan self-heal: e.g. a trailing partial the durable turn dropped, or
+  a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
+  snapshot.
+
+**Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
+blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,
+metadata:{ toolKind, status } }`) and, once the same call completes **with** output, a `tool_result`
+block (`{ type, id, tool_use_id, output, is_error }`).
+
+**Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
+message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
+live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
+`removedIds` for any orphaned live block). The guarantee: **the seq-0 snapshot reduced with every
+delta — honoring `removedIds` — equals a fresh `agent.getConversation` snapshot.**
+
+#### seq-0 snapshot (`subscription.push`, messages page)
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-7","kind":"snapshot","seq":0,
+  "snapshot":{
+    "agentId":"agent-123",
+    "messages":[
+      { "id":"0190a1b2-user","agentId":"agent-123","seq":0,"role":"user",
+        "contentBlocks":[ { "type":"text","id":"0190a1b2-user:0","text":"Run the tests" } ],
+        "timestamp":"2026-06-27T01:00:00.000Z" }
+    ],
+    "truncated":false,"totalMessages":1,"nextToken":null } } }
+```
+
+#### delta frame (in-flight block upsert)
+
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-7","kind":"delta","seq":6,
+  "delta":{
+    "added":[],
+    "updated":[
+      { "agentId":"agent-123","messageId":"0190a200-asst","role":"assistant",
+        "block":{ "type":"text","id":"0190a200-asst:0","text":"Let me check the logs first." } }
+    ],
+    "removedIds":[] } } }
+```
+
+A block's first appearance arrives as `added` with the same `block.id`; each growth is an `updated`
+carrying the **full** block. A tool call arrives as an `added` `tool_use` block, then a `tool_result`
+block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
+with `streamingComplete:true` and any orphan ids in `removedIds`.
+
 ## 8. Permission Flow
 
 When an agent's provider (e.g. auggie) wants to run a tool that requires approval, it sends an ACP`session/request_permission` request **to the backend** (over the provider's stdio channel, not theclient WebSocket). The backend mediates approval:
