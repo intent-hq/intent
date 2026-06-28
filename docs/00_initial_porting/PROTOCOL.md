@@ -1233,17 +1233,16 @@ method requires `workspaceId`.
 
 ### 5.26 Future integrations & observability *(design notes — NOT v1 wire surface)*
 
-> **Future integrations (design stubs — NOT v1).** The following are anticipated but **not** exposed
-> over the protocol in v1 — there are **no** `sentry.*` (or sandbox) wire methods today:
-> - **Sentry** (error tracking) — when built, it is **re-implemented directly in the backend**
->   against the vendor API (**no Augment proxy**), added additively as a `sentry.*` namespace with
->   its own §9 tables and events.
-> - **Sandbox / DevContainer** workspace configuration — a future per-workspace
->   execution-environment surface, folded into the same future track.
+> **Future integrations (design stubs — NOT v1).** Of the original design stubs, **Sandbox /
+> DevContainer** workspace configuration remains a future per-workspace execution-environment
+> surface — anticipated but **not** exposed over the protocol in v1, folded into the same future
+> track.
 >
-> **Linear** (issue tracking) is the first of these to be specified: it is re-implemented daemon-owned
-> against Linear's GraphQL API (**no Augment proxy**) as the `linear.*` namespace — see the TARGET
-> contract in **§5.28**.
+> **Linear** (issue tracking) is re-implemented daemon-owned against Linear's GraphQL API
+> (**no Augment proxy**) as the `linear.*` namespace — **specified as a TARGET contract — see §5.28**.
+>
+> **Sentry** (error tracking) is re-implemented daemon-owned against Sentry's REST API
+> (**no Augment proxy**) as the `sentry.*` namespace — **specified as a TARGET contract — see §5.29**.
 >
 > These are documented so the surface is anticipated; the deferral honors the Iteration-5 scope
 > decision.
@@ -1705,6 +1704,185 @@ this phase and are listed only so the surface is anticipated:
 
 When built, the P2 writes extend this `linear.*` namespace additively (with their own §9 error
 rows and any events) and do not change the read contract above.
+
+### 5.29 `sentry.*` namespace *(new in intentd — not part of the ported 104)*
+
+> **✅ SHIPPED (P0 reads).** The P0 `sentry.*` read surface — `sentry.authStatus`,
+> `sentry.listIssues`, `sentry.searchIssues` — is implemented and wired end-to-end (engine: the
+> new `intent-sentry` crate; wire arm: `intent-services` `sentry_ops` → `intent-transport`
+> router), daemon-owned against Sentry's REST API. The P1 read methods (`sentry.listProjects`,
+> `sentry.getIssue`) and the P2 write methods listed under "Deferred — P1/P2" below remain out
+> of scope. The field names and shapes here remain the source of truth for both sides.
+
+> **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Sentry
+> surface is **read-only** and brokered by the Augment Cloud remote-tool proxy (the same
+> `agents/run-remote-tool` mechanism Linear used), which sends a **natural-language prompt** to a
+> hosted LLM tool and **best-effort parses** the loosely-structured output. `intentd` re-provides
+> that surface **daemon-owned** against Sentry's REST API
+> (`GET https://sentry.io/api/0/organizations/{org}/issues/`) directly — **no Augment proxy, no
+> NL prompt** — via the new `intent-sentry` crate. The `status` filter maps to a **typed
+> `is:<status>` clause** server-side, and `query` is forwarded verbatim as the Sentry search
+> string, removing the parse-the-LLM-output fragility.
+
+> **Auth model — token + org from the environment (no OAuth/device flow, no
+> `connect`/`revoke`).** A local daemon has no hosted OAuth callback, so v1 authenticates with
+> a **Sentry user/internal-integration auth token + organization slug resolved from the
+> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority keychain account
+> `sentry.token`) plus `SENTRY_ORG` (organization slug). Sentry is REST-only; the token is sent
+> as the **`Authorization: Bearer <token>`** header.
+>
+> - `sentry.authStatus` validates the resolved pair via `GET /organizations/{org}/` and reports
+>   connection state.
+> - **There is no `sentry.connect` / `sentry.revoke` / `cancelAuth` wire method.** As with
+>   `linear.*`, Sentry exposes **nothing** here: "connect" becomes "set `SENTRY_API_TOKEN` +
+>   `SENTRY_ORG` and restart", "revoke/logout" is a local "forget token" action, and `cancelAuth`
+>   was always a pure client-side no-op. The settings UI buttons are inert.
+>
+> **🔒 Secret guardrail.** The auth token is a secret: it is **never logged, echoed, or returned**
+> over the wire. Only **derived identity** (the `organization` slug) and the boolean connection
+> state cross the wire — never the token itself.
+
+**Field naming.** The DTOs below mirror the FE `src/features/sentry-auth/types.ts` shapes
+**field-for-field** in this protocol's **camelCase** convention (serde `rename_all =
+"camelCase"`, matching `github.*` §5.27 / `linear.*` §5.28 and the rest of the catalog). The
+wire returns the **flattened `SentryIssueResult`** — the exact shape the FE's `fetchIssues` /
+`searchIssues` already consume — so the rewire is zero-FE-change: nested Sentry relations
+(`project` → `projectName`/`projectSlug`, `metadata` → `type`/`value`/`filename`/`function`,
+`permalink` → `url`) are pre-flattened to scalar fields server-side. Absent (`None`) optional
+fields are **omitted** from the JSON.
+
+**Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
+returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items,
+nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the
+`github.*` list reads, etc.), every Sentry arm returns a **bare result** — either a bare object
+(`sentry.authStatus`) or a bare array (`sentry.listIssues`, `sentry.searchIssues`) — there is
+**no `{ items, nextToken }` envelope and no cursor** (parity with `linear.*`; cursor pagination
+is not part of this phase). Absent (`None`) optional fields are **omitted** from the JSON.
+Errors reuse the §9 conventions: missing/invalid params → `-32602` (e.g. `sentry.searchIssues`
+requires `query`, otherwise `Missing required parameter: query`; an invalid `status` not in
+`unresolved`|`resolved`|`ignored`|`all` → `Invalid params: status must be one of: unresolved,
+resolved, ignored, all`); a credential pair that is **absent or fails the org probe** ("not
+configured"), and any other Sentry/service failure → `-32603` with a descriptive `message`
+(e.g. `"Sentry is not configured."`). There are **no** custom numeric codes.
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.authStatus | — | { authenticated, organization?, error? } — `authenticated` = env credential pair resolves **and** the `GET /organizations/{org}/` probe succeeds; `organization` is the resolved org slug (derived identity only — never the token); `error` is a descriptive failure string when the probe fails. Never includes the token. |
+
+#### Issues
+
+`status` maps to a typed `is:<status>` clause **server-side** (replacing the reference impl's
+natural-language prompt); `query` is forwarded verbatim as the Sentry search string.
+`sentry.listIssues` backs the FE's `fetchIssues`; `sentry.searchIssues` backs the FE's
+`searchIssues`. Both return the flattened `SentryIssueResult[]` directly.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit? | SentryIssueResult[] — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`) |
+| sentry.searchIssues | query (req — missing → `-32602`), project?, limit? | SentryIssueResult[] — full-text issue search |
+
+#### DTO schemas
+
+```ts
+interface SentryAuthState {       // shared with the auth probe; never carries the token
+  authenticated: boolean;
+  organization?: string;          // resolved org slug (derived identity only)
+  error?: string;                 // descriptive failure when the probe fails
+}
+
+interface SentryIssueResult {     // flattened UI shape — matches the FE verbatim
+  id: string;
+  shortId: string;                // e.g. "PROJ-1"
+  title: string;
+  culprit?: string;
+  status: "unresolved" | "resolved" | "ignored";
+  level: "error" | "warning" | "info" | "fatal" | "debug";
+  count: string;                  // total event count (Sentry returns a string)
+  userCount: number;
+  firstSeen: string;              // RFC-3339
+  lastSeen: string;               // RFC-3339
+  projectName: string;
+  projectSlug: string;
+  url?: string;                   // Sentry `permalink`
+  type?: string;                  // metadata.type, e.g. "TypeError"
+  value?: string;                 // metadata.value
+  filename?: string;              // metadata.filename
+  function?: string;              // metadata.function
+}
+```
+
+#### Examples
+
+```json
+// → check Sentry auth (validates the env credential pair via the GET /organizations/{org}/ probe)
+{ "jsonrpc":"2.0","id":70,"method":"sentry.authStatus","params":{} }
+// ← response (SENTRY_API_TOKEN + SENTRY_ORG present and valid)
+{ "jsonrpc":"2.0","id":70,"result":{ "authenticated": true, "organization": "acme" } }
+```
+
+```json
+// → unresolved issues across the org (typed `is:unresolved` clause, no NL prompt)
+{ "jsonrpc":"2.0","id":71,"method":"sentry.listIssues","params":{ "status":"unresolved","limit":50 } }
+// ← response (flattened SentryIssueResult[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":71,"result":[
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "type":"TypeError","filename":"src/app.ts",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+```
+
+```json
+// → full-text issue search (forwarded verbatim as the Sentry search string)
+{ "jsonrpc":"2.0","id":72,"method":"sentry.searchIssues","params":{ "query":"TypeError","limit":20 } }
+// ← response
+{ "jsonrpc":"2.0","id":72,"result":[
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+```
+
+```json
+// → missing required `query` → -32602
+{ "jsonrpc":"2.0","id":73,"method":"sentry.searchIssues","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":73,"error":{ "code":-32602,"message":"Missing required parameter: query" } }
+```
+
+```json
+// → invalid `status` → -32602 (verbatim message)
+{ "jsonrpc":"2.0","id":74,"method":"sentry.listIssues","params":{ "status":"bogus" } }
+// ← error
+{ "jsonrpc":"2.0","id":74,"error":{
+  "code":-32602,"message":"status must be one of: unresolved, resolved, ignored, all" } }
+```
+
+```json
+// → not-configured (no SENTRY_API_TOKEN/SENTRY_ORG, or org probe fails) → -32603
+{ "jsonrpc":"2.0","id":75,"method":"sentry.listIssues","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":75,"error":{ "code":-32603,"message":"Sentry is not configured." } }
+```
+
+#### Deferred — P1/P2 (NOT in this phase)
+
+The P0 read surface ships now (above). The remaining methods are **out of scope** for this
+phase and are listed only so the surface is anticipated:
+
+- **P1 reads (forward-looking; FE has no call sites today):** `sentry.listProjects` — return
+  the org's projects as a bare DTO array (parity with `linear.listTeams`/`linear.listProjects`);
+  `sentry.getIssue` — return a single flattened `SentryIssueResult` by `id` (UUID) **or**
+  `shortId` (e.g. `WEB-1`). Both extend the read surface additively without changing the P0
+  contract above.
+- **P2 writes (FE types exist but have zero call sites):** `sentry.resolveIssue` /
+  `sentry.ignoreIssue` (status mutations) and `sentry.assignIssue` (assignment). Do **not**
+  build unless a feature requires them.
+
+When built, the P1/P2 methods extend this `sentry.*` namespace additively (with their own §9
+error rows and any events) and do not change the P0 read contract above.
 
 ## 6. Events & Subscriptions
 
