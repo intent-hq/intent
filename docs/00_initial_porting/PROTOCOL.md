@@ -162,13 +162,13 @@ The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`
 - `system.status` / `system.shutdown` (control fast-path) — a **UDS-only** transport/process-control pair: `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown. Like `events.subscribe`/`unsubscribe`, they are intercepted **before** the JSON-RPC dispatcher; they are intentd-only ops methods, **not** part of the ported 106 and **not** advertised by `getSupportedMethods`. Consumed by `intentd status` / `intentd stop`.
 - **Code Changes Review** — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
 - **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
-- **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Linear/Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26).
+- **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
 > **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed — it is **not ported** (a vestigial in-memory stub; cancelled, not deferred — see §5.22). See §6.8.
 
-> **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** and **Sentry** integrations are **deferred** (no `linear.*` / `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
+> **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** is now specified as a daemon-owned TARGET contract (`linear.*`, §5.28); **Sentry** integration remains **deferred** (no `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
 
 Framing stays: **"106 ported from `augmentcode/intent` + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`)"**. The ported 106 count is unchanged — every namespace in the count table below is part of the verified 106; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact.
 
@@ -1192,12 +1192,16 @@ method requires `workspaceId`.
 ### 5.26 Future integrations & observability *(design notes — NOT v1 wire surface)*
 
 > **Future integrations (design stubs — NOT v1).** The following are anticipated but **not** exposed
-> over the protocol in v1 — there are **no** `linear.*` / `sentry.*` (or sandbox) wire methods today:
-> - **Linear** (issue tracking) and **Sentry** (error tracking) — when built, both are
->   **re-implemented directly in the backend** against the vendor APIs (**no Augment proxy**), added
->   additively as `linear.*` / `sentry.*` namespaces with their own §9 tables and events.
+> over the protocol in v1 — there are **no** `sentry.*` (or sandbox) wire methods today:
+> - **Sentry** (error tracking) — when built, it is **re-implemented directly in the backend**
+>   against the vendor API (**no Augment proxy**), added additively as a `sentry.*` namespace with
+>   its own §9 tables and events.
 > - **Sandbox / DevContainer** workspace configuration — a future per-workspace
 >   execution-environment surface, folded into the same future track.
+>
+> **Linear** (issue tracking) is the first of these to be specified: it is re-implemented daemon-owned
+> against Linear's GraphQL API (**no Augment proxy**) as the `linear.*` namespace — see the TARGET
+> contract in **§5.28**.
 >
 > These are documented so the surface is anticipated; the deferral honors the Iteration-5 scope
 > decision.
@@ -1444,6 +1448,148 @@ interface ReviewThreadComment {
 { "jsonrpc":"2.0","id":53,"result":{
   "ok": false, "guidance": "GitHub uses a Personal Access Token from the environment. Set GITHUB_TOKEN (or GH_TOKEN) and restart." } }
 ```
+
+### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 106)*
+
+> **⚠️ TARGET contract — BE implementation in progress.** This section documents the **agreed
+> wire shape** for the `linear.*` namespace so the frontend can build the rewire against it **in
+> parallel** with the backend work (engine: LIN-ENG; wire arm: LIN-WIRE). It is the contract, not a
+> status report — methods return `-32601` until wired. Field names and shapes here are the source of
+> truth for both sides.
+
+> **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Linear surface
+> is **read-only** and brokered by the Augment Cloud remote-tool proxy
+> (`agents/run-remote-tool`, `tool_id = 12`), which sends a **natural-language prompt** to a hosted
+> LLM tool and **best-effort parses** the loosely-structured output. `intentd` re-provides that
+> surface **daemon-owned** against Linear's GraphQL API (`POST https://api.linear.app/graphql`)
+> directly — **no Augment proxy, no NL prompt** — via the new `intent-linear` crate. The `filter`
+> values map to **typed Linear GraphQL filters server-side**, removing the parse-the-LLM-output
+> fragility.
+
+> **Auth model — API key from the environment (no OAuth/device flow, no credential store).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key resolved
+> from the environment**: `LINEAR_API_KEY` (with an optional lower-priority keychain account
+> `linear.token`). Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
+> with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
+> `Authorization: Bearer <token>` — the prefix differs by credential type).
+>
+> - `linear.authStatus` validates the resolved key via the GraphQL `viewer` probe and reports
+>   connection state.
+> - **There is no `linear.connect` / `linear.revoke` / `cancelAuth` wire method.** Unlike `github.*`
+>   (which keeps inert no-op `connect`/`revoke` for FE shape parity), Linear exposes **nothing**
+>   here: "connect" becomes "set `LINEAR_API_KEY` and restart", "revoke/logout" is a local
+>   "forget token" action, and `cancelAuth` was always a pure client-side no-op. The settings UI
+>   buttons are inert.
+>
+> **🔒 Secret guardrail.** The API key is a secret: it is **never logged, echoed, or returned** over
+> the wire. Only **derived identity** (the `login` from `viewer`) and the boolean connection state
+> cross the wire — never the key itself.
+
+**Field naming.** The DTOs below mirror the FE `src/features/linear-auth/types.ts` shapes
+**field-for-field** in this protocol's **camelCase** convention (serde `rename_all = "camelCase"`,
+matching `github.*` §5.27 and the rest of the catalog). The wire returns the **flattened
+`LinearIssueResult`** — the exact shape the FE's `fetchMyIssues` / `searchIssues` already consume —
+so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `assignee` / `creator`
+/ `project` / `labels`) are pre-flattened to scalar / `string[]` fields server-side. Absent
+(`None`) optional fields are **omitted** from the JSON.
+
+**Conventions.** Both read methods take an optional `limit` (a cap on the number of issues
+returned). Unlike the §5.5 uniform-pagination reads, the Linear reads return a **bare
+`LinearIssueResult[]` array** — there is **no `{ items, nextToken }` envelope and no cursor** (the
+consumed Linear surface is small and bounded; cursor pagination is deferred with the P1 reads
+below). Errors reuse the §9 conventions: missing/invalid params → `-32602`; a key that is **absent
+or fails the `viewer` probe** ("not configured"), and any other Linear/service failure → `-32603`
+with a descriptive `message` (e.g. `"Linear is not configured."`). There are **no** custom numeric
+codes.
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.authStatus | — | { authenticated, login?, scopes } — `authenticated` = env key resolves **and** the GraphQL `viewer { id name email }` probe succeeds; `login` is the viewer's name/email; `scopes` is always `[]` (Linear's `viewer` returns no key scopes). Never includes the key. |
+
+#### Issues
+
+`filter` maps to a typed Linear GraphQL filter **server-side** (replacing the reference impl's
+natural-language prompt). `linear.listIssues` backs the FE's `fetchMyIssues`; `linear.searchIssues`
+backs the FE's `searchIssues`. Both return the flattened `LinearIssueResult[]` directly.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit? | LinearIssueResult[] — the authenticated viewer's issues for the typed `filter` |
+| linear.searchIssues | query (req), limit? | LinearIssueResult[] — full-text issue search |
+
+#### DTO schemas
+
+```ts
+interface AuthStatus {          // shared with the auth probe; never carries the API key
+  authenticated: boolean;
+  login?: string;               // viewer name or email
+  scopes: string[];             // always [] — Linear's viewer returns no key scopes
+}
+
+interface LinearIssueResult {   // flattened UI shape — matches the FE verbatim
+  id: string;
+  identifier: string;           // e.g. "ENG-123"
+  title: string;
+  description?: string;
+  url?: string;
+  teamName?: string;
+  teamKey?: string;             // e.g. "ENG"
+  state?: string;               // workflow-state name
+  priority?: number;            // Linear priority 0–4
+  assignee?: string;            // assignee display name
+  labels?: string[];            // label names
+  project?: string;             // project name
+  creator?: string;             // creator name
+  createdAt?: string;           // ISO 8601
+  updatedAt?: string;           // ISO 8601
+}
+```
+
+#### Examples
+
+```json
+// → check Linear auth (validates the env key via the GraphQL viewer probe)
+{ "jsonrpc":"2.0","id":54,"method":"linear.authStatus","params":{} }
+// ← response (LINEAR_API_KEY present and valid)
+{ "jsonrpc":"2.0","id":54,"result":{ "authenticated": true, "login": "Ada Lovelace", "scopes": [] } }
+```
+
+```json
+// → issues assigned to the authenticated viewer (typed filter, no NL prompt)
+{ "jsonrpc":"2.0","id":55,"method":"linear.listIssues","params":{ "filter":"assigned","limit":50 } }
+// ← response (flattened LinearIssueResult[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":55,"result":[
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","state":"In Progress",
+    "teamName":"Engineering","teamKey":"ENG","priority":2,"assignee":"Ada Lovelace",
+    "labels":["bug"],"url":"https://linear.app/acme/issue/ENG-123" } ] }
+```
+
+```json
+// → full-text issue search
+{ "jsonrpc":"2.0","id":56,"method":"linear.searchIssues","params":{ "query":"widget","limit":20 } }
+// ← response
+{ "jsonrpc":"2.0","id":56,"result":[
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","teamKey":"ENG",
+    "url":"https://linear.app/acme/issue/ENG-123" } ] }
+```
+
+#### Deferred — P1/P2 (NOT in this phase)
+
+Only the three **P0 reads** above ship now — they cover the entire surface the FE consumes today
+(`authStatus` + `fetchMyIssues` + `searchIssues`). The following are **out of scope** for this phase
+and are listed only so the surface is anticipated:
+
+- **P1 reads (not consumed by the FE today):** `linear.getIssue` `{ id | identifier }`,
+  `linear.viewer` `{}` → `LinearUser`, and `linear.listTeams` / `linear.listWorkflowStates` /
+  `linear.listProjects` / `linear.listLabels` — build only if a future create/edit UI needs them.
+- **P2 writes (FE types exist but have zero call sites):** `linear.createIssue`,
+  `linear.updateIssue`, and `linear.listComments` / `linear.createComment` — comments are not
+  modeled in the FE at all. Do **not** build unless a feature requires them.
+
+When built, the P1/P2 methods extend this `linear.*` namespace additively (with their own §9 error
+rows and any events) and do not change the P0 contract above.
 
 ## 6. Events & Subscriptions
 
