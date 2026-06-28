@@ -1846,21 +1846,22 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
 2. **Interactive.** Otherwise the backend **blocks the agent's stream** and surfaces a permissionrequest to the frontend. In the Electron reference this is an IPC push to the renderer; a Rustbackend exposing this over the wire would push it to subscribed clients and await a response.
 
-> **Implementation status (deferred).** The interactive *answer* and *recovery* RPCs —
-> `agent.respondPermission` (forward the chosen outcome to the provider) and
-> `agent.pendingPermissions` (re-fetch outstanding prompts after a reconnect) — are **not yet
-> wired** in `intentd`: `PermissionRegistry::resolve()` / `::pending()` have no production caller,
-> and the `agent.*` router catalog exposes neither method. The "frontend responds … / pending
-> requests are recoverable" flow described below is therefore **planned, not implemented**. The
-> normalized request payload, options normalization, `riskLevel` heuristic, outcome shape, and
-> 5-minute timeout are implemented as described.
+> **Implementation status.** The interactive *answer* and *recovery* RPCs are now **wired** in
+> `intentd`. `agent.respondPermission { requestId, outcome }` → `{ resolved: bool }` forwards the
+> chosen outcome to the blocked provider — `resolved` is `false` when no matching pending prompt
+> exists, and a malformed `outcome` shape is rejected as **`-32602`**. `agent.pendingPermissions
+> { agentId? }` → `{ requests: [...] }` snapshots the outstanding prompts (optionally filtered to a
+> single `agentId` = `sessionId`) so a reconnecting client can re-fetch them. Both reach
+> `PermissionRegistry::resolve()` / `::pending()` via `AgentManager` → `WorkspaceApi` / `Services`
+> → the `agent.*` router. The normalized request payload, options normalization, `riskLevel`
+> heuristic, outcome shape, and 5-minute timeout are implemented as described.
 >
-> **Default policy.** Production wiring uses `PermissionPolicy::default()` = **`Interactive`**,
-> with no config key or `with_policy()` override in production. Because the interactive resolve
-> RPC is unwired, a real `session/request_permission` blocks the agent's stream until the
-> 5-minute timeout and then auto-cancels. The configurable headless policies that **do** exist
-> today are **`AutoByRisk`** (allow low-risk / reads, deny medium/high), **`AllowAll`**, and
-> **`DenyAll`**.
+> **Default policy.** The production default is now **`AutoByRisk`** (auto-allow low-risk / reads,
+> auto-deny medium/high), selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
+> (`interactive|auto|allow|deny`, default `AutoByRisk`). An **`Interactive`** deployment instead
+> blocks the agent's stream and surfaces each prompt via `agent.pendingPermissions`, resolving it
+> via `agent.respondPermission` (still bounded by the 5-minute timeout when left unanswered).
+> **`AllowAll`** and **`DenyAll`** remain available for fully-headless deployments.
 
 The normalized permission request payload is:
 
@@ -1890,7 +1891,7 @@ The frontend responds with the chosen outcome, which the backend forwards to the
 { "requestId": "perm_1718600000000_1", "outcome": { "outcome": "selected", "optionId": "allow_once" } }
 ```
 
-Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The planned recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **not yet wired** — see the deferral note above.
+Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **now wired** — see the implementation note above.
 
 ## 9. Error Codes
 
