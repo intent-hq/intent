@@ -1721,21 +1721,37 @@ IMPLEMENTATION_SPEC.md §9 (state model) and §10 (Events).
 
 ## 7. Agent Streaming
 
-Agent assistant output is delivered as the `agent:stream:*` event family (subscribe with`events.subscribe(["agent:stream:*"])`, optionally scoped by `workspaceId`). The backend maps aprovider's streaming signals to these canonical event types:
+Agent assistant output is delivered as the `agent:stream:*` event family (subscribe with`events.subscribe(["agent:stream:*"])`, optionally scoped by `workspaceId`). The backend maps aprovider's streaming signals to these canonical event types.
+
+The backend currently emits **three** signals in production; the remaining `agent:stream:*`
+event types are defined as constants (and registered in `ALL_EVENT_TYPES`) but have **no
+production emit site** today and are reserved for future use.
+
+**Emitted today:**
 
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
-| stream start | agent:stream:start | { agentId, content: null, streamId? } |
-| text token(s) | agent:stream:chunk | { agentId, content, streamId? } — incremental assistant text |
-| structured blocks | agent:stream:content-blocks | { agentId, content, streamId? } — e.g. thinking / tool-call blocks |
-| assistant message | agent:stream:message | { agentId, content, message, streamId? } |
-| tool call | agent:stream:tool_use | { agentId, toolUse, streamId? } |
-| tool result | agent:stream:tool_result | { agentId, toolResult, streamId? } |
+| text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
+| tool call | agent:tool:call | the single tool signal; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, content, streamId? } |
+
+**Reserved / not currently emitted** — the following constants exist and are registered in
+`ALL_EVENT_TYPES`, but the backend does **not** emit them today:
+
+| Event type | intended meaning |
+| --- | --- |
+| agent:stream:start | stream start |
+| agent:stream:content-blocks | structured blocks (e.g. thinking / tool-call) |
+| agent:stream:message | assistant message |
+| agent:stream:tool_use | tool call |
+| agent:stream:tool_result | tool result |
+
+Structured consumers should prefer the §7.1 `chat.subscribe` channel (the canonical structured
+transcript) over reconstructing turn state from the firehose.
 
 Notes for client implementers:
 
-- **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Thinking/tool-call content arrivesas `content-blocks` / `tool_use` / `tool_result` interleaved with `chunk` text.
+- **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
 - **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
@@ -1830,6 +1846,22 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
 2. **Interactive.** Otherwise the backend **blocks the agent's stream** and surfaces a permissionrequest to the frontend. In the Electron reference this is an IPC push to the renderer; a Rustbackend exposing this over the wire would push it to subscribed clients and await a response.
 
+> **Implementation status (deferred).** The interactive *answer* and *recovery* RPCs —
+> `agent.respondPermission` (forward the chosen outcome to the provider) and
+> `agent.pendingPermissions` (re-fetch outstanding prompts after a reconnect) — are **not yet
+> wired** in `intentd`: `PermissionRegistry::resolve()` / `::pending()` have no production caller,
+> and the `agent.*` router catalog exposes neither method. The "frontend responds … / pending
+> requests are recoverable" flow described below is therefore **planned, not implemented**. The
+> normalized request payload, options normalization, `riskLevel` heuristic, outcome shape, and
+> 5-minute timeout are implemented as described.
+>
+> **Default policy.** Production wiring uses `PermissionPolicy::default()` = **`Interactive`**,
+> with no config key or `with_policy()` override in production. Because the interactive resolve
+> RPC is unwired, a real `session/request_permission` blocks the agent's stream until the
+> 5-minute timeout and then auto-cancels. The configurable headless policies that **do** exist
+> today are **`AutoByRisk`** (allow low-risk / reads, deny medium/high), **`AllowAll`**, and
+> **`DenyAll`**.
+
 The normalized permission request payload is:
 
 ```json
@@ -1858,7 +1890,7 @@ The frontend responds with the chosen outcome, which the backend forwards to the
 { "requestId": "perm_1718600000000_1", "outcome": { "outcome": "selected", "optionId": "allow_once" } }
 ```
 
-Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent.Pending requests are recoverable (a client reconnecting can re-fetch outstanding prompts) so a pagerefresh does not strand the agent.
+Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The planned recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **not yet wired** — see the deferral note above.
 
 ## 9. Error Codes
 
