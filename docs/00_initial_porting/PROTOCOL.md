@@ -1454,7 +1454,7 @@ interface ReviewThreadComment {
 
 ### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 106)*
 
-> **✅ SHIPPED (P0).** The `linear.*` P0 reads — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues` — are implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE), daemon-owned against Linear's GraphQL API. The P1/P2 methods listed under "Deferred — P1/P2" below remain out of scope. The field names and shapes here remain the source of truth for both sides.
+> **✅ SHIPPED (P0 + P1 reads).** The full `linear.*` read surface — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues`, `linear.getIssue`, `linear.viewer`, `linear.listTeams`, `linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels` — is implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE), daemon-owned against Linear's GraphQL API. The P2 write methods listed under "Deferred — P2 writes" below remain out of scope. The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Linear surface
 > is **read-only** and brokered by the Augment Cloud remote-tool proxy
@@ -1492,14 +1492,17 @@ so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `as
 / `project` / `labels`) are pre-flattened to scalar / `string[]` fields server-side. Absent
 (`None`) optional fields are **omitted** from the JSON.
 
-**Conventions.** Both read methods take an optional `limit` (a cap on the number of issues
-returned). Unlike the §5.5 uniform-pagination reads, the Linear reads return a **bare
-`LinearIssueResult[]` array** — there is **no `{ items, nextToken }` envelope and no cursor** (the
-consumed Linear surface is small and bounded; cursor pagination is deferred with the P1 reads
-below). Errors reuse the §9 conventions: missing/invalid params → `-32602`; a key that is **absent
-or fails the `viewer` probe** ("not configured"), and any other Linear/service failure → `-32603`
-with a descriptive `message` (e.g. `"Linear is not configured."`). There are **no** custom numeric
-codes.
+**Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
+returned). Unlike the §5.5 uniform-pagination reads, every Linear arm returns a **bare result** —
+either a bare object (`linear.authStatus`, `linear.viewer`, `linear.getIssue`) or a bare array
+(`linear.listIssues`, `linear.searchIssues`, `linear.listTeams`, `linear.listWorkflowStates`,
+`linear.listProjects`, `linear.listLabels`) — there is **no `{ items, nextToken }` envelope and no
+cursor** (the consumed Linear surface is small and bounded; cursor pagination is not part of this
+phase). Absent (`None`) optional fields are **omitted** from the JSON. Errors reuse the §9
+conventions: missing/invalid params → `-32602` (e.g. `linear.getIssue` requires `id` **or**
+`identifier`, otherwise `Missing required parameter: id`); a key that is **absent or fails the
+`viewer` probe** ("not configured"), and any other Linear/service failure → `-32603` with a
+descriptive `message` (e.g. `"Linear is not configured."`). There are **no** custom numeric codes.
 
 #### Auth & identity
 
@@ -1512,11 +1515,30 @@ codes.
 `filter` maps to a typed Linear GraphQL filter **server-side** (replacing the reference impl's
 natural-language prompt). `linear.listIssues` backs the FE's `fetchMyIssues`; `linear.searchIssues`
 backs the FE's `searchIssues`. Both return the flattened `LinearIssueResult[]` directly.
+`linear.getIssue` resolves a single flattened `LinearIssueResult` by UUID `id` **or** `ENG-123`-style
+`identifier` (the engine picks the lookup mode by string shape); it is not consumed by the FE today
+but completes the read surface.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit? | LinearIssueResult[] — the authenticated viewer's issues for the typed `filter` |
 | linear.searchIssues | query (req), limit? | LinearIssueResult[] — full-text issue search |
+| linear.getIssue | id \| identifier (one required — UUID `id` or `ENG-123`-style `identifier`) | LinearIssueResult — one flattened issue |
+
+#### Viewer & catalogs
+
+`linear.viewer` returns the authenticated user as a bare `LinearUser`; the four list methods return
+small bounded catalogs (teams, workflow states, projects, labels) as bare DTO arrays. All four
+lists accept an optional `limit`. None of these reads are currently consumed by the FE — they are
+forward-looking surface for a future create/edit UI.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.viewer | — | LinearUser — the authenticated user |
+| linear.listTeams | limit? | LinearTeam[] |
+| linear.listWorkflowStates | limit? | LinearWorkflowState[] |
+| linear.listProjects | limit? | LinearProject[] |
+| linear.listLabels | limit? | LinearLabel[] |
 
 #### DTO schemas
 
@@ -1543,6 +1565,44 @@ interface LinearIssueResult {   // flattened UI shape — matches the FE verbati
   creator?: string;             // creator name
   createdAt?: string;           // ISO 8601
   updatedAt?: string;           // ISO 8601
+}
+
+interface LinearUser {          // linear.viewer
+  id: string;
+  name: string;
+  displayName?: string;
+  email?: string;
+  avatarUrl?: string;
+}
+
+interface LinearTeam {          // linear.listTeams entry
+  id: string;
+  key: string;                  // e.g. "ENG"
+  name: string;
+  description?: string;
+}
+
+interface LinearWorkflowState { // linear.listWorkflowStates entry
+  id: string;
+  name: string;
+  type: string;                 // "backlog" | "unstarted" | "started" | "completed" | "canceled"
+  description?: string;
+  color?: string;
+}
+
+interface LinearProject {       // linear.listProjects entry
+  id: string;
+  name: string;
+  description?: string;
+  state: string;                // "backlog" | "planned" | "started" | "paused" | "completed" | "canceled"
+  url?: string;
+}
+
+interface LinearLabel {         // linear.listLabels entry
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
 }
 ```
 
@@ -1574,21 +1634,42 @@ interface LinearIssueResult {   // flattened UI shape — matches the FE verbati
     "url":"https://linear.app/acme/issue/ENG-123" } ] }
 ```
 
-#### Deferred — P1/P2 (NOT in this phase)
+```json
+// → one issue by ENG-123 identifier (or pass `id` for a UUID)
+{ "jsonrpc":"2.0","id":57,"method":"linear.getIssue","params":{ "identifier":"ENG-123" } }
+// ← response (single flattened LinearIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":57,"result":
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","state":"In Progress",
+    "teamKey":"ENG","url":"https://linear.app/acme/issue/ENG-123" } }
+```
 
-Only the three **P0 reads** above ship now — they cover the entire surface the FE consumes today
-(`authStatus` + `fetchMyIssues` + `searchIssues`). The following are **out of scope** for this phase
-and are listed only so the surface is anticipated:
+```json
+// → the authenticated user
+{ "jsonrpc":"2.0","id":58,"method":"linear.viewer","params":{} }
+// ← response (bare LinearUser; absent optionals omitted)
+{ "jsonrpc":"2.0","id":58,"result":
+  { "id":"u1","name":"Ada Lovelace","displayName":"ada","email":"ada@example.com" } }
+```
 
-- **P1 reads (not consumed by the FE today):** `linear.getIssue` `{ id | identifier }`,
-  `linear.viewer` `{}` → `LinearUser`, and `linear.listTeams` / `linear.listWorkflowStates` /
-  `linear.listProjects` / `linear.listLabels` — build only if a future create/edit UI needs them.
+```json
+// → list teams (bare array; optional limit caps the result)
+{ "jsonrpc":"2.0","id":59,"method":"linear.listTeams","params":{ "limit":50 } }
+// ← response (bare LinearTeam[])
+{ "jsonrpc":"2.0","id":59,"result":[
+  { "id":"t1","key":"ENG","name":"Engineering" } ] }
+```
+
+#### Deferred — P2 writes (NOT in this phase)
+
+The full read surface ships now (P0 + P1, above). The remaining methods are **out of scope** for
+this phase and are listed only so the surface is anticipated:
+
 - **P2 writes (FE types exist but have zero call sites):** `linear.createIssue`,
   `linear.updateIssue`, and `linear.listComments` / `linear.createComment` — comments are not
   modeled in the FE at all. Do **not** build unless a feature requires them.
 
-When built, the P1/P2 methods extend this `linear.*` namespace additively (with their own §9 error
-rows and any events) and do not change the P0 contract above.
+When built, the P2 writes extend this `linear.*` namespace additively (with their own §9 error
+rows and any events) and do not change the read contract above.
 
 ## 6. Events & Subscriptions
 
