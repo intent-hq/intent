@@ -1871,8 +1871,9 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
 | -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. |
 | -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. |
+| -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 
-There are **no custom numeric codes** outside the standard `-327xx` range; server-specificconditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") arereported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`)never receive an error response except for parse/invalid-request failures detected before thenotification status is known.
+The only custom numeric code outside the standard `-327xx` range is `-32005` (Conflict, above); other server-specificconditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") arereported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`)never receive an error response except for parse/invalid-request failures detected before thenotification status is known.
 
 ## 10. Thin-Client Guidance
 
