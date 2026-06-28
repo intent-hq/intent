@@ -1220,11 +1220,7 @@ method requires `workspaceId`.
 
 ### 5.27 `github.*` namespace *(new in intentd — not part of the ported 106)*
 
-> **⚠️ TARGET contract — BE implementation in progress.** This section documents the **agreed
-> wire shape** for the `github.*` namespace so the frontend can build against it **in parallel**
-> with the backend work (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B). It is the contract,
-> not a status report — methods land incrementally and return `-32601` until wired. Field names
-> and shapes here are the source of truth for both sides.
+> **✅ SHIPPED.** The `github.*` namespace is fully implemented and wired end-to-end (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B) — 21 methods routed daemon-owned against `api.github.com`, with real §5.5 `nextToken`/`limit` pagination on the list reads. The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the GitHub +
 > identity surface is served by the Augment Cloud `augment-api.client.ts` (a hosted proxy +
@@ -1458,11 +1454,7 @@ interface ReviewThreadComment {
 
 ### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 106)*
 
-> **⚠️ TARGET contract — BE implementation in progress.** This section documents the **agreed
-> wire shape** for the `linear.*` namespace so the frontend can build the rewire against it **in
-> parallel** with the backend work (engine: LIN-ENG; wire arm: LIN-WIRE). It is the contract, not a
-> status report — methods return `-32601` until wired. Field names and shapes here are the source of
-> truth for both sides.
+> **✅ SHIPPED (P0).** The `linear.*` P0 reads — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues` — are implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE), daemon-owned against Linear's GraphQL API. The P1/P2 methods listed under "Deferred — P1/P2" below remain out of scope. The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Linear surface
 > is **read-only** and brokered by the Augment Cloud remote-tool proxy
