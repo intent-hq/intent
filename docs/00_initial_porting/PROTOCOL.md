@@ -150,16 +150,17 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`augmentcode/intent`**'sElectron WebSocket API** (`getSupportedMethods()` on the reference server returns this list; thecounts below sum to 106). On top of the ported surface `intentd` adds **additive, intentd-only methods and events** that are *not* part of the verified 106, so the ported count stays intact. The additive surface is:
+The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`augmentcode/intent`**'sElectron WebSocket API** (`getSupportedMethods()` on the reference server returns 106 method names; the two `browser.*` methods are explicit **won't-port-v1** in intentd — §5.9 — so the counts below sum to **104**). On top of the ported surface `intentd` adds **additive, intentd-only methods and events** that are *not* part of the verified ported surface, so the ported count stays intact. The additive surface is:
 
 - `settings.*` — 4 methods (§5.12), server-side settings.
 - `workspace.dismissAttention` / `workspace.markSeen` (§5.1) — mutate the workspace `attention` field; the derived `activity` field is read-only.
-- interactive `terminal.*` — `create` / `write` / `resize` / `kill` / `getBuffer` (§5.13); the ported `terminal.list` / `terminal.readOutput` stay in the 106.
+- interactive `terminal.*` — `create` / `write` / `resize` / `kill` / `getBuffer` (§5.13); the ported `terminal.list` / `terminal.readOutput` stay in the 104.
 - `host.*` / `forward.*` (§5.14) — host-capability probe, FE-served open-external, and remote port-forwarding.
 - `search.*` (§5.15) — 8 BE-owned search methods (`inFiles`, `fileNames`, `messages`, `events`, `memories`, `notes`, `codebase`, `cancel`); search runs on the daemon, where the code/data live, with `search:result` / `search:done` streaming.
 - `drafts.*` (§5.16) — 3 methods (`get` / `set` / `clear`) for BE-persisted, per-client message drafts, with the `draft:changed` event.
 - `client.hello` (§5.17) — stable client-identity handshake; the disambiguation key for `drafts.*` and future per-viewer read cursors.
-- `system.status` / `system.shutdown` (control fast-path) — a **UDS-only** transport/process-control pair: `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown. Like `events.subscribe`/`unsubscribe`, they are intercepted **before** the JSON-RPC dispatcher; they are intentd-only ops methods, **not** part of the ported 106 and **not** advertised by `getSupportedMethods`. Consumed by `intentd status` / `intentd stop`.
+- `system.status` / `system.shutdown` (control fast-path) — a **UDS-only** transport/process-control pair: `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown. Like `events.subscribe`/`unsubscribe`, they are intercepted **before** the JSON-RPC dispatcher; they are intentd-only ops methods, **not** part of the ported 104 and **not** advertised by `getSupportedMethods`. Consumed by `intentd status` / `intentd stop`.
+- **Catalog parity additions** — small additive read/write methods routed alongside the ported surface and **not** counted in the ported 104: `comment.resolveThread` (§5.3); `task.list` / `task.get` (§5.4); `agent.diagnostics` (§5.5); `git.unstage`, `git.changes`, `git.diffs` (alias `git.diff`), `git.commits` (alias `git.log`) (§5.6); `file.tree` (§5.9). See each per-namespace table for shapes.
 - **Code Changes Review** — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
 - **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
 - **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
@@ -170,7 +171,7 @@ The API exposes **106 JSON-RPC methods** across 16 namespaces, **ported from **`
 
 > **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** is now specified as a daemon-owned TARGET contract (`linear.*`, §5.28); **Sentry** integration remains **deferred** (no `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
 
-Framing stays: **"106 ported from `augmentcode/intent` + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`)"**. The ported 106 count is unchanged — every namespace in the count table below is part of the verified 106; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact.
+Framing stays: **"104 ported from `augmentcode/intent` (the reference 106 minus the two `browser.*` methods, explicit won't-port-v1) + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`; plus the catalog-parity additions enumerated above)"**. The ported 104 count is unchanged — every namespace in the count table below is part of the verified ported surface; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact. The catalog-parity additions (`comment.resolveThread`, `task.list`/`task.get`, `agent.diagnostics`, `git.unstage`/`git.changes`/`git.diffs`/`git.commits`, `file.tree`) are likewise additive and leave the ported `comment`/`task`/`agent`/`git`/`file` counts unchanged.
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -182,7 +183,6 @@ Framing stays: **"106 ported from `augmentcode/intent` + additive intentd-only s
 | git | 6 | status, stage, commit, agentCommit, checkMergeConflicts, getBranches |
 | pr | 9 | merge, status, updateBranch, waitForChanges, listReviewComments, replyToReviewComment, resolveThread, listComments, postComment |
 | script | 9 | list, create, remove, start, stop, restart, output, status, run |
-| browser | 2 | exec, docs |
 | terminal | 2 | list, readOutput |
 | file | 6 | read, write, list, delete, mkdir, rename |
 | event | 7 | recentFiles, agentActivity, workspaceSummary, directoryChanges, query, subscribe*, unsubscribe* |
@@ -310,6 +310,12 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 | comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, suggestionOriginal?, suggestionProposed? | { ok, ... } |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
+**`comment.*` extensions (new in intentd — additive; do not change the ported count of 5).** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| comment.resolveThread | noteId (req), threadId? or commentId?, resolved?: bool (default true) | { ok, ... } — marks every comment in the thread (un)resolved |
+
 ### 5.4 `task.*`
 
 | Method | Params | Result |
@@ -330,6 +336,13 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 // ← response
 { "jsonrpc":"2.0","id":11,"result":{ "ok": true, "lineNumber": 3, "status": "done" } }
 ```
+
+**`task.*` extensions (new in intentd — additive; do not change the ported count of 8).** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| task.list | workspaceId (req), status? | { tasks: WorkspaceTask[] } — optional `status` filter |
+| task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
 
 ### 5.5 `agent.*`
 
@@ -370,6 +383,12 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 { "jsonrpc":"2.0","id":20,"result":{ "success": true, "queued": false, "messageId": "user-msg-1718...-ab12" } }
 ```
 
+**`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.diagnostics | workspaceId (req), agentId?, taskNoteId?, staleRespondingAfterMs? | { diagnostics, text } — JSON snapshot plus a pre-formatted text rendering; optional filters narrow to one agent or task |
+
 ### 5.6 `git.*`
 
 | Method | Params | Result |
@@ -387,6 +406,15 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 // ← response
 { "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
 ```
+
+**`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus three working-tree reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
+| git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
+| git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
+| git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
 
 ### 5.7 `pr.*`
 
@@ -472,15 +500,22 @@ host-agnostic.
 { "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
 ```
 
+**`file.*` extensions (new in intentd — additive; do not change the ported count of 6).** A file-explorer P0 read returning the entries directly under the given path as a **bare array**; the FE anchors the explorer at the workspace root and lazy-lists children via the existing `file.list`. Shares the within-workspace containment guard with the other `file.*` ops.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| file.tree | path? (default .) | [{ path, name, isDirectory }] — bare array; paths outside the workspace rejected |
+
 > **`browser.*` — NOT PORTING (v1): won't port.** `browser.exec` (Chrome DevTools Protocol
 > automation) and `browser.docs` are **not implemented** in `intentd` and are **not v1 wire
 > surface** — the headless backend port has no consumer for them, and `browser.exec` would need
 > a dedicated CDP driver. They are **won't-port-v1** (deferred, not cancelled): revisit only if a
 > future frontend feature needs in-app browser automation — see the future-integrations note
-> (§5.26). The `terminal.*` and `file.*` methods above are **unaffected** and stay in the 106.
+> (§5.26). The two `browser.*` methods are the reason the ported count is 104 rather than the
+> reference 106; the `terminal.*` and `file.*` methods above are **unaffected** and stay in the 104.
 
 > **Interactive terminals.** `terminal.list` / `terminal.readOutput` above are the ported,
-> read-only methods (part of the 106). `intentd` adds interactive
+> read-only methods (part of the 104). `intentd` adds interactive
 > `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
 
 ### 5.10 `event.*` (query/aggregation)
@@ -523,7 +558,7 @@ These are **historical/aggregate read** helpers — distinct from live streaming
   { "id":"implementor","name":"Implementor","description":"...","source":"bundled" } ] } }
 ```
 
-**`specialist.*` full CRUD** *(new in intentd — not part of the ported 106).* `specialist.list` is
+**`specialist.*` full CRUD** *(new in intentd — not part of the ported 104).* `specialist.list` is
 the ported method; `get` / `create` / `edit` / `delete` are **additive** and do not change the
 ported `specialist` count of 1. Definitions resolve in **3 tiers** — **project**
 (`.augment/specialists/`) overrides **user** (`~/.augment/specialists/`) overrides **bundled** — and
@@ -548,7 +583,7 @@ non-existent or `bundled` definition → `-32602`.
   "source":"project","path":".augment/specialists/reviewer.md" } } }
 ```
 
-### 5.12 `settings.*` *(new in intentd — not part of the ported 106)*
+### 5.12 `settings.*` *(new in intentd — not part of the ported 104)*
 
 > New namespace. The settings.* methods are new in intentd and are not among the106 methods ported from augmentcode/intent's Electron WS API. The Electron app keeps itssettings on the frontend (electron-store / local-storage / Redux); intentd must instead ownthe settings that affect server-side behavior and let thin clients read/mutate them over the wire.These methods are global — like specialist.list / repo.list they do not requireworkspaceId (§3.6).
 
@@ -630,10 +665,10 @@ interface SettingDefinition {
 { "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5180 } }
 ```
 
-### 5.13 Interactive `terminal.*` *(new in intentd — not part of the ported 106)*
+### 5.13 Interactive `terminal.*` *(new in intentd — not part of the ported 104)*
 
 > **New methods.** The `augmentcode/intent` WS API exposes terminals **read-only**
-> (`terminal.list` / `terminal.readOutput`, §5.9 — both stay in the 106). `intentd` adds the
+> (`terminal.list` / `terminal.readOutput`, §5.9 — both stay in the 104). `intentd` adds the
 > interactive methods below so a thin client can open, drive, resize, and tear down PTYs that
 > run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
 > host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
@@ -723,7 +758,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
 ```
 
-### 5.15 `search.*` *(new in intentd — not part of the ported 106)*
+### 5.15 `search.*` *(new in intentd — not part of the ported 104)*
 
 > **New namespace.** In `augmentcode/intent` search is FE/IPC-driven and scattered
 > (`workspace:search-in-files` via ripgrep, the `list-files` filename path, an empty
@@ -807,7 +842,7 @@ with an unknown or already-finished `requestId` is a no-op success (`{ ok: true 
 **not** part of `search.*` — they stay under `pr.*` / the provider-agnostic `SourceControl`
 (§5.7, host-agnostic).
 
-### 5.16 `drafts.*` *(new in intentd — not part of the ported 106)*
+### 5.16 `drafts.*` *(new in intentd — not part of the ported 104)*
 
 > **New namespace.** In `augmentcode/intent`, message drafts (typed-but-not-sent input) live in
 > per-client `localStorage` (`transient-ui-slice` `chatDrafts: Record<agentId, string>`,
@@ -863,7 +898,7 @@ affordance without leaking content, and lets the owning client's *other* connect
 `-32602`. `drafts.get` for a non-existent draft returns `null` (not an error); `drafts.clear`
 on a non-existent draft is a no-op success.
 
-### 5.17 `client.hello` handshake & stable client identity *(new in intentd — not part of the ported 106)*
+### 5.17 `client.hello` handshake & stable client identity *(new in intentd — not part of the ported 104)*
 
 > **New handshake.** In `augmentcode/intent` the WS server mints an **ephemeral**
 > `clientId = ws-${Date.now()}-${rand}` per connection (`websocket-api-server.ts`), uses it only
@@ -916,7 +951,7 @@ on a non-existent draft is a no-op success.
 re-sending `client.hello` on the same connection updates `name` / `capabilities` and re-returns
 the same `server` block.
 
-### 5.18 `accept-changes.*` *(new in intentd — not part of the ported 106)*
+### 5.18 `accept-changes.*` *(new in intentd — not part of the ported 104)*
 
 The multi-step "accept the agent's work" workflow: the backend owns local git **and** the forge
 (`SourceControl`, IMPLEMENTATION_SPEC.md §7), so a thin client drives commit → push → create-PR →
@@ -972,7 +1007,7 @@ from the new FE), so `execute` rejects `action:"export"`. A step that fails sets
   stored inside the backend (IMPLEMENTATION_SPEC.md §9 `diffs`); never returned by a `diffs.*` RPC.
   Diff content reaches the client only via the `file-tracking.*` reads and the §6.5 change events.
 
-### 5.19 `file-tracking.*` (reads) *(new in intentd — not part of the ported 106)*
+### 5.19 `file-tracking.*` (reads) *(new in intentd — not part of the ported 104)*
 
 A per-file audit trail as changes move through the git stages
 (`unstaged → staged → committed → pushed → pull_request → merged`) with agent attribution. Only
@@ -1004,7 +1039,7 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
   "truncated":false,"totalCount":1 } }
 ```
 
-### 5.20 Change metrics (reads) *(new in intentd — not part of the ported 106)*
+### 5.20 Change metrics (reads) *(new in intentd — not part of the ported 104)*
 
 Read-only line-change aggregates (ported from the reference `line-changes` module). Aggregation
 itself (`metrics.calculate`, the `update*` writers, `mark-agent-active`) is **internal** — the
@@ -1026,7 +1061,7 @@ Metrics are recommended durable (IMPLEMENTATION_SPEC.md §9 `workspace_metrics` 
   "byAgent":{ "agent-123":{ "additions":140,"deletions":12,"filesChanged":3 } } } }
 ```
 
-### 5.21 `rules.*` *(new in intentd — not part of the ported 106)*
+### 5.21 `rules.*` *(new in intentd — not part of the ported 104)*
 
 The backend owns prompt **rules**: the workspace rule files
 (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization
@@ -1064,7 +1099,7 @@ origin (e.g. `"AGENTS.md"`, `".augment/guidelines.md"`, a specialist id, or `"us
     "updatedAt":1750000000000,"editable":true } ] } } }
 ```
 
-### 5.22 `mcp.servers.*` *(new in intentd — not part of the ported 106)*
+### 5.22 `mcp.servers.*` *(new in intentd — not part of the ported 104)*
 
 The **external** MCP-server lifecycle/config surface, backed by the `mcp.servers` setting
 (**sensitive** — §5.12; secrets in `env`/`headers` are redacted on the wire). This is the
@@ -1111,7 +1146,7 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 > internal `search.memories` path (IMPLEMENTATION_SPEC.md §5.15) scans it; a `memories.*` namespace
 > (list/create/search/delete) could be added additively later **only if** a memories UI ever ships.
 
-### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 106)*
+### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 104)*
 
 The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
 usage per agent and per model and writes the durable `tokenUsage` field on the `Workspace`; only the
@@ -1141,7 +1176,7 @@ pushed via `workspace:tokenUsage-changed` (§6.5).
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
 
-### 5.24 Session stats — `agent.getSessionStats` *(new in intentd — not part of the ported 106)*
+### 5.24 Session stats — `agent.getSessionStats` *(new in intentd — not part of the ported 104)*
 
 Per-session usage rollup sourced from the auggie CLI (`session stats --json`) and cached on the
 `stats` field of the `AgentSession`. `agent.getSessionStats` is a point **read**; live changes are
@@ -1162,7 +1197,7 @@ session. The same object appears as the `stats` field on `AgentSession` in `agen
 { "jsonrpc":"2.0","id":63,"result":{ "stats":{ "creditsUsed":1.54,"messageCount":18,"toolCount":42 } } }
 ```
 
-### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` *(new in intentd — not part of the ported 106)*
+### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` *(new in intentd — not part of the ported 104)*
 
 A per-workspace **setup script** that provisions a fresh worktree (install deps, build prereqs, …),
 persisted on the durable `setupScript` field of the `Workspace`. `detectProjectType` inspects
@@ -1218,9 +1253,9 @@ method requires `workspaceId`.
 > surface, and none is planned for v1. Clients observe backend work through domain **events** (§6.5),
 > not through a logging API.
 
-### 5.27 `github.*` namespace *(new in intentd — not part of the ported 106)*
+### 5.27 `github.*` namespace *(new in intentd — not part of the ported 104)*
 
-> **✅ SHIPPED.** The `github.*` namespace is fully implemented and wired end-to-end (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B) — 21 methods routed daemon-owned against `api.github.com`, with real §5.5 `nextToken`/`limit` pagination on the list reads. The field names and shapes here remain the source of truth for both sides.
+> **✅ SHIPPED.** The `github.*` namespace is fully implemented and wired end-to-end (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B) — 21 methods routed daemon-owned against `api.github.com`, with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in §5.27 conventions below). The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the GitHub +
 > identity surface is served by the Augment Cloud `augment-api.client.ts` (a hosted proxy +
@@ -1262,7 +1297,7 @@ are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`,
 `in_reply_to_id → inReplyToId`. The set of fields is otherwise identical to the FE types.
 
 **Conventions.** Unless noted, `owner` + `repo` are **(req)** string params (and `number` is the
-**(req)** PR/issue number where applicable). Reads that paginate follow the §5.5 uniform pagination
+**(req)** PR/issue number where applicable). Reads that paginate follow the uniform pagination
 contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
 in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
 missing/invalid params and "not found" (404) lookups → `-32602`; a token that is absent or fails
@@ -1452,7 +1487,7 @@ interface ReviewThreadComment {
   "ok": false, "guidance": "GitHub uses a Personal Access Token from the environment. Set GITHUB_TOKEN (or GH_TOKEN) and restart." } }
 ```
 
-### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 106)*
+### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 104)*
 
 > **✅ SHIPPED (P0 + P1 reads).** The full `linear.*` read surface — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues`, `linear.getIssue`, `linear.viewer`, `linear.listTeams`, `linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels` — is implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE), daemon-owned against Linear's GraphQL API. The P2 write methods listed under "Deferred — P2 writes" below remain out of scope. The field names and shapes here remain the source of truth for both sides.
 
@@ -1493,7 +1528,7 @@ so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `as
 (`None`) optional fields are **omitted** from the JSON.
 
 **Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
-returned). Unlike the §5.5 uniform-pagination reads, every Linear arm returns a **bare result** —
+returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items, nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the `github.*` list reads, etc.), every Linear arm returns a **bare result** —
 either a bare object (`linear.authStatus`, `linear.viewer`, `linear.getIssue`) or a bare array
 (`linear.listIssues`, `linear.searchIssues`, `linear.listTeams`, `linear.listWorkflowStates`,
 `linear.listProjects`, `linear.listLabels`) — there is **no `{ items, nextToken }` envelope and no
@@ -1738,7 +1773,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 
 | Namespace | Types (selected) | Notes |
 | --- | --- | --- |
-| file | file:changed | Canonical. Discriminate on data.action = create |
+| file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.action, data.path |
 | task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:status-changed |  |
@@ -1748,7 +1783,9 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
 | workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7) |
 | spec/goal | spec:updated, goal:updated |  |
-| comment | comment:added |  |
+| comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
+| pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
+| agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
@@ -1799,6 +1836,37 @@ wire method**:
 Clients **read** current state and **subscribe** to changes; they never invoke the internal
 writers. This keeps the FE thin: it reflects backend-owned state rather than driving it. See
 IMPLEMENTATION_SPEC.md §9 (state model) and §10 (Events).
+
+### 6.9 Snapshot+delta subscription channels *(new in intentd)*
+
+The `events.subscribe` firehose (§6.1) carries every bus event; a thin client that needs **structured live state for a specific entity family** subscribes to a typed channel instead. Each channel is intercepted on the transport fast-path **before** the JSON-RPC dispatcher (alongside `events.subscribe` and `system.*`), returns a `{ subscriptionId }` ack, then pushes a seq-0 **snapshot** followed by ordered **deltas** as `subscription.push` notifications (§3.3). The firehose stays unchanged and **coexists** with these channels.
+
+| Method | Channel | Scope | Snapshot shape (seq 0) | Notes |
+| --- | --- | --- | --- | --- |
+| `note.subscribe` / `note.unsubscribe` | note | per-workspace (`workspaceId` req — `-32602` if missing/empty) | array of `Note` entities (newest-first) | `note:created`/`updated`/`deleted` → `added`/`updated`/`removedIds` via a re-read of the entity. |
+| `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of `WorkspaceTask` entities | tails `task:status-changed`/`task:ready-tasks-changed`. |
+| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of `Workspace` entities visible to the connection | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`. |
+| `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | array of `Comment` entities | tails `comment:added`/`resolved`. |
+| `agent.subscribe` / `agent.unsubscribe` (no `eventTypes`) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Likewise `agent.unsubscribe` without `workspaceId` is the channel form. |
+| `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty) | newest `agent.getConversation` page, plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
+
+**Frame shapes.** Every push is a JSON-RPC notification with method `subscription.push`:
+
+```json
+// seq-0 snapshot
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-1","kind":"snapshot","seq":0,
+  "snapshot":[ /* entities */ ] } }
+
+// delta (seq 1, 2, …)
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-1","kind":"delta","seq":1,
+  "delta":{ "added":[…], "updated":[…], "removedIds":[…] } } }
+```
+
+`added`/`updated`/`removedIds` are each present only when non-empty; the **invariant** is that the seq-0 snapshot reduced with every delta (honoring `removedIds`) equals a fresh full read of the channel. `*.unsubscribe` takes `{ subscriptionId }` and returns `{ success }` (`false` if the id is unknown for this connection). Subscriptions are **per-connection** and are dropped on disconnect.
+
+`note` and `task` entities carry an explicit `rev` (the optimistic-concurrency version, §4); `workspace`, `comment`, `agent`, and `chat` entities deliberately do **not** carry `rev`.
 
 ## 7. Agent Streaming
 
