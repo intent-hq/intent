@@ -472,6 +472,13 @@ host-agnostic.
 { "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
 ```
 
+> **`browser.*` — NOT PORTING (v1): won't port.** `browser.exec` (Chrome DevTools Protocol
+> automation) and `browser.docs` are **not implemented** in `intentd` and are **not v1 wire
+> surface** — the headless backend port has no consumer for them, and `browser.exec` would need
+> a dedicated CDP driver. They are **won't-port-v1** (deferred, not cancelled): revisit only if a
+> future frontend feature needs in-app browser automation — see the future-integrations note
+> (§5.26). The `terminal.*` and `file.*` methods above are **unaffected** and stay in the 106.
+
 > **Interactive terminals.** `terminal.list` / `terminal.readOutput` above are the ported,
 > read-only methods (part of the 106). `intentd` adds interactive
 > `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
