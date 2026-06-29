@@ -88,14 +88,22 @@ make test       # cargo test --workspace
 make build      # cargo build --workspace
 make clean      # remove build artifacts
 
-# Run the full desktop dev stack in one command (builds intentd, launches the
-# cloudlands-fe desktop app, and spawns the bundled daemon over UDS on a
-# dedicated gitignored dev data dir). Long-running; Ctrl-C to stop.
-# NOTE: cloudlands-fe is now an Electron + SvelteKit + TypeScript app, but the
-# `make dev` target still drives it through the legacy `pnpm tauri dev`
-# invocation and needs updating for the Electron toolchain (see the Makefile).
-make dev        # FE + intentd dev stack
-make dev-daemon # intentd alone (UDS) against the dev data dir
+# Local dev runs as two long-running processes, one per terminal
+# (each is long-running; Ctrl-C to stop):
+#
+#   # Terminal 1 — the intentd daemon on its default (real) data dir + socket
+#   make run-intentd
+#
+#   # Terminal 2 — the Electron + SvelteKit frontend (packages/cloudlands-fe),
+#   # launched via `pnpm run dev`. By default it connects to the daemon's
+#   # default intentd socket, so it pairs directly with `make run-intentd`.
+#   make run-fe
+#
+# Isolated dev-data variant: run the daemon against a dedicated gitignored dev
+# data dir, then point the frontend at that socket instead of the default:
+#
+#   make dev-daemon                                          # intentd (UDS) on the dev data dir
+#   INTENTD_SOCKET=$(DEV_DATA_DIR)/intentd.sock make run-fe  # FE → dev-data socket
 ```
 
 ## Contributing & Workflow
