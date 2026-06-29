@@ -13,8 +13,10 @@ CI/CD. The **Rust backend (`intentd`) comes first**; the desktop frontend lands 
 tasks, comments, agents, git, pull requests, scripts, terminals, files, and events — and
 exposes it over a JSON-RPC 2.0 API on a Unix-domain socket plus a secure WSS/TLS LAN
 transport. Clients are thin; all business logic lives in the daemon, including the ACP agent
-runtime. A Tauri/Svelte desktop frontend is **planned** and will live in this monorepo as a
-second submodule once it exists.
+runtime. The desktop frontend now **exists** and lives in this monorepo as the
+`packages/cloudlands-fe` submodule — an **Electron + SvelteKit + TypeScript** app. It talks
+to `intentd` only through the `AppClient` JSON-RPC boundary (which ships with a mock
+implementation, so the frontend can also run standalone). It was migrated in with full history.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -24,8 +26,8 @@ second submodule once it exists.
 │  │ packages/                                              │  │
 │  │   ├── intentd/        ⇒ submodule → cloudlands-ai/intentd │
 │  │   │     Rust backend daemon (JSON-RPC over UDS)        │  │
-│  │   └── (frontend/)     ⇒ Tauri + Svelte desktop UI      │  │
-│  │                          ── PLANNED, not yet present ── │  │
+│  │   └── cloudlands-fe/   ⇒ submodule → cloudlands-ai/cloudlands-fe │
+│  │         Electron + SvelteKit desktop UI                │  │
 │  ├────────────────────────────────────────────────────────┤  │
 │  │ docs/00_initial_porting/   IMPLEMENTATION_SPEC + PROTOCOL │
 │  │ AGENTS.md   Makefile   cliff.toml   .github/workflows/ │  │
@@ -42,7 +44,7 @@ for the full design.
 | Component | Status |
 | --- | --- |
 | `packages/intentd` | **Backend port — Milestones 1–10 implemented.** ~143 JSON-RPC methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, the settings/rules/specialist/`mcp.servers` agent ecosystem, the ACP agent runtime (`agent.*`), and intentd transport extensions. Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
-| Desktop frontend | **Planned.** Tauri + Svelte; not yet a submodule. |
+| `packages/cloudlands-fe` | **Desktop frontend — imported with full history.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs). |
 
 ## Repository Layout
 
@@ -51,12 +53,13 @@ monorepo/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                 # fmt/clippy/test + build matrix + PR-title check
-├── .gitmodules                    # Submodule definitions (intentd)
+├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe)
 ├── cliff.toml                     # git-cliff changelog config (conventional commits)
 ├── docs/
 │   └── 00_initial_porting/        # IMPLEMENTATION_SPEC.md + PROTOCOL.md
 ├── packages/
-│   └── intentd/                   # ⇒ submodule → cloudlands-ai/intentd (Rust backend)
+│   ├── intentd/                   # ⇒ submodule → cloudlands-ai/intentd (Rust backend)
+│   └── cloudlands-fe/             # ⇒ submodule → cloudlands-ai/cloudlands-fe (Electron + SvelteKit frontend)
 ├── AGENTS.md                      # AI agent workflow guide (commit/PR conventions)
 ├── Makefile                       # Cross-package task orchestration
 └── README.md                      # ← you are here
@@ -64,9 +67,10 @@ monorepo/
 
 ## Submodules
 
-| Path               | Repository                                                        | Visibility |
-| ------------------ | ---------------------------------------------------------------- | ---------- |
-| `packages/intentd` | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) | Private    |
+| Path                     | Repository                                                                    | Visibility |
+| ------------------------ | ----------------------------------------------------------------------------- | ---------- |
+| `packages/intentd`       | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd)             | Private    |
+| `packages/cloudlands-fe` | [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Private    |
 
 ## Getting Started
 
@@ -85,8 +89,11 @@ make build      # cargo build --workspace
 make clean      # remove build artifacts
 
 # Run the full desktop dev stack in one command (builds intentd, launches the
-# cloudlands-fe Tauri app, and spawns the bundled daemon over UDS on a
+# cloudlands-fe desktop app, and spawns the bundled daemon over UDS on a
 # dedicated gitignored dev data dir). Long-running; Ctrl-C to stop.
+# NOTE: cloudlands-fe is now an Electron + SvelteKit + TypeScript app, but the
+# `make dev` target still drives it through the legacy `pnpm tauri dev`
+# invocation and needs updating for the Electron toolchain (see the Makefile).
 make dev        # FE + intentd dev stack
 make dev-daemon # intentd alone (UDS) against the dev data dir
 ```
@@ -123,3 +130,4 @@ Conventions:
 | Repository | Description |
 | --- | --- |
 | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) | Rust backend daemon (private) — JSON-RPC over UDS, mounted at `packages/intentd`. |
+| [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Electron + SvelteKit desktop frontend (private) — mounted at `packages/cloudlands-fe`. |
