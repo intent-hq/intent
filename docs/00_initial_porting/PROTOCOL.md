@@ -721,12 +721,16 @@ machine. See IMPLEMENTATION_SPEC.md §5.1 (transport matrix) and §5.5 (remote m
 - **TCP / WSS ⇒ treat as remote.** Side effects happen on another machine, so GUI-spawning
   commands may not be visible and detected dev-server URLs need forwarding.
 
-**`host.*` — capability probe + FE-served intents:**
+**`host.*` — capability probe + FE-served intents + host-services:**
 
 | Method | Params | Result |
 | --- | --- | --- |
 | host.status | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
 | host.openExternal | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
+| host.checkGit | — | { available, version?, path? } — daemon-host `git` probe (PATH + OS-common dirs) |
+| host.checkAuggie | — | { available, version?, path? } — daemon-host `auggie` probe (honours `context.auggiePath` / `providers.paths.auggie`, else canonical discovery) |
+| host.listDirectory | path? | { path, parent\|null, home, entries: [{ name, path, isDirectory, isGitRepo }] } — host-side folder browse for a workspace-root picker; `path` defaults to `home`; `~`/`~/...` expand; entries sorted dirs-first then by name; nested `.git` directory *and* worktree `.git` files mark `isGitRepo:true` |
+| host.directoryStatus | path (req) | { exists, isDirectory, isEmpty, isGitRepo, isSubdirectoryOfGitRepo, path, parentGitRoot?, relativePathFromGitRoot? } — host-side probe used to decide create-vs-reuse flow; walks parents looking for a `.git` dir or worktree pointer |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
@@ -734,6 +738,11 @@ machine. See IMPLEMENTATION_SPEC.md §5.1 (transport matrix) and §5.5 (remote m
 - `host.openExternal` is **served by the frontend, not the daemon** (a reverse RPC): on a
   headless/remote daemon, "open this URL/file" intents are dispatched to the connected client so
   they open on the user's machine.
+- `host.checkGit` / `host.checkAuggie` / `host.listDirectory` / `host.directoryStatus` are
+  additive **host-services**: they resolve on the daemon host (so a remote client sees the
+  worktrees and binaries that actually live where workspaces run) and are answered on **both**
+  UDS and WSS, like the rest of `host.*`. They never error on a missing binary — `available:false`
+  is the contract — and `directoryStatus` returns `-32602` on a missing `path` parameter.
 
 **`forward.*` — port-forwarding (remote only):**
 
@@ -756,6 +765,13 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // → open a detected URL on the user's machine (FE-served)
 { "jsonrpc":"2.0","id":81,"method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
 // ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
+// → host-services: probe daemon-side git (workspace-root picker gating)
+{ "jsonrpc":"2.0","id":82,"method":"host.checkGit" }
+// ← { "jsonrpc":"2.0","id":82,"result":{ "available":true,"version":"git version 2.45.0","path":"/usr/bin/git" } }
+// → host-services: browse a folder on the daemon host
+{ "jsonrpc":"2.0","id":83,"method":"host.listDirectory","params":{ "path":"~/code" } }
+// → host-services: classify a candidate workspace path (create vs reuse vs subdir-of-repo)
+{ "jsonrpc":"2.0","id":84,"method":"host.directoryStatus","params":{ "path":"~/code/myrepo/src" } }
 ```
 
 ### 5.15 `search.*` *(new in intentd — not part of the ported 104)*
