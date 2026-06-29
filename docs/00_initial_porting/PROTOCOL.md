@@ -1488,7 +1488,7 @@ interface ReviewThreadComment {
 
 ### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 104)*
 
-> **✅ SHIPPED (P0 + P1 reads).** The full `linear.*` read surface — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues`, `linear.getIssue`, `linear.viewer`, `linear.listTeams`, `linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels` — is implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE), daemon-owned against Linear's GraphQL API. The P2 write methods listed under "Deferred — P2 writes" below remain out of scope. The field names and shapes here remain the source of truth for both sides.
+> **✅ SHIPPED (P0 + P1 reads + P2 writes).** The full `linear.*` read surface — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues`, `linear.getIssue`, `linear.viewer`, `linear.listTeams`, `linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels` — plus the P2 issue-write methods `linear.createIssue` / `linear.updateIssue` are implemented and wired end-to-end (engine: LIN-ENG; wire arm: LIN-WIRE; P2 writes: intentd PR #71), daemon-owned against Linear's GraphQL API. Only the `linear.listComments` / `linear.createComment` comment surface (no FE shape) remains out of scope — see "Deferred — comments" below. The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Linear surface
 > is **read-only** and brokered by the Augment Cloud remote-tool proxy
@@ -1693,26 +1693,100 @@ interface LinearLabel {         // linear.listLabels entry
   { "id":"t1","key":"ENG","name":"Engineering" } ] }
 ```
 
-#### Deferred — P2 writes (NOT in this phase)
+#### Writes — P2 (createIssue / updateIssue)
 
-The full read surface ships now (P0 + P1, above). The remaining methods are **out of scope** for
-this phase and are listed only so the surface is anticipated:
+`linear.createIssue` runs the `issueCreate` GraphQL mutation; `linear.updateIssue` runs
+`issueUpdate`. The router validates the required wire fields up front — `createIssue` requires a
+non-empty `title` **and** `teamId`, `updateIssue` requires a non-empty `issueId` (otherwise
+`-32602` `Missing required parameter: <field>`) — and forwards only the fields present. Both return
+the **flattened `LinearIssueResult`** (the same shape as the reads). A key that is **absent or
+fails the `viewer` probe** ("not configured"), and any other Linear/service failure → `-32603`.
+🔒 The API key is never logged, echoed, or returned.
 
-- **P2 writes (FE types exist but have zero call sites):** `linear.createIssue`,
-  `linear.updateIssue`, and `linear.listComments` / `linear.createComment` — comments are not
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.createIssue | title (req), teamId (req), description?, assigneeId?, stateId?, priority?, labelIds? | LinearIssueResult — the created issue, flattened |
+| linear.updateIssue | issueId (req), title?, description?, assigneeId?, stateId?, priority? | LinearIssueResult — the updated issue, flattened |
+
+##### DTO schemas
+
+```ts
+interface CreateIssueRequest {  // linear.createIssue — `title` + `teamId` required
+  title: string;
+  teamId: string;
+  description?: string;
+  assigneeId?: string;
+  stateId?: string;
+  priority?: number;            // Linear priority 0–4
+  labelIds?: string[];
+}
+
+interface UpdateIssueRequest {  // linear.updateIssue — `issueId` required; rest optional
+  issueId: string;
+  title?: string;
+  description?: string;
+  assigneeId?: string;
+  stateId?: string;
+  priority?: number;            // Linear priority 0–4
+}
+```
+
+##### Examples
+
+```json
+// → create an issue (title + teamId required)
+{ "jsonrpc":"2.0","id":60,"method":"linear.createIssue",
+  "params":{ "title":"New issue","teamId":"team-uuid","priority":2,"labelIds":["l1"] } }
+// ← response (flattened LinearIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":60,"result":
+  { "id":"a1b2","identifier":"ENG-200","title":"New issue","teamKey":"ENG","priority":2,
+    "url":"https://linear.app/acme/issue/ENG-200" } }
+```
+
+```json
+// → missing required `teamId` → -32602
+{ "jsonrpc":"2.0","id":61,"method":"linear.createIssue","params":{ "title":"X" } }
+// ← error
+{ "jsonrpc":"2.0","id":61,"error":{ "code":-32602,"message":"Missing required parameter: teamId" } }
+```
+
+```json
+// → update an issue (issueId required; only present fields are sent through IssueUpdateInput)
+{ "jsonrpc":"2.0","id":62,"method":"linear.updateIssue",
+  "params":{ "issueId":"uuid-1","title":"Updated","stateId":"s1" } }
+// ← response (flattened LinearIssueResult)
+{ "jsonrpc":"2.0","id":62,"result":
+  { "id":"uuid-1","identifier":"ENG-123","title":"Updated","state":"Done",
+    "url":"https://linear.app/acme/issue/ENG-123" } }
+```
+
+```json
+// → not-configured (no LINEAR_API_KEY, or the viewer probe fails) → -32603
+{ "jsonrpc":"2.0","id":63,"method":"linear.createIssue","params":{ "title":"X","teamId":"t1" } }
+// ← error
+{ "jsonrpc":"2.0","id":63,"error":{ "code":-32603,"message":"Linear is not configured." } }
+```
+
+#### Deferred — comments (NOT in this phase)
+
+The read surface (P0 + P1) and the P2 issue writes ship now (above). Only the comment surface
+remains **out of scope** and is listed so it is anticipated:
+
+- **Comments (no FE shape):** `linear.listComments` / `linear.createComment` — comments are not
   modeled in the FE at all. Do **not** build unless a feature requires them.
 
-When built, the P2 writes extend this `linear.*` namespace additively (with their own §9 error
-rows and any events) and do not change the read contract above.
+When built, the comment methods extend this `linear.*` namespace additively (with their own §9
+error rows and any events) and do not change the contract above.
 
 ### 5.29 `sentry.*` namespace *(new in intentd — not part of the ported 104)*
 
-> **✅ SHIPPED (P0 reads).** The P0 `sentry.*` read surface — `sentry.authStatus`,
-> `sentry.listIssues`, `sentry.searchIssues` — is implemented and wired end-to-end (engine: the
+> **✅ SHIPPED (P0 + P1 reads + P2 writes).** The full `sentry.*` surface — the P0 reads
+> `sentry.authStatus`, `sentry.listIssues`, `sentry.searchIssues`; the P1 reads
+> `sentry.listProjects`, `sentry.getIssue`; and the P2 writes `sentry.resolveIssue`,
+> `sentry.ignoreIssue`, `sentry.assignIssue` — is implemented and wired end-to-end (engine: the
 > new `intent-sentry` crate; wire arm: `intent-services` `sentry_ops` → `intent-transport`
-> router), daemon-owned against Sentry's REST API. The P1 read methods (`sentry.listProjects`,
-> `sentry.getIssue`) and the P2 write methods listed under "Deferred — P1/P2" below remain out
-> of scope. The field names and shapes here remain the source of truth for both sides.
+> router; P1 reads + P2 writes: intentd PR #72), daemon-owned against Sentry's REST API. The
+> field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the Sentry
 > surface is **read-only** and brokered by the Augment Cloud remote-tool proxy (the same
@@ -1782,6 +1856,32 @@ natural-language prompt); `query` is forwarded verbatim as the Sentry search str
 | --- | --- | --- |
 | sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit? | SentryIssueResult[] — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`) |
 | sentry.searchIssues | query (req — missing → `-32602`), project?, limit? | SentryIssueResult[] — full-text issue search |
+| sentry.getIssue | id \| shortId (one required — UUID/numeric `id` or `WEB-1`-style `shortId`; both missing → `-32602`) | SentryIssueResult — one flattened issue |
+
+#### Projects (P1)
+
+`sentry.listProjects` returns the configured organization's projects as a bare `SentryProject[]`
+(parity with `linear.listTeams` / `linear.listProjects`); it accepts an optional `limit`. Not
+consumed by the FE today — forward-looking surface for a future project picker.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.listProjects | limit? | SentryProject[] |
+
+#### Writes — P2 (resolve / ignore / assign)
+
+`sentry.resolveIssue` / `sentry.ignoreIssue` mutate the issue's status (`resolved` / `ignored`);
+`sentry.assignIssue` sets the assignee. All three require a **non-empty `id`** (otherwise `-32602`
+`Missing required parameter: id`); `assignIssue`'s `assignedTo` is **optional — an absent value
+unassigns** the issue. Each returns the updated flattened `SentryIssueResult`. A credential pair
+that is **absent or fails the org probe** ("not configured"), and any other Sentry/service failure
+→ `-32603`. 🔒 The auth token is never logged, echoed, or returned.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.resolveIssue | id (req) | SentryIssueResult — the issue with `status: "resolved"` |
+| sentry.ignoreIssue | id (req) | SentryIssueResult — the issue with `status: "ignored"` |
+| sentry.assignIssue | id (req), assignedTo? (absent = unassign) | SentryIssueResult — the issue after (un)assignment |
 
 #### DTO schemas
 
@@ -1790,6 +1890,14 @@ interface SentryAuthState {       // shared with the auth probe; never carries t
   authenticated: boolean;
   organization?: string;          // resolved org slug (derived identity only)
   error?: string;                 // descriptive failure when the probe fails
+}
+
+interface SentryProject {         // sentry.listProjects entry
+  id: string;
+  slug: string;
+  name: string;
+  platform?: string;
+  isMember?: boolean;
 }
 
 interface SentryIssueResult {     // flattened UI shape — matches the FE verbatim
@@ -1867,22 +1975,60 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":75,"error":{ "code":-32603,"message":"Sentry is not configured." } }
 ```
 
-#### Deferred — P1/P2 (NOT in this phase)
+```json
+// → one issue by shortId (or pass `id` for a UUID/numeric id)
+{ "jsonrpc":"2.0","id":76,"method":"sentry.getIssue","params":{ "shortId":"WEB-1" } }
+// ← response (single flattened SentryIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":76,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
 
-The P0 read surface ships now (above). The remaining methods are **out of scope** for this
-phase and are listed only so the surface is anticipated:
+```json
+// → getIssue with neither `id` nor `shortId` → -32602
+{ "jsonrpc":"2.0","id":77,"method":"sentry.getIssue","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":77,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
+```
 
-- **P1 reads (forward-looking; FE has no call sites today):** `sentry.listProjects` — return
-  the org's projects as a bare DTO array (parity with `linear.listTeams`/`linear.listProjects`);
-  `sentry.getIssue` — return a single flattened `SentryIssueResult` by `id` (UUID) **or**
-  `shortId` (e.g. `WEB-1`). Both extend the read surface additively without changing the P0
-  contract above.
-- **P2 writes (FE types exist but have zero call sites):** `sentry.resolveIssue` /
-  `sentry.ignoreIssue` (status mutations) and `sentry.assignIssue` (assignment). Do **not**
-  build unless a feature requires them.
+```json
+// → list the org's projects (bare SentryProject[]; optional limit caps the result)
+{ "jsonrpc":"2.0","id":78,"method":"sentry.listProjects","params":{ "limit":25 } }
+// ← response (bare SentryProject[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":78,"result":[
+  { "id":"1","slug":"web","name":"Web","platform":"javascript","isMember":true } ] }
+```
 
-When built, the P1/P2 methods extend this `sentry.*` namespace additively (with their own §9
-error rows and any events) and do not change the P0 read contract above.
+```json
+// → resolve an issue (id required) → updated flattened issue with status "resolved"
+{ "jsonrpc":"2.0","id":79,"method":"sentry.resolveIssue","params":{ "id":"1" } }
+// ← response
+{ "jsonrpc":"2.0","id":79,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"resolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
+
+```json
+// → assign an issue; omit `assignedTo` to unassign
+{ "jsonrpc":"2.0","id":80,"method":"sentry.assignIssue","params":{ "id":"1","assignedTo":"user-1" } }
+// ← response (updated flattened SentryIssueResult)
+{ "jsonrpc":"2.0","id":80,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
+
+```json
+// → a write with a missing/empty `id` → -32602
+{ "jsonrpc":"2.0","id":81,"method":"sentry.resolveIssue","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
+```
 
 ## 6. Events & Subscriptions
 
