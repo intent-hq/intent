@@ -1070,6 +1070,15 @@ are reads; `update` is the UI-invoked op that edits the **user-override** conten
 into an agent's system prompt (the **injection pipeline**) runs **internally** as agents start —
 there is no wire method for it (§6.8). Every method requires `workspaceId` except where noted.
 
+Within that internal pipeline the **per-agent-type specialization** layer is **not settings-only**:
+it resolves through a **3-tier fallback** (highest priority first) — the `endUserRules`
+**user-settings override** (edited via `rules.update`) **>** the **workspace file**
+`.augment/agent-rules/{agentType}.md` **>** the compiled-in **bundled built-in** template — so a
+workspace rule file and a bundled default both back the per-agent-type key when no settings override
+exists. This is a faithful port of the reference `getInstructionWithCommon` composition (with the
+agent-id alias map and the utility/background-agent special-cases) and remains internal — no method
+or shape changes (intentd PR #73).
+
 | Method | Params | Result |
 | --- | --- | --- |
 | rules.list | workspaceId? | { rules: RuleSet } — all rule sources for the workspace (or global when omitted) |
