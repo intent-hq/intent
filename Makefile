@@ -14,7 +14,7 @@ DEV_PORT ?= 5180
 # plus the local UDS socket). Override for UDS-only, e.g. `make run-intentd LISTEN=uds` (or `tcp`).
 LISTEN ?= both
 
-.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev dev-daemon run-intentd
+.PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev-daemon run-intentd run-fe
 
 all: build
 
@@ -49,20 +49,6 @@ test-intentd: ensure-submodules
 clean:
 	rm -rf $(INTENTD_DIR)/target
 
-dev: ensure-submodules ## Run the full FE+daemon dev stack (builds intentd, launches cloudlands-fe)
-	@mkdir -p $(DEV_DATA_DIR)
-	@echo "[dev] starting cloudlands-fe + intentd dev stack"
-	@echo "[dev] intentd dev data dir: $(DEV_DATA_DIR) (UDS socket: $(DEV_DATA_DIR)/intentd.sock)"
-	# `pnpm tauri dev` runs the FE's `beforeDevCommand` (`pnpm sidecar && pnpm dev`):
-	# scripts/prepare-sidecar.mjs cargo-builds intentd (release) and stages it as the
-	# Tauri sidecar, then src-tauri/src/daemon.rs spawns that bundled intentd over UDS on
-	# app startup. So this one command builds intentd + launches the FE + spawns the daemon.
-	# INTENTD_DATA_DIR is honored by both the FE's rpc client and the spawned daemon (which
-	# inherits this env), so dev stays on the dedicated gitignored data dir. This target is
-	# long-running and does not exit until you stop the dev app (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
-	cd $(FE_DIR) && INTENTD_DATA_DIR=$(DEV_DATA_DIR) pnpm tauri dev
-
 dev-daemon: ensure-submodules ## Run intentd alone (UDS) against a dedicated dev data dir
 	@mkdir -p $(DEV_DATA_DIR)
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS socket: $(DEV_DATA_DIR)/intentd.sock)"
@@ -80,3 +66,14 @@ run-intentd: ensure-submodules ## Run intentd with default settings (real data d
 	# transport: `both` (default) serves the local UDS socket AND HTTPS+WSS on 0.0.0.0:5180
 	# for the iOS app; override with `LISTEN=uds` (UDS only) or `LISTEN=tcp` (HTTPS+WSS only).
 	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
+
+run-fe: ensure-submodules ## Run the Electron + SvelteKit FE alone (packages/cloudlands-fe)
+	# Launches only the FE dev stack (vite + Electron). The FE does NOT spawn intentd;
+	# it connects to an already-running daemon, so pair this with `make run-intentd`
+	# (both use the default socket: ~/Library/Application Support/intentd/intentd.sock).
+	# Point the FE at a different daemon by setting INTENTD_SOCKET — make exports it to
+	# the FE automatically, so e.g. `INTENTD_SOCKET=$(DEV_DATA_DIR)/intentd.sock make run-fe`
+	# targets `make dev-daemon`. Left unset by default so the FE uses its default socket.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	cd $(FE_DIR) && pnpm run dev
