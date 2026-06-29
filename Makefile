@@ -75,5 +75,5 @@ run-fe: ensure-submodules ## Run the Electron + SvelteKit FE alone (packages/clo
 	# the FE automatically, so e.g. `INTENTD_SOCKET=$(DEV_DATA_DIR)/intentd.sock make run-fe`
 	# targets `make dev-daemon`. Left unset by default so the FE uses its default socket.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
-	cd $(FE_DIR) && pnpm run dev
+	# Always runs `pnpm install` first so FE deps stay synced to the lockfile.
+	cd $(FE_DIR) && pnpm install && pnpm run dev
