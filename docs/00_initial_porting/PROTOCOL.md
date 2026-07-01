@@ -757,6 +757,9 @@ in the bullet under this table).
 | host.openInEditor | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — **FE-served**: launches the user's editor on `path` (optional `line`/`column` hint). On a local daemon the launch short-circuits via the resolved `host.listInstalledEditors` entry; on a remote daemon the intent is dispatched to the connected client so the editor opens on the user's laptop |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
+| host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
+| host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
+| host.execStream.cancel | client → daemon | requestId (req) | { ok: true, cancelled: bool } — reap a live stream's process group (idempotent on unknown ids) |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
@@ -780,6 +783,30 @@ in the bullet under this table).
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
   workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
   stay on `script.*` and `terminal.*` (§5.8, §12) — `host.exec` is one-shot only.
+- `host.execStream` is the **streaming/interactive** counterpart for FE surfaces (e.g.
+  `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
+  something neither the buffered `host.exec` nor the PTY-mangling `terminal.*` nor the
+  workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
+  process-group + `kill_on_drop` + `timeoutMs` reap, enriched PATH, caller `env` on top,
+  workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
+  `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
+  `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
+  daemon publishes one bus frame per output chunk plus one terminal exit frame, all correlated
+  by `requestId`:
+  - `host:exec:stdout` — `{ requestId, chunk }` where `chunk` is base64-encoded so binary
+    output crosses the wire intact (mirrors `terminal:data.chunk`).
+  - `host:exec:stderr` — same shape as stdout, over the child's stderr.
+  - `host:exec:exit` — terminal: `{ requestId, ok, exitCode?, timedOut?, cancelled? }`.
+    Emitted exactly once; subscribers unregister on receipt.
+  Callers pipe stdin two ways: an optional initial `stdin`/`stdinBase64` on the request itself
+  (written to the child before any reader task starts) and follow-up `host.execStream.write
+  { requestId, stdin?, stdinBase64?, eof? }` calls that append bytes and optionally close the
+  child's stdin end (`eof=true`) so a reader-to-EOF like `cat` / `augment-cli` finishes
+  cleanly. Only one of `stdin` / `stdinBase64` may be set per request. `host.execStream.cancel
+  { requestId }` reaps the whole process group (SIGTERM → grace → SIGKILL, mirroring the
+  `host.exec` timeout path) and is idempotent on unknown / already-finished ids
+  (`cancelled:false` still surfaces `ok:true`). Command payloads carry env values that are
+  **never logged or streamed** — only `stdout` / `stderr` / exit metadata crosses the wire.
 
 **`forward.*` — port-forwarding (remote only):**
 
@@ -815,6 +842,28 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
   "command":"echo","args":["hello"],"timeoutMs":5000
 } }
 // ← { "jsonrpc":"2.0","id":82,"result":{ "stdout":"hello\n","stderr":"","exitCode":0 } }
+// → daemon-owned streaming exec (argv only, cwd validated against workspace root)
+{ "jsonrpc":"2.0","id":90,"method":"host.execStream","params":{
+  "command":"cat","stdin":"hello\n"
+} }
+// ← { "jsonrpc":"2.0","id":90,"result":{ "requestId":"hexec-<uuid>" } }
+// then, correlated by requestId, subscribers see (base64 chunks):
+// { "method":"events.event","params":{ "event":{ "type":"host:exec:stdout",
+//   "data":{ "requestId":"hexec-<uuid>","chunk":"aGVsbG8K" } } } }
+// (optionally more stdout/stderr frames)
+// → follow-up stdin write, closing the child's stdin end so `cat` exits
+{ "jsonrpc":"2.0","id":91,"method":"host.execStream.write","params":{
+  "requestId":"hexec-<uuid>","stdin":"","eof":true
+} }
+// ← { "jsonrpc":"2.0","id":91,"result":{ "ok": true } }
+// terminal frame (ok:true when exitCode==0):
+// { "method":"events.event","params":{ "event":{ "type":"host:exec:exit",
+//   "data":{ "requestId":"hexec-<uuid>","ok":true,"exitCode":0 } } } }
+// → force-reap a live stream's whole process group
+{ "jsonrpc":"2.0","id":92,"method":"host.execStream.cancel","params":{
+  "requestId":"hexec-<uuid>"
+} }
+// ← { "jsonrpc":"2.0","id":92,"result":{ "ok": true, "cancelled": true } }
 ```
 
 ### 5.15 `search.*` *(new in intentd — not part of the ported 104)*
