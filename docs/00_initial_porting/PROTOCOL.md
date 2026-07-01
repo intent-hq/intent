@@ -698,7 +698,7 @@ interface SettingDefinition {
 
 | Method | Params | Result |
 | --- | --- | --- |
-| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command? | { terminalId } — spawns a PTY; `command` omitted → default shell |
+| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `env` layers onto the daemon's inherited environment (later keys override) |
 | terminal.write | terminalId (req), data (req, base64) | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int) | { ok: true } |
 | terminal.kill | terminalId (req) | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
