@@ -807,6 +807,21 @@ in the bullet under this table).
   `host.exec` timeout path) and is idempotent on unknown / already-finished ids
   (`cancelled:false` still surfaces `ok:true`). Command payloads carry env values that are
   **never logged or streamed** — only `stdout` / `stderr` / exit metadata crosses the wire.
+- **ACP model/readiness handshake probes ride `host.execStream`** — the four
+  bidirectional-stdio provider probes (codex / claude-code / pi / droid) that R1b retired do
+  **not** get a dedicated `provider.probeAcp` RPC. Every guarantee an ACP handshake needs is
+  already on this surface: argv-only spawn (no shell), `PATH` enrichment, workspace-cwd
+  containment, secret-safe env, initial `stdin` payload written before any reader task starts,
+  `timeoutMs` reap of the whole process group, and a terminal `host:exec:exit` frame carrying
+  `timedOut` / `cancelled` metadata. A thin FE probe therefore (1) calls `host.execStream`
+  with `command`+`args` for the ACP CLI and the `initialize` JSON-RPC line as `stdin`,
+  (2) subscribes to `host:exec:*` frames correlated by `requestId`, (3) parses the
+  `\n`-terminated JSON reply out of the base64 stdout chunks, and (4) closes the child via
+  `host.execStream.write { eof:true }` (clean exit) or `host.execStream.cancel` (force reap).
+  The `providerId` a caller would want to tag such a probe with never needed to cross the
+  wire — it stays as FE-local correlation. Retiring the pre-R1b probes in favor of this
+  reuse keeps the daemon a **thin process host** and avoids duplicating spawn / reap / stdin
+  plumbing behind a purpose-built RPC.
 
 **`forward.*` — port-forwarding (remote only):**
 
