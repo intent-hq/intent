@@ -1,0 +1,36 @@
+refactor(mcp): daemon-manage FE-bundled MCP servers via mcp.servers.*
+
+The FE-bundled workspace/notes/git MCP server binaries were spawned as
+Node children by ServerManager over `stdio: [...ipc]`. Move that
+lifecycle to the daemon: ServerManager becomes a thin registration
+shim that calls `mcp.servers.create` / `toggle` / `restart` /
+`getStatus` / `delete` (PROTOCOL.md §5.22) through the shared backend
+JSON-RPC client, and no longer imports child_process or
+process-tree-kill.
+
+- `startServer` builds a §5.22 stdio config (command + args + env,
+  same argv/env layout the FE spawn used) and calls
+  `mcp.servers.create` + `mcp.servers.toggle(true)`; falls back to
+  `mcp.servers.update` if a definition with the same id already lives
+  in the daemon's persistent settings.
+- `stopServer` calls `mcp.servers.toggle(false)` + `mcp.servers.delete`.
+- `restartServer` calls `mcp.servers.restart`.
+- `pingServer` is implemented against `mcp.servers.getStatus`
+  (`state === "running"`), preserving the HealthMonitor contract.
+- `callTool` throws an explicit not-supported error: MCP tool calls
+  now flow through the daemon's MCP surface, not back through the FE.
+- Event surface (`server:started` / `server:stopped` / `server:error`
+  / `server:restarting`) is preserved for McpHub.
+
+BE surface required no changes: `mcp.servers.create` already accepts
+`{ transport: "stdio", command, args?, env? }` and the FE spawn never
+set `cwd` — workspace context flows through env vars / CLI args, so
+the lack of `cwd` on the wire is a non-issue.
+
+Honest-degradation: the bundled binaries currently speak Node IPC
+(process.send/on('message')) rather than stdio JSON-RPC, so the
+daemon's MCP `initialize` handshake will surface as an `error`
+status via `mcp.servers:status-changed` and McpHub's `server:error`
+event. This is invisible to users today — the FE `mcp.ipc.ts`
+tool-call / list-tools / create-server channels have no live callers
+and `mcp-client.ts` is unreferenced.
