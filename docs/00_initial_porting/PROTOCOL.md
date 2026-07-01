@@ -744,24 +744,32 @@ machine. See IMPLEMENTATION_SPEC.md §5.1 (transport matrix) and §5.5 (remote m
 
 **`host.*` — capability probe + FE-served intents:**
 
-| Method | Params | Result |
-| --- | --- | --- |
-| host.status | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
-| host.openExternal | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
-| host.openInEditor | editorId (req), path (req), line?, column? | { ok: true } — **FE-served**: launches the user's editor on `path` (optional `line`/`column` hint). On a local daemon the launch short-circuits via the resolved `host.listInstalledEditors` entry; on a remote daemon the intent is dispatched to the connected client so the editor opens on the user's laptop |
-| host.pickApplication | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
-| host.exec | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
+The `Direction` column below records who initiates the JSON-RPC **request** on the wire:
+`client → daemon` is a normal client-called method (client picks the `id`); `daemon → client`
+is a **reverse RPC** where the *daemon* is the requester and the connected client responds
+(daemon picks the `id`, always in the `rev-<n>` namespace — the mechanism is spelled out
+in the bullet under this table).
+
+| Method | Direction | Params | Result |
+| --- | --- | --- | --- |
+| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
+| host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
+| host.openInEditor | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — **FE-served**: launches the user's editor on `path` (optional `line`/`column` hint). On a local daemon the launch short-circuits via the resolved `host.listInstalledEditors` entry; on a remote daemon the intent is dispatched to the connected client so the editor opens on the user's laptop |
+| host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
+| host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
   `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
 - `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
-  frontend, not the daemon** (reverse RPCs): on a headless/remote daemon, these
-  inherently-user-side GUI intents are dispatched to the connected client so they resolve on
-  the user's machine. Reverse-request ids use the `rev-<n>` namespace with a 30s default
-  timeout; the local branch short-circuits directly on the daemon host (via `OsOpener` for
-  `openExternal`, the resolved `host.listInstalledEditors` entry for `openInEditor`, and — when
-  available — a native chooser for `pickApplication`).
+  frontend, not the daemon** (reverse RPCs — the *daemon* sends the JSON-RPC `request` and the
+  connected client returns the `response`). Clients never call these methods on the daemon;
+  the daemon dispatches them to the client so these inherently-user-side GUI intents resolve
+  on the user's machine. Reverse-request ids are always in the `rev-<n>` namespace (allocated
+  by the daemon, distinct from the client's own `id` space) with a 30s default timeout; the
+  local branch short-circuits directly on the daemon host without a wire round-trip (via
+  `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
+  `openInEditor`, and — when available — a native chooser for `pickApplication`).
 - `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
   commands itself. It uses `argv` only — **no shell interpolation** — spawns with the child in
   its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree), enriches
