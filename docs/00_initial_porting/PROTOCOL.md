@@ -415,6 +415,27 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
+| git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
+
+**Streaming `git.clone`.** Long-running clones cannot use the buffered `host.exec` (§5.14) — the FE animates a progress bar as objects arrive. `git.clone` mirrors the `search.*` streaming shape (§5.15 / §6.5): the method returns `{ requestId, targetPath }` immediately and the daemon spawns `git clone --progress` with a piped stderr, parses the canonical phases (`starting` → `counting` → `compressing` → `receiving` → `resolving` → `checkout` → `complete`) into `git:clone:progress` frames, and emits a terminal `git:clone:done` when the child exits, times out (5 min hard cap), or fails to spawn. `GIT_LFS_SKIP_SMUDGE=1` is preserved so a missing/unreachable LFS object never fails the clone. The `url` is used only at spawn time; neither the URL nor the environment ever appears in the streamed payloads, and any `user:pass@` credential fragment in stderr is redacted before it surfaces on the `git:clone:done { error }` frame.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":40,"method":"git.clone",
+  "params":{ "url":"https://github.com/example/repo.git","parentDir":"/tmp/wt","targetName":"repo","requestId":"clone-1" } }
+// ← prompt ack — the clone runs in the background
+{ "jsonrpc":"2.0","id":40,"result":{ "requestId":"clone-1","targetPath":"/tmp/wt/repo" } }
+// ← incremental progress (§6.5), correlated by requestId
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"git:clone:progress","workspaceId":"","id":"evt-a1",
+    "timestamp":"2026-07-01T05:01:00.000Z","actor":{ "type":"system" },
+    "data":{ "requestId":"clone-1","phase":"receiving","percent":45,"message":"Receiving objects: 45%" } } } }
+// ← terminal event — clone finished
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"git:clone:done","workspaceId":"","id":"evt-a2",
+    "timestamp":"2026-07-01T05:01:12.000Z","actor":{ "type":"system" },
+    "data":{ "requestId":"clone-1","ok":true } } } }
+```
 
 ### 5.7 `pr.*`
 
@@ -727,13 +748,30 @@ machine. See IMPLEMENTATION_SPEC.md §5.1 (transport matrix) and §5.5 (remote m
 | --- | --- | --- |
 | host.status | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
 | host.openExternal | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
+| host.openInEditor | editorId (req), path (req), line?, column? | { ok: true } — **FE-served**: launches the user's editor on `path` (optional `line`/`column` hint). On a local daemon the launch short-circuits via the resolved `host.listInstalledEditors` entry; on a remote daemon the intent is dispatched to the connected client so the editor opens on the user's laptop |
+| host.pickApplication | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
+| host.exec | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
   `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
-- `host.openExternal` is **served by the frontend, not the daemon** (a reverse RPC): on a
-  headless/remote daemon, "open this URL/file" intents are dispatched to the connected client so
-  they open on the user's machine.
+- `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
+  frontend, not the daemon** (reverse RPCs): on a headless/remote daemon, these
+  inherently-user-side GUI intents are dispatched to the connected client so they resolve on
+  the user's machine. Reverse-request ids use the `rev-<n>` namespace with a 30s default
+  timeout; the local branch short-circuits directly on the daemon host (via `OsOpener` for
+  `openExternal`, the resolved `host.listInstalledEditors` entry for `openInEditor`, and — when
+  available — a native chooser for `pickApplication`).
+- `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
+  commands itself. It uses `argv` only — **no shell interpolation** — spawns with the child in
+  its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree), enriches
+  `PATH` with the daemon's host PATH, and merges caller-supplied `env` on top. It is
+  **secret-safe**: no env values are logged or returned; only `stdout` / `stderr` / `exitCode`
+  (and `timedOut: true` on the timeout path) cross the wire. `cwd` requires `workspaceId` so
+  the daemon can enforce the same lexical within-workspace containment guard that `file.*` uses;
+  a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
+  workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
+  stay on `script.*` and `terminal.*` (§5.8, §12) — `host.exec` is one-shot only.
 
 **`forward.*` — port-forwarding (remote only):**
 
@@ -756,6 +794,19 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // → open a detected URL on the user's machine (FE-served)
 { "jsonrpc":"2.0","id":81,"method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
 // ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
+// → launch the user's editor on the user's machine (FE-served; local daemons short-circuit)
+{ "jsonrpc":"2.0","id":83,"method":"host.openInEditor","params":{
+  "editorId":"vscode","path":"/repo/src/main.rs","line":12,"column":3
+} }
+// ← { "jsonrpc":"2.0","id":83,"result":{ "ok": true } }
+// → present "open with…" chooser on the user's machine (FE-served)
+{ "jsonrpc":"2.0","id":84,"method":"host.pickApplication","params":{ "path":"/repo/README.md" } }
+// ← { "jsonrpc":"2.0","id":84,"result":{ "applicationId":"com.microsoft.VSCode" } }
+// → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
+{ "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
+  "command":"echo","args":["hello"],"timeoutMs":5000
+} }
+// ← { "jsonrpc":"2.0","id":82,"result":{ "stdout":"hello\n","stderr":"","exitCode":0 } }
 ```
 
 ### 5.15 `search.*` *(new in intentd — not part of the ported 104)*
@@ -2123,6 +2174,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Reserved-but-unused in the reference impl — subscribing yields zero events today. |
+| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error? }`; `error` is present iff `ok == false` and never carries the source URL or credentials. |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
 | script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
