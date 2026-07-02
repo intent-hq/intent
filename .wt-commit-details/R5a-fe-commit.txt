@@ -1,0 +1,33 @@
+refactor(system.ipc): retire spawn/execAsync in favor of host.exec / host.execStream
+
+Per PROTOCOL.md §5.14 (AUDIT-R5a), the FE main process no longer spawns
+workspace-adjacent commands itself. All non-LOCAL-GUI arbitrary execution in
+`system.ipc.ts` now rides through the daemon:
+
+- USER_MCP_CHANNELS.MCP_LIST / MCP_ADD / MCP_REMOVE
+  → `hostExec(auggiePath, { args: [...argv], timeoutMs })` (one-shot). The
+    settings-file fallbacks when the auggie CLI is missing are preserved.
+
+- SYSTEM_CHANNELS.EXECUTE_COMMAND
+  → `hostExec('/bin/sh' | 'cmd.exe', { args: ['-c'|'/c', command], cwd,
+    timeoutMs })`. The shell shim preserves the existing shell-form wire
+    schema so the CommitsTimeline git callers do not have to change.
+
+- SYSTEM_CHANNELS.EXECUTE_COMMAND_STREAMING
+  → `hostExecStream(shellCmd, { args, cwd, stdin, onStdout, onStderr })`,
+    piping stdout/stderr and a terminal `close` frame back over the existing
+    `auggie:stream:${sessionId}` renderer channel.
+
+Every remaining `spawn(` / `execAsync` / `require('child_process')` site in
+this file is a LOCAL-GUI editor/IDE launcher (VSCode diff/open, JetBrains,
+Xcode, `osascript` admin prompt for the CLI symlink) and is now annotated
+with a one-line `LOCAL-GUI:` comment so the R5 audit grep confirms every
+survivor is intentional client-local UI, not workspace execution.
+
+Adds wire-contract tests
+(`src/features/system/main/__tests__/system-ipc-host-exec.test.ts`) that
+capture the registered `ipcMain.handle` callbacks, invoke each handler with
+a validated payload, and assert the exact argv/cwd/timeout forwarded to the
+`hostExec` / `hostExecStream` seams — plus PROTOCOL-shaped mock replies for
+success, non-zero exit, missing-auggie, and streaming stdout/stderr/close
+frames (including the RPC-failure fallback).
