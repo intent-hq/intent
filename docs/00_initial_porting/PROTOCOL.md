@@ -165,6 +165,7 @@ The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`
 - **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
 - **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
 - **Model catalog** — `models.list` (§5.30), the BE-owned rich model catalog for FE model pickers. Ports the reference app's `auggie:get-models` IPC discovery (auggie CLI `model list --json` → plain-text fallback → static tier fallback) as a daemon RPC. Additive richer sibling of the ported `agent.getModels` (§5.5), which is unchanged.
+- **Prompt enhancement** — `agent.enhancePrompt` (§5.31), the BE-owned one-shot prompt-enhance / AI-layout generation RPC. Ports the FE's last local-CLI bypass (the `agent:enhance-prompt` / `agent:generate-layout` IPC handlers spawning `auggie --print` on the client) into the daemon. Additive next to the ported `agent.*` namespace (§5.5), whose count is unchanged.
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -2247,6 +2248,63 @@ static catalog).
     "badges":[{ "color":"green","label":"Auto" }],"effortLevels":["low","medium","high"],
     "isDefault":true,"priority":1 } ] } }
 ```
+
+### 5.31 `agent.enhancePrompt` — one-shot prompt enhancement *(new in intentd — not part of the ported 104)*
+
+Ports the FE's last local-CLI bypass — the `agent:enhance-prompt` and `agent:generate-layout`
+IPC handlers (`cloudlands-fe src/features/agent/main/agent-missing.ipc.ts`), which spawn
+`auggie --print` on the client — as a daemon RPC. One-shot request/response: no streaming, no
+agent session created or persisted, no events emitted. Additive next to the ported `agent.*`
+namespace (§5.5), whose count of 24 is unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — in `mode: "enhance"` the raw user input to improve; in
+  `mode: "layout"` the full layout-generation instruction sent verbatim.
+- `mode` — `"enhance"` (default) wraps `prompt` in the enhancement template (the FE
+  `getInputWithEnhancePrompt` port) and **extracts** the
+  `<augment-enhanced-prompt>…</augment-enhanced-prompt>` payload from the model reply;
+  `"layout"` skips the template and returns the full cleaned reply (covers the FE
+  `agent:generate-layout` use). Any other value is `-32602`.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree as its
+  working directory (unknown workspace → `-32602`). Without it the CLI runs without a `cwd`
+  (mirrors the FE, which drops `cwd` when no workspace is bound).
+- `timeoutMs` — optional positive integer, default `30000` (the FE's 30-second enhancement
+  timeout), capped at `120000`.
+
+**Execution** — same one-shot CLI discipline as `workspace.generateSetupScript` (§5.25) and
+`models.list` (§5.30): auggie discovery (Intent-managed binary → enhanced PATH, §8.2), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped for latency — enhancement needs no
+tools) with the composed prompt piped over stdin (`System: <mode system prompt>\n\n<message>`,
+mirroring the FE `streamChat` composition). Stdout is ANSI-stripped and cleaned (🤖-delimited
+response extraction plus tool-artifact line filtering, the FE `cleanAgentMessage` port) before
+the mode-specific parse.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; `mode` not `"enhance"`/`"layout"`; non-positive
+  `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit; in `mode: "enhance"`, a reply missing the
+  `<augment-enhanced-prompt>` tags (`data`: `"Failed to parse enhanced prompt from response"`).
+  CLI absence is a **hard error** here (unlike §5.30) — there is no meaningful static fallback
+  for enhancement.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":83,"method":"agent.enhancePrompt",
+  "params":{ "prompt":"make login better","model":"haiku4.5","workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":83,"result":{
+  "enhanced":"Improve the login flow: add client-side validation …",
+  "original":"make login better","mode":"enhance" } }
+```
+
 
 ## 6. Events & Subscriptions
 
