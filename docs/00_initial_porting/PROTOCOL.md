@@ -665,6 +665,7 @@ interface SettingDefinition {
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OSkeychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace'skeychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE"connect Linear" flow.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
 
@@ -1670,10 +1671,11 @@ interface ReviewThreadComment {
 > values map to **typed Linear GraphQL filters server-side**, removing the parse-the-LLM-output
 > fragility.
 
-> **Auth model — API key from the environment (no OAuth/device flow, no credential store).** A local
-> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key resolved
-> from the environment**: `LINEAR_API_KEY` (with an optional lower-priority keychain account
-> `linear.token`). Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
+> **Auth model — personal API key (no OAuth/device flow).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key**: the
+> default `auto` resolution tries the OS-keychain account `linear.token` first (service `intentd`;
+> settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
+> `LINEAR_API_KEY` environment variable. Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
 > with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
 > `Authorization: Bearer <token>` — the prefix differs by credential type).
 >
@@ -1681,9 +1683,9 @@ interface ReviewThreadComment {
 >   connection state.
 > - **There is no `linear.connect` / `linear.revoke` / `cancelAuth` wire method.** Unlike `github.*`
 >   (which keeps inert no-op `connect`/`revoke` for FE shape parity), Linear exposes **nothing**
->   here: "connect" becomes "set `LINEAR_API_KEY` and restart", "revoke/logout" is a local
->   "forget token" action, and `cancelAuth` was always a pure client-side no-op. The settings UI
->   buttons are inert.
+>   here: "connect" is `settings.update` on the `linear.token` catalog entry (§5.12) — or set
+>   `LINEAR_API_KEY` — "revoke/logout" is `settings.reset { path: "linear.token" }`, and
+>   `cancelAuth` was always a pure client-side no-op.
 >
 > **🔒 Secret guardrail.** The API key is a secret: it is **never logged, echoed, or returned** over
 > the wire. Only **derived identity** (the `login` from `viewer`) and the boolean connection state
