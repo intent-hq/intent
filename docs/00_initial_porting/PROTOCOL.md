@@ -291,6 +291,9 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 | note.delete | noteId (req) | { ok, noteId, deleted } |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId) |
 | note.readAsset | asset (req) — asset id or workspace-asset:// URL | { assetId, mimeType, data, sizeKb } (image assets returned as data) |
+| note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
+| note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
+| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state |
 
 ```json
 // → request
@@ -299,6 +302,19 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 // ← response
 { "jsonrpc":"2.0","id":7,"result":{ "ok": true, "noteId":"spec" } }
 ```
+
+**Version history (deliberate divergence from the FE).** The FE's file-based store
+appended mixed snapshot/diff entries to a `.versions/<noteId>.jsonl` sidecar
+(`SNAPSHOT_INTERVAL = 10` diffs between full snapshots). The daemon stores **every
+version as a full snapshot** in the `note_version` table instead — content sizes are
+note-scale, SQLite holds blobs natively, and full snapshots make `getVersion`/
+`restoreVersion` O(1) with no diff-chain replay. The FE cap is kept: on append the
+store prunes to the newest **50** versions per note (`MAX_NOTE_VERSIONS`). Versions are
+captured on every content mutation (`note.create`, `note.update` with `content`,
+`note.add`, `note.edit`, `note.editLines`, `note.setContent`, `note.restoreVersion`);
+metadata-only updates do not create versions. `note.*` writes carry no author context
+on the wire yet, so every version is stamped with the system author
+(`{ id:"system", name:"intentd", type:"system" }`).
 
 ### 5.3 `comment.*`
 
