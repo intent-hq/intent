@@ -841,17 +841,23 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // ← response (headless remote host)
 { "jsonrpc":"2.0","id":80,"result":{ "os":"linux","arch":"x86_64","hostname":"build-01",
   "hasDisplay":false,"locality":"remote" } }
-// → open a detected URL on the user's machine (FE-served)
-{ "jsonrpc":"2.0","id":81,"method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
-// ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
-// → launch the user's editor on the user's machine (FE-served; local daemons short-circuit)
-{ "jsonrpc":"2.0","id":83,"method":"host.openInEditor","params":{
+// reverse RPC — daemon → client — open a detected URL on the user's machine (FE-served)
+// ← daemon sends the request (id in the `rev-<n>` namespace)
+{ "jsonrpc":"2.0","id":"rev-1","method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
+// → client replies with the same rev-* id
+{ "jsonrpc":"2.0","id":"rev-1","result":{ "ok": true } }
+// reverse RPC — daemon → client — launch the user's editor on the user's machine (FE-served; local daemons short-circuit)
+// ← daemon sends the request
+{ "jsonrpc":"2.0","id":"rev-2","method":"host.openInEditor","params":{
   "editorId":"vscode","path":"/repo/src/main.rs","line":12,"column":3
 } }
-// ← { "jsonrpc":"2.0","id":83,"result":{ "ok": true } }
-// → present "open with…" chooser on the user's machine (FE-served)
-{ "jsonrpc":"2.0","id":84,"method":"host.pickApplication","params":{ "path":"/repo/README.md" } }
-// ← { "jsonrpc":"2.0","id":84,"result":{ "applicationId":"com.microsoft.VSCode" } }
+// → client replies
+{ "jsonrpc":"2.0","id":"rev-2","result":{ "ok": true } }
+// reverse RPC — daemon → client — present "open with…" chooser on the user's machine (FE-served)
+// ← daemon sends the request
+{ "jsonrpc":"2.0","id":"rev-3","method":"host.pickApplication","params":{ "path":"/repo/README.md" } }
+// → client replies with the selection
+{ "jsonrpc":"2.0","id":"rev-3","result":{ "applicationId":"com.microsoft.VSCode" } }
 // → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
 { "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
   "command":"echo","args":["hello"],"timeoutMs":5000
