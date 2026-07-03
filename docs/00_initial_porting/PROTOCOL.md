@@ -366,11 +366,11 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId? } |
+| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, delegationDepth?, initialMessage? } (the P3-1.2b persistence-gap fields; omitted when absent) |
 | agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list; -32602 if not found (falls back to disk) |
 | agent.getConversation | agentId (req), limit?: number, workspaceId? | { agentId, messages, truncated, totalMessages } (capped to most-recent limit) |
-| agent.create | workspaceId (req), name?, model?, specialistId?, agentId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `agentId` (when supplied) is honored verbatim (`agent-{uuid}`) so the caller can address `agent.sendMessage` at the same id; malformed values surface as `-32602`. `provider` persists on the session; `agentType`/`metadata`/`workspacePath`/`workspaceContext` are accepted for the widened FE seam but not yet persisted (deferred per the P2-12a audit). |
-| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result |
+| agent.create | workspaceId (req), name?, model?, specialistId?, agentId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `agentId` (when supplied) is honored verbatim (`agent-{uuid}`) so the caller can address `agent.sendMessage` at the same id; malformed values surface as `-32602`. `provider` persists on the session. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b) with the top-level `contextReferences`/`imageBlocks` params winning over the `metadata` copies; `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
+| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result — the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b) |
 | agent.sendToTask | taskNoteId (req), message (req), priority? | service result |
 | agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks? | { success, queued, messageId? |
 | agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, noteIds? | service result (stops current stream first) |
@@ -379,13 +379,13 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 | agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
 | agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks? } |
 | agent.stop | agentId (req) | { success: true } |
-| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result |
+| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result — emits `agent:updated` |
 | agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
-| agent.rename | agentId (req), name (req, non-empty) | { success: true, name } |
+| agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet? | { success: true, name } — an applied rename emits `agent:renamed`. With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
 | agent.delete | agentId (req), workspaceId? | { success: true } |
 | agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model? | service result (resumes/creates assigned agent) |
 | agent.summary | agentId (req) | quick summary of what the agent did |
-| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent |
+| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` before delivering to the parent (P3-1.2b) |
 | agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses } (filter fields flattened; legacy filter kept) |
 | agent.cancelSubscriptions | agentId (req), workspaceId (req) | { success: true } |
 | agent.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — not the WS streaming surface (use events.subscribe) |
@@ -2254,7 +2254,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.action, data.path |
 | task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
-| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:status-changed |  |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed |  |
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
