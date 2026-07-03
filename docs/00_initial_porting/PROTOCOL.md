@@ -164,6 +164,7 @@ The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`
 - **Code Changes Review** — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
 - **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
 - **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
+- **Model catalog** — `models.list` (§5.30), the BE-owned rich model catalog for FE model pickers. Ports the reference app's `auggie:get-models` IPC discovery (auggie CLI `model list --json` → plain-text fallback → static tier fallback) as a daemon RPC. Additive richer sibling of the ported `agent.getModels` (§5.5), which is unchanged.
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -2186,6 +2187,51 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":81,"method":"sentry.resolveIssue","params":{} }
 // ← error
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
+```
+
+### 5.30 `models.list` — model catalog *(new in intentd — not part of the ported 104)*
+
+The BE-owned model catalog every FE model picker reads (ModelPicker, background-agent settings,
+workspace initializers, onboarding). Ports the reference app's `auggie:get-models` IPC handler
+(`fetchAuggieModels`, `src/features/auggie/main/auggie.ipc.ts`) as a daemon RPC. It is the
+**richer, additive sibling** of the ported `agent.getModels` (§5.5), which keeps its lean
+`{ id, name, provider, description? }` rows unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| models.list | — (none; no `workspaceId`) | { models: ModelInfo[], source: "auggie" \| "static" } |
+
+**ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number }`.
+`id` is the bare model id (the reference `shortName`/`value`), `name` the display label
+(`displayName`/`label`); the optional fields carry the picker metadata the reference FE
+`AuggieModel` consumes (group/within-group ordering, cost tier `1..3`, badges, effort levels,
+default flag). Optional fields are omitted when the CLI does not report them.
+
+**Discovery** (mirrors the reference `fetchAuggieModels`):
+
+1. `auggie model list --json` — rich metadata (`id` ← `shortName`, `name` ← `displayName`).
+2. Plain `auggie model list` text fallback (`- Label [model-id]` rows + optional indented
+   description) when the JSON form fails or parses empty.
+3. Rows flagged `isLegacyModel` are **filtered out server-side**; the survivors are sorted by
+   `modelGroupPriority`, then `priority`, then `name` (missing priorities sort last). A
+   successful CLI result is **cached for 5 minutes** (ports the reference provider-model cache).
+4. When the auggie CLI is unavailable or yields nothing parseable, the static
+   `PROVIDER_MODEL_TIERS` catalog is returned with `source: "static"` (same fallback as
+   `agent.getModels`), so the result is never empty — clients can key honest "live vs fallback"
+   UI off `source`.
+
+Errors: `-32603` only on internal failure; CLI absence is **not** an error (it degrades to the
+static catalog).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":82,"method":"models.list" }
+// ← response
+{ "jsonrpc":"2.0","id":82,"result":{ "source":"auggie","models":[
+  { "id":"sonnet4.5","name":"Sonnet 4.5","provider":"auggie",
+    "description":"Balanced general model","modelGroupPriority":1,"costTier":2,
+    "badges":[{ "color":"green","label":"Auto" }],"effortLevels":["low","medium","high"],
+    "isDefault":true,"priority":1 } ] } }
 ```
 
 ## 6. Events & Subscriptions
