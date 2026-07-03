@@ -1,2 +1,5 @@
 # Local dev stack data dir created by `make dev` (intentd socket + SQLite DB)
 .dev/
+
+# Local scratch dir for worktree commit-message drafts (never committed)
+.wt-commit-details/
