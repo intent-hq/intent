@@ -414,7 +414,9 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 | git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
 | git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } |
 | git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
-| git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be a known repo (-32602) |
+| git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
+
+**Path-based branch reads (`git.getBranches`, `git.branchStatus`).** These two read-only methods take a filesystem `repoPath` instead of a `workspaceId` because the workspace-initializer BranchSelector lists branches for a user-picked repo *before* any workspace referencing it exists — a known-repo gate here is a chicken-and-egg failure (the create flow can never register the repo it cannot list). Mirroring the ungated legacy IPC handlers (`git:getBranches` `{ repoPath }` variant, `git:getBranchStatus`), the daemon accepts **any local path that exists and is a git repository** (registered as a workspace or not) and rejects invalid paths with distinct `-32602` errors: `Repository path does not exist: <path>` for a nonexistent path, `Path is not a git repository: <path>` for an existing non-git directory. Mutating `git.*` methods remain workspace-scoped and are unaffected.
 
 ```json
 // → request
@@ -423,11 +425,12 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 { "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
 ```
 
-**`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus three working-tree reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
+**`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus working-tree/branch reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
+| git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
