@@ -203,7 +203,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields; optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace } (initial agent is activated async, fire-and-forget) |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace } (initial agent is activated async, fire-and-forget). Provisions a git worktree — see note below |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } |
 | workspace.archive | workspaceId (req) | { success: true } |
@@ -217,6 +217,21 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 // ← response
 { "jsonrpc": "2.0", "id": 1, "result": { "workspaces": [ { "id": "ws-abc", "title": "My Workspace" } ] } }
 ```
+
+**Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
+repository, the daemon provisions a linked worktree before persisting the row (TS
+`createGitWorktree` parity): the worktree lives at
+`<root>/<workspaceId>/<repo-slug>` — `root` is `$INTENTD_WORKSPACES_DIR`, else
+`~/intent/workspaces` (the FE's `WorkspaceConfig.WORKSPACES_BASE`); the slug is the
+slugified `repositoryName` (basename fallback) — checked out on the workspace `branch`
+(defaults to the workspace id), created from `baseRef` resolved as
+`refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
+any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
+local state. The returned `Workspace` carries `worktreePath` and `baseCommitSha` (the
+checked-out tip). An unresolvable `baseRef` on a valid repo fails with `-32602`.
+Provisioning is skipped — prior row-only behavior — for `skipWorktree: true`,
+`isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or a
+`repositoryPath` that is not a local git repository.
 
 **Workspace status fields (new in intentd).** Two BE-owned fields appear on every `Workspace`
 object returned by `workspace.*` — lightweight status metadata, **not** a notification store —
