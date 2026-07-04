@@ -203,7 +203,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace } (initial agent is activated async, fire-and-forget). Provisions a git worktree — see note below |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } |
 | workspace.archive | workspaceId (req) | { success: true } |
@@ -241,6 +241,37 @@ checked-out tip). An unresolvable `baseRef` on a valid repo fails with `-32602`.
 Provisioning is skipped — prior row-only behavior — for `skipWorktree: true`,
 `isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or a
 `repositoryPath` that is not a local git repository.
+
+**Clone orchestration (`workspace.create`).** When `githubUrl` is set and
+`repositoryPath` is not already a local git repository, the daemon clones the URL
+before branch naming and worktree provisioning, reusing the streaming `git.clone`
+pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
+else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
+`.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
+with `-32603`. Progress streams as `git:clone:progress` frames and terminates in exactly
+one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
+failure fails the whole `workspace.create` (no row persisted, no `workspace:created`).
+On success the checkout becomes the workspace's `repositoryPath` and, when the URL
+carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
+daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
+left them blank.
+
+**Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
+`spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
+id `"spec"`, title `"Spec"`, empty markdown body, tags `["spec"]`, pinned, default,
+workspace visibility. The seed captures an initial `v1` version snapshot and publishes
+`note:created` so subscribers see the standard note lifecycle. Seeding runs inside the
+idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
+a replayed create returns the stored result and does not re-seed.
+
+**Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
+daemon minitally creates the agent session (honoring `agentId`/`name`/`model`/
+`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
+delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+The result's `initialAgent.agentId` is the created session; the agent's turn starts
+asynchronously (fire-and-forget) but the create call is not idempotent unless a
+`idempotencyKey` is supplied — a replay with the same key returns the stored result
+without re-creating the session or re-delivering the prompt.
 
 **Workspace status fields (new in intentd).** Two BE-owned fields appear on every `Workspace`
 object returned by `workspace.*` — lightweight status metadata, **not** a notification store —
