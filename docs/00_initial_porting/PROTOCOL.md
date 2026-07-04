@@ -218,13 +218,22 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 { "jsonrpc": "2.0", "id": 1, "result": { "workspaces": [ { "id": "ws-abc", "title": "My Workspace" } ] } }
 ```
 
+**Branch naming (`workspace.create`).** An explicit `branch` is used untouched. Otherwise
+the daemon auto-names the branch with a friendly `word-word` slug (TS parity): extracted
+from `initialAgent.prompt` via local keyword heuristics when possible (`generateLocalSlug`
+— e.g. "fix the auth flow" → `auth-fix`), else a random adjective-animal pair
+(`generateWorkspaceSlug` — e.g. `amber-forest`). The `workspace.branchPrefix` setting
+(§5.12), when set, is prepended (e.g. `aw/auth-fix`). When `repositoryPath` is a local git
+repository the name is uniquified against existing local and remote-tracking branches by
+appending `-2`, `-3`, … until free. The branch is never the raw workspace UUID.
+
 **Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
 repository, the daemon provisions a linked worktree before persisting the row (TS
 `createGitWorktree` parity): the worktree lives at
 `<root>/<workspaceId>/<repo-slug>` — `root` is `$INTENTD_WORKSPACES_DIR`, else
 `~/intent/workspaces` (the FE's `WorkspaceConfig.WORKSPACES_BASE`); the slug is the
 slugified `repositoryName` (basename fallback) — checked out on the workspace `branch`
-(defaults to the workspace id), created from `baseRef` resolved as
+(auto-named as above when not supplied), created from `baseRef` resolved as
 `refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
 any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
 local state. The returned `Workspace` carries `worktreePath` and `baseCommitSha` (the
