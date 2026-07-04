@@ -594,6 +594,7 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | specialist.edit | id (req), spec (req): SpecialistDef, scope (req): "project"\|"user" | { specialist: SpecialistDef } |
 | specialist.delete | id (req), scope (req): "project"\|"user", workspacePath? | { success: true } — `bundled` definitions are read-only |
 | repo.list | — (no workspaceId) | { repos: [...] } |
+| repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 
 ```json
 // → request
