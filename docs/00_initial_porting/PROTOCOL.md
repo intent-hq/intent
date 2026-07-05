@@ -374,6 +374,48 @@ metadata-only updates do not create versions. `note.*` writes carry no author co
 on the wire yet, so every version is stamped with the system author
 (`{ id:"system", name:"intentd", type:"system" }`).
 
+### 5.2.1 `note.lineAttribution.*` *(new in intentd — not part of the ported 104)*
+
+Per-line attribution over the daemon's full-snapshot version history (§5.2). Ports the FE
+`LineAttributionService` that backed the tiptap `LineAttributionGutter`, so a client can
+render "who last touched each line" without re-implementing the diff.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.lineAttribution.load | noteId (req) | `LineAttributionData \| null` — see payload below; `null` when the daemon has not computed attributions yet |
+| note.lineAttribution.computeNow | noteId (req) | `{ ok: true }` — force an immediate recompute + persist + `line-attribution:updated` emit (bypasses the debounce) |
+
+**Payload shape (`LineAttributionData`).** Identical to the FE JSON the
+`line-attribution:load` IPC handler served, so `LineAttributionGutter.svelte` decodes it
+unchanged:
+
+```json
+{
+  "noteId": "…",
+  "workspaceId": "…",
+  "computedAt": "2026-07-05T12:34:56.000Z",
+  "attributions": {
+    "1": { "timestamp": 1720193696000,
+            "author": { "id": "system", "name": "intentd", "type": "system" } },
+    "2": { "timestamp": 1720193710000,
+            "author": { "id": "agent-…", "name": "Assistant", "type": "agent" } }
+  }
+}
+```
+
+Keys of `attributions` are stringified 1-based line numbers (only lines the algorithm
+attributed to a stored version are present). `timestamp` is milliseconds since the Unix
+epoch. `author.type` is `user` / `agent` / `system`; `turnNumber` is emitted when
+available (currently omitted because `note.*` writes still stamp the system author —
+see §5.2 version-history extensions).
+
+**Recompute lifecycle.** Every content-changing `note.*` mutation schedules a debounced
+recompute (5 s, mirroring `LineAttributionService.DEBOUNCE_MS`). A fresh mutation cancels
+any pending timer so a burst of writes coalesces into one persist + one
+`line-attribution:updated` emit (§6.5). Persistence is one row per note in
+`note_line_attribution` (SQLite migration `0028_note_line_attribution.sql`), upserted on
+each recompute so the read path is O(1) and survives restart. `note.delete` cascades.
+
 ### 5.3 `comment.*`
 
 | Method | Params | Result |
@@ -2488,6 +2530,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | --- | --- | --- |
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.action, data.path |
+| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
 | task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
