@@ -374,6 +374,21 @@ metadata-only updates do not create versions. `note.*` writes carry no author co
 on the wire yet, so every version is stamped with the system author
 (`{ id:"system", name:"intentd", type:"system" }`).
 
+**CRDT merge on full-content writes (§5.2 / A5).** `note.setContent` and the
+content arm of `note.update` are **not** last-write-wins: incoming content is
+routed through a per-note `yrs` (Rust Yjs) document seeded from the note's
+stored content on first touch, and each write applies a single-hunk char-level
+diff (common UTF-16 prefix / suffix trimmed) inside a `yrs` transaction. The
+merged `Y.Text` output is what the daemon cleans and persists, so two
+concurrent full-content writes whose diffs target different regions both
+survive in the stored content. The CRDT state is **session-only** — never
+persisted, sweepable after 24 h idle, keyed by `(workspaceId, noteId)`. The
+surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
+`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write
+straight to storage and invalidate the cached session so the next full-content
+write reseeds from the fresh persisted content; `note.delete` drops the
+session. The wire shapes on §5.2 are unchanged.
+
 ### 5.2.1 `note.lineAttribution.*` *(new in intentd — not part of the ported 104)*
 
 Per-line attribution over the daemon's full-snapshot version history (§5.2). Ports the FE
