@@ -411,12 +411,22 @@ on the wire yet, so every version is stamped with the system author
 { "jsonrpc":"2.0","id":11,"result":{ "ok": true, "lineNumber": 3, "status": "done" } }
 ```
 
-**`task.*` extensions (new in intentd — additive; do not change the ported count of 8).** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape.
+**`task.*` extensions (new in intentd — additive; do not change the ported count of 8).** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape, and one bulk write clears an agent from every task in a workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | task.list | workspaceId (req), status? | { tasks: WorkspaceTask[] } — optional `status` filter |
 | task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
+| task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
+
+**`task.*` legacy methods NOT exposed by intentd.** Four TS-only helpers survived on `NotesService` at the pre-daemon FE tip but had no renderer IPC producers and no MCP/main-internal callers at fe tip `16a0f9f3`, so they are retired with the TS notes service rather than ported. Reasoning captured for auditability:
+
+| Legacy method | Reason not exposed |
+| --- | --- |
+| `updateTaskPeerOrder` | No renderer producer for `notes:update-task-peer-order`; no MCP/main-internal call site. Retired with the TS `NotesService`. |
+| `removeTaskMetadata` | No renderer producer for `notes:remove-task-metadata`; sole non-test caller is the dead IPC handler. Retired with the TS `NotesService`. |
+| `findNextTask` | No renderer producer for `notes:find-next-task`; sole caller is the dead IPC handler. Retired with the TS `NotesService`. |
+| `findReadyTasks` | No renderer producer for `notes:find-ready-tasks`; only in-process caller is `findNextTask`, which retires alongside it. The pure `task-tree-utils.findReadyTasks` helper stays FE-local (unrelated to the wire surface). |
 
 ### 5.5 `agent.*`
 
