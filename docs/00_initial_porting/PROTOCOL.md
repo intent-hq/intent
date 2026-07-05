@@ -733,10 +733,14 @@ interface SettingDefinition {
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OSkeychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace'skeychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE"connect Linear" flow.
+- **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
+- **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
+- **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the known-repositorylist the FE previously kept in the `repo-registry` electron-store; `workspace.changeHistory`*(object)* — per-workspace diff-history bags the FE previously kept in the default `config.json`electron-store. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
 
-**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `notifications.*` (display),`workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `accounts.sentry`, `rtk.enabled`, `linear.issueFilter`.
+**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `notifications.*` (display),`workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `rtk.enabled`, `linear.issueFilter`.
 
 ```json
 // → request — list all BE-owned settings (sensitive values redacted)
@@ -1384,6 +1388,47 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 > **cancelled, not deferred** — it is not on the porting roadmap. The §9 `memories` table ships and the
 > internal `search.memories` path (IMPLEMENTATION_SPEC.md §5.15) scans it; a `memories.*` namespace
 > (list/create/search/delete) could be added additively later **only if** a memories UI ever ships.
+
+#### 5.22.1 `mcp.oauth.*` — per-server OAuth token bags *(new in intentd — not part of the ported 104)*
+
+Companion to §5.22: manage the OAuth token bag associated with each external MCP server id
+(port of the FE `mcp-oauth-tokens` electron-store). Bags are **secret material**; the daemon
+persists them in the dedicated `mcp_oauth_tokens` table (§9.4) and every wire response is
+**presence-only** — the bag body **never** crosses the wire (mirrors the `settings.*` §9.8
+redaction seam and `mcp.servers.*` `env`/`headers` redaction). Internal daemon consumers that
+need to build an outbound request read the raw bag directly from the store; there is no
+"reveal" RPC. This is a separate namespace (not a `settings.*` key) because bag counts are
+unbounded and rotate independently of the config surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.oauth.list | — | `{ tokens: [{ serverId, value }] }` — one entry per stored bag, `value` always the redaction placeholder |
+| mcp.oauth.get | serverId (req) | `{ serverId, value }` — `value` is the placeholder when a bag exists and `null` when it does not |
+| mcp.oauth.set | serverId (req), tokenBag (req) | `{ serverId, value }` — persists the bag; `value` is always the placeholder (bag itself is never echoed) |
+| mcp.oauth.delete | serverId (req) | `{ success: true }` — idempotent (absent bag succeeds) |
+
+- `tokenBag` is an opaque JSON body (object / array / scalar) so the FE's bag shape can
+  evolve without a daemon change; the reference bag is
+  `{ access_token, refresh_token?, expires_at?, token_type? }`.
+- Missing/empty `serverId` yields `-32602`; `mcp.oauth.set` also requires `tokenBag`.
+- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
+  polls / re-fetches on demand.
+
+```json
+// → request — persist an OAuth bag for one MCP server
+{ "jsonrpc":"2.0","id":62,"method":"mcp.oauth.set",
+  "params":{ "serverId":"srv-linear",
+             "tokenBag":{ "access_token":"…","refresh_token":"…",
+                          "expires_at":1750000000,"token_type":"Bearer" } } }
+// ← response (bag never echoed — value is a placeholder)
+{ "jsonrpc":"2.0","id":62,"result":{ "serverId":"srv-linear","value":"********" } }
+
+// → request — list stored bags (presence only)
+{ "jsonrpc":"2.0","id":63,"method":"mcp.oauth.list" }
+// ← response
+{ "jsonrpc":"2.0","id":63,"result":{ "tokens":[
+  { "serverId":"srv-linear","value":"********" } ] } }
+```
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 104)*
 
