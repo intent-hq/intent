@@ -1,0 +1,64 @@
+{
+  "scripts": [
+    {
+      "name": "all",
+      "command": "make all",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ensure-submodules",
+      "command": "make ensure-submodules",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "build",
+      "command": "make build",
+      "mode": "command",
+      "category": "build"
+    },
+    {
+      "name": "build-intentd",
+      "command": "make build-intentd",
+      "mode": "command",
+      "category": "build"
+    },
+    {
+      "name": "fmt",
+      "command": "make fmt",
+      "mode": "command",
+      "category": "format"
+    },
+    {
+      "name": "clippy",
+      "command": "make clippy",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "check",
+      "command": "make check",
+      "mode": "command",
+      "category": "typecheck"
+    },
+    {
+      "name": "test",
+      "command": "make test",
+      "mode": "command",
+      "category": "test"
+    },
+    {
+      "name": "test-intentd",
+      "command": "make test-intentd",
+      "mode": "command",
+      "category": "test"
+    },
+    {
+      "name": "clean",
+      "command": "make clean",
+      "mode": "command",
+      "category": "other"
+    }
+  ]
+}
