@@ -2662,12 +2662,21 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 > → the `agent.*` router. The normalized request payload, options normalization, `riskLevel`
 > heuristic, outcome shape, and 5-minute timeout are implemented as described.
 >
-> **Default policy.** The production default is now **`AutoByRisk`** (auto-allow low-risk / reads,
-> auto-deny medium/high), selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
-> (`interactive|auto|allow|deny`, default `AutoByRisk`). An **`Interactive`** deployment instead
-> blocks the agent's stream and surfaces each prompt via `agent.pendingPermissions`, resolving it
-> via `agent.respondPermission` (still bounded by the 5-minute timeout when left unanswered).
-> **`AllowAll`** and **`DenyAll`** remain available for fully-headless deployments.
+> **Default policy.** The shipped default is **`AllowAll`** for reference parity with the TS
+> acp-provider, selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
+> (`interactive|auto|allow|deny`, default `AllowAll`). Under `AllowAll`,
+> `AgentManager::start_session` additionally issues a best-effort
+> `session/set_mode { modeId: "bypassPermissions" }` after `session/new`,
+> `session/load`, and the recreate fallback on providers that advertise
+> set-mode (auggie today). Providers that don't advertise set-mode, or that
+> reject the mode change, fall through to the local auto-approve inside
+> `ClientRequestHandler` (the previous `AutoByRisk` default silently denied
+> medium/high prompts, which diverged from the reference). An **`Interactive`**
+> deployment instead blocks the agent's stream and surfaces each prompt via
+> `agent.pendingPermissions`, resolving it via `agent.respondPermission` (still
+> bounded by the 5-minute timeout when left unanswered). **`AutoByRisk`** and
+> **`DenyAll`** remain available for headless-with-guardrails deployments and
+> never issue the bypass mode change.
 
 The normalized permission request payload is:
 
