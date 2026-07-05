@@ -798,8 +798,9 @@ interface SettingDefinition {
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the known-repositorylist the FE previously kept in the `repo-registry` electron-store; `workspace.changeHistory`*(object)* — per-workspace diff-history bags the FE previously kept in the default `config.json`electron-store. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
+- **Notifications (ported from the FE `settings` electron-store):** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four keys the FE app-settings schema exposes under `notifications.*` are now daemon-owned so the legacy `notificationSettings` bag in the `settings` electron-store can retire; every entry is non-secret and reset-able via `settings.reset`.
 
-**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `notifications.*` (display),`workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `rtk.enabled`, `linear.issueFilter`.
+**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `rtk.enabled`, `linear.issueFilter`.
 
 ```json
 // → request — list all BE-owned settings (sensitive values redacted)
