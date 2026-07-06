@@ -166,6 +166,7 @@ The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`
 - **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
 - **Model catalog** — `models.list` (§5.30), the BE-owned rich model catalog for FE model pickers. Ports the reference app's `auggie:get-models` IPC discovery (auggie CLI `model list --json` → plain-text fallback → static tier fallback) as a daemon RPC. Additive richer sibling of the ported `agent.getModels` (§5.5), which is unchanged.
 - **Prompt enhancement** — `agent.enhancePrompt` (§5.31), the BE-owned one-shot prompt-enhance / AI-layout generation RPC. Ports the FE's last local-CLI bypass (the `agent:enhance-prompt` / `agent:generate-layout` IPC handlers spawning `auggie --print` on the client) into the daemon. Additive next to the ported `agent.*` namespace (§5.5), whose count is unchanged.
+- **One-shot completion** — `agent.completeOnce` (§5.32), the BE-owned stateless prompt→completion RPC. Retires the FE `background-request.service.ts` ACPProvider spawn (slug generation + note-status checks) so background requests no longer need an ephemeral agent session. Additive next to the ported `agent.*` namespace (§5.5), whose count is unchanged.
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -2478,6 +2479,59 @@ the mode-specific parse.
 { "jsonrpc":"2.0","id":83,"result":{
   "enhanced":"Improve the login flow: add client-side validation …",
   "original":"make login better","mode":"enhance" } }
+```
+
+
+### 5.32 `agent.completeOnce` — one-shot prompt→completion *(new in intentd — not part of the ported 104)*
+
+Retires the FE `background-request.service.ts` ACPProvider spawn — the last live
+ACPProvider construction in the renderer, used for slug generation and note-status
+checks — by exposing a stateless one-shot completion RPC. The daemon owns the full
+lifecycle: spawn the auggie CLI, collect its cleaned reply, reap the process on any
+failure path (timeout, cancel, drop). **No agent session or in-memory state is
+created**, so no client-side create→send→read→delete orchestration is needed and
+there is nothing to garbage-collect on the error path. Additive next to the ported
+`agent.*` namespace (§5.5), whose count of 24 is unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.completeOnce | prompt (req), systemPrompt?, model?, workspaceId?, timeoutMs? | { text } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — the user prompt piped verbatim to the CLI over
+  stdin (composed with `systemPrompt` when supplied).
+- `systemPrompt` — optional system prompt; when present the composed input becomes
+  `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
+  used by §5.31. Absent/blank → `prompt` rides through unchanged.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree
+  as its working directory (unknown workspace → `-32602`). Without it the CLI runs
+  without a `cwd`.
+- `timeoutMs` — optional positive integer, default `30000` (matches §5.31 default),
+  capped at `120000`. A hung CLI is reaped when the timeout elapses.
+
+**Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
+discovery (Intent-managed binary → enhanced PATH, §8.2), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
+tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
+(🤖-delimited response extraction plus tool-artifact line filtering, the FE
+`cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
+events, no persistence.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit. CLI absence is a **hard error** —
+  there is no static fallback for completion.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":84,"method":"agent.completeOnce",
+  "params":{ "prompt":"one-line slug for: fix the login flow" } }
+// ← response
+{ "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
 ```
 
 
