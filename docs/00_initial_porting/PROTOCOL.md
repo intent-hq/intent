@@ -346,7 +346,7 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 
 ### 5.5 `agent.*`
 
-The largest namespace. Methods split into **collaboration shims** (forward to the `ws.agent.*`service) and **lifecycle/runtime** methods (route through the `AgentBackendHandler` singleton).`agentId` values are of the form `agent-{uuid}`.
+The largest namespace. Every `agent.*` method is served daemon-primary by `intent-services` via the `intent-transport` router — the legacy FE `AgentBackendHandler` singleton and `daemon-agent-bridge` shim have been retired (see BREADCRUMBS "Legacy agent transport unification (FE C1d)") and no renderer-owned agent transport remains. `agentId` values are of the form `agent-{uuid}`.
 
 | Method | Params | Result |
 | --- | --- | --- |
