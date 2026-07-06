@@ -367,7 +367,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
 | agent.rename | agentId (req), name (req, non-empty) | { success: true, name } |
 | agent.delete | agentId (req), workspaceId? | { success: true } |
-| agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model? | service result (resumes/creates assigned agent) |
+| agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. |
 | agent.summary | agentId (req) | quick summary of what the agent did |
 | agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent |
 | agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses } (filter fields flattened; legacy filter kept) |
@@ -381,6 +381,24 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
   "params":{ "workspaceId":"ws-abc","agentId":"agent-123","content":"Run the tests" } }
 // ← response (agent was idle — message delivered)
 { "jsonrpc":"2.0","id":20,"result":{ "success": true, "queued": false, "messageId": "user-msg-1718...-ab12" } }
+```
+
+```json
+// → agent.wakeOrCreate: wake branch (a resumable assigned agent exists — most-recent-first)
+{ "jsonrpc":"2.0","id":21,"method":"agent.wakeOrCreate",
+  "params":{ "workspaceId":"ws-abc","taskNoteId":"note-task-1","contextMessage":"resume","model":"opus4.7" } }
+// ← response (agent was woken; earlier stale assignments are reported via cleanedUpAgentIds when present)
+{ "jsonrpc":"2.0","id":21,"result":{ "ok": true, "agentId": "agent-abc", "agentName": "Task: Deploy", "created": false, "action": "woke_existing", "taskTitle": "Deploy", "result": { "success": true, "queued": false, "messageId": "user-msg-...", "action": "woke_existing" }, "cleanedUpAgentIds": ["agent-stale-1"] } }
+
+// → agent.wakeOrCreate: create branch (no live/resumable assignment — rich payload; specialist/model from a newest assigned session would override create.specialist/create.model)
+{ "jsonrpc":"2.0","id":22,"method":"agent.wakeOrCreate",
+  "params":{ "workspaceId":"ws-abc","taskNoteId":"note-task-1","contextMessage":"kickoff","callerAgentId":"agent-parent","delegationDepth":1,"messageMetadata":{"type":"task_wake","source":"wake"},
+             "create":{"specialist":"implementor","provider":"acp/mock","metadata":{"custom":"field"},"skipAutoCommit":true} } }
+// ← response (new agent created; agent.create's rich result nested under `result`)
+{ "jsonrpc":"2.0","id":22,"result":{ "ok": true, "agentId": "agent-new", "agentName": "Task: Deploy", "created": true, "action": "created_new", "taskTitle": "Deploy", "result": { "id": "agent-new", "text": "...", "backgrounded": true, "queued": false } } }
+
+// → agent.wakeOrCreate: depth-guard rejection (delegationDepth >= MAX_DELEGATION_DEPTH)
+// ← { "jsonrpc":"2.0","id":23,"error":{ "code": -32602, "message": "agent.wakeOrCreate: delegation depth 2 exceeds MAX_DELEGATION_DEPTH (2)" } }
 ```
 
 **`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals.
