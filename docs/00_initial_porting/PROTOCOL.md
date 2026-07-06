@@ -525,7 +525,17 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 { "jsonrpc":"2.0","id":20,"result":{ "success": true, "queued": false, "messageId": "user-msg-1718...-ab12" } }
 ```
 
-**`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals. Plus the four session-shape RPCs that unblock the FE agent-backend-handler retirement (C1d/C1e): the full-session read `agent.getSession`, the partial-mutation writer `agent.update`, and the transcript-mutation pair `agent.appendMessage` / `agent.replaceMessages`.
+> **Migrating off the removed FE `sendBackendInitiatedMessage`.** Callers that
+> previously branched on the FE-only `errorCode: "ALREADY_STREAMING"` result
+> should now treat `agent.sendMessage`'s `{ queued: true }` response as the
+> "agent is mid-turn / already streaming" case: the daemon auto-queues the
+> message behind the in-flight turn and returns `{ success: true, queued: true,
+> messageId? }` without preempting. For the "resume or spin up the assignee for
+> a `taskNoteId`" branch, use `agent.wakeOrCreate`; for a known existing
+> `agentId`, use `agent.sendMessage` directly (the daemon distinguishes the
+> mid-turn case via the boolean `queued` flag).
+
+**`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals. Plus the four session-shape RPCs that unblock the FE agent-backend-handler retirement (C1d/C1e): the full-session read `agent.getSession`, the partial-mutation writer `agent.update`, and the transcript-mutation pair `agent.appendMessage` / `agent.replaceMessages`. `agent.enhancePrompt` (one-shot prompt-enhance / AI-layout generation; full contract in §5.31) is cross-referenced here as a namespace index entry.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -534,6 +544,7 @@ The largest namespace. Methods split into **collaboration shims** (forward to th
 | agent.update | agentId (req), workspaceId?, changes (req) | { success: true, agent: AgentLite } — partial update of the persisted `AgentSession` from a `changes` object. Whitelisted fields: `status`, `isActive`, `acpSessionId`, `backendSessionId`, `name`, `nameExplicitlySet`, `model`, `provider`, `systemPrompt`, `specialist`, `taskNoteId`, `skipAutoCommit`, `completionReport`, `completionReportTimestamp`, `delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`, `isBackground`. Optional-string fields accept a JSON `null` to clear. Write-once (`acpSessionId`) and immutable (`provider`) invariants are still enforced by the store. Emits `agent:updated` (or `agent:renamed` when `name` is the only mutated field). Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"` |
 | agent.appendMessage | agentId (req), role (req, `user`\|`assistant`\|`tool`\|`system`), contentBlocks (req), workspaceId?, metadata? | { success: true, message: AgentMessage } — append a single message to the transcript. `metadata` persists verbatim on the row and round-trips on reads. Emits `agent:message`. Rejected with `-32602` when the agent is mid-turn (transcript mutations must not race the streaming writer) |
 | agent.replaceMessages | agentId (req), messages (req, `AgentMessage[]`), workspaceId? | { success: true, messages: AgentMessage[] } — atomically swap the entire transcript. Each entry needs `role` + `contentBlocks`; `metadata` / `timestamp` are optional. Row ids and `seq` values (`0..n`) are minted by the store so callers cannot smuggle stale ids across the swap. Emits `agent:updated` with `{ replacedCount }`. Rejected with `-32602` when the agent is mid-turn (same rationale as `agent.appendMessage`) |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } — one-shot prompt-enhance / AI-layout generation via a spawned `auggie --print`; no agent session is created or persisted, no events emitted. Full contract in §5.31 |
 
 ### 5.6 `git.*`
 
