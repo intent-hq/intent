@@ -10,8 +10,9 @@ SUBMODULES = $(INTENTD_DIR)
 DEV_DATA_DIR ?= $(PWD)/.dev/intentd
 DEV_PORT ?= 5180
 
-# Transport for `run-intentd`. Defaults to `both` (HTTPS+WSS on 0.0.0.0:5180 for the iOS app,
-# plus the local UDS socket). Override for UDS-only, e.g. `make run-intentd LISTEN=uds` (or `tcp`).
+# Transport for `run-intentd`. Defaults to `both` — the local UDS socket AND the TCP
+# WebSocket listener on 0.0.0.0:5181 (fixed port; fail-fast on bind failure). Override
+# for UDS-only, e.g. `make run-intentd LISTEN=uds` (or `tcp`).
 LISTEN ?= both
 
 .PHONY: all ensure-submodules build build-intentd test test-intentd fmt clippy check clean dev-daemon run-intentd run-fe
@@ -62,10 +63,16 @@ dev-daemon: ensure-submodules ## Run intentd alone (UDS) against a dedicated dev
 run-intentd: ensure-submodules ## Run intentd with default settings (real data dir; LISTEN=both|uds|tcp)
 	# Runs intentd against its DEFAULT data dir (no dev override): Config::resolve picks
 	# $$HOME/Library/Application Support/intentd on macOS for the socket + SQLite DB. This
-	# target is long-running and does not exit until you stop it (Ctrl-C). LISTEN selects the
-	# transport: `both` (default) serves the local UDS socket AND HTTPS+WSS on 0.0.0.0:5180
-	# for the iOS app; override with `LISTEN=uds` (UDS only) or `LISTEN=tcp` (HTTPS+WSS only).
-	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
+	# target is long-running and does not exit until you stop it (Ctrl-C). LISTEN selects
+	# the transport: `both` (default) serves the local UDS socket AND the TCP WebSocket
+	# listener on 0.0.0.0:5181 (fixed port; the process exits non-zero immediately if that
+	# port is occupied — no port walking); `LISTEN=uds` (UDS only) or `LISTEN=tcp`
+	# (TCP only). This target passes `--insecure` so the TCP listener serves plain
+	# `ws://` with no TLS and no bearer-token auth — the local FE dev seat's default
+	# posture. For a secure listener (TLS + bearer auth on `wss://`), invoke `cargo run`
+	# directly without `--insecure`, e.g.
+	#   cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
+	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN) --insecure
 
 run-fe: ensure-submodules ## Run the Electron + SvelteKit FE alone (packages/cloudlands-fe)
 	# Launches only the FE dev stack (vite + Electron). The FE does NOT spawn intentd;

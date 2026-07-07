@@ -38,7 +38,7 @@ The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable)
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5180`. If busy, the server walks forward up to `WS_API_MAX_PORT_ATTEMPTS`(10) ports with same-port backoff (`[100, 200, 400]ms`) before advancing — so clients shouldtreat the port as **discovered**, not hard-coded (see §1.4 mDNS, or the `/health` probe).
+- **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.4) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.port`.
 - **Scheme is always **`wss://` (TLS). There is no plaintext `ws://` listener.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
@@ -824,7 +824,7 @@ interface SettingDefinition {
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "settings": [
   { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
-    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5180,"value":5180 },
+    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
   { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
     "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
 ```
@@ -842,11 +842,11 @@ interface SettingDefinition {
 ```json
 // → request — mutate settings (emits settings:changed)
 { "jsonrpc":"2.0","id":53,"method":"settings.update","params":{ "changes":[
-  { "path":"server.port","value":5181 },
+  { "path":"server.port","value":5182 },
   { "path":"sourceControl.github.tokenSource","value":"gh-cli","reason":"use gh auth token" } ] } }
 // ← response
 { "jsonrpc":"2.0","id":53,"result":{ "applied":[
-  { "path":"server.port","value":5181 },
+  { "path":"server.port","value":5182 },
   { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
 ```
 
@@ -854,7 +854,7 @@ interface SettingDefinition {
 // → request — reset one setting to its default
 { "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
 // ← response
-{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5180 } }
+{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
 ```
 
 ### 5.13 Interactive `terminal.*` *(new in intentd — not part of the ported 104)*
