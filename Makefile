@@ -7,8 +7,16 @@ SUBMODULES = $(INTENTD_DIR)
 
 # Local dev stack configuration (overridable from the env/CLI, e.g. `make dev DEV_PORT=6000`).
 # DEV_DATA_DIR is a dedicated, gitignored data dir so dev never touches the real one.
+# DEV_PORT stays clear of two reserved ranges by default:
+#   - 5179..5188 is walked by the FE's MCP bridge scanner
+#     (packages/cloudlands-fe/src/main/mcp-stdio-server.ts::getCandidatePorts);
+#     landing the dev renderer here makes it look like a spurious bridge candidate
+#     and floods the SvelteKit console with `[404] GET /health` probes.
+#   - 5177 is the FE's own default vite port (packages/cloudlands-fe/vite.config.mjs)
+#     which the intent-build seat already uses; overlapping it would collide.
+# Override for a specific seat when needed (e.g. `make dev-daemon DEV_PORT=6000`).
 DEV_DATA_DIR ?= $(PWD)/.dev/intentd
-DEV_PORT ?= 5180
+DEV_PORT ?= 5190
 
 # Transport for `run-intentd`. Defaults to `both` — the local UDS socket AND the TCP
 # WebSocket listener on 0.0.0.0:5181 (fixed port; fail-fast on bind failure). Override
