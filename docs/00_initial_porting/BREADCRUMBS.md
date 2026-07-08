@@ -93,6 +93,31 @@ Port Intent's backend to a standalone, headless Rust daemon (`intentd`) speaking
 
 ## Milestone history
 
+### 2026-07-08 — Synthesized tool_use parity, launch-time tool restrictions, workspace-scoped persistence + delete cascade, task-delta removedIds (intentd branch `feat/p3-daemon-persistence`, uncommitted working-tree state)
+
+Local branch tip at `450dec3` (verifier-approved; **not committed and the recorded submodule HEAD has not moved**). Landing a docs-only trail ahead of the eventual submodule bump so future agents can find the daemon-side rationale that matches the code they are actually running against.
+
+**intentd (branch `feat/p3-daemon-persistence`):**
+- **Synthesized `tool_use` parity:** shared `tool_block` factory (`intent-services/src/tool_block.rs`) — synthesized `tool_use` blocks now carry the real tool name (double `_workspace-mcp` suffix collapsed), raw arguments, and `input._acpTitle`; documented in PROTOCOL §7.1.
+- **Launch-time tool restrictions:** new `tool_restrictions` module + `SpawnOptions.removed_tools` → deduped `--remove-tool` argv (auggie-gated), forcing visible delegation over silent tool use for restricted agent types.
+- **`terminal.create` defaults `cwd`** to the workspace root (`worktree_path` → `repository_path` → `path`) when not supplied by the caller.
+- **Workspace delete cascade — live sessions terminated:** `workspace.delete` now aborts every live agent session in the workspace (workers aborted, registries/queues swept, `agent:deleted` emitted per session) **before** the store cascade runs, so no worker outlives its workspace.
+- **`workspace:created` / `workspace:updated` events published** from the create/update/unarchive paths (TS-parity payloads).
+- **Notes are workspace-scoped:** migration `0022` reshapes the `note` table to a composite `(id, workspace_id)` primary key; `workspace_id` is threaded through every note and comment lookup so `'spec'` (and any other id) coexists per-workspace without collision.
+- **Script registry is workspace-scoped:** the in-memory map is now keyed `(WorkspaceId, scriptId)`; every mutating `script.*` arm requires `workspaceId` (missing → `-32602`).
+- **Agent + comment repos and ops are workspace-guarded:** `(id, workspace_id)` scoping on lookups and mutations; a cross-workspace probe returns `NotFound` instead of leaking rows.
+- **`task_delta` emits `removedIds`** when a note's task is demoted, so subscribers can drop stale rows without re-reading.
+- **`host_exec::node_resolve` now returns `Result`** — the silent `current_dir()` fallbacks are removed so a failing node-binary resolution surfaces to the caller instead of quietly running from `.`.
+
+**cloudlands-fe (companion changes, branch `fix/p3-fe-regressions`, working-tree state):**
+- **Chat hydration:** `chat.subscribe` seq-0 snapshot rehydrates on remount so in-flight turns survive tab switches.
+- **`workspace:deleted` purge:** the event now clears the agent-session, workspace-agents, and chat-state slices so deleted workspaces cannot leak into subsequent selections.
+- **Notes hydrate on `workspaceMounted`** and stay live via `note:*` events (no stale caches on workspace switch).
+- **`daemon-events-bridge`:** six new routes wired (task status, comments, PR); `agent:session-stats-changed` mapping added; `workspaces.subscribe` bound; and the `workspaceMounted` re-hydration fan-out is extended to agents / terminals / file-explorer / scripts / skills / PR / changes.
+- **Mutating `script.*` wire calls now send `workspaceId`**, aligned with the workspace-scoped daemon script registry.
+
+Docs-only monorepo change — no pushes, no PRs, no commits. The "Current submodule HEAD" line is intentionally unchanged; the Implemented surface / Deferred sections stay anchored to the landed HEAD and will move once this branch lands.
+
 ### 2026-06-29 — 3-tier specialization rule layering with bundled built-ins (intentd PR #73)
 
 Ported the reference TypeScript specialization-rule resolution into `intentd`'s internal prompt-assembly pipeline. Per-agent-type specialization rules now resolve through a **3-tier fallback** (highest priority first): **(1)** the `endUserRules` **user-settings override** (stored via the rules service), **(2)** the **workspace file** `.augment/agent-rules/{agentType}.md`, and **(3)** the **bundled built-in** compiled-in instruction template — the settings override wins over the workspace file, which wins over the bundled default, replacing the prior single-tier `endUserRules`-only specialization slot while preserving the surrounding layer order. A new `instructions` module (`crates/intent-services/src/instructions.rs`) composes the bundled templates from the `common` / `workspace` / specific layers as a **faithful port of `getInstructionWithCommon`** — including the agent-id **alias map** (e.g. `implementor`→`task-loop`, `fix`→`debug`), `UTILITY_AGENTS`/`NON_INTERACTIVE_BACKGROUND_AGENTS` special-case handling, and unknown-id fallback to the workspace body — with **17 instruction templates** extracted into `crates/intent-services/resources/agent-instructions/` and embedded via `include_str!`. `get_specialization_rules` (in `rules.rs`) resolves the 3-tier hierarchy and is wired into `assemble_system_prompt`. No new wire methods (internal pipeline only). Parity note: `UTILITY_AGENTS` and `NON_INTERACTIVE_BACKGROUND_AGENTS` hold the same four ids and the non-interactive check runs first, so every utility agent takes the specific-only branch (matching the reference and documented in a test). Verification: `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test -p intent-services` (396 passed) all clean. `make check` + `make test` green at the monorepo root. Landed via intentd PR #73. Touched `intent-services`. Submodule HEAD `ab8e8c4`.
