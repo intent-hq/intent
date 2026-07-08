@@ -93,6 +93,21 @@ Port Intent's backend to a standalone, headless Rust daemon (`intentd`) speaking
 
 ## Milestone history
 
+### 2026-07-08 — Transport concurrency + async keychain resilience (intentd branch `feat/p3-daemon-persistence`, uncommitted working-tree state)
+
+Uncommitted working-tree changes atop `450dec3` on `feat/p3-daemon-persistence` (no commit yet, no submodule bump). The recorded submodule HEAD is intentionally unchanged.
+
+**intentd (branch `feat/p3-daemon-persistence`):**
+- **Per-connection concurrent dispatch (`intent-transport`):** the per-connection read loop now spawns stateless handlers concurrently (`host.*` and general request paths run on `tokio::spawn` with a per-connection semaphore); the connection-state paths — `client.hello`, `events.subscribe`/`unsubscribe`, snapshot+delta channel subscribes, subscription writes, and `forward.*` — stay serialized on the same connection so ordering invariants hold. Response frames are serialized to the write half so no interleaving is possible. Proven by a new `uds_concurrent_dispatch` e2e that issues N in-flight `host.status` requests over one UDS connection and asserts they overlap in wall-time (dispatch is not head-of-line-blocked on a slow prior request).
+- **`AsyncSecretStore` (`intent-services`):** every keychain read/write is now off the executor via `spawn_blocking`, gated by short/long timeouts (3s reads / 10s writes), coalesced per-account via a **single-flight** map, cached with a **60s TTL**, and invalidated via a **generation guard** on writes so a concurrent write bumps the generation and forces the next read to miss the cache. Wired through the settings redaction path and MCP server catalog resolution so the `settings.*` / `mcp.servers.*` handlers no longer block the runtime on a slow/unavailable keychain. Proven by a new `uds_settings_nonblocking` e2e that stalls the keychain and asserts unrelated RPCs continue to make progress.
+- **Keyring sweep — Linear / Sentry / SourceControl / transport wrapped, registries + resolvers async:** every direct `keyring` call across `intent-linear`, `intent-sourcecontrol`, `intent-sentry`, and `intent-transport` (bearer-token load) is now `spawn_blocking`-wrapped. A shared **`AsyncTokenStore`** (single-flight + generation guard, sibling of `AsyncSecretStore`) fronts token reads. The `LinearRegistry` / `SentryRegistry` / `SourceControlRegistry` and their token/settings resolvers are now `async fn` throughout, so `linear_ops` / `sentry_ops` / `pr_ops` / `github_ops` engine resolution never blocks the runtime; the transport bearer-token load path also awaits the async store instead of a synchronous keychain call at accept time. No new wire methods; the `linear.*` / `sentry.*` / `github.*` / `pr.*` surface is unchanged.
+
+**cloudlands-fe (companion changes, working-tree state):**
+- **Heartbeat `system.status` fix:** the daemon-heartbeat client now hits the intentd-only `system.status` control fast-path instead of a stale RPC name, so the liveness indicator no longer flaps when the daemon is up but the previous method resolved to `-32601`.
+- **Provider-availability store service:** a new renderer store service (`src/features/providers/provider-availability-store-service.ts`) subscribes to provider-availability signals once and fans them into the redux slice, replacing per-consumer polling.
+
+Docs-only monorepo change — no pushes, no PRs, no commits. The "Current submodule HEAD" line is intentionally unchanged; the Implemented surface / Deferred sections stay anchored to the landed HEAD and will move once this branch lands.
+
 ### 2026-07-08 — Synthesized tool_use parity, launch-time tool restrictions, workspace-scoped persistence + delete cascade, task-delta removedIds (intentd branch `feat/p3-daemon-persistence`, uncommitted working-tree state)
 
 Local branch tip at `450dec3` (verifier-approved; **not committed and the recorded submodule HEAD has not moved**). Landing a docs-only trail ahead of the eventual submodule bump so future agents can find the daemon-side rationale that matches the code they are actually running against.
