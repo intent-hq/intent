@@ -1685,9 +1685,9 @@ The per-agent-type tool restriction is **hardcoded and enforced internally** whi
 
 | Category | Examples | What it gates |
 | --- | --- | --- |
-| `FILE_WRITE_TOOLS` | `str-replace-editor`, `save-file`, `remove-files`, `create`, `apply_patch`, `write_file_workspace-mcp` | editing the codebase |
-| `GIT_TOOLS` | `git_stage_workspace-mcp`, `git_commit_workspace-mcp` | mutating git state |
-| `AGENT_CREATION_TOOLS` | `create_agent_workspace-mcp`, `delegate_task_workspace-mcp`, `send_message_to_agent_workspace-mcp` | spawning/messaging agents |
+| `FILE_WRITE_TOOLS` | `str-replace-editor`, `save-file`, `remove-files`, `create`, `apply_patch`, `write_file` | editing the codebase |
+| `GIT_TOOLS` | `git_stage`, `git_commit` | mutating git state |
+| `AGENT_CREATION_TOOLS` | `create_agent`, `delegate_task`, `send_message_to_agent` | spawning/messaging agents |
 | `NOTE_WRITE_TOOLS` / `WORKSPACE_WRITE_TOOLS` / `UNIFIED_WORKSPACE_TOOLS` | note + workspace mutation tools | mutating notes/workspace state |
 | `EXECUTION_TOOLS` | process/terminal execution tools | running commands |
 | `EXTERNAL_TOOLS` | `web-fetch`, `web-search`, `github-api` | external/network access |
