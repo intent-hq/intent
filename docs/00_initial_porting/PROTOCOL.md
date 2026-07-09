@@ -2744,7 +2744,7 @@ production emit site** today and are reserved for future use.
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
-| tool call | agent:tool:call | the single tool signal; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
+| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, content, streamId? } |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
@@ -2812,16 +2812,20 @@ frame):
 `crates/intent-services/src/tool_block.rs::build_tool_use_block` — so seq-0 and every subsequent
 delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 `"sub-agent-explore: Explore the AI agent system…"`) rather than the raw tool name the model
-invoked; `block.name` is derived by splitting a title of the form `<name>: <description>` —
-`<name>` a bare `[A-Za-z0-9_-]+` identifier followed by `": "` or `":\t"` — and taking the prefix.
-Titles without that shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`)
-pass through as `name` unchanged. Repeated `_workspace-mcp` suffixes on the derived name are
-collapsed to a single one — an auggie convention artifact when the MCP server name equals the
-tool-name suffix (§18.4); a single suffix is preserved as canonical. The full title, when
-non-empty, is echoed verbatim as `input._acpTitle` so the FE classifier has it alongside `name`
-for fallback rendering when raw args are missing (auggie frequently sends `raw_input: null`); a
-`Null` `input` is coerced to `{}` so the marker can attach, while non-object non-null inputs
-(arrays / scalars) pass through verbatim (the FE still has `title` in the event).
+invoked; the real name is derived **once**, at `session/update` mapping time
+(`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
+raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
+Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
+identifier followed by `": "` or `":\t"` — is split, taking the prefix. Titles without that
+shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
+`name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
+tool names carry no suffix (§18.4), and auggie's `<tool>_<server>` convention appends the server
+name, so stripping recovers the registry name (`add_to_note_workspace-mcp` → `add_to_note`).
+The full title, when non-empty, is echoed verbatim as `input._acpTitle` so the FE classifier
+has it alongside `name` for fallback rendering when raw args are missing (auggie frequently
+sends `raw_input: null`); a `Null` `input` is coerced to `{}` so the marker can attach, while
+non-object non-null inputs (arrays / scalars) pass through verbatim (the FE still has `title`
+in the event).
 
 **Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
 blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,
