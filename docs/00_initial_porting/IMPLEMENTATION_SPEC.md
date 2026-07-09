@@ -1151,7 +1151,7 @@ Provide `intentd import --from <intent-userData-dir>` to migrate an existing ins
 | specialists.default | string | implementor | no | src/shared/app-settings-schema.ts |
 | workspace.branchPrefix | string | — | no | src/shared/app-settings-schema.ts |
 | workspace.worktreesLocation | path | — | no | src/shared/app-settings-schema.ts |
-| workspace.sshKeyPath | path | — | yes | src/shared/app-settings-schema.ts |
+| workspace.sshKeyPath | path | — | no | src/shared/app-settings-schema.ts |
 | workspace.defaultShell | string | $SHELL | no | src/shared/app-settings-schema.ts |
 | workspace.autoFetch | bool | true | no | src/shared/app-settings-schema.ts |
 | workspace.autoCommit | bool | true | no | src/shared/app-settings-schema.ts |
@@ -1193,7 +1193,7 @@ Source-control provider config is namespaced as `sourceControl.<provider>.*` so 
 
 - **Storage.** Non-secret values persist in the `settings` table (§9.2, `key` → JSON`value`). Definitions (label, description, category, type, enum/min/max, default, sensitive,scope) are ported from `app-settings-schema.ts` as `AppSettingDefinition`s; group B adds itsown definitions. Non-secret settings may also be surfaced in `config.toml` (§11.2), but theDB row is authoritative.
 - **Validation.** Every mutation is validated against its `AppSettingDefinition` (type, enummembership, numeric min/max) via the analog of `findAppSettingDefinition` before persisting;invalid changes are rejected with an `invalid params` error and nothing is written.
-- **Secrets.** Settings marked **sensitive** (`workspace.sshKeyPath`, `mcp.servers`,`server.auth.token`, `sourceControl.github.token`) are stored securely in the OS keychain(`keyring` crate), never in `config.toml`, never in logs, and are **never returned inplaintext over the wire** — `settings.list`/`settings.get` redact them (presence/placeholderonly). `server.auth.token` is read-only via the API (regenerate, not set).
+- **Secrets.** Settings marked **sensitive** (`mcp.servers`, `server.auth.token`,`sourceControl.github.token`) are stored securely in the OS keychain (`keyring` crate),never in `config.toml`, never in logs, and are **never returned in plaintext over the wire**— `settings.list`/`settings.get` redact them (presence/placeholder only).`server.auth.token` is read-only via the API (regenerate, not set). `workspace.sshKeyPath`is **not** sensitive: it holds a filesystem path to the SSH key, not key material — thereal secret is the key file on disk, protected by filesystem permissions — so the value isstored as a plain string and read back verbatim by `settings.get`/`settings.list` (the FE`git`-env consumer needs the real path to hand to `git` via `GIT_SSH_COMMAND`).
 - **Change notification.** A successful `settings.update`/`settings.reset` persists the changeand emits a `settings:changed` event (§10) so every connected client stays in sync.
 
 The wire methods (`settings.list`, `settings.get`, `settings.update`, `settings.reset`) andthe `settings:changed` event are specified in `./PROTOCOL.md` §5 — an **intentd-only**namespace added on top of the 106 ported methods.

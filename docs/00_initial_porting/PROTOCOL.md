@@ -38,7 +38,7 @@ The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable)
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5180`. If busy, the server walks forward up to `WS_API_MAX_PORT_ATTEMPTS`(10) ports with same-port backoff (`[100, 200, 400]ms`) before advancing — so clients shouldtreat the port as **discovered**, not hard-coded (see §1.4 mDNS, or the `/health` probe).
+- **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.4) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.port`.
 - **Scheme is always **`wss://` (TLS). There is no plaintext `ws://` listener.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
@@ -160,10 +160,13 @@ The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`
 - `drafts.*` (§5.16) — 3 methods (`get` / `set` / `clear`) for BE-persisted, per-client message drafts, with the `draft:changed` event.
 - `client.hello` (§5.17) — stable client-identity handshake; the disambiguation key for `drafts.*` and future per-viewer read cursors.
 - `system.status` / `system.shutdown` (control fast-path) — a **UDS-only** transport/process-control pair: `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown. Like `events.subscribe`/`unsubscribe`, they are intercepted **before** the JSON-RPC dispatcher; they are intentd-only ops methods, **not** part of the ported 104 and **not** advertised by `getSupportedMethods`. Consumed by `intentd status` / `intentd stop`.
-- **Catalog parity additions** — small additive read/write methods routed alongside the ported surface and **not** counted in the ported 104: `comment.resolveThread` (§5.3); `task.list` / `task.get` (§5.4); `agent.diagnostics` (§5.5); `git.unstage`, `git.changes`, `git.diffs` (alias `git.diff`), `git.commits` (alias `git.log`) (§5.6); `file.tree` (§5.9). See each per-namespace table for shapes.
+- **Catalog parity additions** — small additive read/write methods routed alongside the ported surface and **not** counted in the ported 104: `note.saveAsset` (§5.2); `comment.resolveThread` (§5.3); `task.list` / `task.get` (§5.4); `agent.diagnostics` (§5.5); `git.unstage`, `git.changes`, `git.diffs` (alias `git.diff`), `git.commits` (alias `git.log`), `git.pull`, `git.showFile` (§5.6); `file.tree` / `file.exists` / `file.stat` (§5.9). See each per-namespace table for shapes.
 - **Code Changes Review** — the agent-change review loop. `accept-changes.*` (§5.18) — `getStatus` / `prepare` / `execute` / `mergePR` / `addRemote`; `file-tracking.*` **reads** (§5.19) — `init` / `sync` / `load` / `loadCommits` / `getChanges` / `getLineStats` / `stage` / `unstage`; change-metrics **reads** (§5.20) — `getWorkspaceStats` / `getAgentStats` / `getAllWorkspaceStats` / `clearAgentStats`; and `pr.*` **extensions** — `getReviews` / `listCheckRuns` / `createReview` (folded into the existing `pr.*` table, §5.7). Backed by the `SourceControl` trait (IMPLEMENTATION_SPEC.md §7) for the forge calls.
 - **Agent Ecosystem** — the BE-owned agent control surface. `rules.*` (§5.21) — `list` / `get` / `update` (workspace + specialization rules and user-rule overrides; the prompt-assembly/injection pipeline itself is **internal**, not a wire method); `specialist.*` **full CRUD** — `get` / `create` / `edit` / `delete` extend the ported `specialist.list` into a managed namespace (§5.11); and `mcp.servers.*` (§5.22) — `list` / `create` / `update` / `delete` / `toggle` / `restart` for **external** MCP-server lifecycle/config (distinct from the agent→BE MCP callback, IMPLEMENTATION_SPEC.md §6.8), with the `mcp.servers:status-changed` health event.
 - **Integrations & Ops** — the BE-owned usage & worktree-setup surface. Usage metrics — `workspace.getTokenUsage` (§5.23) + the `tokenUsage` field on workspace, with the `workspace:tokenUsage-changed` event (the periodic usage/credit **scan job** is daemon-internal — no RPC); session stats — `agent.getSessionStats` (§5.24) + the `stats` field on `AgentSession`, with the `agent:session-stats-changed` event; and worktree setup — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` (§5.25) + the `setupScript` field on workspace. **Sentry/sandbox** integrations and **observability/logging** are explicitly **not** wire surface in v1 (§5.26); **Linear** is specified as a daemon-owned TARGET contract (`linear.*`, §5.28).
+- **Model catalog** — `models.list` (§5.30), the BE-owned rich model catalog for FE model pickers. Ports the reference app's `auggie:get-models` IPC discovery (auggie CLI `model list --json` → plain-text fallback → static tier fallback) as a daemon RPC. Additive richer sibling of the ported `agent.getModels` (§5.5), which is unchanged.
+- **Prompt enhancement** — `agent.enhancePrompt` (§5.31), the BE-owned one-shot prompt-enhance / AI-layout generation RPC. Ports the FE's last local-CLI bypass (the `agent:enhance-prompt` / `agent:generate-layout` IPC handlers spawning `auggie --print` on the client) into the daemon. Additive next to the ported `agent.*` namespace (§5.5), whose count is unchanged.
+- **One-shot completion** — `agent.completeOnce` (§5.32), the BE-owned stateless prompt→completion RPC. Retires the FE `background-request.service.ts` ACPProvider spawn (slug generation + note-status checks) so background requests no longer need an ephemeral agent session. Additive next to the ported `agent.*` namespace (§5.5), whose count is unchanged.
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads above plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -171,7 +174,7 @@ The API exposes **104 JSON-RPC methods** across 15 namespaces, **ported from **`
 
 > **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. **Linear** is now specified as a daemon-owned TARGET contract (`linear.*`, §5.28); **Sentry** integration remains **deferred** (no `sentry.*` methods in v1) — see the future-integrations note (§5.26). See §6.8.
 
-Framing stays: **"104 ported from `augmentcode/intent` (the reference 106 minus the two `browser.*` methods, explicit won't-port-v1) + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`; plus the catalog-parity additions enumerated above)"**. The ported 104 count is unchanged — every namespace in the count table below is part of the verified ported surface; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact. The catalog-parity additions (`comment.resolveThread`, `task.list`/`task.get`, `agent.diagnostics`, `git.unstage`/`git.changes`/`git.diffs`/`git.commits`, `file.tree`) are likewise additive and leave the ported `comment`/`task`/`agent`/`git`/`file` counts unchanged.
+Framing stays: **"104 ported from `augmentcode/intent` (the reference 106 minus the two `browser.*` methods, explicit won't-port-v1) + additive intentd-only surface (`settings.*`, workspace status/attention, interactive `terminal.*`, `host.*`/`forward.*`, `search.*`, `drafts.*`, `client.hello`, the Code Changes Review surface: `accept-changes.*`, `file-tracking.*` reads, change-metrics reads, `pr.*` extensions; and the Agent Ecosystem surface: `rules.*`, `specialist.*` CRUD extensions, `mcp.servers.*`; and the Integrations & Ops surface: `workspace.getTokenUsage`, `agent.getSessionStats`, `workspace.getSetupScript`/`saveSetupScript`/`detectProjectType`/`generateSetupScript`; plus the catalog-parity additions enumerated above)"**. The ported 104 count is unchanged — every namespace in the count table below is part of the verified ported surface; the additive intentd-only surface is deliberately **not** in that table. The three `pr.*` extension methods are additive and do **not** change the ported `pr` count of 9; likewise the four `specialist.*` CRUD methods are additive and do **not** change the ported `specialist` count of 1, and `rules.*` / `mcp.servers.*` are entirely new additive namespaces. The Integrations & Ops usage/setup-script methods are additive onto existing namespaces and do **not** change the ported counts: `workspace.getTokenUsage` / `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` leave the ported `workspace` count of 7 intact, and `agent.getSessionStats` leaves the ported `agent` count of 24 intact. The catalog-parity additions (`note.saveAsset`, `comment.resolveThread`, `task.list`/`task.get`, `agent.diagnostics`, `git.unstage`/`git.changes`/`git.diffs`/`git.commits`/`git.showFile`, `file.tree`/`file.exists`/`file.stat`) are likewise additive and leave the ported `note`/`comment`/`task`/`agent`/`git`/`file` counts unchanged.
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -201,7 +204,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields; optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace } (initial agent is activated async, fire-and-forget) |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } |
 | workspace.archive | workspaceId (req) | { success: true } |
@@ -215,6 +218,61 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 // ← response
 { "jsonrpc": "2.0", "id": 1, "result": { "workspaces": [ { "id": "ws-abc", "title": "My Workspace" } ] } }
 ```
+
+**Branch naming (`workspace.create`).** An explicit `branch` is used untouched. Otherwise
+the daemon auto-names the branch with a friendly `word-word` slug (TS parity): extracted
+from `initialAgent.prompt` via local keyword heuristics when possible (`generateLocalSlug`
+— e.g. "fix the auth flow" → `auth-fix`), else a random adjective-animal pair
+(`generateWorkspaceSlug` — e.g. `amber-forest`). The `workspace.branchPrefix` setting
+(§5.12), when set, is prepended (e.g. `aw/auth-fix`). When `repositoryPath` is a local git
+repository the name is uniquified against existing local and remote-tracking branches by
+appending `-2`, `-3`, … until free. The branch is never the raw workspace UUID.
+
+**Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
+repository, the daemon provisions a linked worktree before persisting the row (TS
+`createGitWorktree` parity): the worktree lives at
+`<root>/<workspaceId>/<repo-slug>` — `root` is `$INTENTD_WORKSPACES_DIR`, else
+`~/intent/workspaces` (the FE's `WorkspaceConfig.WORKSPACES_BASE`); the slug is the
+slugified `repositoryName` (basename fallback) — checked out on the workspace `branch`
+(auto-named as above when not supplied), created from `baseRef` resolved as
+`refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
+any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
+local state. The returned `Workspace` carries `worktreePath` and `baseCommitSha` (the
+checked-out tip). An unresolvable `baseRef` on a valid repo fails with `-32602`.
+Provisioning is skipped — prior row-only behavior — for `skipWorktree: true`,
+`isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or a
+`repositoryPath` that is not a local git repository.
+
+**Clone orchestration (`workspace.create`).** When `githubUrl` is set and
+`repositoryPath` is not already a local git repository, the daemon clones the URL
+before branch naming and worktree provisioning, reusing the streaming `git.clone`
+pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
+else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
+`.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
+with `-32603`. Progress streams as `git:clone:progress` frames and terminates in exactly
+one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
+failure fails the whole `workspace.create` (no row persisted, no `workspace:created`).
+On success the checkout becomes the workspace's `repositoryPath` and, when the URL
+carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
+daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
+left them blank.
+
+**Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
+`spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
+id `"spec"`, title `"Spec"`, empty markdown body, tags `["spec"]`, pinned, default,
+workspace visibility. The seed captures an initial `v1` version snapshot and publishes
+`note:created` so subscribers see the standard note lifecycle. Seeding runs inside the
+idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
+a replayed create returns the stored result and does not re-seed.
+
+**Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
+daemon minitally creates the agent session (honoring `agentId`/`name`/`model`/
+`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
+delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+The result's `initialAgent.agentId` is the created session; the agent's turn starts
+asynchronously (fire-and-forget) but the create call is not idempotent unless a
+`idempotencyKey` is supplied — a replay with the same key returns the stored result
+without re-creating the session or re-delivering the prompt.
 
 **Workspace status fields (new in intentd).** Two BE-owned fields appear on every `Workspace`
 object returned by `workspace.*` — lightweight status metadata, **not** a notification store —
@@ -291,6 +349,10 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 | note.delete | noteId (req) | { ok, noteId, deleted } |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId) |
 | note.readAsset | asset (req) — asset id or workspace-asset:// URL | { assetId, mimeType, data, sizeKb } (image assets returned as data) |
+| note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
+| note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
+| note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
+| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state |
 
 ```json
 // → request
@@ -299,6 +361,76 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 // ← response
 { "jsonrpc":"2.0","id":7,"result":{ "ok": true, "noteId":"spec" } }
 ```
+
+**Version history (deliberate divergence from the FE).** The FE's file-based store
+appended mixed snapshot/diff entries to a `.versions/<noteId>.jsonl` sidecar
+(`SNAPSHOT_INTERVAL = 10` diffs between full snapshots). The daemon stores **every
+version as a full snapshot** in the `note_version` table instead — content sizes are
+note-scale, SQLite holds blobs natively, and full snapshots make `getVersion`/
+`restoreVersion` O(1) with no diff-chain replay. The FE cap is kept: on append the
+store prunes to the newest **50** versions per note (`MAX_NOTE_VERSIONS`). Versions are
+captured on every content mutation (`note.create`, `note.update` with `content`,
+`note.add`, `note.edit`, `note.editLines`, `note.setContent`, `note.restoreVersion`);
+metadata-only updates do not create versions. `note.*` writes carry no author context
+on the wire yet, so every version is stamped with the system author
+(`{ id:"system", name:"intentd", type:"system" }`).
+
+**CRDT merge on full-content writes (§5.2 / A5).** `note.setContent` and the
+content arm of `note.update` are **not** last-write-wins: incoming content is
+routed through a per-note `yrs` (Rust Yjs) document seeded from the note's
+stored content on first touch, and each write applies a single-hunk char-level
+diff (common UTF-16 prefix / suffix trimmed) inside a `yrs` transaction. The
+merged `Y.Text` output is what the daemon cleans and persists, so two
+concurrent full-content writes whose diffs target different regions both
+survive in the stored content. The CRDT state is **session-only** — never
+persisted, sweepable after 24 h idle, keyed by `(workspaceId, noteId)`. The
+surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
+`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write
+straight to storage and invalidate the cached session so the next full-content
+write reseeds from the fresh persisted content; `note.delete` drops the
+session. The wire shapes on §5.2 are unchanged.
+
+### 5.2.1 `note.lineAttribution.*` *(new in intentd — not part of the ported 104)*
+
+Per-line attribution over the daemon's full-snapshot version history (§5.2). Ports the FE
+`LineAttributionService` that backed the tiptap `LineAttributionGutter`, so a client can
+render "who last touched each line" without re-implementing the diff.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.lineAttribution.load | noteId (req) | `LineAttributionData \| null` — see payload below; `null` when the daemon has not computed attributions yet |
+| note.lineAttribution.computeNow | noteId (req) | `{ ok: true }` — force an immediate recompute + persist + `line-attribution:updated` emit (bypasses the debounce) |
+
+**Payload shape (`LineAttributionData`).** Identical to the FE JSON the
+`line-attribution:load` IPC handler served, so `LineAttributionGutter.svelte` decodes it
+unchanged:
+
+```json
+{
+  "noteId": "…",
+  "workspaceId": "…",
+  "computedAt": "2026-07-05T12:34:56.000Z",
+  "attributions": {
+    "1": { "timestamp": 1720193696000,
+            "author": { "id": "system", "name": "intentd", "type": "system" } },
+    "2": { "timestamp": 1720193710000,
+            "author": { "id": "agent-…", "name": "Assistant", "type": "agent" } }
+  }
+}
+```
+
+Keys of `attributions` are stringified 1-based line numbers (only lines the algorithm
+attributed to a stored version are present). `timestamp` is milliseconds since the Unix
+epoch. `author.type` is `user` / `agent` / `system`; `turnNumber` is emitted when
+available (currently omitted because `note.*` writes still stamp the system author —
+see §5.2 version-history extensions).
+
+**Recompute lifecycle.** Every content-changing `note.*` mutation schedules a debounced
+recompute (5 s, mirroring `LineAttributionService.DEBOUNCE_MS`). A fresh mutation cancels
+any pending timer so a burst of writes coalesces into one persist + one
+`line-attribution:updated` emit (§6.5). Persistence is one row per note in
+`note_line_attribution` (SQLite migration `0028_note_line_attribution.sql`), upserted on
+each recompute so the read path is O(1) and survives restart. `note.delete` cascades.
 
 ### 5.3 `comment.*`
 
@@ -337,12 +469,22 @@ All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). 
 { "jsonrpc":"2.0","id":11,"result":{ "ok": true, "lineNumber": 3, "status": "done" } }
 ```
 
-**`task.*` extensions (new in intentd — additive; do not change the ported count of 8).** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape.
+**`task.*` extensions (new in intentd — additive; do not change the ported count of 8).** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape, and one bulk write clears an agent from every task in a workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | task.list | workspaceId (req), status? | { tasks: WorkspaceTask[] } — optional `status` filter |
 | task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
+| task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
+
+**`task.*` legacy methods NOT exposed by intentd.** Four TS-only helpers survived on `NotesService` at the pre-daemon FE tip but had no renderer IPC producers and no MCP/main-internal callers at fe tip `16a0f9f3`, so they are retired with the TS notes service rather than ported. Reasoning captured for auditability:
+
+| Legacy method | Reason not exposed |
+| --- | --- |
+| `updateTaskPeerOrder` | No renderer producer for `notes:update-task-peer-order`; no MCP/main-internal call site. Retired with the TS `NotesService`. |
+| `removeTaskMetadata` | No renderer producer for `notes:remove-task-metadata`; sole non-test caller is the dead IPC handler. Retired with the TS `NotesService`. |
+| `findNextTask` | No renderer producer for `notes:find-next-task`; sole caller is the dead IPC handler. Retired with the TS `NotesService`. |
+| `findReadyTasks` | No renderer producer for `notes:find-ready-tasks`; only in-process caller is `findNextTask`, which retires alongside it. The pure `task-tree-utils.findReadyTasks` helper stays FE-local (unrelated to the wire surface). |
 
 ### 5.5 `agent.*`
 
@@ -350,26 +492,26 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId? } |
+| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, delegationDepth?, initialMessage? } (the P3-1.2b persistence-gap fields; omitted when absent). `metadata.isBackground` is served from the persisted session flag (harvested at spawn; G-A1/P3-1.2c) so rehydrated background agents stay background |
 | agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list; -32602 if not found (falls back to disk) |
 | agent.getConversation | agentId (req), limit?: number, workspaceId? | { agentId, messages, truncated, totalMessages } (capped to most-recent limit) |
-| agent.create | workspaceId (req), name?, model?, specialistId?, agentId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `agentId` (when supplied) is honored verbatim (`agent-{uuid}`) so the caller can address `agent.sendMessage` at the same id; malformed values surface as `-32602`. `provider` persists on the session; `agentType`/`metadata`/`workspacePath`/`workspaceContext` are accepted for the widened FE seam but not yet persisted (deferred per the P2-12a audit). |
-| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result |
-| agent.sendToTask | taskNoteId (req), message (req), priority? | service result |
-| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks? | { success, queued, messageId? |
-| agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, noteIds? | service result (stops current stream first) |
-| agent.queueMessage | agentId (req), content (req), imageBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks? } |
+| agent.create | workspaceId (req), name?, model?, specialistId?, agentId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, isBackground? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `agentId` (when supplied) is honored verbatim (`agent-{uuid}`) so the caller can address `agent.sendMessage` at the same id; malformed values surface as `-32602`. `provider` persists on the session. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b — plus `isBackground`, G-A1/P3-1.2c) with the top-level `contextReferences`/`imageBlocks`/`isBackground` params winning over the `metadata` copies; `isBackground` defaults to `false` when absent from both. `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
+| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result — the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b); delegated children always persist `isBackground: true` (matching the TS `DelegateTaskTool`; G-A1/P3-1.2c) |
+| agent.sendToTask | taskNoteId (req), message (req), priority? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist |
+| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? } — `priority: "interrupt"` preempts an in-flight turn instead of queueing: the current turn is cancelled keep-alive (`session/cancel` + one terminal `agent:stream:end`; the agent process is never killed) and the message streams immediately as a fresh turn on the same session (`queued: false`); the pending queue is preserved and drains afterwards. On an idle agent, interrupt priority falls through to the normal send path. **Duplicate delivery** of the SAME interrupt (same client-supplied `messageId`) preempts exactly once: the duplicate is acknowledged idempotently as `{ success: true, queued: false, messageId, deduplicated: true }` — no second preemption, message NOT double-persisted (dedup keys on `messageId`; omit it and duplicates are indistinguishable from new sends). **During turn startup** (busy slot claimed but no cancellable turn live yet — spawn/`session/new` in flight) the preemption is skipped and the message queues keep-alive behind the starting turn (`queued: true`); the agent is never killed and never fails. **Per-turn prompt-assembly hints (Fidelity B).** `stdinContext` is prepended verbatim to the outbound prompt as a `Context:\n<stdin>\n\n---\n\n` block (reference-parity `acp-provider.ts`); when absent, one is synthesised from `contextReferences` (port of `agent-backend-handler.service.ts`’s builder — first-non-empty wins across `content` / `selectedText` / `taskText` / `codeChunk`, with per-`type` framing for `selection` / `task` / `code_chunk` / `file` / `linear-issue` / `github-issue` / `sentry-issue` / `terminal`; unknown types fall through to the raw content). `noteIds` are resolved to workspace-asset image content blocks: each note's markdown is scanned for `workspace-asset://<workspaceId>/<assetId>` URLs in the current workspace, the referenced bytes are appended as ACP `image` blocks, and a single system text notice is added noting how many images were inlined. `messageMetadata` is opaque JSON persisted on the user message row (new `agent_message.metadata` column) and echoed on read — used by clients (e.g. `{ source: "system" }`) to distinguish daemon-initiated turns; the daemon never inspects its shape. **Daemon-ignored fields (FE-forwarded, unwired daemon-side; documented so callers know the wire shape stays stable when the daemon widens).** The FE-side app-ID trio (`userAppMessageId` / `assistantMessageId` / `assistantAppMessageId`) is accepted by the router but not consumed: the transcript is keyed on the server-minted UUIDv7 `id` and any client-side identity round-trips via `messageMetadata`. Per-turn `model` override is likewise accepted but **not extracted** by the daemon router today; the session-level model set at `agent.create` / `agent.setModel` remains authoritative (deferred pending an ACP-provider-side change to switch model mid-session). |
+| agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks?, noteIds?, stdinContext?, contextReferences?, messageMetadata? | service result (stops current stream first) — same per-turn hint semantics as `agent.sendMessage` (Fidelity B): `stdinContext` / `contextReferences` build the `Context:` block, `noteIds` inlines workspace-asset images with a system notice, and `messageMetadata` persists on the user message row |
+| agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks? } |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req) | { success, queuedMessage } (QueuedMessage shape as above) |
 | agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
-| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks? } |
+| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks? } |
 | agent.stop | agentId (req) | { success: true } |
-| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result |
+| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result — emits `agent:updated` |
 | agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
-| agent.rename | agentId (req), name (req, non-empty) | { success: true, name } |
+| agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet? | { success: true, name } — an applied rename emits `agent:renamed`. With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
 | agent.delete | agentId (req), workspaceId? | { success: true } |
 | agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. |
 | agent.summary | agentId (req) | quick summary of what the agent did |
-| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent |
+| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` before delivering to the parent (P3-1.2b) |
 | agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses } (filter fields flattened; legacy filter kept) |
 | agent.cancelSubscriptions | agentId (req), workspaceId (req) | { success: true } |
 | agent.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — not the WS streaming surface (use events.subscribe) |
@@ -401,11 +543,26 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 // ← { "jsonrpc":"2.0","id":23,"error":{ "code": -32602, "message": "agent.wakeOrCreate: delegation depth 2 exceeds MAX_DELEGATION_DEPTH (2)" } }
 ```
 
-**`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals.
+> **Migrating off the removed FE `sendBackendInitiatedMessage`.** Callers that
+> previously branched on the FE-only `errorCode: "ALREADY_STREAMING"` result
+> should now treat `agent.sendMessage`'s `{ queued: true }` response as the
+> "agent is mid-turn / already streaming" case: the daemon auto-queues the
+> message behind the in-flight turn and returns `{ success: true, queued: true,
+> messageId? }` without preempting. For the "resume or spin up the assignee for
+> a `taskNoteId`" branch, use `agent.wakeOrCreate`; for a known existing
+> `agentId`, use `agent.sendMessage` directly (the daemon distinguishes the
+> mid-turn case via the boolean `queued` flag).
+
+**`agent.*` extensions (new in intentd — additive; do not change the ported count of 24).** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals. Plus the four session-shape RPCs that unblock the FE agent-backend-handler retirement (C1d/C1e): the full-session read `agent.getSession`, the partial-mutation writer `agent.update`, and the transcript-mutation pair `agent.appendMessage` / `agent.replaceMessages`. `agent.enhancePrompt` (one-shot prompt-enhance / AI-layout generation; full contract in §5.31) is cross-referenced here as a namespace index entry.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | agent.diagnostics | workspaceId (req), agentId?, taskNoteId?, staleRespondingAfterMs? | { diagnostics, text } — JSON snapshot plus a pre-formatted text rendering; optional filters narrow to one agent or task |
+| agent.getSession | agentId (req), workspaceId? | { session: AgentSession } — full projection (superset of `AgentLite`): includes `systemPrompt`, `specialist`, the persisted metadata block, and the full `messages` log (chronological). Backs the FE-side `loadAgent` rehydration path. `-32602 "Agent not found"` when the session is unknown |
+| agent.update | agentId (req), workspaceId?, changes (req) | { success: true, agent: AgentLite } — partial update of the persisted `AgentSession` from a `changes` object. Whitelisted fields: `status`, `isActive`, `acpSessionId`, `backendSessionId`, `name`, `nameExplicitlySet`, `model`, `provider`, `systemPrompt`, `specialist`, `taskNoteId`, `skipAutoCommit`, `completionReport`, `completionReportTimestamp`, `delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`, `isBackground`. Optional-string fields accept a JSON `null` to clear. Write-once (`acpSessionId`) and immutable (`provider`) invariants are still enforced by the store. Emits `agent:updated` (or `agent:renamed` when `name` is the only mutated field). Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"` |
+| agent.appendMessage | agentId (req), role (req, `user`\|`assistant`\|`tool`\|`system`), contentBlocks (req), workspaceId?, metadata? | { success: true, message: AgentMessage } — append a single message to the transcript. `metadata` persists verbatim on the row and round-trips on reads. Emits `agent:message`. Rejected with `-32602` when the agent is mid-turn (transcript mutations must not race the streaming writer) |
+| agent.replaceMessages | agentId (req), messages (req, `AgentMessage[]`), workspaceId? | { success: true, messages: AgentMessage[] } — atomically swap the entire transcript. Each entry needs `role` + `contentBlocks`; `metadata` / `timestamp` are optional. Row ids and `seq` values (`0..n`) are minted by the store so callers cannot smuggle stale ids across the swap. Emits `agent:updated` with `{ replacedCount }`. Rejected with `-32602` when the agent is mid-turn (same rationale as `agent.appendMessage`) |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } — one-shot prompt-enhance / AI-layout generation via a spawned `auggie --print`; no agent session is created or persisted, no events emitted. Full contract in §5.31 |
 
 ### 5.6 `git.*`
 
@@ -416,7 +573,9 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
 | git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } |
 | git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
-| git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be a known repo (-32602) |
+| git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
+
+**Path-based branch reads (`git.getBranches`, `git.branchStatus`).** These two read-only methods take a filesystem `repoPath` instead of a `workspaceId` because the workspace-initializer BranchSelector lists branches for a user-picked repo *before* any workspace referencing it exists — a known-repo gate here is a chicken-and-egg failure (the create flow can never register the repo it cannot list). Mirroring the ungated legacy IPC handlers (`git:getBranches` `{ repoPath }` variant, `git:getBranchStatus`), the daemon accepts **any local path that exists and is a git repository** (registered as a workspace or not) and rejects invalid paths with distinct `-32602` errors: `Repository path does not exist: <path>` for a nonexistent path, `Path is not a git repository: <path>` for an existing non-git directory. `git.pull` (extensions table below) shares the same `repoPath` validation for the same reason — the workspace-create auto-pull runs before the repo is registered; all other mutating `git.*` methods remain workspace-scoped and are unaffected.
 
 ```json
 // → request
@@ -425,14 +584,17 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 { "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
 ```
 
-**`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus three working-tree reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
+**`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus working-tree/branch reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
+| git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
+| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
+| git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
 | git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
 
 **Streaming `git.clone`.** Long-running clones cannot use the buffered `host.exec` (§5.14) — the FE animates a progress bar as objects arrive. `git.clone` mirrors the `search.*` streaming shape (§5.15 / §6.5): the method returns `{ requestId, targetPath }` immediately and the daemon spawns `git clone --progress` with a piped stderr, parses the canonical phases (`starting` → `counting` → `compressing` → `receiving` → `resolving` → `checkout` → `complete`) into `git:clone:progress` frames, and emits a terminal `git:clone:done` when the child exits, times out (5 min hard cap), or fails to spawn. `GIT_LFS_SKIP_SMUDGE=1` is preserved so a missing/unreachable LFS object never fails the clone. The `url` is used only at spawn time; neither the URL nor the environment ever appears in the streamed payloads, and any `user:pass@` credential fragment in stderr is redacted before it surfaces on the `git:clone:done { error }` frame.
@@ -539,11 +701,13 @@ host-agnostic.
 { "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
 ```
 
-**`file.*` extensions (new in intentd — additive; do not change the ported count of 6).** A file-explorer P0 read returning the entries directly under the given path as a **bare array**; the FE anchors the explorer at the workspace root and lazy-lists children via the existing `file.list`. Shares the within-workspace containment guard with the other `file.*` ops.
+**`file.*` extensions (new in intentd — additive; do not change the ported count of 6).** Three additive methods sit next to the ported six: `file.tree` — a file-explorer P0 read returning the entries directly under the given path as a **bare array**; and `file.exists` / `file.stat` — the existence probe and metadata read that back the remote-backend retirement track (R-BE-1 / R-BE-2), mirroring the legacy `intent-server.cjs` `fileExists` / `stat` result shapes for 1:1 consumer swap. The FE anchors the explorer at the workspace root and lazy-lists children via the existing `file.list`. All three share the within-workspace containment guard with the other `file.*` ops.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | file.tree | path? (default .) | [{ path, name, isDirectory }] — bare array; paths outside the workspace rejected |
+| file.exists | path (req) | { exists, isFile, isDirectory } |
+| file.stat | path (req) | { size, mtime, isFile, isDirectory, isSymlink, permissions } |
 
 > **`browser.*` — NOT PORTING (v1): won't port.** `browser.exec` (Chrome DevTools Protocol
 > automation) and `browser.docs` are **not implemented** in `intentd` and are **not v1 wire
@@ -588,6 +752,7 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | specialist.edit | id (req), spec (req): SpecialistDef, scope (req): "project"\|"user" | { specialist: SpecialistDef } |
 | specialist.delete | id (req), scope (req): "project"\|"user", workspacePath? | { success: true } — `bundled` definitions are read-only |
 | repo.list | — (no workspaceId) | { repos: [...] } |
+| repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 
 ```json
 // → request
@@ -656,14 +821,20 @@ interface SettingDefinition {
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed. These are theported, BE-owned settings (group A) plus `intentd`-specific host/daemon settings (group B):
 
 - **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`.
-- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(sensitive)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OSkeychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace'skeychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE"connect Linear" flow.
+- **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
+- **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
+- **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the known-repositorylist the FE previously kept in the `repo-registry` electron-store; `workspace.changeHistory`*(object)* — per-workspace diff-history bags the FE previously kept in the default `config.json`electron-store. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
+- **Notifications (ported from the FE `settings` electron-store):** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four keys the FE app-settings schema exposes under `notifications.*` are now daemon-owned so the legacy `notificationSettings` bag in the `settings` electron-store can retire; every entry is non-secret and reset-able via `settings.reset`.
 
-**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `notifications.*` (display),`workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `accounts.sentry`, `rtk.enabled`, `linear.issueFilter`.
+**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `rtk.enabled`, `linear.issueFilter`.
 
 ```json
 // → request — list all BE-owned settings (sensitive values redacted)
@@ -671,7 +842,7 @@ interface SettingDefinition {
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "settings": [
   { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
-    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5180,"value":5180 },
+    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
   { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
     "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
 ```
@@ -689,11 +860,11 @@ interface SettingDefinition {
 ```json
 // → request — mutate settings (emits settings:changed)
 { "jsonrpc":"2.0","id":53,"method":"settings.update","params":{ "changes":[
-  { "path":"server.port","value":5181 },
+  { "path":"server.port","value":5182 },
   { "path":"sourceControl.github.tokenSource","value":"gh-cli","reason":"use gh auth token" } ] } }
 // ← response
 { "jsonrpc":"2.0","id":53,"result":{ "applied":[
-  { "path":"server.port","value":5181 },
+  { "path":"server.port","value":5182 },
   { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
 ```
 
@@ -701,7 +872,7 @@ interface SettingDefinition {
 // → request — reset one setting to its default
 { "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
 // ← response
-{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5180 } }
+{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
 ```
 
 ### 5.13 Interactive `terminal.*` *(new in intentd — not part of the ported 104)*
@@ -772,7 +943,7 @@ in the bullet under this table).
 | --- | --- | --- | --- |
 | host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
 | host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
-| host.openInEditor | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — **FE-served**: launches the user's editor on `path` (optional `line`/`column` hint). On a local daemon the launch short-circuits via the resolved `host.listInstalledEditors` entry; on a remote daemon the intent is dispatched to the connected client so the editor opens on the user's laptop |
+| host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 | host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
@@ -784,9 +955,13 @@ in the bullet under this table).
   `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
 - `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
   frontend, not the daemon** (reverse RPCs — the *daemon* sends the JSON-RPC `request` and the
-  connected client returns the `response`). Clients never call these methods on the daemon;
-  the daemon dispatches them to the client so these inherently-user-side GUI intents resolve
-  on the user's machine. Reverse-request ids are always in the `rev-<n>` namespace (allocated
+  connected client returns the `response`). Clients never call `openExternal` /
+  `pickApplication` on the daemon; the daemon dispatches them to the client so these
+  inherently-user-side GUI intents resolve on the user's machine. `host.openInEditor` is
+  additionally **client-callable as a trigger** (the FE's "Open in editor / VS Code" buttons):
+  the daemon serves the request by short-circuiting locally on a local connection, or by
+  re-dispatching the same intent to the connected client as the FE-served reverse RPC on a
+  remote connection. Reverse-request ids are always in the `rev-<n>` namespace (allocated
   by the daemon, distinct from the client's own `id` space) with a 30s default timeout; the
   local branch short-circuits directly on the daemon host without a wire round-trip (via
   `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
@@ -864,6 +1039,12 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":"rev-1","method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
 // → client replies with the same rev-* id
 { "jsonrpc":"2.0","id":"rev-1","result":{ "ok": true } }
+// client-called trigger — FE asks the daemon to open the user's editor
+// (local daemon: direct launch; remote daemon: re-dispatched as the reverse RPC below)
+{ "jsonrpc":"2.0","id":81,"method":"host.openInEditor","params":{
+  "editorId":"vscode","path":"/repo/src/main.rs","line":12,"column":3
+} }
+// ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
 // reverse RPC — daemon → client — launch the user's editor on the user's machine (FE-served; local daemons short-circuit)
 // ← daemon sends the request
 { "jsonrpc":"2.0","id":"rev-2","method":"host.openInEditor","params":{
@@ -1302,6 +1483,47 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 > internal `search.memories` path (IMPLEMENTATION_SPEC.md §5.15) scans it; a `memories.*` namespace
 > (list/create/search/delete) could be added additively later **only if** a memories UI ever ships.
 
+#### 5.22.1 `mcp.oauth.*` — per-server OAuth token bags *(new in intentd — not part of the ported 104)*
+
+Companion to §5.22: manage the OAuth token bag associated with each external MCP server id
+(port of the FE `mcp-oauth-tokens` electron-store). Bags are **secret material**; the daemon
+persists them in the dedicated `mcp_oauth_tokens` table (§9.4) and every wire response is
+**presence-only** — the bag body **never** crosses the wire (mirrors the `settings.*` §9.8
+redaction seam and `mcp.servers.*` `env`/`headers` redaction). Internal daemon consumers that
+need to build an outbound request read the raw bag directly from the store; there is no
+"reveal" RPC. This is a separate namespace (not a `settings.*` key) because bag counts are
+unbounded and rotate independently of the config surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.oauth.list | — | `{ tokens: [{ serverId, value }] }` — one entry per stored bag, `value` always the redaction placeholder |
+| mcp.oauth.get | serverId (req) | `{ serverId, value }` — `value` is the placeholder when a bag exists and `null` when it does not |
+| mcp.oauth.set | serverId (req), tokenBag (req) | `{ serverId, value }` — persists the bag; `value` is always the placeholder (bag itself is never echoed) |
+| mcp.oauth.delete | serverId (req) | `{ success: true }` — idempotent (absent bag succeeds) |
+
+- `tokenBag` is an opaque JSON body (object / array / scalar) so the FE's bag shape can
+  evolve without a daemon change; the reference bag is
+  `{ access_token, refresh_token?, expires_at?, token_type? }`.
+- Missing/empty `serverId` yields `-32602`; `mcp.oauth.set` also requires `tokenBag`.
+- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
+  polls / re-fetches on demand.
+
+```json
+// → request — persist an OAuth bag for one MCP server
+{ "jsonrpc":"2.0","id":62,"method":"mcp.oauth.set",
+  "params":{ "serverId":"srv-linear",
+             "tokenBag":{ "access_token":"…","refresh_token":"…",
+                          "expires_at":1750000000,"token_type":"Bearer" } } }
+// ← response (bag never echoed — value is a placeholder)
+{ "jsonrpc":"2.0","id":62,"result":{ "serverId":"srv-linear","value":"********" } }
+
+// → request — list stored bags (presence only)
+{ "jsonrpc":"2.0","id":63,"method":"mcp.oauth.list" }
+// ← response
+{ "jsonrpc":"2.0","id":63,"result":{ "tokens":[
+  { "serverId":"srv-linear","value":"********" } ] } }
+```
+
 ### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 104)*
 
 The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
@@ -1655,10 +1877,11 @@ interface ReviewThreadComment {
 > values map to **typed Linear GraphQL filters server-side**, removing the parse-the-LLM-output
 > fragility.
 
-> **Auth model — API key from the environment (no OAuth/device flow, no credential store).** A local
-> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key resolved
-> from the environment**: `LINEAR_API_KEY` (with an optional lower-priority keychain account
-> `linear.token`). Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
+> **Auth model — personal API key (no OAuth/device flow).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key**: the
+> default `auto` resolution tries the OS-keychain account `linear.token` first (service `intentd`;
+> settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
+> `LINEAR_API_KEY` environment variable. Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
 > with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
 > `Authorization: Bearer <token>` — the prefix differs by credential type).
 >
@@ -1666,9 +1889,9 @@ interface ReviewThreadComment {
 >   connection state.
 > - **There is no `linear.connect` / `linear.revoke` / `cancelAuth` wire method.** Unlike `github.*`
 >   (which keeps inert no-op `connect`/`revoke` for FE shape parity), Linear exposes **nothing**
->   here: "connect" becomes "set `LINEAR_API_KEY` and restart", "revoke/logout" is a local
->   "forget token" action, and `cancelAuth` was always a pure client-side no-op. The settings UI
->   buttons are inert.
+>   here: "connect" is `settings.update` on the `linear.token` catalog entry (§5.12) — or set
+>   `LINEAR_API_KEY` — "revoke/logout" is `settings.reset { path: "linear.token" }`, and
+>   `cancelAuth` was always a pure client-side no-op.
 >
 > **🔒 Secret guardrail.** The API key is a secret: it is **never logged, echoed, or returned** over
 > the wire. Only **derived identity** (the `login` from `viewer`) and the boolean connection state
@@ -2186,6 +2409,161 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
 ```
 
+### 5.30 `models.list` — model catalog *(new in intentd — not part of the ported 104)*
+
+The BE-owned model catalog every FE model picker reads (ModelPicker, background-agent settings,
+workspace initializers, onboarding). Ports the reference app's `auggie:get-models` IPC handler
+(`fetchAuggieModels`, `src/features/auggie/main/auggie.ipc.ts`) as a daemon RPC. It is the
+**richer, additive sibling** of the ported `agent.getModels` (§5.5), which keeps its lean
+`{ id, name, provider, description? }` rows unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| models.list | — (none; no `workspaceId`) | { models: ModelInfo[], source: "auggie" \| "static" } |
+
+**ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number }`.
+`id` is the bare model id (the reference `shortName`/`value`), `name` the display label
+(`displayName`/`label`); the optional fields carry the picker metadata the reference FE
+`AuggieModel` consumes (group/within-group ordering, cost tier `1..3`, badges, effort levels,
+default flag). Optional fields are omitted when the CLI does not report them.
+
+**Discovery** (mirrors the reference `fetchAuggieModels`):
+
+1. `auggie model list --json` — rich metadata (`id` ← `shortName`, `name` ← `displayName`).
+2. Plain `auggie model list` text fallback (`- Label [model-id]` rows + optional indented
+   description) when the JSON form fails or parses empty.
+3. Rows flagged `isLegacyModel` are **filtered out server-side**; the survivors are sorted by
+   `modelGroupPriority`, then `priority`, then `name` (missing priorities sort last). A
+   successful CLI result is **cached for 5 minutes** (ports the reference provider-model cache).
+4. When the auggie CLI is unavailable or yields nothing parseable, the static
+   `PROVIDER_MODEL_TIERS` catalog is returned with `source: "static"` (same fallback as
+   `agent.getModels`), so the result is never empty — clients can key honest "live vs fallback"
+   UI off `source`.
+
+Errors: `-32603` only on internal failure; CLI absence is **not** an error (it degrades to the
+static catalog).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":82,"method":"models.list" }
+// ← response
+{ "jsonrpc":"2.0","id":82,"result":{ "source":"auggie","models":[
+  { "id":"sonnet4.5","name":"Sonnet 4.5","provider":"auggie",
+    "description":"Balanced general model","modelGroupPriority":1,"costTier":2,
+    "badges":[{ "color":"green","label":"Auto" }],"effortLevels":["low","medium","high"],
+    "isDefault":true,"priority":1 } ] } }
+```
+
+### 5.31 `agent.enhancePrompt` — one-shot prompt enhancement *(new in intentd — not part of the ported 104)*
+
+Ports the FE's last local-CLI bypass — the `agent:enhance-prompt` and `agent:generate-layout`
+IPC handlers (`cloudlands-fe src/features/agent/main/agent-missing.ipc.ts`), which spawn
+`auggie --print` on the client — as a daemon RPC. One-shot request/response: no streaming, no
+agent session created or persisted, no events emitted. Additive next to the ported `agent.*`
+namespace (§5.5), whose count of 24 is unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — in `mode: "enhance"` the raw user input to improve; in
+  `mode: "layout"` the full layout-generation instruction sent verbatim.
+- `mode` — `"enhance"` (default) wraps `prompt` in the enhancement template (the FE
+  `getInputWithEnhancePrompt` port) and **extracts** the
+  `<augment-enhanced-prompt>…</augment-enhanced-prompt>` payload from the model reply;
+  `"layout"` skips the template and returns the full cleaned reply (covers the FE
+  `agent:generate-layout` use). Any other value is `-32602`.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree as its
+  working directory (unknown workspace → `-32602`). Without it the CLI runs without a `cwd`
+  (mirrors the FE, which drops `cwd` when no workspace is bound).
+- `timeoutMs` — optional positive integer, default `30000` (the FE's 30-second enhancement
+  timeout), capped at `120000`.
+
+**Execution** — same one-shot CLI discipline as `workspace.generateSetupScript` (§5.25) and
+`models.list` (§5.30): auggie discovery (Intent-managed binary → enhanced PATH, §8.2), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped for latency — enhancement needs no
+tools) with the composed prompt piped over stdin (`System: <mode system prompt>\n\n<message>`,
+mirroring the FE `streamChat` composition). Stdout is ANSI-stripped and cleaned (🤖-delimited
+response extraction plus tool-artifact line filtering, the FE `cleanAgentMessage` port) before
+the mode-specific parse.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; `mode` not `"enhance"`/`"layout"`; non-positive
+  `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit; in `mode: "enhance"`, a reply missing the
+  `<augment-enhanced-prompt>` tags (`data`: `"Failed to parse enhanced prompt from response"`).
+  CLI absence is a **hard error** here (unlike §5.30) — there is no meaningful static fallback
+  for enhancement.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":83,"method":"agent.enhancePrompt",
+  "params":{ "prompt":"make login better","model":"haiku4.5","workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":83,"result":{
+  "enhanced":"Improve the login flow: add client-side validation …",
+  "original":"make login better","mode":"enhance" } }
+```
+
+
+### 5.32 `agent.completeOnce` — one-shot prompt→completion *(new in intentd — not part of the ported 104)*
+
+Retires the FE `background-request.service.ts` ACPProvider spawn — the last live
+ACPProvider construction in the renderer, used for slug generation and note-status
+checks — by exposing a stateless one-shot completion RPC. The daemon owns the full
+lifecycle: spawn the auggie CLI, collect its cleaned reply, reap the process on any
+failure path (timeout, cancel, drop). **No agent session or in-memory state is
+created**, so no client-side create→send→read→delete orchestration is needed and
+there is nothing to garbage-collect on the error path. Additive next to the ported
+`agent.*` namespace (§5.5), whose count of 24 is unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.completeOnce | prompt (req), systemPrompt?, model?, workspaceId?, timeoutMs? | { text } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — the user prompt piped verbatim to the CLI over
+  stdin (composed with `systemPrompt` when supplied).
+- `systemPrompt` — optional system prompt; when present the composed input becomes
+  `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
+  used by §5.31. Absent/blank → `prompt` rides through unchanged.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree
+  as its working directory (unknown workspace → `-32602`). Without it the CLI runs
+  without a `cwd`.
+- `timeoutMs` — optional positive integer, default `30000` (matches §5.31 default),
+  capped at `120000`. A hung CLI is reaped when the timeout elapses.
+
+**Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
+discovery (Intent-managed binary → enhanced PATH, §8.2), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
+tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
+(🤖-delimited response extraction plus tool-artifact line filtering, the FE
+`cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
+events, no persistence.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit. CLI absence is a **hard error** —
+  there is no static fallback for completion.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":84,"method":"agent.completeOnce",
+  "params":{ "prompt":"one-line slug for: fix the login flow" } }
+// ← response
+{ "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
+```
+
+
 ## 6. Events & Subscriptions
 
 Live event streaming is the **canonical** way a thin client stays in sync. It uses twoserver-handled methods (the plural `events.` prefix) plus a server-pushed notification.
@@ -2255,13 +2633,14 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | --- | --- | --- |
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.action, data.path |
+| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
 | task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
-| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:status-changed |  |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed |  |
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
-| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7) |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7) |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
@@ -2269,7 +2648,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
-| git / terminal / test / build | git:, terminal:command, test:, build:* | Reserved-but-unused in the reference impl — subscribing yields zero events today. |
+| git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused in the reference impl. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (matches the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
 | git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error? }`; `error` is present iff `ok == false` and never carries the source URL or credentials. |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
 | script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
@@ -2384,7 +2763,7 @@ Notes for client implementers:
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
 - **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
-- **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
+- **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
 ### 7.1 `chat.subscribe` — structured live transcript channel *(new in intentd)*
 
@@ -2503,12 +2882,21 @@ When an agent's provider (e.g. auggie) wants to run a tool that requires approva
 > → the `agent.*` router. The normalized request payload, options normalization, `riskLevel`
 > heuristic, outcome shape, and 5-minute timeout are implemented as described.
 >
-> **Default policy.** The production default is now **`AutoByRisk`** (auto-allow low-risk / reads,
-> auto-deny medium/high), selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
-> (`interactive|auto|allow|deny`, default `AutoByRisk`). An **`Interactive`** deployment instead
-> blocks the agent's stream and surfaces each prompt via `agent.pendingPermissions`, resolving it
-> via `agent.respondPermission` (still bounded by the 5-minute timeout when left unanswered).
-> **`AllowAll`** and **`DenyAll`** remain available for fully-headless deployments.
+> **Default policy.** The shipped default is **`AllowAll`** for reference parity with the TS
+> acp-provider, selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
+> (`interactive|auto|allow|deny`, default `AllowAll`). Under `AllowAll`,
+> `AgentManager::start_session` additionally issues a best-effort
+> `session/set_mode { modeId: "bypassPermissions" }` after `session/new`,
+> `session/load`, and the recreate fallback on providers that advertise
+> set-mode (auggie today). Providers that don't advertise set-mode, or that
+> reject the mode change, fall through to the local auto-approve inside
+> `ClientRequestHandler` (the previous `AutoByRisk` default silently denied
+> medium/high prompts, which diverged from the reference). An **`Interactive`**
+> deployment instead blocks the agent's stream and surfaces each prompt via
+> `agent.pendingPermissions`, resolving it via `agent.respondPermission` (still
+> bounded by the 5-minute timeout when left unanswered). **`AutoByRisk`** and
+> **`DenyAll`** remain available for headless-with-guardrails deployments and
+> never issue the bypass mode change.
 
 The normalized permission request payload is:
 
