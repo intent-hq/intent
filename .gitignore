@@ -3,3 +3,6 @@
 
 # Local scratch dir for worktree commit-message drafts (never committed)
 .wt-commit-details/
+
+# macOS Finder metadata
+.DS_Store

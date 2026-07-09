@@ -2,7 +2,8 @@
 
 Internal engineering monorepo for **Cloudlands**, an agentic coding platform. This repo ties
 the Cloudlands components together via git submodules and provides unified docs, tooling, and
-CI/CD. The **Rust backend (`intentd`) comes first**; the desktop frontend lands later.
+CI/CD. It mounts the **Rust backend daemon (`intentd`)** and the **Electron + SvelteKit
+desktop frontend (`cloudlands-fe`)** as submodules.
 
 > ⚠️ Private Repository — This repo is internal to the Cloudlands engineering team. The
 > component repositories it references are also private. See Related Repositories for links.
@@ -43,8 +44,8 @@ for the full design.
 
 | Component | Status |
 | --- | --- |
-| `packages/intentd` | **Backend port — Milestones 1–10 implemented.** ~143 JSON-RPC methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, the settings/rules/specialist/`mcp.servers` agent ecosystem, the ACP agent runtime (`agent.*`), and intentd transport extensions. Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
-| `packages/cloudlands-fe` | **Desktop frontend — imported with full history.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs). |
+| `packages/intentd` | **Backend port — canonical persistence landed.** 218 JSON-RPC request methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, workspace-file/note-primitive/cross-workspace, the settings/rules/specialist/`mcp.servers`/MCP-OAuth agent ecosystem, GitHub-browse/Linear/Sentry integrations, and the ACP agent runtime (`agent.*`). The daemon owns all persistent user-facing state (notes/comments/assets/settings/agent sessions). Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`token`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
+| `packages/cloudlands-fe` | **Desktop frontend — daemon-canonical.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend only through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs); local persistence, execution spawns, the legacy agent transport, and the remote-backend stack are all retired onto daemon RPCs. |
 
 ## Repository Layout
 
