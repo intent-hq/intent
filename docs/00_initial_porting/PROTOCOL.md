@@ -228,6 +228,15 @@ from `initialAgent.prompt` via local keyword heuristics when possible (`generate
 repository the name is uniquified against existing local and remote-tracking branches by
 appending `-2`, `-3`, … until free. The branch is never the raw workspace UUID.
 
+**Workspace id (`workspace.create`).** The daemon derives the workspace id as a friendly
+`word-word` slug (extracted from `initialAgent.prompt` when possible, else a random
+adjective-animal pair), uniquified with a `-2`, `-3`, … suffix whenever the candidate id was
+**ever** used — a live workspace, a previously deleted workspace (persisted delete
+tombstone), or a leftover `<root>/<id>` directory on disk. Ids are therefore never recycled
+across delete/recreate (reuse would collide the old workspace's agent streams and file
+paths with the new one's); callers must use the id returned in the `workspace.create`
+result rather than predicting it.
+
 **Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
 repository, the daemon provisions a linked worktree before persisting the row (TS
 `createGitWorktree` parity): the worktree lives at
@@ -255,7 +264,10 @@ failure fails the whole `workspace.create` (no row persisted, no `workspace:crea
 On success the checkout becomes the workspace's `repositoryPath` and, when the URL
 carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
 daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
-left them blank.
+left them blank. Independently of cloning, any create that ends up with a local
+`repositoryPath` but no caller-supplied `repositoryName` persists the path basename as
+`repositoryName`; `repositoryOwner` is never derived from local paths (no remote
+inspection).
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
@@ -825,7 +837,7 @@ interface SettingDefinition {
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
-- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OS keychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace's keychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
 - **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
@@ -887,7 +899,7 @@ interface SettingDefinition {
 
 | Method | Params | Result |
 | --- | --- | --- |
-| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `env` layers onto the daemon's inherited environment (later keys override) |
+| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `cwd` omitted → the workspace's worktree root (falls back to the daemon's cwd when the workspace has no resolvable worktree); `env` layers onto the daemon's inherited environment (later keys override) |
 | terminal.write | terminalId (req), data (req, base64) | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int) | { ok: true } |
 | terminal.kill | terminalId (req) | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
@@ -1879,8 +1891,8 @@ interface ReviewThreadComment {
 
 > **Auth model — personal API key (no OAuth/device flow).** A local
 > daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key**: the
-> default `auto` resolution tries the OS-keychain account `linear.token` first (service `intentd`;
-> settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
+> default `auto` resolution tries the secret-store account `linear.token` first (the daemon's
+> file-backed secret store; settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
 > `LINEAR_API_KEY` environment variable. Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
 > with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
 > `Authorization: Bearer <token>` — the prefix differs by credential type).
@@ -2180,7 +2192,7 @@ error rows and any events) and do not change the contract above.
 > **Auth model — token + org from the environment (no OAuth/device flow, no
 > `connect`/`revoke`).** A local daemon has no hosted OAuth callback, so v1 authenticates with
 > a **Sentry user/internal-integration auth token + organization slug resolved from the
-> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority keychain account
+> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority secret-store account
 > `sentry.token`) plus `SENTRY_ORG` (organization slug). Sentry is REST-only; the token is sent
 > as the **`Authorization: Bearer <token>`** header.
 >
@@ -2741,7 +2753,7 @@ production emit site** today and are reserved for future use.
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
-| tool call | agent:tool:call | the single tool signal; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
+| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, content, streamId? } |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
@@ -2809,16 +2821,20 @@ frame):
 `crates/intent-services/src/tool_block.rs::build_tool_use_block` — so seq-0 and every subsequent
 delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 `"sub-agent-explore: Explore the AI agent system…"`) rather than the raw tool name the model
-invoked; `block.name` is derived by splitting a title of the form `<name>: <description>` —
-`<name>` a bare `[A-Za-z0-9_-]+` identifier followed by `": "` or `":\t"` — and taking the prefix.
-Titles without that shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`)
-pass through as `name` unchanged. Repeated `_workspace-mcp` suffixes on the derived name are
-collapsed to a single one — an auggie convention artifact when the MCP server name equals the
-tool-name suffix (§18.4); a single suffix is preserved as canonical. The full title, when
-non-empty, is echoed verbatim as `input._acpTitle` so the FE classifier has it alongside `name`
-for fallback rendering when raw args are missing (auggie frequently sends `raw_input: null`); a
-`Null` `input` is coerced to `{}` so the marker can attach, while non-object non-null inputs
-(arrays / scalars) pass through verbatim (the FE still has `title` in the event).
+invoked; the real name is derived **once**, at `session/update` mapping time
+(`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
+raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
+Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
+identifier followed by `": "` or `":\t"` — is split, taking the prefix. Titles without that
+shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
+`name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
+tool names carry no suffix (§18.4), and auggie's `<tool>_<server>` convention appends the server
+name, so stripping recovers the registry name (`add_to_note_workspace-mcp` → `add_to_note`).
+The full title, when non-empty, is echoed verbatim as `input._acpTitle` so the FE classifier
+has it alongside `name` for fallback rendering when raw args are missing (auggie frequently
+sends `raw_input: null`); a `Null` `input` is coerced to `{}` so the marker can attach, while
+non-object non-null inputs (arrays / scalars) pass through verbatim (the FE still has `title`
+in the event).
 
 **Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
 blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,

@@ -590,7 +590,7 @@ Notes:
 
 `GitHubSourceControl` is the v1 impl. Resolve a token per `sourceControl.github.tokenSource`(§9.8):
 
-1. `explicit` — a token stored in `intentd` settings (`sourceControl.github.token`, enteredby the user; stored in the OS keychain via a `keyring` crate, **never** in plaintext configor logs).
+1. `explicit` — a token stored in `intentd` settings (`sourceControl.github.token`, enteredby the user; stored in the daemon's file-backed secret store — `intent_core::FileSecretStore`, `~/intent/secrets.json`, `0600` — **never** in `config.toml` or logs).
 2. `env` — `GITHUB_TOKEN` / `GH_TOKEN` env var.
 3. `gh-cli` — `gh auth token` (shell out to the GitHub CLI if installed) — the most commondev setup.
 
@@ -796,7 +796,7 @@ pub struct Event {                       // append-only; see §10 / events/types
 
 pub struct Settings {                    // key/value, typed accessors
     pub ws_api_enabled: bool,
-    pub ws_api_token: Option<String>,    // stored in keychain, not this row, in practice
+    pub ws_api_token: Option<String>,    // stored in the file-backed secret store, not this row, in practice
     pub discovery_enabled: bool,
     pub default_provider: String,
     pub github_base_uri: Option<String>,
@@ -1193,7 +1193,7 @@ Source-control provider config is namespaced as `sourceControl.<provider>.*` so 
 
 - **Storage.** Non-secret values persist in the `settings` table (§9.2, `key` → JSON`value`). Definitions (label, description, category, type, enum/min/max, default, sensitive,scope) are ported from `app-settings-schema.ts` as `AppSettingDefinition`s; group B adds itsown definitions. Non-secret settings may also be surfaced in `config.toml` (§11.2), but theDB row is authoritative.
 - **Validation.** Every mutation is validated against its `AppSettingDefinition` (type, enummembership, numeric min/max) via the analog of `findAppSettingDefinition` before persisting;invalid changes are rejected with an `invalid params` error and nothing is written.
-- **Secrets.** Settings marked **sensitive** (`mcp.servers`, `server.auth.token`, `sourceControl.github.token`) are stored securely in the OS keychain (`keyring` crate), never in `config.toml`, never in logs, and are **never returned in plaintext over the wire** — `settings.list`/`settings.get` redact them (presence/placeholder only). `server.auth.token` is read-only via the API (regenerate, not set). `workspace.sshKeyPath` is **not** sensitive: it holds a filesystem path to the SSH key, not key material — the real secret is the key file on disk, protected by filesystem permissions — so the value is stored as a plain string and read back verbatim by `settings.get`/`settings.list` (the FE `git`-env consumer needs the real path to hand to `git` via `GIT_SSH_COMMAND`).
+- **Secrets.** Settings marked **sensitive** (`mcp.servers`, `server.auth.token`, `sourceControl.github.token`) are stored in the daemon's file-backed secret store (`intent_core::FileSecretStore` — `~/intent/secrets.json`, `0600` file / `0700` dir on unix, `INTENTD_SECRETS_FILE` override), never in `config.toml`, never in logs, and are **never returned in plaintext over the wire** — `settings.list`/`settings.get` redact them (presence/placeholder only). `server.auth.token` is read-only via the API (regenerate, not set). `workspace.sshKeyPath` is **not** sensitive: it holds a filesystem path to the SSH key, not key material — the real secret is the key file on disk, protected by filesystem permissions — so the value is stored as a plain string and read back verbatim by `settings.get`/`settings.list` (the FE `git`-env consumer needs the real path to hand to `git` via `GIT_SSH_COMMAND`).
 - **Change notification.** A successful `settings.update`/`settings.reset` persists the changeand emits a `settings:changed` event (§10) so every connected client stays in sync.
 
 The wire methods (`settings.list`, `settings.get`, `settings.update`, `settings.reset`) andthe `settings:changed` event are specified in `./PROTOCOL.md` §5 — an **intentd-only**namespace added on top of the 106 ported methods.
@@ -1255,7 +1255,7 @@ This is the persistence behind the **Agent Ecosystem** domain (§18). Three stor
 - **Workspace & specialization rules — files, not DB.** Workspace rules (`AGENTS.md`, `CLAUDE.md`, `.augment/guidelines.md`, `.augment/rules/*.md`) live in the repo and are read **live** off the worktree by the rules loader (ports `src/features/agent/main/rules-loader.ts`, which fixes the precedence order); `intentd` does not copy them into the DB.
 - **User-rule overrides — settings store.** The per-rule-type user overrides (`base-system-prompt`, the per-agent-type specialization rules, `workspace`, …) that `EndUserRulesManager` keeps in electron-store under `endUserRules` (ports `src/features/rules/user-rules.service.ts`) port onto the `settings` table (§9.2) under an `endUserRules` key — `{ enabled, content, updatedAt }` per rule type. This is the **only** rules data with a wire surface (`rules.*`, §18.1).
 - **Specialists — files, not DB.** Specialist definitions are markdown-with-frontmatter files resolved 3-tier (project > user > bundled): `<ws>/.augment/specialists/` (project), `~/.augment/specialists/` (user), `resources/specialists/` (bundled). `specialist.*` CRUD (§18.2) writes user/project files; nothing is stored in SQLite (ports `src/features/specialists/main/specialist-file-loader.ts`).
-- **External MCP servers — config in settings (sensitive).** `mcp.servers` (plus `mcp.enableUserServers`/`mcp.disabledServers`) is the `mcp.servers.*` (§18.3) source of truth and is already declared **sensitive** in §9.8 group A (stored in the OS keychain, redacted over the wire; ports `src/features/mcp/main/user-mcp-settings.ts`). Running-server status is **runtime-only** (not persisted) and surfaced via the `mcp.servers:status-changed` event.
+- **External MCP servers — config in settings (sensitive).** `mcp.servers` (plus `mcp.enableUserServers`/`mcp.disabledServers`) is the `mcp.servers.*` (§18.3) source of truth and is already declared **sensitive** in §9.8 group A (stored in the file-backed secret store, redacted over the wire; ports `src/features/mcp/main/user-mcp-settings.ts`). Running-server status is **runtime-only** (not persisted) and surfaced via the `mcp.servers:status-changed` event.
 - **`memories` table (new) — internal context source; `memories.*` NOT PORTED.** A `memories` table (§9.2) backs long-term agent memory. There is **no `memories.*` RPC** and there will not be one in this port (§18.5): in `augmentcode/intent` this feature is only a non-persisted in-memory `Map` stub (`memories.service.ts`) seeded with a few hardcoded demo entries and exposed via Electron IPC, with no live renderer consumers and no SQLite backing — a vestigial surface, so its RPC is **cancelled, not deferred**. Rows are written/read internally and exposed to agents through the agent→BE MCP callback (§6.8) as a context source. The durable table itself is **retained** as a deliberate forward-looking upgrade so `search.memories` has a real store to scan; a `memories.*` namespace could still be added additively later **only if** a memories UI ever ships.
 
 ### 9.13 Integrations & Ops state (usage metrics, session stats, setup scripts)
@@ -1320,12 +1320,12 @@ Resolve paths via the `directories` crate (with env overrides `INTENTD_DATA_DIR`
 | Runtime (UDS, pidfile) | ~/Library/Application Support/intentd/ | $XDG_RUNTIME_DIR/intentd/ |
 | Logs | ~/Library/Logs/intentd/ | $XDG_STATE_HOME/intentd/logs/ |
 
-`config.toml` holds non-secret settings (listen mode, port, discovery, default provider,GitHub base URI, log level). Secrets (bearer token, GitHub token) live in the **OS keychain**(`keyring` crate), never in `config.toml`.
+`config.toml` holds non-secret settings (listen mode, port, discovery, default provider,GitHub base URI, log level). Secrets (bearer token, GitHub token) live in the **file-backed secret store** (`~/intent/secrets.json`, `0600` file / `0700` dir), never in `config.toml`.
 
 ### 11.3 Security considerations
 
 - **Local-first:** default UDS with `0600` perms means no network exposure unless explicitlyenabled. TCP/TLS requires the user to opt in.
-- **Bearer auth everywhere on the network transport**, timing-safe comparison, token inkeychain. Tokens accepted via header or `?token=` query (for browser WS clients).
+- **Bearer auth everywhere on the network transport**, timing-safe comparison, token in thefile-backed secret store (`0600`). Tokens accepted via header or `?token=` query (for browser WS clients).
 - **Origin allow-list** on every WS upgrade (loopback / `file://` / own hostname / no-Originnative clients) — reject cross-origin browser upgrades (§5.3).
 - **TLS** self-signed + SHA-256 **fingerprint pinning** advertised over mDNS; clients pin onfirst use (TOFU).
 - **Path sandboxing:** all agent fs/terminal access is constrained to the session's worktree;reject traversal outside it.
@@ -1673,7 +1673,7 @@ Ports `src/features/mcp/main/hub/mcp-hub.ts` (`McpHub`), `server-manager.ts` (`S
 
 - **`toggle` replaces explicit `start`/`stop`** — the UI thinks in terms of enabling/disabling a configured server; the daemon translates that to the underlying `startServer`/`stopServer` lifecycle.
 - **Status is event-driven.** Server health/lifecycle transitions (started/stopped/error/restarting, from `HealthMonitor`) are pushed as an **`mcp.servers:status-changed`** event carrying the new state (per the §10 event-design rule), so the FE re-renders without polling. An optional read **`mcp.servers.getStatus { serverId }`** is available for an on-demand snapshot.
-- **Config is sensitive.** Server definitions come from the `mcp.servers` setting, declared **sensitive** in §9.8 group A (OS keychain, redacted over the wire). `mcp.enableUserServers`/`mcp.disabledServers` gate which run.
+- **Config is sensitive.** Server definitions come from the `mcp.servers` setting, declared **sensitive** in §9.8 group A (file-backed secret store, redacted over the wire). `mcp.enableUserServers`/`mcp.disabledServers` gate which run.
 
 - **Transports: stdio only (`http`/`sse` NOT PORTING).** `McpServerConfig.transport` keeps the `"stdio"|"http"|"sse"` shape for config-parity with the original, but `intentd` implements **only `stdio`** external servers; `http`/`sse` are **not porting** — such a server returns an error status rather than connecting. (Closes the Milestone 9 http/sse deferral.)
 
@@ -1685,9 +1685,9 @@ The per-agent-type tool restriction is **hardcoded and enforced internally** whi
 
 | Category | Examples | What it gates |
 | --- | --- | --- |
-| `FILE_WRITE_TOOLS` | `str-replace-editor`, `save-file`, `remove-files`, `create`, `apply_patch`, `write_file_workspace-mcp` | editing the codebase |
-| `GIT_TOOLS` | `git_stage_workspace-mcp`, `git_commit_workspace-mcp` | mutating git state |
-| `AGENT_CREATION_TOOLS` | `create_agent_workspace-mcp`, `delegate_task_workspace-mcp`, `send_message_to_agent_workspace-mcp` | spawning/messaging agents |
+| `FILE_WRITE_TOOLS` | `str-replace-editor`, `save-file`, `remove-files`, `create`, `apply_patch`, `write_file` | editing the codebase |
+| `GIT_TOOLS` | `git_stage`, `git_commit` | mutating git state |
+| `AGENT_CREATION_TOOLS` | `create_agent`, `delegate_task`, `send_message_to_agent` | spawning/messaging agents |
 | `NOTE_WRITE_TOOLS` / `WORKSPACE_WRITE_TOOLS` / `UNIFIED_WORKSPACE_TOOLS` | note + workspace mutation tools | mutating notes/workspace state |
 | `EXECUTION_TOOLS` | process/terminal execution tools | running commands |
 | `EXTERNAL_TOOLS` | `web-fetch`, `web-search`, `github-api` | external/network access |
@@ -1763,7 +1763,7 @@ These exist in the `augmentcode/intent` source and have renderer callers there, 
 - **Sentry (error tracking).** Future basis: `src/features/sentry-auth/`. A future `sentry.*` namespace (authenticate, getConfig, queryIssues — UI callers `SentryAuthConnection`/`SentryPicker`) would surface error/issue context to agents, again BE-owned against the Sentry API directly.
 - **Sandbox / DevContainer workspace config.** Future basis: `src/features/sandbox/`. A future option to run a workspace inside a sandboxed/DevContainer environment (per-workspace container config). No UI evidence today; noted as a future workspace-configuration extension.
 
-Each future integration, when promoted, would slot in as an additive intentd-only namespace plus any durable fields/settings it needs — following the same patterns (validated UI caller, self-sufficient events, sensitive auth in the OS keychain) used by the v1 surfaces above.
+Each future integration, when promoted, would slot in as an additive intentd-only namespace plus any durable fields/settings it needs — following the same patterns (validated UI caller, self-sufficient events, sensitive auth in the file-backed secret store) used by the v1 surfaces above.
 
 ### 19.5 Observability stays daemon-internal (NOT exposed over the protocol)
 
