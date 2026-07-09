@@ -39,7 +39,7 @@ wss://<host>:<port>/ws
 ```
 
 - **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.4) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.port`.
-- **Scheme is always **`wss://` (TLS). There is no plaintext `ws://` listener.
+- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make run-intentd` uses it by default) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
 
@@ -266,7 +266,7 @@ idempotency scope (§6.5) between `workspace:created` and initial-agent orchestr
 a replayed create returns the stored result and does not re-seed.
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
-daemon minitally creates the agent session (honoring `agentId`/`name`/`model`/
+daemon minimally creates the agent session (honoring `agentId`/`name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
 The result's `initialAgent.agentId` is the created session; the agent's turn starts
@@ -818,14 +818,14 @@ interface SettingDefinition {
 
 `changes` entries use the ported `AppSettingChange` shape `{ path, value, reason? }` (`reason` is anoptional free-text audit note). `settings.update` **validates** each change against its definition(type / enum / min / max) and **persists** atomically; an unknown `path` or a value failingvalidation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a`settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive valuesredacted).
 
-**BE-exposed setting paths.** Only settings that affect daemon behavior are exposed. These are theported, BE-owned settings (group A) plus `intentd`-specific host/daemon settings (group B):
+**BE-exposed setting paths.** Only settings that affect daemon behavior are exposed. These are the ported, BE-owned settings (group A) plus `intentd`-specific host/daemon settings (group B):
 
 - **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`.
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
-- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OSkeychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace'skeychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE"connect Linear" flow.
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OS keychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace's keychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
 - **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
