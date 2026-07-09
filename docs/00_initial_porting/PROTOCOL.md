@@ -228,6 +228,15 @@ from `initialAgent.prompt` via local keyword heuristics when possible (`generate
 repository the name is uniquified against existing local and remote-tracking branches by
 appending `-2`, `-3`, … until free. The branch is never the raw workspace UUID.
 
+**Workspace id (`workspace.create`).** The daemon derives the workspace id as a friendly
+`word-word` slug (extracted from `initialAgent.prompt` when possible, else a random
+adjective-animal pair), uniquified with a `-2`, `-3`, … suffix whenever the candidate id was
+**ever** used — a live workspace, a previously deleted workspace (persisted delete
+tombstone), or a leftover `<root>/<id>` directory on disk. Ids are therefore never recycled
+across delete/recreate (reuse would collide the old workspace's agent streams and file
+paths with the new one's); callers must use the id returned in the `workspace.create`
+result rather than predicting it.
+
 **Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
 repository, the daemon provisions a linked worktree before persisting the row (TS
 `createGitWorktree` parity): the worktree lives at
