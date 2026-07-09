@@ -255,7 +255,10 @@ failure fails the whole `workspace.create` (no row persisted, no `workspace:crea
 On success the checkout becomes the workspace's `repositoryPath` and, when the URL
 carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
 daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
-left them blank.
+left them blank. Independently of cloning, any create that ends up with a local
+`repositoryPath` but no caller-supplied `repositoryName` persists the path basename as
+`repositoryName`; `repositoryOwner` is never derived from local paths (no remote
+inspection).
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
@@ -887,7 +890,7 @@ interface SettingDefinition {
 
 | Method | Params | Result |
 | --- | --- | --- |
-| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `env` layers onto the daemon's inherited environment (later keys override) |
+| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `cwd` omitted → the workspace's worktree root (falls back to the daemon's cwd when the workspace has no resolvable worktree); `env` layers onto the daemon's inherited environment (later keys override) |
 | terminal.write | terminalId (req), data (req, base64) | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int) | { ok: true } |
 | terminal.kill | terminalId (req) | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
