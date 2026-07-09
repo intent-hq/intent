@@ -828,7 +828,7 @@ interface SettingDefinition {
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
-- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the OS keychain under service `intentd` / account `linear.token`, the exact entry the `linear.*` namespace's keychain-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
 - **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
@@ -1882,8 +1882,8 @@ interface ReviewThreadComment {
 
 > **Auth model — personal API key (no OAuth/device flow).** A local
 > daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key**: the
-> default `auto` resolution tries the OS-keychain account `linear.token` first (service `intentd`;
-> settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
+> default `auto` resolution tries the secret-store account `linear.token` first (the daemon's
+> file-backed secret store; settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
 > `LINEAR_API_KEY` environment variable. Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
 > with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
 > `Authorization: Bearer <token>` — the prefix differs by credential type).
@@ -2183,7 +2183,7 @@ error rows and any events) and do not change the contract above.
 > **Auth model — token + org from the environment (no OAuth/device flow, no
 > `connect`/`revoke`).** A local daemon has no hosted OAuth callback, so v1 authenticates with
 > a **Sentry user/internal-integration auth token + organization slug resolved from the
-> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority keychain account
+> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority secret-store account
 > `sentry.token`) plus `SENTRY_ORG` (organization slug). Sentry is REST-only; the token is sent
 > as the **`Authorization: Bearer <token>`** header.
 >
