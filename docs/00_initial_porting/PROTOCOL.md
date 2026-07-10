@@ -694,7 +694,7 @@ host-agnostic.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, array), tabId? | single result or results[] (CDP automation) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string |
 | terminal.list | workspaceId (req) | { terminals: [...] } |
 | terminal.readOutput | terminalId (req), maxLines? | output buffer text |
@@ -721,13 +721,27 @@ host-agnostic.
 | file.exists | path (req) | { exists, isFile, isDirectory } |
 | file.stat | path (req) | { size, mtime, isFile, isDirectory, isSymlink, permissions } |
 
-> **`browser.*` — NOT PORTING (v1): won't port.** `browser.exec` (Chrome DevTools Protocol
-> automation) and `browser.docs` are **not implemented** in `intentd` and are **not v1 wire
-> surface** — the headless backend port has no consumer for them, and `browser.exec` would need
-> a dedicated CDP driver. They are **won't-port-v1** (deferred, not cancelled): revisit only if a
-> future frontend feature needs in-app browser automation — see the future-integrations note
-> (§5.26). The two `browser.*` methods are the reason the ported count is 104 rather than the
-> reference 106; the `terminal.*` and `file.*` methods above are **unaffected** and stay in the 104.
+> **`browser.exec` — client-callable trigger + FE-served reverse RPC.**
+> `browser.exec` is a **client-callable trigger** whose real work happens on the connected
+> frontend (Chrome DevTools Protocol against embedded browser tabs — no CDP driver runs in
+> the daemon). Wire pattern mirrors `host.openInEditor` (§5.14): the FE binding calls
+> `browser.exec` like any other method; the daemon validates the envelope, then dispatches
+> an FE-served reverse RPC (`browser.exec`, `id: "rev-<n>"`) so the CDP work resolves on the
+> user's machine. `actions` must be a **non-empty array** (`-32602` otherwise); the FE's
+> raw `{ success, results, error? }` envelope is reshaped for the caller — a single-action
+> batch yields the action's `{ action, success, result?, error? }` envelope, a multi-action
+> batch yields `{ results: [...] }` (reference parity with the FE `browser_exec` MCP tool).
+> A closed reverse channel ("no frontend connected"), a reverse-RPC timeout, and an
+> FE-reported failure envelope all surface as `-32603` carrying the underlying context.
+> `browser.exec` is **additive intentd-only surface** — the FE-served reverse-RPC pattern
+> was chosen over porting the reference MCP tool so the daemon stays a thin proxy and the
+> CDP surface remains an FE concern.
+>
+> **`browser.docs` — NOT PORTING (v1): won't port.** The `browser_docs` MCP tool that
+> served static reference docs on-demand has no consumer in the daemon surface (skills-style
+> docs stay in the FE MCP layer) and is **won't-port-v1** (deferred, not cancelled): revisit
+> only if a future FE feature needs BE-owned browser docs. The `terminal.*` and `file.*`
+> methods above are **unaffected** and stay in the 104.
 
 > **Interactive terminals.** `terminal.list` / `terminal.readOutput` above are the ported,
 > read-only methods (part of the 104). `intentd` adds interactive
@@ -1069,6 +1083,22 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":"rev-3","method":"host.pickApplication","params":{ "path":"/repo/README.md" } }
 // → client replies with the selection
 { "jsonrpc":"2.0","id":"rev-3","result":{ "applicationId":"com.microsoft.VSCode" } }
+// client-called trigger — FE binding (ws.browser.exec) asks the daemon to run CDP actions
+// (daemon validates the envelope and dispatches the reverse RPC below to the same FE)
+{ "jsonrpc":"2.0","id":85,"method":"browser.exec","params":{
+  "actions":[{"action":"listTabs"}],"tabId":"tab-1","agentId":"agent-1","workspaceId":"ws-1"
+} }
+// ← single-action → the action's envelope
+{ "jsonrpc":"2.0","id":85,"result":{ "action":"listTabs","success":true,"result":[{"id":"tab-1"}] } }
+// reverse RPC — daemon → client — run CDP actions against the embedded browser (FE-served, §5.9)
+// ← daemon sends the request (envelope forwarded verbatim)
+{ "jsonrpc":"2.0","id":"rev-4","method":"browser.exec","params":{
+  "actions":[{"action":"listTabs"}],"tabId":"tab-1","agentId":"agent-1","workspaceId":"ws-1"
+} }
+// → client replies with the raw execution envelope (daemon reshapes for the caller)
+{ "jsonrpc":"2.0","id":"rev-4","result":{ "success":true,"results":[
+  { "action":"listTabs","success":true,"result":[{"id":"tab-1"}] }
+] } }
 // → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
 { "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
   "command":"echo","args":["hello"],"timeoutMs":5000
