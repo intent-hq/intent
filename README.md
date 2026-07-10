@@ -2,8 +2,8 @@
 
 Internal engineering monorepo for **Cloudlands**, an agentic coding platform. This repo ties
 the Cloudlands components together via git submodules and provides unified docs, tooling, and
-CI/CD. It mounts the **Rust backend daemon (`intentd`)** and the **Electron + SvelteKit
-desktop frontend (`cloudlands-fe`)** as submodules.
+CI/CD. It mounts the **Rust backend daemon (`intentd`)**, the **Electron + SvelteKit
+desktop frontend (`cloudlands-fe`)**, and the **SwiftUI iOS companion app (`ios`)** as submodules.
 
 > ⚠️ Private Repository — This repo is internal to the Cloudlands engineering team. The
 > component repositories it references are also private. See Related Repositories for links.
@@ -56,7 +56,7 @@ monorepo/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                 # fmt/clippy/test + build matrix + PR-title check
-├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe)
+├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe, ios)
 ├── cliff.toml                     # git-cliff changelog config (conventional commits)
 ├── docs/
 │   └── 00_initial_porting/        # IMPLEMENTATION_SPEC.md + PROTOCOL.md
