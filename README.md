@@ -2,8 +2,8 @@
 
 Internal engineering monorepo for **Cloudlands**, an agentic coding platform. This repo ties
 the Cloudlands components together via git submodules and provides unified docs, tooling, and
-CI/CD. It mounts the **Rust backend daemon (`intentd`)** and the **Electron + SvelteKit
-desktop frontend (`cloudlands-fe`)** as submodules.
+CI/CD. It mounts the **Rust backend daemon (`intentd`)**, the **Electron + SvelteKit
+desktop frontend (`cloudlands-fe`)**, and the **SwiftUI iOS companion app (`ios`)** as submodules.
 
 > ⚠️ Private Repository — This repo is internal to the Cloudlands engineering team. The
 > component repositories it references are also private. See Related Repositories for links.
@@ -27,8 +27,10 @@ implementation, so the frontend can also run standalone). It was migrated in wit
 │  │ packages/                                              │  │
 │  │   ├── intentd/        ⇒ submodule → cloudlands-ai/intentd │
 │  │   │     Rust backend daemon (JSON-RPC over UDS)        │  │
-│  │   └── cloudlands-fe/   ⇒ submodule → cloudlands-ai/cloudlands-fe │
-│  │         Electron + SvelteKit desktop UI                │  │
+│  │   ├── cloudlands-fe/   ⇒ submodule → cloudlands-ai/cloudlands-fe │
+│  │   │     Electron + SvelteKit desktop UI                │  │
+│  │   └── ios/            ⇒ submodule → cloudlands-ai/ios     │
+│  │         SwiftUI iOS companion app                      │  │
 │  ├────────────────────────────────────────────────────────┤  │
 │  │ docs/00_initial_porting/   IMPLEMENTATION_SPEC + PROTOCOL │
 │  │ AGENTS.md   Makefile   cliff.toml   .github/workflows/ │  │
@@ -46,6 +48,7 @@ for the full design.
 | --- | --- |
 | `packages/intentd` | **Backend port — canonical persistence landed.** 218 JSON-RPC request methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, workspace-file/note-primitive/cross-workspace, the settings/rules/specialist/`mcp.servers`/MCP-OAuth agent ecosystem, GitHub-browse/Linear/Sentry integrations, and the ACP agent runtime (`agent.*`). The daemon owns all persistent user-facing state (notes/comments/assets/settings/agent sessions). Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`token`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
 | `packages/cloudlands-fe` | **Desktop frontend — daemon-canonical.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend only through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs); local persistence, execution spawns, the legacy agent transport, and the remote-backend stack are all retired onto daemon RPCs. |
+| `packages/ios` | **iOS companion app — submodule mounted.** SwiftUI iOS app, mounted at `packages/ios`. Early-stage development. |
 
 ## Repository Layout
 
@@ -54,13 +57,14 @@ monorepo/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml                 # fmt/clippy/test + build matrix + PR-title check
-├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe)
+├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe, ios)
 ├── cliff.toml                     # git-cliff changelog config (conventional commits)
 ├── docs/
 │   └── 00_initial_porting/        # IMPLEMENTATION_SPEC.md + PROTOCOL.md
 ├── packages/
 │   ├── intentd/                   # ⇒ submodule → cloudlands-ai/intentd (Rust backend)
-│   └── cloudlands-fe/             # ⇒ submodule → cloudlands-ai/cloudlands-fe (Electron + SvelteKit frontend)
+│   ├── cloudlands-fe/             # ⇒ submodule → cloudlands-ai/cloudlands-fe (Electron + SvelteKit frontend)
+│   └── ios/                       # ⇒ submodule → cloudlands-ai/ios (SwiftUI iOS companion app)
 ├── AGENTS.md                      # AI agent workflow guide (commit/PR conventions)
 ├── Makefile                       # Cross-package task orchestration
 └── README.md                      # ← you are here
@@ -72,6 +76,7 @@ monorepo/
 | ------------------------ | ----------------------------------------------------------------------------- | ---------- |
 | `packages/intentd`       | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd)             | Private    |
 | `packages/cloudlands-fe` | [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Private    |
+| `packages/ios`           | [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios)                     | Private    |
 
 ## Getting Started
 
@@ -140,3 +145,4 @@ Conventions:
 | --- | --- |
 | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) | Rust backend daemon (private) — JSON-RPC over UDS, mounted at `packages/intentd`. |
 | [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Electron + SvelteKit desktop frontend (private) — mounted at `packages/cloudlands-fe`. |
+| [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios) | SwiftUI iOS companion app (private) — mounted at `packages/ios`. |

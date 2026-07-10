@@ -8,6 +8,8 @@ This is a private monorepo that references Cloudlands component repositories as 
 submodules:
 
 - `packages/intentd` → [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) — Rust backend daemon
+- `packages/cloudlands-fe` → [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) — Electron + SvelteKit desktop frontend
+- `packages/ios` → [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios) — SwiftUI iOS companion app
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
 The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`; see

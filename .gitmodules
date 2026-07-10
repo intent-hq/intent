@@ -6,3 +6,7 @@
 	path = packages/cloudlands-fe
 	url = https://github.com/Cloudlands-AI/cloudlands-fe.git
 	branch = main
+[submodule "packages/ios"]
+	path = packages/ios
+	url = https://github.com/Cloudlands-AI/ios.git
+	branch = main
