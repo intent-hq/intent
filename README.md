@@ -29,7 +29,7 @@ implementation, so the frontend can also run standalone). It was migrated in wit
 │  │   │     Rust backend daemon (JSON-RPC over UDS)        │  │
 │  │   ├── cloudlands-fe/   ⇒ submodule → cloudlands-ai/cloudlands-fe │
 │  │   │     Electron + SvelteKit desktop UI                │  │
-│  │   └── ios/            ⇒ submodule → cloudlands-ai/ios │
+│  │   └── ios/            ⇒ submodule → cloudlands-ai/ios     │
 │  │         SwiftUI iOS companion app                      │  │
 │  ├────────────────────────────────────────────────────────┤  │
 │  │ docs/00_initial_porting/   IMPLEMENTATION_SPEC + PROTOCOL │
