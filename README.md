@@ -48,6 +48,7 @@ for the full design.
 | --- | --- |
 | `packages/intentd` | **Backend port — canonical persistence landed.** 218 JSON-RPC request methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, workspace-file/note-primitive/cross-workspace, the settings/rules/specialist/`mcp.servers`/MCP-OAuth agent ecosystem, GitHub-browse/Linear/Sentry integrations, and the ACP agent runtime (`agent.*`). The daemon owns all persistent user-facing state (notes/comments/assets/settings/agent sessions). Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`token`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
 | `packages/cloudlands-fe` | **Desktop frontend — daemon-canonical.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend only through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs); local persistence, execution spawns, the legacy agent transport, and the remote-backend stack are all retired onto daemon RPCs. |
+| `packages/ios` | **iOS companion app — submodule mounted.** SwiftUI iOS app, mounted at `packages/ios`. Early-stage development. |
 
 ## Repository Layout
 
