@@ -737,6 +737,21 @@ host-agnostic.
 > was chosen over porting the reference MCP tool so the daemon stays a thin proxy and the
 > CDP surface remains an FE concern.
 >
+> **Agent-initiated `browser.exec` — first-client-sticky reverse dispatch (REV-1,
+> interim).** When `browser.exec` is triggered by an *agent* (via the MCP
+> `ws.browser.exec` binding, §6.8) rather than by a client connection, there is no
+> ambient reverse channel to reuse: the caller is the daemon-hosted MCP server, not a
+> client-facing socket. The daemon therefore routes the reverse RPC to the
+> **first-connected live client**; if that client disconnects, the next-connected client
+> takes over — failover follows connection arrival order (UDS + WSS clients share the same
+> registry). When no client is connected at all the call fails fast with `-32603` and
+> `browser.exec: no client connected` so the agent surfaces the same class of failure a
+> closed channel already produces. This is a deliberate stopgap ahead of an explicit
+> target-selection surface (REV-2 / §16 client identity): "sticky first" needs no wire
+> change and is trivially observable, but it does not distinguish overlapping clients.
+> Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
+> caller's own connection.
+>
 > **`browser.docs` — NOT PORTING (v1): won't port.** The `browser_docs` MCP tool that
 > served static reference docs on-demand has no consumer in the daemon surface (skills-style
 > docs stay in the FE MCP layer) and is **won't-port-v1** (deferred, not cancelled): revisit
@@ -1099,6 +1114,13 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":"rev-4","result":{ "success":true,"results":[
   { "action":"listTabs","success":true,"result":[{"id":"tab-1"}] }
 ] } }
+// AGENT-INITIATED `browser.exec` (REV-1, interim) — the MCP `ws.browser.exec`
+// binding has no ambient client connection, so the daemon routes the reverse
+// RPC to the FIRST-connected live client (across UDS + WSS). When that client
+// disconnects the next-connected one takes over; when no client is connected
+// the call fails fast with `-32603` "browser.exec: no client connected".
+// Wire shape of the reverse RPC and its result is unchanged from the
+// client-triggered case above.
 // → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
 { "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
   "command":"echo","args":["hello"],"timeoutMs":5000
