@@ -695,7 +695,7 @@ host-agnostic.
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req) | { scripts: [...] } |
-| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | WorkspaceScript |
+| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } |
