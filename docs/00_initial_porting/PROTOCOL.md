@@ -695,14 +695,14 @@ host-agnostic.
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req) | { scripts: [...] } |
-| script.create | name (req), command (req), mode (req: service | command), cwd?, env?, category?, autoStart?, scriptId? |
-| script.remove | scriptId (req) | { ok, scriptId } |
-| script.start | scriptId (req) | { ok, scriptId } |
-| script.stop | scriptId (req) | { ok, scriptId } |
-| script.restart | scriptId (req) | { ok, scriptId } |
-| script.output | scriptId (req), maxLines? | output buffer text |
-| script.status | scriptId (req) | { state, pid, exitCode, url?, ... } |
-| script.run | scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
+| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
+| script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.start | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
+| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, ... } |
+| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
 
 > **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
 > the daemon and share the **unified PTY/terminal host** with interactive terminals (§5.13), so
