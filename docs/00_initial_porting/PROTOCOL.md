@@ -368,11 +368,11 @@ See IMPLEMENTATION_SPEC.md §9.1 (Workspace entity) for the persisted field defi
 
 ### 5.2 `note.*`
 
-All `note.*` methods require `workspaceId` + `noteId` (except `list`/`create`). The spec note isaddressed with the well-known id `"spec"`.
+All `note.*` methods require `workspaceId`. All except `list` and `create` additionally require `noteId` (`list` returns every note; `create` mints a new id). The spec note is addressed with the well-known id `"spec"`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| note.list | — | { notes: NoteSummary[] } |
+| note.list | workspaceId (req) | { notes: NoteSummary[] } |
 | note.get | noteId (req) | { note: Note } — -32602 if not found |
 | note.create | title (req), content?, tags?: string[], parentId? | { note: Note } |
 | note.update | noteId (req); content? or title?/tags? | { note } — content present → full setContent; else metadata update |
@@ -508,7 +508,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 
 | Method | Params | Result |
 | --- | --- | --- |
-| task.list | workspaceId (req), status? | { tasks: WorkspaceTask[] } — optional `status` filter |
+| task.list | workspaceId (req), status? | { tasks: WorkspaceTask[], stats: WorkspaceTaskStats } — optional `status` filter; `stats` is the `{ total, completed, inProgress }` aggregate (§5.1 card aggregates — same `computeTaskStats` projection: `cancelled` is excluded from `total`, `complete` counts as `completed`, `in_progress` + `review_required` count as `inProgress`) served alongside the filtered task list |
 | task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
 | task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
 
@@ -529,7 +529,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | --- | --- | --- |
 | agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, delegationDepth?, initialMessage? } (the P3-1.2b persistence-gap fields; omitted when absent). `metadata.isBackground` is served from the persisted session flag (harvested at spawn; G-A1/P3-1.2c) so rehydrated background agents stay background |
 | agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list; -32602 if not found (falls back to disk) |
-| agent.getConversation | agentId (req), limit?: number, workspaceId? | { agentId, messages, truncated, totalMessages } (capped to most-recent limit) |
+| agent.getConversation | agentId (req), limit?: number, nextToken?: string, workspaceId? | { agentId, messages, truncated, totalMessages, nextToken } (capped to most-recent limit; `nextToken` is the opaque cursor for the next older page — `null` when no more history remains, non-null iff `truncated` is `true`; pass it back as the `nextToken` input to fetch the next page) |
 | agent.create | workspaceId (req), name?, model?, specialistId?, agentId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, isBackground? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `agentId` (when supplied) is honored verbatim (`agent-{uuid}`) so the caller can address `agent.sendMessage` at the same id; malformed values surface as `-32602`. `provider` persists on the session. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b — plus `isBackground`, G-A1/P3-1.2c) with the top-level `contextReferences`/`imageBlocks`/`isBackground` params winning over the `metadata` copies; `isBackground` defaults to `false` when absent from both. `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
 | agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?) | service result — the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b); delegated children always persist `isBackground: true` (matching the TS `DelegateTaskTool`; G-A1/P3-1.2c) |
 | agent.sendToTask | taskNoteId (req), message (req), priority? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist |
@@ -718,7 +718,7 @@ host-agnostic.
 | Method | Params | Result |
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
-| browser.docs | topic (req) | docs string |
+| browser.docs | topic (req) | docs string — **NOT PORTING (won't-port-v1)**: no router arm; see the `browser.docs — NOT PORTING (v1)` block below |
 | terminal.list | workspaceId (req) | { terminals: [...] } |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
@@ -795,7 +795,7 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | event.agentActivity | agentId?, minutesAgo? | activity events |
 | event.workspaceSummary | minutesAgo? | aggregated activity summary |
 | event.directoryChanges | dir (req), limit? | recent changes under a directory prefix |
-| event.query | filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?) | matching events |
+| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. |
 | event.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — use events.subscribe for WS streaming |
 | event.unsubscribe (deprecated) | subscriptionId (req) | service result |
 
@@ -2695,7 +2695,7 @@ Matching events are pushed as JSON-RPC **notifications** (no `id`):
     "id":"evt-789",
     "timestamp":"2026-06-17T04:35:04.055Z",
     "actor":{ "type":"agent","id":"agent-123","name":"Coordinator" },
-    "data":{ "noteId":"spec","action":"update","path":"spec.md" }
+    "data":{ "noteId":"spec","title":"Spec","action":"update" }
   } } }
 ```
 
@@ -2719,7 +2719,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | Namespace | Types (selected) | Notes |
 | --- | --- | --- |
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
-| note | note:created, note:updated, note:deleted | data.noteId, data.action, data.path |
+| note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — TS-parity `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`), matching the reference `notes.service.ts`. No `path` field (never emitted). |
 | line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
 | task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
