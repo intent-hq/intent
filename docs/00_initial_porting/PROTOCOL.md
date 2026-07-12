@@ -720,7 +720,7 @@ host-agnostic.
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string |
 | terminal.list | workspaceId (req) | { terminals: [...] } |
-| terminal.readOutput | terminalId (req), maxLines? | output buffer text |
+| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
 | file.list | path? (default .) | [{ name, type }] |
