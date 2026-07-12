@@ -294,9 +294,9 @@ whose workers are still draining or whose completion watches are still firing:
 - list the workspace's sessions via `store.list_agent_sessions` (a store error is
   propagated with `?` — a partial teardown is worse than a failed delete);
 - per session, `AgentManager::stop` aborts the in-flight turn worker, drops the
-  session handle (which `kill_child_tree`s the ACP child on drop), clears the
-  busy flag + the `agent_ws` workspace mapping, and deregisters the process from
-  the LRU registry;
+  session handle (which calls `kill_child_tree` on the ACP child on drop),
+  clears the busy flag + the `agent_ws` workspace mapping, and deregisters the
+  process from the LRU registry;
 - drop the session's live-turn slot and pending message-queue entry in
   `Services` (both are `HashMap::remove` calls, not a drain);
 - drop the workspace's `agent_subscriptions` entry (completion watches and
