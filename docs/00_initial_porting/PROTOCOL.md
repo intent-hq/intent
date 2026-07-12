@@ -286,6 +286,29 @@ asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result
 without re-creating the session or re-delivering the prompt.
 
+**Delete cascade (`workspace.delete`).** Before the store cascade drops the
+workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
+per-session state so recreating a workspace with the same slug never surfaces ghost agents
+whose workers are still draining or whose completion watches are still firing:
+
+- list the workspace's sessions via `store.list_agent_sessions` (a store error is
+  propagated with `?` — a partial teardown is worse than a failed delete);
+- per session, `AgentManager::stop` aborts the in-flight turn worker, drops the
+  session handle (which calls `kill_child_tree` on the ACP child on drop),
+  clears the busy flag + the `agent_ws` workspace mapping, and deregisters the
+  process from the LRU registry;
+- drop the session's live-turn slot and pending message-queue entry in
+  `Services` (both are `HashMap::remove` calls, not a drain);
+- drop the workspace's `agent_subscriptions` entry (completion watches and
+  delegation groups are workspace-scoped, so the whole map row goes at once).
+
+Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
+the last chance to unlink the workspace-scoped state, so recovery beats a panic.
+The daemon emits **one `agent:deleted` per swept session BEFORE** the terminal
+`workspace:deleted`, so subscribers see the per-session teardown first and can
+retire agent-scoped UI (chat panes, banners) before the workspace row disappears
+(§6.5).
+
 **Workspace status fields (new in intentd).** Two BE-owned fields appear on every `Workspace`
 object returned by `workspace.*` — lightweight status metadata, **not** a notification store —
 each with a dedicated change event (§6.5) that carries the new value:
@@ -2705,7 +2728,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
 | agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint restoring the reference-implementation pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
-| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7) |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` — so subscribers see per-session teardown before the workspace row disappears. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
