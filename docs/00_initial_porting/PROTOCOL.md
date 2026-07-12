@@ -297,8 +297,8 @@ whose workers are still draining or whose completion watches are still firing:
   session handle (which `kill_child_tree`s the ACP child on drop), clears the
   busy flag + the `agent_ws` workspace mapping, and deregisters the process from
   the LRU registry;
-- clear the session's live-turn slot and drain its pending message queue in
-  `Services`;
+- drop the session's live-turn slot and pending message-queue entry in
+  `Services` (both are `HashMap::remove` calls, not a drain);
 - drop the workspace's `agent_subscriptions` entry (completion watches and
   delegation groups are workspace-scoped, so the whole map row goes at once).
 
