@@ -288,7 +288,7 @@ without re-creating the session or re-delivering the prompt.
 
 **Delete cascade (`workspace.delete`).** Before the store cascade drops the
 workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
-per-session state so recreating a same-slug workspace never surfaces ghost agents
+per-session state so recreating a workspace with the same slug never surfaces ghost agents
 whose workers are still draining or whose completion watches are still firing:
 
 - list the workspace's sessions via `store.list_agent_sessions` (a store error is
