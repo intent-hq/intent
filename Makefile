@@ -158,7 +158,7 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
 
-build-sidecar: ensure-submodules ## Build intentd release + stage the sidecar binary for FE packaging
+build-sidecar: ensure-submodules ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
 	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
 	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
@@ -167,11 +167,11 @@ build-sidecar: ensure-submodules ## Build intentd release + stage the sidecar bi
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
-dev: ensure-submodules ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
+dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
 	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
 	# spawn and supervise its own intentd binary, giving a one-command dev stack.
 	# Builds intentd release first if the binary doesn't exist. This is an alternative
-	# to the two-terminal flow (run-intentd + run-fe); use whichever fits your workflow.
+	# to the two-terminal flow (dev-daemon + run-fe); use whichever fits your workflow.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@if [ ! -f "$(INTENTD_DIR)/target/release/intentd" ]; then \
