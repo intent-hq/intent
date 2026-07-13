@@ -114,17 +114,17 @@ clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
 
 clean-dev: ## Wipe the dev-seat state dir (.dev/)
-	rm -rf $(CURDIR)/.dev
+	rm -rf "$(CURDIR)/.dev"
 
 dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
-	@mkdir -p $(DEV_DATA_DIR)
+	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--listen both --insecure` serves the local UDS socket AND a plain ws://
 	# listener on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth
 	# — matches the FE's dev default and the iOS simulator/hardware seat.
 	# The daemon fails fast if $(DEV_TCP_PORT) is already bound.
-	INTENTD_DATA_DIR=$(DEV_DATA_DIR) INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
+	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen both --insecure
 
 release-daemon: ensure-submodules ## Release-state debug seat: intentd on real data dir, LISTEN=uds by default, no --insecure
