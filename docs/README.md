@@ -25,8 +25,9 @@ Supporting documents:
 - **[WSS_OVER_SSH.md](./00_initial_porting/WSS_OVER_SSH.md)** — the surviving FE SSH
   surface and the WSS-over-SSH transport shape for future remote workspaces.
 
-In short: the **spec** is where we're going, the **protocol** is the contract we must
-honor, and the **breadcrumbs** are where we are right now.
+In short: the **spec** was the target architecture, the **protocol** is the contract that
+was reproduced, and the **breadcrumbs** are the frozen record of how the port progressed;
+current work is tracked in [docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md).
 
 **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with
 the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto intentd
