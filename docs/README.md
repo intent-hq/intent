@@ -45,8 +45,8 @@ which now builds the next version of itself.
   exit criteria for public release readiness.
 - **[KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md)** — the **live issue tracker**:
   all open bugs discovered during self-hosting, with severity (P0/P1/P2), repro steps,
-  and status. Agents update this file when bugs are found or resolved, following the same
-  docs-only conventional-commit conventions.
+  and status. Agents update this file when bugs are found or resolved, following the
+  conventional-commit conventions in AGENTS.md.
 
 ## Workflow
 
