@@ -8,7 +8,7 @@ This file is now **frozen** as a historical record. The initial port is complete
 
 A frozen historical record of the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail that documents how the port progressed; no further appends will be made. New work is tracked in [docs/01_stabilizing/](../01_stabilizing/).
 
-See also: [IMPLEMENTATION_SPEC.md](./IMPLEMENTATION_SPEC.md) (target architecture), [PROTOCOL.md](./PROTOCOL.md) (wire contract), and the root [AGENTS.md](../../AGENTS.md) (workflow + breadcrumb-update policy).
+See also: [IMPLEMENTATION_SPEC.md](./IMPLEMENTATION_SPEC.md) (target architecture), [PROTOCOL.md](./PROTOCOL.md) (wire contract), and the root [AGENTS.md](../../AGENTS.md) (workflow + concluded breadcrumb policy, superseded by KNOWN_ISSUES.md tracking for stabilization).
 
 ## Goal
 
