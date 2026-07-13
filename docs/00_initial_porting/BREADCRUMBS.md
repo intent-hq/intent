@@ -3,7 +3,7 @@
 ---
 **EFFORT CLOSED AS OF 2026-07-13**
 
-This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted stack (intentd + cloudlands-fe building the next version of itself). See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
+This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted Cloudlands stack (`intentd` + `cloudlands-fe`), which now builds the next version of itself. See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
 ---
 
 A frozen historical record of the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail that documents how the port progressed; no further appends will be made. New work is tracked in [docs/01_stabilizing/](../01_stabilizing/).
@@ -121,7 +121,7 @@ Port Intent's backend to a standalone, headless Rust daemon (`intentd`) speaking
 
 ### 2026-07-13 — **00_initial_porting effort CLOSED: self-hosting cutover milestone reached**
 
-The initial port is complete. **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with the reference app (`augmentcode/intent`); as of this close-out, development moves onto intentd + cloudlands-fe itself — the IDE now builds the next version of the IDE.
+The initial port is complete. **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with the reference app (`augmentcode/intent`); as of this close-out, development moves onto the Cloudlands stack (`intentd` + `cloudlands-fe`) itself — the IDE now builds the next version of the IDE.
 
 **Final submodule HEADs:**
 - `packages/intentd` @ `ea2d237` (intentd PR #121 `fix: store empty title for untitled workspaces (Untitled parity)`)

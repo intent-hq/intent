@@ -37,8 +37,8 @@ itself.
 ## `01_stabilizing/`
 
 Documents for the **ongoing stabilization and hardening phase**, post-initial-port.
-Development now happens on the self-hosted stack (intentd + cloudlands-fe building the
-next version of itself).
+Development now happens on the self-hosted Cloudlands stack (`intentd` + `cloudlands-fe`),
+which now builds the next version of itself.
 
 - **[STABILIZATION.md](./01_stabilizing/STABILIZATION.md)** — the **dogfooding process**:
   how bugs are discovered, filed, triaged, fixed, and closed; fix conventions; and the
