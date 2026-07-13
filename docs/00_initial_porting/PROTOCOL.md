@@ -329,8 +329,9 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `baseRef`, `prNumber`, `prStatus`, `activePullRequest`,
-`pullRequests`, `archivedAt`, repository/worktree fields, …) are **omitted when absent**
+`Workspace` fields (`statusMessage`, `baseRef`, `prUrl`, `prNumber`, `prStatus`,
+`activePullRequest`, `pullRequests`, `archivedAt`, repository/worktree fields, …) are
+**omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
