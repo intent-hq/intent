@@ -77,6 +77,26 @@ The cloudlands-fe sidecar watchdog kills the daemon while it is healthy, trigger
 
 **Status:** open
 
+### STAB-7 (2026-07-13, area: intentd CI / intent-store SQLite contention, severity: P2)
+
+Flaky CI test failure: 'database is locked' in workspace_duplicate_provisions_worktree_over_wss.
+
+**Repro:** On intentd PR #137 (https://github.com/intent-hq/intentd/pull/137), the 'check' CI job failed once with "insert note_version failed: error returned from database: (code: 5) database is locked" in the workspace_duplicate_provisions_worktree_over_wss e2e test; a re-run passed. Intermittent under CI parallelism.
+
+**Expected:** e2e tests ride out SQLite write contention (busy_timeout should absorb it); no intermittent 'database is locked' failures.
+
+**Status:** open
+
+### STAB-8 (2026-07-13, area: intentd agent runtime / delegation (self-hosted stack), severity: P1)
+
+Delegated agents stall: initial prompt never runs / agents go idle mid-flow.
+
+**Repro:** In this workspace today, 3 of 4 delegated/created agents never started their initial prompt (agent diagnostics showed 'initial-prompt-not-running'; conversations contained only empty user messages, zero assistant turns) and required a manual wake (wakeOrCreate / send) or full re-delegation. Separately, two agents later went idle mid-task (during PR flows) without completing or reporting, and needed another wake.
+
+**Expected:** A delegated agent starts running its initial prompt immediately after creation, and either completes its task or reports a blocker; no silent stalls.
+
+**Status:** open
+
 ---
 
 ## Carried Over from 00_initial_porting
