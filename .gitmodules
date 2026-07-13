@@ -1,12 +1,12 @@
 [submodule "packages/intentd"]
 	path = packages/intentd
-	url = https://github.com/Cloudlands-AI/intentd.git
+	url = https://github.com/intent-hq/intentd.git
 	branch = main
 [submodule "packages/cloudlands-fe"]
 	path = packages/cloudlands-fe
-	url = https://github.com/Cloudlands-AI/cloudlands-fe.git
+	url = https://github.com/intent-hq/cloudlands-fe.git
 	branch = main
 [submodule "packages/ios"]
 	path = packages/ios
-	url = https://github.com/Cloudlands-AI/ios.git
+	url = https://github.com/intent-hq/ios.git
 	branch = main

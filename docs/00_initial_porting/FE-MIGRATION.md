@@ -1,7 +1,7 @@
 # Frontend Migration
 
 The Intent frontend has been migrated from the prior Electron app
-(`augmentcode/intent`) into [Cloudlands-AI/cloudlands-fe](https://github.com/Cloudlands-AI/cloudlands-fe)
+(`augmentcode/intent`) into [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe)
 and wired into this monorepo as the `packages/cloudlands-fe` submodule. The full
 git history (938 commits) was pushed to `cloudlands-fe` `main` (`ab321db0`), and
 the earlier **Tauri v2 prototype** that previously occupied that repo was
@@ -13,7 +13,7 @@ architecture), [PROTOCOL.md](./PROTOCOL.md) (the `intentd` wire contract), and
 
 ## Why
 
-Consolidate the frontend under the Cloudlands-AI monorepo so it lives alongside
+Consolidate the frontend under the intent-hq monorepo so it lives alongside
 `packages/intentd` (the headless Rust daemon it talks to), sharing one history,
 one review surface, and one porting trail.
 

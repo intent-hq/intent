@@ -21,15 +21,15 @@ implementation, so the frontend can also run standalone). It was migrated in wit
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                     cloudlands-ai/monorepo                    │
+│                       intent-hq/monorepo                     │
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │ packages/                                              │  │
-│  │   ├── intentd/        ⇒ submodule → cloudlands-ai/intentd │
+│  │   ├── intentd/        ⇒ submodule → intent-hq/intentd  │  │
 │  │   │     Rust backend daemon (JSON-RPC over UDS)        │  │
-│  │   ├── cloudlands-fe/   ⇒ submodule → cloudlands-ai/cloudlands-fe │
+│  │   ├── cloudlands-fe/   ⇒ submodule → intent-hq/cloudlands-fe │
 │  │   │     Electron + SvelteKit desktop UI                │  │
-│  │   └── ios/            ⇒ submodule → cloudlands-ai/ios     │
+│  │   └── ios/            ⇒ submodule → intent-hq/ios      │  │
 │  │         SwiftUI iOS companion app                      │  │
 │  ├────────────────────────────────────────────────────────┤  │
 │  │ docs/00_initial_porting/   IMPLEMENTATION_SPEC + PROTOCOL │
@@ -62,9 +62,9 @@ monorepo/
 ├── docs/
 │   └── 00_initial_porting/        # IMPLEMENTATION_SPEC.md + PROTOCOL.md
 ├── packages/
-│   ├── intentd/                   # ⇒ submodule → cloudlands-ai/intentd (Rust backend)
-│   ├── cloudlands-fe/             # ⇒ submodule → cloudlands-ai/cloudlands-fe (Electron + SvelteKit frontend)
-│   └── ios/                       # ⇒ submodule → cloudlands-ai/ios (SwiftUI iOS companion app)
+│   ├── intentd/                   # ⇒ submodule → intent-hq/intentd (Rust backend)
+│   ├── cloudlands-fe/             # ⇒ submodule → intent-hq/cloudlands-fe (Electron + SvelteKit frontend)
+│   └── ios/                       # ⇒ submodule → intent-hq/ios (SwiftUI iOS companion app)
 ├── AGENTS.md                      # AI agent workflow guide (commit/PR conventions)
 ├── Makefile                       # Cross-package task orchestration
 └── README.md                      # ← you are here
@@ -74,15 +74,15 @@ monorepo/
 
 | Path                     | Repository                                                                    | Visibility |
 | ------------------------ | ----------------------------------------------------------------------------- | ---------- |
-| `packages/intentd`       | [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd)             | Private    |
-| `packages/cloudlands-fe` | [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Private    |
-| `packages/ios`           | [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios)                     | Private    |
+| `packages/intentd`       | [intent-hq/intentd](https://github.com/intent-hq/intentd)                     | Private    |
+| `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe)         | Private    |
+| `packages/ios`           | [intent-hq/ios](https://github.com/intent-hq/ios)                             | Private    |
 
 ## Getting Started
 
 ```bash
 # Clone with submodules
-git clone --recursive git@github.com:cloudlands-ai/monorepo.git
+git clone --recursive git@github.com:intent-hq/monorepo.git
 cd monorepo
 
 # Or, if already cloned without --recursive:
@@ -129,7 +129,7 @@ Changes that span a submodule and the monorepo follow a two-phase flow (see `AGE
 the full guide):
 
 **Phase 1 — Submodule PR.** Make scoped, conventional commits on a feature branch in the
-submodule (e.g. `cloudlands-ai/intentd`), push, open a PR, and merge (squash preferred).
+submodule (e.g. `intent-hq/intentd`), push, open a PR, and merge (squash preferred).
 
 **Phase 2 — Monorepo update.** Pull the submodule's latest `main`, stage the updated gitlink
 (`git add packages/intentd`), commit (`chore: update intentd submodule to latest main`), push,
@@ -154,6 +154,6 @@ Conventions:
 
 | Repository | Description |
 | --- | --- |
-| [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) | Rust backend daemon (private) — JSON-RPC over UDS, mounted at `packages/intentd`. |
-| [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) | Electron + SvelteKit desktop frontend (private) — mounted at `packages/cloudlands-fe`. |
-| [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios) | SwiftUI iOS companion app (private) — mounted at `packages/ios`. |
+| [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon (private) — JSON-RPC over UDS, mounted at `packages/intentd`. |
+| [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop frontend (private) — mounted at `packages/cloudlands-fe`. |
+| [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app (private) — mounted at `packages/ios`. |
