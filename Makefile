@@ -56,9 +56,13 @@ export DEV_PORT
 # TCP+UDS or TCP-only postures, e.g. `make release-daemon LISTEN=both`.
 LISTEN ?= uds
 
+<<<<<<< HEAD
 .PHONY: all help ensure-submodules ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd test test-intentd fmt clippy check clean clean-dev \
 	dev-daemon release-daemon run-intentd run-fe ios-open ios-info
+=======
+.PHONY: all ensure-submodules build build-intentd build-sidecar test test-intentd fmt clippy check clean dev-daemon run-intentd run-fe dev
+>>>>>>> 7e208f2 (chore: add sidecar dev workflow targets and documentation)
 
 all: build
 
@@ -158,6 +162,7 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
 
+<<<<<<< HEAD
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
 		echo "[ios-open] ERROR: requires macOS (Xcode). Detected $$(uname -s)."; \
@@ -189,3 +194,29 @@ ios-info: ## Print how to point the iOS app at the local dev daemon
 	@echo "  run intentd WITHOUT '--insecure' and with INTENTD_DISCOVERY=1, e.g."
 	@echo "    INTENTD_DISCOVERY=1 cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen both"
 	@echo "  then use the iOS 'Scan QR Code' or 'Find on Network' flows."
+=======
+build-sidecar: ensure-submodules ## Build intentd release + stage the sidecar binary for FE packaging
+	# Builds the intentd release binary (may take several minutes on first build) and
+	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
+	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
+	@echo "[build-sidecar] Building intentd release binary..."
+	cd $(INTENTD_DIR) && cargo build --release --workspace
+	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
+	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
+
+dev: ensure-submodules ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
+	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
+	# spawn and supervise its own intentd binary, giving a one-command dev stack.
+	# Builds intentd release first if the binary doesn't exist. This is an alternative
+	# to the two-terminal flow (run-intentd + run-fe); use whichever fits your workflow.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@if [ ! -f "$(INTENTD_DIR)/target/release/intentd" ]; then \
+		echo "[dev] intentd release binary not found, building..."; \
+		cd $(INTENTD_DIR) && cargo build --release --workspace; \
+	else \
+		echo "[dev] intentd release binary exists, skipping build"; \
+	fi
+	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
+	cd $(FE_DIR) && INTENTD_SIDECAR=1 pnpm run dev
+>>>>>>> 7e208f2 (chore: add sidecar dev workflow targets and documentation)
