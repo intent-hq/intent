@@ -47,12 +47,13 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
   green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
   `make check` and `make test`, which run those checks against `packages/intentd`.
 
-## Breadcrumbs (initial porting)
+## Breadcrumbs (initial porting) — **CONCLUDED**
 
-For the duration of the **`00_initial_porting`** effort — the initial port of Intent's
-backend to the Rust daemon (`intentd`) — keep the breadcrumb trail at
-`docs/00_initial_porting/BREADCRUMBS.md` current.
+The **`00_initial_porting`** effort is complete as of 2026-07-13.
+`docs/00_initial_porting/BREADCRUMBS.md` is now **frozen** as a historical record. No
+new breadcrumb entries should be added to that file.
 
+The policy was:
 - **When**: whenever you complete a meaningful unit of porting work (a crate, a method or
   group of methods, a transport/persistence change, a submodule bump).
 - **What**: append a dated entry to the changelog, newest first. Keep it concise — what
@@ -61,12 +62,31 @@ backend to the Rust daemon (`intentd`) — keep the breadcrumb trail at
   change, and move items out of "Deferred / planned" as they ship.
 - **Accuracy**: never overstate. Only list surface that is actually implemented; everything
   else stays under deferred/planned.
-- **Scope**: this policy applies only until the initial Rust-BE port is complete; it does
-  not extend to later efforts.
 
-Breadcrumb edits are docs-only and follow the same conventional-commit / PR conventions
-above (use a `docs:` commit). They typically ship in the monorepo PR that bumps the
-submodule, so the recorded HEAD matches the gitlink.
+Breadcrumb edits were docs-only and followed the same conventional-commit / PR conventions
+(using a `docs:` commit). They typically shipped in the monorepo PR that bumped the
+submodule, so the recorded HEAD matched the gitlink.
+
+## Known Issues (stabilization)
+
+For the **`01_stabilizing`** phase — ongoing stabilization and hardening on the
+self-hosted stack — keep the issue tracker at `docs/01_stabilizing/KNOWN_ISSUES.md`
+current.
+
+- **When to file**: whenever you discover a bug while dogfooding (using intentd +
+  cloudlands-fe for daily development work).
+- **What to file**: document with id `STAB-N`, date (YYYY-MM-DD), area
+  (component/subsystem), severity (P0 crash/data-loss, P1 broken feature, P2 papercut),
+  repro steps, and status (`open` | `fixed (PR link, date)`).
+- **When to update**: when you fix an issue, mark it fixed with the PR link and resolution
+  date.
+- **Accuracy**: file issues as you encounter them; update status when PRs land. Known
+  issues should reflect the current state of the app.
+
+Issue-tracker edits follow the same conventional-commit / PR conventions above. When the
+KNOWN_ISSUES.md update is standalone (documenting a newly-discovered bug), use a `docs:`
+commit. When the tracker update rides along in the same PR as the actual code fix (marking
+an issue fixed), the PR/commit type follows the code change (`fix:`, `feat:`, etc.).
 
 ## Terminology
 
