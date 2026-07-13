@@ -37,6 +37,16 @@ The "workspace start" indicator renders at the bottom of the workspace view inst
 
 **Status:** open
 
+### STAB-3 (2026-07-13, area: intentd PR↔workspace linking, severity: P1)
+
+An open PR whose head branch exactly matches the workspace branch is never linked to the workspace.
+
+**Repro:** In a workspace on branch X, file a PR with head X via `gh`, wait >2 minutes, call `pr.status`. Observed while self-hosting: monorepo PR #98 was filed with head branch `any-fix` for the workspace on branch `any-fix`; well beyond several 60s background-refresh cycles, `pr.status` still returns `-32603` "No active PR", no `pr:linked` event is emitted, and the FE PR panel keeps showing "Create PR" instead of the open PR.
+
+**Expected:** The 60s background + on-demand PR refresh matches the PR by `head.ref` (branch-only matching per BREADCRUMBS Milestone 4 Cycle B), persists `activePullRequest`/`prStatus`, emits `pr:linked`, and the `pr.*` surface + FE PR panel reflect the open PR.
+
+**Status:** open
+
 ---
 
 ## Carried Over from 00_initial_porting
