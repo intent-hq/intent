@@ -19,7 +19,12 @@ INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
-SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
+# `ensure-submodules` covers the intentd submodule that every Rust target
+# (build/test/fmt/clippy/check) needs. The FE and iOS submodules are heavy and
+# not needed for backend-only workflows, so they are initialized on demand by
+# their own `ensure-fe-submodule` / `ensure-ios-submodule` targets (same
+# idempotent init-if-missing contract, just narrower).
+SUBMODULES = $(INTENTD_DIR)
 
 # Dev-seat data + ports (overridable, e.g. `make dev-daemon DEV_TCP_PORT=6181`).
 #
@@ -39,7 +44,7 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # packages/cloudlands-fe/src/main/utils/resolve-dev-instance.ts), keeping
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
-DEV_DATA_DIR ?= $(PWD)/.dev/intentd
+DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
 DEV_TCP_PORT ?= 5181
 DEV_PORT ?= 5190
 
@@ -48,16 +53,16 @@ DEV_PORT ?= 5190
 # TCP+UDS or TCP-only postures, e.g. `make release-daemon LISTEN=both`.
 LISTEN ?= uds
 
-.PHONY: all help ensure-submodules build build-intentd test test-intentd \
-	fmt clippy check clean clean-dev dev-daemon release-daemon run-intentd \
-	run-fe ios-open ios-info
+.PHONY: all help ensure-submodules ensure-fe-submodule ensure-ios-submodule \
+	build build-intentd test test-intentd fmt clippy check clean clean-dev \
+	dev-daemon release-daemon run-intentd run-fe ios-open ios-info
 
 all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-ensure-submodules: ## Initialize any missing submodules (idempotent)
+ensure-submodules: ## Initialize any missing Rust-workflow submodules (idempotent)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
@@ -66,6 +71,26 @@ ensure-submodules: ## Initialize any missing submodules (idempotent)
 			echo "[ensure-submodules] $$sm already initialized — leaving as-is"; \
 		fi; \
 	done
+
+# On-demand init for the FE submodule — pulled in only by targets that need it
+# (`run-fe`), so backend-only workflows stay fast.
+ensure-fe-submodule:
+	@if [ ! -e "$(FE_DIR)/.git" ]; then \
+		echo "[ensure-submodules] initializing $(FE_DIR)"; \
+		git submodule update --init --recursive "$(FE_DIR)"; \
+	else \
+		echo "[ensure-submodules] $(FE_DIR) already initialized — leaving as-is"; \
+	fi
+
+# On-demand init for the iOS submodule — pulled in only by targets that need
+# it (`ios-open`); backend-only workflows stay fast.
+ensure-ios-submodule:
+	@if [ ! -e "$(IOS_DIR)/.git" ]; then \
+		echo "[ensure-submodules] initializing $(IOS_DIR)"; \
+		git submodule update --init --recursive "$(IOS_DIR)"; \
+	else \
+		echo "[ensure-submodules] $(IOS_DIR) already initialized — leaving as-is"; \
+	fi
 
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
@@ -89,7 +114,7 @@ clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
 
 clean-dev: ## Wipe the dev-seat state dir (.dev/)
-	rm -rf $(PWD)/.dev
+	rm -rf $(CURDIR)/.dev
 
 dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p $(DEV_DATA_DIR)
@@ -104,17 +129,19 @@ dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + i
 release-daemon: ensure-submodules ## Release-state debug seat: intentd on real data dir, LISTEN=uds by default, no --insecure
 	# Runs intentd against its DEFAULT data dir (no dev override): Config::resolve picks
 	# $$HOME/Library/Application Support/intentd on macOS for the socket + SQLite DB.
-	# LISTEN defaults to `uds` so this seat never binds $(DEV_TCP_PORT); pass
-	# `LISTEN=both` or `LISTEN=tcp` to add the WSS listener (fixed port 5181 —
-	# fails fast if the dev seat already holds it). No `--insecure`: the TCP
-	# listener, when enabled, serves wss:// with TLS + bearer auth as the
-	# packaged app expects.
+	# LISTEN defaults to `uds` so this seat is UDS-only and does not bind a TCP
+	# port at all. Pass `LISTEN=both` or `LISTEN=tcp` to add the WSS listener on
+	# intentd's default TCP port (5181 unless INTENTD_TCP_PORT is set); the
+	# daemon fails fast if that port is already bound (e.g. by `make dev-daemon`
+	# on the same 5181). No `--insecure`: the TCP listener, when enabled, serves
+	# wss:// with TLS + bearer auth as the packaged app expects.
 	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
 
-run-intentd: release-daemon ## DEPRECATED alias for release-daemon
+run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
+	@$(MAKE) release-daemon
 
-run-fe: ensure-submodules ## Run the Electron + SvelteKit FE (pairs with dev-daemon out of the box)
+run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-daemon out of the box)
 	# Launches only the FE dev stack (vite + Electron). The FE does NOT spawn
 	# intentd; pair this with `make dev-daemon` (default) — the FE's dev build
 	# defaults to `ws://127.0.0.1:5181/ws` (DEFAULT_DEV_WS_URL in
@@ -127,7 +154,7 @@ run-fe: ensure-submodules ## Run the Electron + SvelteKit FE (pairs with dev-dae
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
 
-ios-open: ensure-submodules ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
+ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	open $(IOS_DIR)/Intent.xcodeproj
 
 ios-info: ## Print how to point the iOS app at the local dev daemon

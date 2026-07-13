@@ -96,8 +96,10 @@ make clean      # remove build artifacts
 
 # Local dev runs as two long-running processes, one per terminal
 # (each is long-running; Ctrl-C to stop). The default dev seat runs intentd
-# on an isolated data dir with UDS + a plain ws:// listener on 127.0.0.1:5181,
-# which is the FE's built-in dev default:
+# on an isolated data dir with UDS + a plain ws:// listener on port 5181
+# (reachable from loopback and from other devices on the same LAN — the
+# FE's built-in dev default is `ws://127.0.0.1:5181/ws`; the iOS app on a
+# phone talks to `ws://<Mac LAN IP>:5181`; see `make ios-info`):
 #
 #   # Terminal 1 — dev daemon: isolated data dir under .dev/intentd, --listen both --insecure
 #   make dev-daemon
