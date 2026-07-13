@@ -477,6 +477,21 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, suggestionOriginal?, suggestionProposed? | { ok, ... } |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
+**Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
+`<!--anchor:{commentId}:start-->` / `<!--anchor:{commentId}:end-->` markers into the
+note markdown around the anchored span, and captures up to 50 characters of
+surrounding text as `anchorBefore` / `anchorAfter` on the persisted comment
+(reference `extractAnchoredText` in `markdown-anchor-recovery.ts`). Every
+content-changing `note.*` mutation (`note.update`, `note.add`, `note.edit`,
+`note.editLines`, `note.setContent`) then runs the rewritten markdown through a
+recovery pass before persist: healthy anchors are left alone; partial anchors
+(only one marker surviving) are relocated using the stored `anchorBefore` /
+`anchorAfter` context; unrecoverable and degenerate anchors have their stray
+markers scrubbed from the persisted content and the comment is flipped to
+`isOrphaned: true`. Comments in the wire `Comment` shape carry an optional
+`isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
+`false` explicitly when a previously-orphaned comment heals).
+
 **`comment.*` extensions (new in intentd — additive; do not change the ported count of 5).** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
 | Method | Params | Result |
