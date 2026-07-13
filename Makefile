@@ -57,8 +57,8 @@ export DEV_PORT
 LISTEN ?= uds
 
 .PHONY: all help ensure-submodules ensure-fe-submodule ensure-ios-submodule \
-	build build-intentd test test-intentd fmt clippy check clean clean-dev \
-	dev-daemon release-daemon run-intentd run-fe ios-open ios-info
+	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
+	dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
 
 all: build
 
@@ -157,6 +157,31 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
+
+build-sidecar: ensure-submodules ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
+	# Builds the intentd release binary (may take several minutes on first build) and
+	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
+	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
+	@echo "[build-sidecar] Building intentd release binary..."
+	cd $(INTENTD_DIR) && cargo build --release --workspace
+	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
+	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
+
+dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
+	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
+	# spawn and supervise its own intentd binary, giving a one-command dev stack.
+	# Builds intentd release first if the binary doesn't exist. This is an alternative
+	# to the two-terminal flow (dev-daemon + run-fe); use whichever fits your workflow.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@if [ ! -f "$(INTENTD_DIR)/target/release/intentd" ]; then \
+		echo "[dev] intentd release binary not found, building..."; \
+		cd $(INTENTD_DIR) && cargo build --release --workspace; \
+	else \
+		echo "[dev] intentd release binary exists, skipping build"; \
+	fi
+	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
+	cd $(FE_DIR) && INTENTD_SIDECAR=1 pnpm run dev
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
