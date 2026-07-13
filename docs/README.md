@@ -30,8 +30,9 @@ was reproduced, and the **breadcrumbs** are the frozen record of how the port pr
 current work is tracked in [docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md).
 
 **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with
-the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto intentd
-+ cloudlands-fe itself — the IDE now builds the next version of the IDE.
+the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto the
+Cloudlands stack (`intentd` + `cloudlands-fe`) — the IDE now builds the next version of
+itself.
 
 ## `01_stabilizing/`
 

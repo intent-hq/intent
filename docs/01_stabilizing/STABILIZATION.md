@@ -4,7 +4,7 @@ Self-hosted development — stabilize the forked app while using it for daily wo
 
 ## Goal + Self-Hosting Premise
 
-**00_initial_porting** was developed entirely with the reference app (`augmentcode/intent`). **01_stabilizing** is the **self-hosting phase** — `intentd` + `cloudlands-fe` is now the development environment used to build the next version of itself.
+**00_initial_porting** was developed entirely with the reference app (`augmentcode/intent`). **01_stabilizing** is the **self-hosting phase** — the Cloudlands stack (`intentd` + `cloudlands-fe`) is now the development environment used to build the next version of itself.
 
 Stabilize the forked app while running it for all daily work. Bugs found while self-hosting are the primary work source, and every fix shipped through the app is itself a validation of the app.
 

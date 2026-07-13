@@ -11,7 +11,7 @@ Each issue entry includes:
 - **Area** — component/subsystem (e.g., `intentd note persistence`, `cloudlands-fe chat UI`, `ios sync`)
 - **Severity** — P0 (crash/data-loss), P1 (broken feature), P2 (papercut)
 - **Repro** — minimal steps to reproduce
-- **Status** — `open` | `fixed (PR link, date)`
+- **Status** — `open` or `open (optional note)` | `fixed (PR link, date)`
 
 ---
 

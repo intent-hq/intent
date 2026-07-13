@@ -83,9 +83,10 @@ current.
 - **Accuracy**: file issues as you encounter them; update status when PRs land. Known
   issues should reflect the current state of the app.
 
-Issue-tracker edits are docs-only and follow the same conventional-commit / PR conventions
-above (use a `docs:` or `fix:` commit as appropriate). They typically ship in the monorepo
-PR that bumps the submodule containing the fix.
+Issue-tracker edits follow the same conventional-commit / PR conventions above. When the
+KNOWN_ISSUES.md update is standalone (documenting a newly-discovered bug), use a `docs:`
+commit. When the tracker update rides along in the same PR as the actual code fix (marking
+an issue fixed), the PR/commit type follows the code change (`fix:`, `feat:`, etc.).
 
 ## Terminology
 
