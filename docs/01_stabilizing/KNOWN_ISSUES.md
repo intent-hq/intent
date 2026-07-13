@@ -27,6 +27,16 @@ Concurrent note writes fail with JSON-RPC `-32603` `internal error: insert note_
 
 **Status:** open
 
+### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
+
+The "workspace start" indicator renders at the bottom of the workspace view instead of marking the chronological beginning of the workspace.
+
+**Repro:** Open a workspace with multiple activity items and locate the workspace start indicator. Observed while self-hosting: in a workspace whose first activity was the "Scaffold docs/01_stabilizing" work, the start indicator appeared way down at the bottom of the feed rather than at the top where the workspace began.
+
+**Expected:** The indicator anchors the beginning of the workspace (before/at the first item), regardless of feed ordering.
+
+**Status:** open
+
 ---
 
 ## Carried Over from 00_initial_porting
