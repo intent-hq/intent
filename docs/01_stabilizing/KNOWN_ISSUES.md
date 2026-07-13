@@ -57,6 +57,16 @@ Messages queued while an agent is mid-turn do not appear in the conversation whe
 
 **Status:** open
 
+### STAB-5 (2026-07-13, area: intentd agent events / parent notifications, severity: P2)
+
+A child agent's completion report is re-delivered to the parent agent multiple times.
+
+**Repro:** Delegate a task to a child agent, let it complete and deliver its report, then trigger additional parent wakes (e.g. new user messages) and observe the same completion report re-delivered. Observed while self-hosting: after a delegated implementor completed and its report was delivered and acted upon, the identical "[WORKSPACE EVENTS] Child agent ... completed. Report: ..." message was delivered to the coordinator again on two subsequent turns, hours of activity later, as if the completion event was never acknowledged/marked consumed.
+
+**Expected:** A child-completion notification is delivered to the parent exactly once (or is idempotently deduplicated); already-consumed completion events are not replayed on later wakes.
+
+**Status:** open
+
 ---
 
 ## Carried Over from 00_initial_porting
