@@ -7,9 +7,9 @@ Instructions for AI agents working in this monorepo.
 This is a private monorepo that references Cloudlands component repositories as git
 submodules:
 
-- `packages/intentd` → [cloudlands-ai/intentd](https://github.com/cloudlands-ai/intentd) — Rust backend daemon
-- `packages/cloudlands-fe` → [cloudlands-ai/cloudlands-fe](https://github.com/cloudlands-ai/cloudlands-fe) — Electron + SvelteKit desktop frontend
-- `packages/ios` → [cloudlands-ai/ios](https://github.com/cloudlands-ai/ios) — SwiftUI iOS companion app
+- `packages/intentd` → [intent-hq/intentd](https://github.com/intent-hq/intentd) — Rust backend daemon
+- `packages/cloudlands-fe` → [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) — Electron + SvelteKit desktop frontend
+- `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
 The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`; see
@@ -24,7 +24,7 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 1. **Make scoped commits in the submodule** on a feature branch. Group related changes into
    logical commits with conventional commit messages (`feat:`, `fix:`, `chore:`, etc.).
 2. **Push the feature branch** in the submodule repo.
-3. **File a PR** on the submodule's repo (e.g., `cloudlands-ai/intentd`).
+3. **File a PR** on the submodule's repo (e.g., `intent-hq/intentd`).
 4. **Merge the PR** (squash merge preferred).
 
 ### Phase 2 — Monorepo Update
@@ -33,7 +33,7 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 2. **Stage the submodule ref change** in the monorepo (`git add packages/<name>`).
 3. **Commit** with a message like `chore: update <name> submodule to latest main`.
 4. **Push** the monorepo branch.
-5. **File a PR** on the monorepo repo (`cloudlands-ai/monorepo`). Reference the submodule PR
+5. **File a PR** on the monorepo repo (`intent-hq/monorepo`). Reference the submodule PR
    in the body.
 6. **Merge the monorepo PR**.
 

@@ -20,7 +20,7 @@ Documents for the **initial port of Intent's backend to a headless Rust daemon**
 Supporting documents:
 
 - **[FE-MIGRATION.md](./00_initial_porting/FE-MIGRATION.md)** — how the Electron +
-  SvelteKit frontend was migrated into `cloudlands-ai/cloudlands-fe` and mounted as the
+  SvelteKit frontend was migrated into `intent-hq/cloudlands-fe` and mounted as the
   `packages/cloudlands-fe` submodule.
 - **[WSS_OVER_SSH.md](./00_initial_porting/WSS_OVER_SSH.md)** — the surviving FE SSH
   surface and the WSS-over-SSH transport shape for future remote workspaces.
