@@ -3,7 +3,7 @@
 ---
 **EFFORT CLOSED AS OF 2026-07-13**
 
-This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted stack (intentd + cloudlands-fe building the next version of themselves). See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
+This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted stack (intentd + cloudlands-fe building the next version of itself). See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
 ---
 
 A frozen historical record of the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail that documents how the port progressed; no further appends will be made. New work is tracked in [docs/01_stabilizing/](../01_stabilizing/).

@@ -38,7 +38,7 @@ itself.
 
 Documents for the **ongoing stabilization and hardening phase**, post-initial-port.
 Development now happens on the self-hosted stack (intentd + cloudlands-fe building the
-next version of themselves).
+next version of itself).
 
 - **[STABILIZATION.md](./01_stabilizing/STABILIZATION.md)** — the **dogfooding process**:
   how bugs are discovered, filed, triaged, fixed, and closed; fix conventions; and the
@@ -50,5 +50,8 @@ next version of themselves).
 
 ## Workflow
 
-For the agent commit/PR workflow — and the policy requiring breadcrumbs to be kept
-current — see the root [AGENTS.md](../AGENTS.md).
+For the agent commit/PR workflow and stabilization issue tracking, see the root
+[AGENTS.md](../AGENTS.md). The Known Issues tracker at
+[docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md) is the live
+progress record; breadcrumbs in [docs/00_initial_porting/](./00_initial_porting/) are
+frozen historical records from the concluded initial-porting effort.
