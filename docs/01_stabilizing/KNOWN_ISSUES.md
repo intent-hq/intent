@@ -47,6 +47,16 @@ An open PR whose head branch exactly matches the workspace branch is never linke
 
 **Status:** open
 
+### STAB-4 (2026-07-13, area: intentd agent runtime / chat transcript (queue-flip path), severity: P1)
+
+Messages queued while an agent is mid-turn do not appear in the conversation when they are dequeued and delivered.
+
+**Repro:** Send message A to an agent, then send message B while the agent is still streaming A's turn; after A's turn ends, B's turn starts — B's text is absent from the transcript. Observed while self-hosting: sending a message to a busy agent queues it (expected), but when the current turn ends and the queue-flip loop flips the queued message to in-flight, the delivered user message never shows up in the conversation transcript/UI — the agent acts on it, but the transcript is missing the user message that triggered the turn.
+
+**Expected:** On dequeue, the user message is persisted to the conversation (`agent.getConversation`) and pushed to live subscribers (`chat.subscribe` delta / `agent:stream` events) exactly like a directly-delivered message.
+
+**Status:** open
+
 ---
 
 ## Carried Over from 00_initial_porting
