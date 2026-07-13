@@ -173,6 +173,15 @@ dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE wit
 	# Builds intentd release first if the binary doesn't exist. This is an alternative
 	# to the two-terminal flow (dev-daemon + run-fe); use whichever fits your workflow.
 	# Long-running; does not exit until you stop it (Ctrl-C).
+	#
+	# Pins the sidecar to two absolute paths so it does not depend on Electron's cwd:
+	#   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd — the release binary
+	#     just built above; consumed by resolveIntentdBinaryPath in
+	#     packages/cloudlands-fe/src/features/backend/main/intentd-sidecar.ts
+	#     (env override wins over the packaged/dev cwd walk).
+	#   INTENTD_DATA_DIR=$(DEV_DATA_DIR) — the isolated dev data dir; keeps the
+	#     sidecar off the packaged app's real data dir and pairs with the UDS
+	#     socket at $(DEV_DATA_DIR)/intentd.sock (resolveSocketPath in the same file).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@if [ ! -f "$(INTENTD_DIR)/target/release/intentd" ]; then \
 		echo "[dev] intentd release binary not found, building..."; \
@@ -180,8 +189,14 @@ dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE wit
 	else \
 		echo "[dev] intentd release binary exists, skipping build"; \
 	fi
+	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
-	cd $(FE_DIR) && INTENTD_SIDECAR=1 pnpm run dev
+	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
+	@echo "[dev]   INTENTD_DATA_DIR=$(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock)"
+	cd $(FE_DIR) && INTENTD_SIDECAR=1 \
+		INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
+		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
+		pnpm run dev
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
