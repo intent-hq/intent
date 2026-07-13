@@ -1,5 +1,11 @@
 # Initial Porting — Breadcrumbs
 
+---
+**EFFORT CLOSED AS OF 2026-07-13**
+
+This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted stack (intentd + cloudlands-fe building the next version of themselves). See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
+---
+
 A living progress log for the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail future agents read first to understand where the port stands, and append to as work lands.
 
 See also: [IMPLEMENTATION_SPEC.md](./IMPLEMENTATION_SPEC.md) (target architecture), [PROTOCOL.md](./PROTOCOL.md) (wire contract), and the root [AGENTS.md](../../AGENTS.md) (workflow + breadcrumb-update policy).
@@ -112,6 +118,22 @@ Port Intent's backend to a standalone, headless Rust daemon (`intentd`) speaking
 - The entire frontend (Tauri/Svelte).
 
 ## Milestone history
+
+### 2026-07-13 — **00_initial_porting effort CLOSED: self-hosting cutover milestone reached**
+
+The initial port is complete. **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with the reference app (`augmentcode/intent`); as of this close-out, development moves onto intentd + cloudlands-fe itself — the IDE now builds the next version of the IDE.
+
+**Final submodule HEADs:**
+- `packages/intentd` @ `ea2d237` (intentd PR #121 `fix: store empty title for untitled workspaces (Untitled parity)`)
+- `packages/cloudlands-fe` @ `caf3e5f5` (cloudlands-fe PR #34 `fix: make dev sidecar — connect over UDS and resolve the binary reliably`)
+
+**Implemented surface summary:** 218 JSON-RPC request methods + 1 server-initiated notification over UDS and WSS, backed by SQLite — full CRUD across workspace/note/task/comment/agent domains; the recent-repository registry; event query/aggregation and snapshot+delta subscriptions; local git operations (status/stage/commit/agentCommit/pull/discard); GitHub PR linking and the full `pr.*` + `github.*` + `linear.*` + `sentry.*` surfaces; code-review change-tracking, metrics, and accept-changes orchestration; ripgrep/symbol-backed search across files/notes/messages/events; interactive terminals and managed scripts on a unified PTY host; settings persistence with secret redaction; specialist + rules CRUD; MCP-server lifecycle management (stdio only); workspace-file CRUD; note primitives; cross-workspace sibling reads; client-callable `browser.exec` reverse RPC; the full ACP orchestration layer with agent session persistence, live MCP spawn-wiring, and a per-agent-type tool denylist; workspace activity/attention status model; locality detection and remote-only mitigations (`forward.*` tunnels, `host.openExternal` reverse RPC); data migration (`intentd import`) and event retention sweeps; and a hermetic mock ACP provider + E2E transport/lifecycle suite. The daemon serves both UDS and WSS transports with bearer-token auth, origin allow-list, TLS fingerprint pinning, mDNS discovery, single-instance enforcement, idle agent reaping, CLI control (`intentd serve/status/stop/doctor`), and launchd/systemd daemonization. The FE `make dev` sidecar connects over UDS and resolves the binary reliably; workspace reads cut over to daemon `workspace.list`/`workspace.get`. See the "Implemented surface so far" section for the full catalog.
+
+**Unresolved deferrals carried into 01_stabilizing:** Transport panic-safety via `catch_unwind`, and general stabilization/hardening work. All known issues and planned follow-ups are documented in `docs/01_stabilizing/KNOWN_ISSUES.md`.
+
+This file is now frozen as a historical record. Future work is tracked in `docs/01_stabilizing/`.
+
+---
 
 ### 2026-07-13 — `make dev` sidecar: UDS connect + reliable binary resolution; FE workspace read-path cut-over to daemon (cloudlands-fe PRs #34 + #35 merged; monorepo Makefile `dev` target exports `INTENTD_BIN` + `INTENTD_DATA_DIR`)
 
