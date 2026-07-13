@@ -170,8 +170,10 @@ build-sidecar: ensure-submodules ensure-fe-submodule ## Build intentd release + 
 dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
 	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
 	# spawn and supervise its own intentd binary, giving a one-command dev stack.
-	# Builds intentd release first if the binary doesn't exist. This is an alternative
-	# to the two-terminal flow (dev-daemon + run-fe); use whichever fits your workflow.
+	# Always runs the intentd release build first so the sidecar reflects the
+	# current sources; cargo's freshness check makes it a fast no-op when nothing
+	# changed. This is an alternative to the two-terminal flow (dev-daemon +
+	# run-fe); use whichever fits your workflow.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	#
 	# Pins the sidecar to two absolute paths so it does not depend on Electron's cwd:
@@ -183,12 +185,8 @@ dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE wit
 	#     sidecar off the packaged app's real data dir and pairs with the UDS
 	#     socket at $(DEV_DATA_DIR)/intentd.sock (resolveSocketPath in the same file).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
-	@if [ ! -f "$(INTENTD_DIR)/target/release/intentd" ]; then \
-		echo "[dev] intentd release binary not found, building..."; \
-		cd $(INTENTD_DIR) && cargo build --release --workspace; \
-	else \
-		echo "[dev] intentd release binary exists, skipping build"; \
-	fi
+	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
+	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
