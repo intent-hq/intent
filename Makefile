@@ -2,9 +2,9 @@
 #
 # Three postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,
-#      serving UDS + TCP (`--listen both --insecure`) on 127.0.0.1:$(DEV_TCP_PORT)
-#      / 0.0.0.0:$(DEV_TCP_PORT). Pairs with `make run-fe` (whose dev default is
-#      `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
+#      serving UDS + TCP (`--listen both --insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
+#      (reachable from loopback and LAN). Pairs with `make run-fe` (whose dev default
+#      is `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
 #   2. `make release-daemon` — occasional "debug the release app with its own
 #      state" seat. intentd on the real data dir, `LISTEN=uds` by default and
 #      no `--insecure`, so it never binds $(DEV_TCP_PORT) or collides with the
@@ -163,6 +163,10 @@ ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Inten
 	open "$(IOS_DIR)/Intent.xcodeproj"
 
 ios-info: ## Print how to point the iOS app at the local dev daemon
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-info] ERROR: requires macOS (uses ipconfig getifaddr). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
 	@echo "iOS ↔ intentd dev seat (pairs with 'make dev-daemon' on port $(DEV_TCP_PORT)):"
 	@echo ""
 	@echo "  Simulator: host 127.0.0.1  port $(DEV_TCP_PORT)"
