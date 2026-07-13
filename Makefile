@@ -76,20 +76,20 @@ ensure-submodules: ## Initialize any missing Rust-workflow submodules (idempoten
 # (`run-fe`), so backend-only workflows stay fast.
 ensure-fe-submodule:
 	@if [ ! -e "$(FE_DIR)/.git" ]; then \
-		echo "[ensure-submodules] initializing $(FE_DIR)"; \
+		echo "[ensure-fe-submodule] initializing $(FE_DIR)"; \
 		git submodule update --init --recursive "$(FE_DIR)"; \
 	else \
-		echo "[ensure-submodules] $(FE_DIR) already initialized — leaving as-is"; \
+		echo "[ensure-fe-submodule] $(FE_DIR) already initialized — leaving as-is"; \
 	fi
 
 # On-demand init for the iOS submodule — pulled in only by targets that need
 # it (`ios-open`); backend-only workflows stay fast.
 ensure-ios-submodule:
 	@if [ ! -e "$(IOS_DIR)/.git" ]; then \
-		echo "[ensure-submodules] initializing $(IOS_DIR)"; \
+		echo "[ensure-ios-submodule] initializing $(IOS_DIR)"; \
 		git submodule update --init --recursive "$(IOS_DIR)"; \
 	else \
-		echo "[ensure-submodules] $(IOS_DIR) already initialized — leaving as-is"; \
+		echo "[ensure-ios-submodule] $(IOS_DIR) already initialized — leaving as-is"; \
 	fi
 
 build: build-intentd ## Build the Rust workspace (packages/intentd)
@@ -119,6 +119,7 @@ clean-dev: ## Wipe the dev-seat state dir (.dev/)
 dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p $(DEV_DATA_DIR)
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
+	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--listen both --insecure` serves the local UDS socket AND a plain ws://
 	# listener on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth
 	# — matches the FE's dev default and the iOS simulator/hardware seat.
@@ -155,7 +156,11 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	cd $(FE_DIR) && pnpm run dev
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
-	open $(IOS_DIR)/Intent.xcodeproj
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-open] ERROR: requires macOS (Xcode). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	open "$(IOS_DIR)/Intent.xcodeproj"
 
 ios-info: ## Print how to point the iOS app at the local dev daemon
 	@echo "iOS ↔ intentd dev seat (pairs with 'make dev-daemon' on port $(DEV_TCP_PORT)):"
