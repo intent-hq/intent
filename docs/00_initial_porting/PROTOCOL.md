@@ -207,8 +207,8 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } |
-| workspace.archive | workspaceId (req) | { success: true } |
-| workspace.unarchive | workspaceId (req) | { success: true } |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
 
@@ -328,8 +328,40 @@ each with a dedicated change event (§6.5) that carries the new value:
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `baseRef`, `prNumber`, `prStatus`, `activePullRequest`,
-`lastActivity`, `archivedAt`, repository/worktree fields, …) are **omitted when absent**
+`pullRequests`, `archivedAt`, repository/worktree fields, …) are **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
+
+**`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
+authoritative "most recent thing that happened in this workspace" timestamp. The daemon
+derives it on every path that returns a `Workspace` on the wire (`workspace.list` /
+`workspace.get` / `workspace.create` / `workspace.update` / `workspace.archive` /
+`workspace.unarchive`) as the **max** of the persisted `lastActivity`, `updatedAt`,
+`createdAt`, every note's `updatedAt`, and every agent session's `updatedAt` (FE
+`deriveWorkspaceLastActivity` parity, §9.1). It is always present on the wire —
+clients never need to recompute it from notes/agents.
+
+**PR-field ownership (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`, `pullRequests`).**
+These five fields are BE-owned: the daemon writes them from PR discovery / refresh
+(§5.9, §6.5 `pr:*` events) and clients read them off the returned `Workspace`. All five
+are `Option`s that serialize with `skip_serializing_if` (absent, not `null`). The
+persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) sits
+alongside `activePullRequest` and carries the reconciliation candidates the FE matches
+`activePullRequest` against.
+
+**Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
+five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
+`pullRequests`) accept three wire forms: **missing** the key leaves the stored value
+untouched, an explicit **JSON `null`** clears the stored value, and a **present value**
+sets it. The applied `WorkspaceUpdate` delta emitted as
+`workspace:updated { changes }` (§6.5) preserves this distinction — omitted keys were
+untouched, `null` keys were explicit clears, present keys were sets.
+
+**`baseRef` canonicalisation.** On `workspace.create` and `workspace.update`, an incoming
+`baseRef` has any known remote prefix (`origin/`, `upstream/`, `fork/`) stripped before
+persistence, so `origin/main` and `main` collapse to the same canonical `main`. The
+returned `Workspace.baseRef` and the persisted DB value are always the canonical form;
+values without a known prefix are stored verbatim. `git.*` methods that need the
+fully-qualified remote-tracking name reconstruct it as `origin/<baseRef>` locally.
 
 **Card aggregates (`taskStats` / `agentSummary` / `diffSummary`).** `workspace.list` and
 `workspace.get` enrich each `Workspace` with the nested rollup objects the iOS coverflow cards
