@@ -47,6 +47,9 @@ SUBMODULES = $(INTENTD_DIR)
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
 DEV_TCP_PORT ?= 5181
 DEV_PORT ?= 5190
+# Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
+# actually sees the default/override in the child environment.
+export DEV_PORT
 
 # Transport for `release-daemon`. Defaults to `uds` (UDS only) so the release
 # seat can never race the dev seat for $(DEV_TCP_PORT). Override for the
