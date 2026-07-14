@@ -167,6 +167,6 @@ Intermittent CI failures in `agent_retry_rpc_recovery_path_over_wss` test on mai
 
 **Repro:** Test expected spawn failure after retry exhaustion, but sometimes succeeded in CI due to race between event delivery and status persistence. Test waited for `agent:stream:end` event (published before status persisted to DB), so `agent.getSession` could read stale status. Additionally, the test broke early on the first `agent:status-changed` event without waiting for all three terminal events (`agent:failed`, `agent:stream:end`, `agent:status-changed`), causing flakiness when event delivery order varied.
 
-**Expected:** Test waits for ALL three terminal events (order-independent) and uses `agent:status-changed` (published AFTER `set_agent_session_status` DB write completes at agent_manager.rs:2722) to guarantee read-after-write consistency.
+**Expected:** Test waits for ALL three terminal events (order-independent) and uses `agent:status-changed` (published AFTER `set_agent_session_status` DB write completes) to guarantee read-after-write consistency.
 
 **Status:** fixed ([intent-hq/intentd#149](https://github.com/intent-hq/intentd/pull/149), 2026-07-14)
