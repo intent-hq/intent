@@ -77,7 +77,7 @@ The root causes included: (1) no retry logic—first spawn attempt was terminal;
 
 **Expected:** Transient spawn failures (session/load or session/new timeouts, handshake failures, stdout closed) trigger automatic retry with backoff (3 attempts, 2s/5s delays, fresh child per attempt). On exhaustion, emit agent:failed with stderr-enriched error, persist 'error' status, requeue the message, and show a Retry button in the UI. The agent.retry RPC allows manual recovery.
 
-**Status:** open
+**Status:** fixed (intent-hq/cloudlands-fe#51, 2026-07-14; intentd PR in merge queue)
 
 ### STAB-7 (2026-07-14, area: intentd tests, severity: P2)
 
