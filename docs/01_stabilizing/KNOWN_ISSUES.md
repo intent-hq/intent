@@ -2,6 +2,8 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
+**Next available ID:** STAB-29 (as of 2026-07-14)
+
 ## Intake Convention
 
 Each issue entry includes:
@@ -25,7 +27,7 @@ Concurrent note writes fail with JSON-RPC `-32603` `internal error: insert note_
 
 **Expected:** Writes are serialized or retried daemon-side (busy_timeout / retry-on-busy), never surfacing SQLITE_BUSY to the client. Sequential retry succeeds.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#138](https://github.com/intent-hq/intentd/pull/138), 2026-07-14)
 
 ### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
 
@@ -65,7 +67,7 @@ A child agent's completion report is re-delivered to the parent agent multiple t
 
 **Expected:** A child-completion notification is delivered to the parent exactly once (or is idempotently deduplicated); already-consumed completion events are not replayed on later wakes.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#143](https://github.com/intent-hq/intentd/pull/143), 2026-07-14)
 
 ### STAB-6 (2026-07-14, area: intentd agent runtime / spawn path, severity: P1)
 
@@ -161,7 +163,8 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
-### STAB-6 (2026-07-13, area: cloudlands-fe sidecar watchdog + intentd store pool, severity: P1)
+### STAB-11 (2026-07-13, area: cloudlands-fe sidecar watchdog + intentd store pool, severity: P1)
+*(Renumbered from STAB-6 to resolve duplicate)*
 
 The cloudlands-fe sidecar watchdog kills the daemon while it is healthy, triggered by intentd store pool exhaustion.
 
@@ -180,3 +183,74 @@ Intermittent CI failures in `agent_retry_rpc_recovery_path_over_wss` test on mai
 **Expected:** Test waits for ALL three terminal events (order-independent) and uses `agent:status-changed` (published AFTER `set_agent_session_status` DB write completes) to guarantee read-after-write consistency.
 
 **Status:** fixed ([intent-hq/intentd#149](https://github.com/intent-hq/intentd/pull/149), 2026-07-14)
+
+### STAB-12 (2026-07-14, area: intentd agent runtime / agent.sendMessage fallback path, severity: P1)
+*(Shipped as STAB-7 in intent-hq/intentd#150 title)*
+
+The `agent.sendMessage` fallback path (queue when target is busy) drops image and file content blocks.
+
+**Repro:** Send a message with image or file attachments to a busy agent. Observed while self-hosting: when the target agent is mid-turn and the message is queued for later delivery, the fallback code path (`QueuedMessage::from` conversion) only preserves `text_blocks` and drops `image_blocks` and `file_blocks`. After dequeue, the delivered message contains only text, losing the attachments.
+
+**Expected:** The fallback path preserves full block fidelity — `image_blocks` and `file_blocks` are stored in `QueuedMessage` and restored on dequeue exactly like `text_blocks`.
+
+**Status:** fixed ([intent-hq/intentd#150](https://github.com/intent-hq/intentd/pull/150), 2026-07-14)
+
+### STAB-22 (2026-07-14, area: cloudlands-fe agent footer / streaming state hydration, severity: P2)
+
+Agent footer shows "Thinking..." state for non-streaming idle agents after page refresh.
+
+**Repro:** Open a workspace with an idle agent, refresh the page. Observed while self-hosting: after hydration, the agent footer displays "Thinking..." with the thinking spinner even though the agent is idle and not streaming. The hydration logic initialized `isThinking` to `true` unconditionally without checking the actual streaming state.
+
+**Expected:** Footer state reflects the actual agent status on hydration — idle agents show idle state, streaming agents show thinking state.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#55](https://github.com/intent-hq/cloudlands-fe/pull/55), 2026-07-14)
+
+### STAB-23 (2026-07-14, area: cloudlands-fe agent footer / hydration timing, severity: P2)
+
+Agent footer flickers or shows stale state during hydration.
+
+**Repro:** Open a workspace with active agents and refresh. Observed while self-hosting: during hydration, the agent footer briefly shows incorrect state (e.g., thinking indicator when agent is idle, or missing footer entirely) before settling to the correct state. Race between component mount and streaming-state initialization.
+
+**Expected:** Footer hydrates synchronously with correct state from the start, no flicker.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#55](https://github.com/intent-hq/cloudlands-fe/pull/55), 2026-07-14)
+
+### STAB-24 (2026-07-14, area: cloudlands-fe terminal tabs / workspace switch, severity: P2)
+
+Terminal tabs are lost when switching between workspaces.
+
+**Repro:** Open terminal tabs in workspace A, switch to workspace B, switch back to workspace A. Observed while self-hosting: terminal tabs from workspace A do not persist after switching away and back — the terminal tab list is empty or shows only new tabs. Terminal tab state was not scoped per workspace or persisted correctly.
+
+**Expected:** Each workspace retains its own terminal tabs across workspace switches. Tab state (terminal ID, title, working directory) persists and restores when returning to the workspace.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#56](https://github.com/intent-hq/cloudlands-fe/pull/56), 2026-07-14)
+
+### STAB-26 (2026-07-14, area: cloudlands-fe UI state persistence / boot-time clobber, severity: P1)
+
+Persisted UI state (open tabs, active tab) is clobbered on application boot.
+
+**Repro:** Open multiple workspace tabs with a specific active tab, quit and restart the app. Observed while self-hosting: after boot, the workspace tab list is empty or shows only a default tab, losing the persisted state from the previous session. Root cause: `cleanupInvalidWorkspaceTabs` fires before the workspace list has loaded (`workspace.hasLoaded` is false), treating all persisted tabs as invalid and clearing them.
+
+**Expected:** Boot-time cleanup guards against running before workspace data is available. Persisted tabs are validated against the loaded workspace list only after `workspace.hasLoaded` is true, preserving valid tabs across restarts.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#58](https://github.com/intent-hq/cloudlands-fe/pull/58), 2026-07-14)
+
+### STAB-27 (2026-07-14, area: cloudlands-fe queued messages / edit-mode hold, severity: P2)
+
+Editing a queued prompt does not hold the queue, allowing the original unedited message to send.
+
+**Repro:** Send a message to a busy agent (queues the message), then click edit on the queued message in the queue list. Observed while self-hosting: starting edit mode sets only local component state but does not call the `agent.editQueuedMessage` RPC with `editing: true`, so the queue continues to drain and the unedited message sends before the user can save their edits.
+
+**Expected:** Entering edit mode on a queued message immediately holds the queue by calling `agent.editQueuedMessage` with `editing: true`. The queue remains paused until the user saves (sends edited content + `editing: false`) or cancels (restores original + `editing: false`). Every exit path from edit mode releases the hold.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#59](https://github.com/intent-hq/cloudlands-fe/pull/59), 2026-07-14)
+
+### STAB-28 (2026-07-14, area: intentd agent runtime / interrupt + completion watches, severity: P1)
+
+Interrupt-priority messages do not emit `agent:idle` after delivery, wedging completion watches.
+
+**Repro:** Interrupt a streaming agent with a priority=interrupt message. Observed while self-hosting: after the interrupt is delivered and the agent processes the message, no `agent:idle` event is emitted. Parent agents or tooling waiting on `agent:idle` (via `agent.waitForCompletion` or event subscriptions) block indefinitely even though the agent has finished processing the interrupt.
+
+**Expected:** After delivering an interrupt-priority message, the agent runtime emits `agent:idle` (and `agent:stream:end`) so watchers can detect completion. Interrupt delivery follows the same event contract as normal message delivery.
+
+**Status:** fixed ([intent-hq/intentd#148](https://github.com/intent-hq/intentd/pull/148), 2026-07-14)
