@@ -67,15 +67,7 @@ A child agent's completion report is re-delivered to the parent agent multiple t
 
 **Status:** open
 
-### STAB-6 (2026-07-13, area: cloudlands-fe sidecar watchdog + intentd store pool, severity: P1)
 
-The cloudlands-fe sidecar watchdog kills the daemon while it is healthy, triggered by intentd store pool exhaustion.
-
-**Repro:** Run under moderate workspace load (multiple agents, concurrent note writes, PR operations). Observed while self-hosting: cloudlands-fe sidecar watchdog detected that intentd stopped responding to health checks and killed the daemon; the daemon was actually alive but all SQLite pool connections were in use, blocking the health-check handler from acquiring a connection to run its trivial `SELECT 1` query, triggering the watchdog timeout.
-
-**Expected:** Health-check requests either bypass the store pool entirely (no DB access required), use a dedicated reserved connection, or have a fast-fail timeout that lets the watchdog distinguish "slow but alive" from "dead". The daemon should never be killed while healthy.
-
-**Status:** open
 
 ### STAB-7 (2026-07-13, area: intentd CI / intent-store SQLite contention, severity: P2)
 
@@ -149,4 +141,12 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
-_(none yet — first fixes will appear here with PR links and resolution dates)_
+### STAB-6 (2026-07-13, area: cloudlands-fe sidecar watchdog + intentd store pool, severity: P1)
+
+The cloudlands-fe sidecar watchdog kills the daemon while it is healthy, triggered by intentd store pool exhaustion.
+
+**Repro:** Run under moderate workspace load (multiple agents, concurrent note writes, PR operations). Observed while self-hosting: cloudlands-fe sidecar watchdog detected that intentd stopped responding to health checks and killed the daemon; the daemon was actually alive but all SQLite pool connections were in use, blocking the health-check handler from acquiring a connection to run its trivial `SELECT 1` query, triggering the watchdog timeout.
+
+**Expected:** Health-check requests either bypass the store pool entirely (no DB access required), use a dedicated reserved connection, or have a fast-fail timeout that lets the watchdog distinguish "slow but alive" from "dead". The daemon should never be killed while healthy.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/137, https://github.com/intent-hq/cloudlands-fe/pull/43, 2026-07-14)
