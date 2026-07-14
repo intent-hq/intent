@@ -47,7 +47,7 @@ An open PR whose head branch exactly matches the workspace branch is never linke
 
 **Expected:** The 60s background + on-demand PR refresh matches the PR by `head.ref` (branch-only matching per BREADCRUMBS Milestone 4 Cycle B), persists `activePullRequest`/`prStatus`, emits `pr:linked`, and the `pr.*` surface + FE PR panel reflect the open PR.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#131](https://github.com/intent-hq/intentd/pull/131), 2026-07-13)
 
 ### STAB-4 (2026-07-13, area: intentd agent runtime / chat transcript (queue-flip path), severity: P1)
 
@@ -57,7 +57,7 @@ Messages queued while an agent is mid-turn do not appear in the conversation whe
 
 **Expected:** On dequeue, the user message is persisted to the conversation (`agent.getConversation`) and pushed to live subscribers (`chat.subscribe` delta / `agent:stream` events) exactly like a directly-delivered message.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#132](https://github.com/intent-hq/intentd/pull/132), 2026-07-14)
 
 ### STAB-5 (2026-07-13, area: intentd agent events / parent notifications, severity: P2)
 
