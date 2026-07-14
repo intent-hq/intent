@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-30 (as of 2026-07-14)
+**Next available ID:** STAB-33 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -274,3 +274,23 @@ Intermittent CI failures in the `check` job: "No space left on device" during Te
 **Expected:** The `check` job frees unnecessary preinstalled bundles before compilation, sets `CARGO_INCREMENTAL=0` to reduce target dir overhead, and includes `df -h` diagnostics to measure disk usage. Tests run reliably without exhausting disk.
 
 **Status:** fixed ([intent-hq/intentd#146](https://github.com/intent-hq/intentd/pull/146), 2026-07-14)
+
+### STAB-31 (2026-07-14, area: intentd agent runtime / AgentManager process cap on macOS, severity: P2)
+
+Agent process cap stuck at conservative fallback 8 on macOS instead of RAM-based cap.
+
+**Repro:** Run intentd on macOS. Observed while self-hosting on macOS with 64 GB RAM: `AgentManager::new` logged "Failed to detect system RAM, using fallback cap of 8" and capped concurrent agents at 8 instead of the expected RAM-based cap of 32 (64 GB / 2 GB per agent). The daemon was hardcoded to use Linux procfs (`/proc/meminfo`) for RAM detection, which doesn't exist on macOS, forcing the fallback.
+
+**Expected:** AgentManager detects total physical RAM on both Linux (procfs) and macOS (sysctl `hw.memsize` via `libc::sysctlbyname`) and calculates the cap as `total_ram_gb / 2`. Additionally, the `agents.maxConcurrent` setting (new in this fix) allows explicit override: `0` (default) triggers auto-detection, positive integer sets an explicit cap with upper bound 200.
+
+**Status:** fixed ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14)
+
+### STAB-32 (2026-07-14, area: intentd CI / WSS e2e test, severity: P2)
+
+Flaky CI test failure: `router_read_lifecycle_arms_over_wss` in `e2e_wss_agent_lifecycle.rs` with "no mcp servers configured on a fresh workspace".
+
+**Repro:** On intent-hq/intentd PR #134, the `router_read_lifecycle_arms_over_wss` e2e test failed intermittently with assertion error on fresh workspace expecting zero MCP servers. Test was removed in PR #134 as part of review-driven cleanup (flawed API usage); testing requirements met by existing unit tests and WSS coverage suite.
+
+**Expected:** WSS e2e tests exercise real JSON-RPC transport + method catalog; flawed test removed to reduce flakiness.
+
+**Status:** resolved ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14) — test removed
