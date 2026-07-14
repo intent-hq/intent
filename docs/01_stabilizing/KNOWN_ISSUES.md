@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-30 (as of 2026-07-14)
+**Next available ID:** STAB-31 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -110,6 +110,16 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 **Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
 
 **Status:** open (pending PROTOCOL §5.1 RPC design)
+
+### STAB-30 (2026-07-14, area: intentd intent-acp session lifecycle, severity: P2)
+
+Fixed 1-hour prompt timeout kills healthy long turns.
+
+**Repro:** Any agent turn exceeding 60 minutes dies with "request `session/prompt` timed out" even while actively streaming session/updates. Observed 2026-07-14 when an implementor turn combining a CI watch (`gh pr checks --watch`) with a 20-thread review sweep exceeded the fixed `PROMPT_TIMEOUT` (intent-acp/src/session.rs, 60*60s). The deadline never resets on streaming activity, so busy and wedged turns are indistinguishable.
+
+**Expected:** Use activity-based idle timeout instead of fixed deadline — reset the timer on every streaming update so actively-working turns never time out. Only kill sessions that are truly silent/wedged.
+
+**Status:** open (fix approved: activity-based idle timeout)
 
 ---
 
