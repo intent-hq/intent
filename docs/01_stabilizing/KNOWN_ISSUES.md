@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-34 (as of 2026-07-14)
+**Next available ID:** STAB-35 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -120,6 +120,16 @@ Fixed 1-hour prompt timeout kills healthy long turns.
 **Expected:** Use activity-based idle timeout instead of fixed deadline — reset the timer on every streaming update so actively-working turns never time out. Only kill sessions that are truly silent/wedged.
 
 **Status:** open (fix approved: activity-based idle timeout)
+
+### STAB-34 (2026-07-14, area: intentd CI / agent_manager process-cap test, severity: P1)
+
+Main branch CI red, all intentd merges blocked by `agent_manager::tests::process_cap_events_queued_resumed_evicted` test failure.
+
+**Repro:** The `check` CI job fails with assertion "resume path emits agent:process:resumed" on main tip 13a1e4f5 (run https://github.com/intent-hq/intentd/actions/runs/29340545221) and on PR #159 (2 runs). Test passes locally on macOS. The test was introduced with the STAB-31 fix (intent-hq/intentd#134). Suspected cause: test depends on auto-detected host RAM for the process cap instead of pinning it, so CI runners produce a different queued/resumed/evicted sequence than expected.
+
+**Expected:** Test should either pin the process cap to a known value or adjust assertions to be robust across different RAM environments. CI should be green on main.
+
+**Status:** open (fix in flight on intentd)
 
 ---
 
