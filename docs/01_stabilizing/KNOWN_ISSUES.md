@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-33 (as of 2026-07-14)
+**Next available ID:** STAB-35 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -110,6 +110,26 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 **Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
 
 **Status:** open (pending PROTOCOL §5.1 RPC design)
+
+### STAB-33 (2026-07-14, area: intentd intent-acp session lifecycle, severity: P2)
+
+Fixed 1-hour prompt timeout kills healthy long turns.
+
+**Repro:** Any agent turn exceeding 60 minutes dies with "request `session/prompt` timed out" even while actively streaming session/updates. Observed 2026-07-14 when an implementor turn combining a CI watch (`gh pr checks --watch`) with a 20-thread review sweep exceeded the fixed `PROMPT_TIMEOUT` (intent-acp/src/session.rs, 60*60s). The deadline never resets on streaming activity, so busy and wedged turns are indistinguishable.
+
+**Expected:** Use activity-based idle timeout instead of fixed deadline — reset the timer on every streaming update so actively-working turns never time out. Only kill sessions that are truly silent/wedged.
+
+**Status:** open (fix approved: activity-based idle timeout)
+
+### STAB-34 (2026-07-14, area: intentd CI / agent_manager process-cap test, severity: P1)
+
+Main branch CI red, all intentd merges blocked by `agent_manager::tests::process_cap_events_queued_resumed_evicted` test failure.
+
+**Repro:** The `check` CI job fails with assertion "resume path emits agent:process:resumed" on main tip 13a1e4f5 (run https://github.com/intent-hq/intentd/actions/runs/29340545221) and on PR #159 (2 runs). Test passes locally on macOS. The test was introduced with the STAB-31 fix (intent-hq/intentd#134). Suspected cause: test depends on auto-detected host RAM for the process cap instead of pinning it, so CI runners produce a different queued/resumed/evicted sequence than expected.
+
+**Expected:** Test should either pin the process cap to a known value or adjust assertions to be robust across different RAM environments. CI should be green on main.
+
+**Status:** open (fix in flight on intentd)
 
 ---
 
