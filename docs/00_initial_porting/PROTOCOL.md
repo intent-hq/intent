@@ -207,10 +207,12 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } |
-| workspace.archive | workspaceId (req) | { success: true } |
-| workspace.unarchive | workspaceId (req) | { success: true } |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
+| workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
+| workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 
 ```json
 // → request
@@ -327,9 +329,42 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `baseRef`, `prNumber`, `prStatus`, `activePullRequest`,
-`lastActivity`, `archivedAt`, repository/worktree fields, …) are **omitted when absent**
+`Workspace` fields (`statusMessage`, `baseRef`, `prUrl`, `prNumber`, `prStatus`,
+`activePullRequest`, `pullRequests`, `archivedAt`, repository/worktree fields, …) are
+**omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
+
+**`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
+authoritative "most recent thing that happened in this workspace" timestamp. The daemon
+derives it on every path that returns a `Workspace` on the wire (`workspace.list` /
+`workspace.get` / `workspace.create` / `workspace.update` / `workspace.archive` /
+`workspace.unarchive`) as the **max** of the persisted `lastActivity`, `updatedAt`,
+`createdAt`, every note's `updatedAt`, and every agent session's `updatedAt` (FE
+`deriveWorkspaceLastActivity` parity, §9.1). It is always present on the wire —
+clients never need to recompute it from notes/agents.
+
+**PR-field ownership (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`, `pullRequests`).**
+These five fields are BE-owned: the daemon writes them from PR discovery / refresh
+(§5.9, §6.5 `pr:*` events) and clients read them off the returned `Workspace`. All five
+are `Option`s that serialize with `skip_serializing_if` (absent, not `null`). The
+persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) sits
+alongside `activePullRequest` and carries the reconciliation candidates the FE matches
+`activePullRequest` against.
+
+**Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
+five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
+`pullRequests`) accept three wire forms: **missing** the key leaves the stored value
+untouched, an explicit **JSON `null`** clears the stored value, and a **present value**
+sets it. The applied `WorkspaceUpdate` delta emitted as
+`workspace:updated { changes }` (§6.5) preserves this distinction — omitted keys were
+untouched, `null` keys were explicit clears, present keys were sets.
+
+**`baseRef` canonicalisation.** On `workspace.create` and `workspace.update`, an incoming
+`baseRef` has any known remote prefix (`origin/`, `upstream/`, `fork/`) stripped before
+persistence, so `origin/main` and `main` collapse to the same canonical `main`. The
+returned `Workspace.baseRef` and the persisted DB value are always the canonical form;
+values without a known prefix are stored verbatim. `git.*` methods that need the
+fully-qualified remote-tracking name reconstruct it as `origin/<baseRef>` locally.
 
 **Card aggregates (`taskStats` / `agentSummary` / `diffSummary`).** `workspace.list` and
 `workspace.get` enrich each `Workspace` with the nested rollup objects the iOS coverflow cards
@@ -364,6 +399,36 @@ See IMPLEMENTATION_SPEC.md §9.1 (Workspace entity) for the persisted field defi
 { "jsonrpc":"2.0","id":2,"method":"workspace.dismissAttention","params":{ "workspaceId":"ws-abc" } }
 // ← response (attention reset; emits workspace:attention-changed)
 { "jsonrpc":"2.0","id":2,"result":{ "workspace":{ "id":"ws-abc","activity":"idle","attention":"none" } } }
+```
+
+**Workspace chat-context items (`workspace.getContext` / `updateContext`, new in intentd).**
+Migrates the renderer-only `localStorage["workspace:context:{workspaceId}"]` store (attached
+files/notes/URLs, Linear/GitHub/Sentry issues surfaced in the chat context panel) into
+daemon-owned rows so the surface is queryable by MCP tools and other clients. The daemon
+treats each item as an **opaque JSON blob** authored by the FE — the `ContextItem` union in
+`packages/cloudlands-fe/src/features/context/types.ts` — and only pulls `id` out for keying
+and ordering. `updateContext` is a full-list replacement (matches the FE's collapsed
+`hydrate/add/remove/update` write pattern) and preserves the caller-supplied order. Every
+successful `updateContext` emits `workspace:context-changed` with the persisted list
+(§6.5), so subscribers refresh without a follow-up `getContext`.
+
+- **ContextItem** — `{ id: string (required, non-empty), ...extras }`. `id` is the row key
+  and the only field the daemon inspects; every other field (`type`, `provider`, `title`,
+  `url?`, `parentNoteId?`, `createdAt`, `updatedAt`, plus provider-specific extras such as
+  `identifier`, `number`, `favicon`, `noteId`, `isSpec?`, `taskStatus?`) round-trips
+  verbatim. The FE's union types are the source of truth.
+
+```json
+// → request — write the authoritative list
+{ "jsonrpc":"2.0","id":10,"method":"workspace.updateContext","params":{
+  "workspaceId":"ws-abc",
+  "items":[
+    { "id":"ctx-1","type":"linear-issue","provider":"linear","title":"ENG-42",
+      "identifier":"ENG-42","createdAt":"2026-07-13T00:00:00Z","updatedAt":"2026-07-13T00:00:00Z" }
+  ]
+} }
+// ← response (emits workspace:context-changed)
+{ "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
 
 ### 5.2 `note.*`
@@ -526,6 +591,30 @@ markers scrubbed from the persisted content and the comment is flipped to
 | task.list | workspaceId (req), status? | { tasks: WorkspaceTask[], stats: WorkspaceTaskStats } — optional `status` filter; `stats` is the `{ total, completed, inProgress }` aggregate (§5.1 card aggregates — same `computeTaskStats` projection: `cancelled` is excluded from `total`, `complete` counts as `completed`, `in_progress` + `review_required` count as `inProgress`) served alongside the filtered task list |
 | task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
 | task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
+| task.linkAgent | workspaceId (req), noteId (req), taskText (req), agentId (req), taskKey? | { link: TaskAgentLink } — upsert on `(workspace_id, note_id, task_key)`. `taskKey` defaults to `taskText` when omitted, matching the FE derivation `association.taskKey ?? association.taskText`. `createdAt` is set to the current epoch-ms. Emits `task:agent-linked`. |
+| task.unlinkAgent | workspaceId (req), noteId (req), taskKey (req) | { removed: boolean } — deleting an unknown row is not an error (`removed: false`); an actual delete emits `task:agent-unlinked`. |
+| task.listAgentLinks | workspaceId (req) | { links: TaskAgentLink[], linksByNoteId: Record<noteId, Record<taskKey, TaskAgentLink>> } — flat oldest-first list plus the FE-parity `byNoteId → byTaskKey` map so hydration is a mechanical cut-over from `localStorage["task-agent-associations:{wsId}"]`. |
+
+**`task.*` linkage types.** `task.linkAgent` / `unlinkAgent` / `listAgentLinks` migrate the
+renderer-only `taskAgentAssociations` slice into daemon-owned rows so MCP tools and other
+clients can ask "who is working on this task?".
+
+- **TaskAgentLink** — `{ workspaceId, noteId, taskKey, taskText, agentId, createdAt }`.
+  `taskKey` mirrors the FE key (`association.taskKey ?? association.taskText`);
+  `taskText` records the human-readable checkbox text at link time; `createdAt` is
+  epoch-ms (FE parity with `TaskAgentAssociation.createdAt: number`).
+
+```json
+// → request — link an agent to a task
+{ "jsonrpc":"2.0","id":12,"method":"task.linkAgent","params":{
+  "workspaceId":"ws-abc","noteId":"spec","taskText":"Ship it","agentId":"agent-alpha"
+} }
+// ← response (emits task:agent-linked)
+{ "jsonrpc":"2.0","id":12,"result":{ "link":{
+  "workspaceId":"ws-abc","noteId":"spec","taskKey":"Ship it","taskText":"Ship it",
+  "agentId":"agent-alpha","createdAt":1750000000000
+} } }
+```
 
 **`task.*` legacy methods NOT exposed by intentd.** Four TS-only helpers survived on `NotesService` at the pre-daemon FE tip but had no renderer IPC producers and no MCP/main-internal callers at fe tip `16a0f9f3`, so they are retired with the TS notes service rather than ported. Reasoning captured for auditability:
 
@@ -2738,14 +2827,14 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — TS-parity `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`), matching the reference `notes.service.ts`. No `path` field (never emitted). |
 | line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
-| task | task:status-changed, task:ready-tasks-changed | status + ready-task-id list |
+| task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (one-shot removal, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
 | agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint restoring the reference-implementation pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
-| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }. New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` — so subscribers see per-session teardown before the workspace row disappears. |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` — so subscribers see per-session teardown before the workspace row disappears. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
