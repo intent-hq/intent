@@ -44,7 +44,7 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 â†
   `refactor`, `test`, `ci`, `perf`.
 - **Merge queue**: `intent-hq/monorepo` main branch uses a merge queue. Do NOT use
   `gh pr merge --squash` (it will be rejected). Instead, enqueue PRs via GraphQL:
-  `gh api graphql -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position state } } }' -f id="$(gh pr view N --json id --jq .id)"`.
+  `gh api graphql -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position state } } }' -f id="$(gh pr view <PR_NUMBER> --json id --jq .id)"`.
   **Critical**: the queue's squash message defaults to the sole commit's message, NOT the
   PR title. On single-commit PRs, ensure every branch commit message is itself a valid
   conventional commit (amend auto-commits like "Coordinator" before pushing) to prevent
