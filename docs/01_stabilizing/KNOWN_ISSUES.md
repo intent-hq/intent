@@ -299,11 +299,11 @@ Agent process cap stuck at conservative fallback 8 on macOS instead of RAM-based
 
 Flaky CI test failure: `router_read_lifecycle_arms_over_wss` in `e2e_wss_agent_lifecycle.rs` with "no mcp servers configured on a fresh workspace".
 
-**Repro:** On intent-hq/intentd PR #134, the `router_read_lifecycle_arms_over_wss` e2e test failed intermittently with assertion error on fresh workspace expecting zero MCP servers. Test was removed in PR #134 as part of review-driven cleanup (flawed API usage); testing requirements met by existing unit tests and WSS coverage suite.
+**Repro:** On intent-hq/intentd PR #134, the `router_read_lifecycle_arms_over_wss` e2e test failed intermittently with assertion error on fresh workspace expecting zero MCP servers.
 
-**Expected:** WSS e2e tests exercise real JSON-RPC transport + method catalog; flawed test removed to reduce flakiness.
+**Expected:** WSS e2e tests exercise real JSON-RPC transport + method catalog without intermittent failures.
 
-**Status:** resolved ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14) — test removed
+**Status:** not reproducible (investigation 2026-07-14) — The test `router_read_lifecycle_arms_over_wss` still exists in the codebase at `crates/intentd/tests/e2e_wss_agent_lifecycle.rs:2755`. PR [#134](https://github.com/intent-hq/intentd/pull/134) was the macOS RAM-based agent process-cap fix and removed a different test (`e2e_wss_agent_max_concurrent.rs`), not this one. Verification: 25/25 local passes and no failures in 3 days of CI history (2026-07-11 through 2026-07-14). The reported flake is not reproducible on current main.
 
 ### STAB-35 (2026-07-14, area: intentd agent events / subscription dedupe + settlement coalescing, severity: P2)
 
