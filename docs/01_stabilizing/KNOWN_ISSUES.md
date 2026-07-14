@@ -305,7 +305,7 @@ Flaky CI test failure: `router_read_lifecycle_arms_over_wss` in `e2e_wss_agent_l
 
 **Status:** resolved ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14) — test removed
 
-### STAB-33 (2026-07-14, area: intentd agent events / subscription dedupe + settlement coalescing, severity: P2)
+### STAB-35 (2026-07-14, area: intentd agent events / subscription dedupe + settlement coalescing, severity: P2)
 
 Duplicate agent completion notifications when parent agents repeatedly wake/send to the same child.
 
