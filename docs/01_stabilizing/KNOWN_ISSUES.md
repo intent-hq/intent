@@ -121,16 +121,6 @@ Fixed 1-hour prompt timeout kills healthy long turns.
 
 **Status:** open (fix approved: activity-based idle timeout)
 
-### STAB-34 (2026-07-14, area: intentd CI / agent_manager process-cap test, severity: P1)
-
-Main branch CI red, all intentd merges blocked by `agent_manager::tests::process_cap_events_queued_resumed_evicted` test failure.
-
-**Repro:** The `check` CI job fails with assertion "resume path emits agent:process:resumed" on main tip 13a1e4f5 (run https://github.com/intent-hq/intentd/actions/runs/29340545221) and on PR #159 (2 runs). Test passes locally on macOS. The test was introduced with the STAB-31 fix (intent-hq/intentd#134). Suspected cause: test depends on auto-detected host RAM for the process cap instead of pinning it, so CI runners produce a different queued/resumed/evicted sequence than expected.
-
-**Expected:** Test should either pin the process cap to a known value or adjust assertions to be robust across different RAM environments. CI should be green on main.
-
-**Status:** open (fix in flight on intentd)
-
 ---
 
 ## Carried Over from 00_initial_porting
@@ -314,3 +304,13 @@ Flaky CI test failure: `router_read_lifecycle_arms_over_wss` in `e2e_wss_agent_l
 **Expected:** WSS e2e tests exercise real JSON-RPC transport + method catalog; flawed test removed to reduce flakiness.
 
 **Status:** resolved ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14) — test removed
+
+### STAB-34 (2026-07-14, area: intentd CI / agent_manager process-cap test, severity: P1)
+
+Main branch CI red, all intentd merges blocked by `agent_manager::tests::process_cap_events_queued_resumed_evicted` test failure.
+
+**Repro:** The `check` CI job fails with assertion "resume path emits agent:process:resumed" on main tip 13a1e4f5 (run https://github.com/intent-hq/intentd/actions/runs/29340545221) and on PR #159 (2 runs). Test passes locally on macOS. The test was introduced with the STAB-31 fix (intent-hq/intentd#134). Root cause: test race with async event emission. Events are spawned via `tokio::spawn` in `ProcessRegistry` methods, so they may arrive in any order or be batched unpredictably. The original test used one-shot `sub.recv()` calls that raced with async delivery.
+
+**Expected:** Test should use bounded wait loops that filter by agent ID and event type, continuing on timeout and only breaking when the expected event is found or subscription closes.
+
+**Status:** fixed ([intent-hq/intentd#164](https://github.com/intent-hq/intentd/pull/164), 2026-07-14)
