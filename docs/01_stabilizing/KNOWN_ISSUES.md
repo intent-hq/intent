@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-36 (as of 2026-07-14)
+**Next available ID:** STAB-37 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -326,5 +326,15 @@ Main branch CI red, all intentd merges blocked by `agent_manager::tests::process
 **Repro:** The `check` CI job fails with assertion "resume path emits agent:process:resumed" on main tip 13a1e4f5 (run https://github.com/intent-hq/intentd/actions/runs/29340545221) and on PR #159 (2 runs). Test passes locally on macOS. The test was introduced with the STAB-31 fix (intent-hq/intentd#134). Root cause: test race with async event emission. Events are spawned via `tokio::spawn` in `ProcessRegistry` methods, so they may arrive in any order or be batched unpredictably. The original test used one-shot `sub.recv()` calls that raced with async delivery.
 
 **Expected:** Test should use bounded wait loops that filter by agent ID and event type, continuing on timeout and only breaking when the expected event is found or subscription closes.
+
+**Status:** fixed ([intent-hq/intentd#164](https://github.com/intent-hq/intentd/pull/164), 2026-07-14)
+
+### STAB-36 (2026-07-14, area: intentd intent-services agent_manager tests, severity: P2)
+
+Flaky CI test failure: `agent_manager::tests::process_cap_events_queued_resumed_evicted` with ~50% failure rate.
+
+**Repro:** The `agent_manager::tests::process_cap_events_queued_resumed_evicted` test failed intermittently in CI with ~50% failure rate. Introduced by intentd PR #160, blocked intentd PR #162 CI runs.
+
+**Expected:** Test should pass reliably in CI without intermittent failures.
 
 **Status:** fixed ([intent-hq/intentd#164](https://github.com/intent-hq/intentd/pull/164), 2026-07-14)
