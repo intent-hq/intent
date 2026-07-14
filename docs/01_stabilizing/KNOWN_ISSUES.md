@@ -264,3 +264,13 @@ Two daemons with separate SQLite DBs sharing the same default workspaces root tr
 **Expected:** Workspace cleanup must never delete directories it doesn't own. The purge feature was removed entirely to prevent this class of data-loss bug.
 
 **Status:** fixed ([intent-hq/intentd#155](https://github.com/intent-hq/intentd/pull/155), [intent-hq/cloudlands-fe#64](https://github.com/intent-hq/cloudlands-fe/pull/64), 2026-07-14) — purge feature removed
+
+### STAB-30 (2026-07-14, area: intentd CI / runner disk exhaustion, severity: P1)
+
+Intermittent CI failures in the `check` job: "No space left on device" during Tests or rust-cache post step.
+
+**Repro:** On intentd main runs 29304250834, 29301806668 (rust-cache post step failed with "No space left on device"), and runs 29307318874, 29306678297, 29306184499 (job died mid-Tests with null step conclusion). GitHub Actions ubuntu-latest runners have ~53 GB of preinstalled software (dotnet, android, ghc, ghcup) leaving insufficient headroom for Rust compilation + test artifacts.
+
+**Expected:** The `check` job frees unnecessary preinstalled bundles before compilation, sets `CARGO_INCREMENTAL=0` to reduce target dir overhead, and includes `df -h` diagnostics to measure disk usage. Tests run reliably without exhausting disk.
+
+**Status:** fixed ([intent-hq/intentd#146](https://github.com/intent-hq/intentd/pull/146), 2026-07-14)
