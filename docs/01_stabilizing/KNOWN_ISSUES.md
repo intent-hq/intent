@@ -29,15 +29,7 @@ Concurrent note writes fail with JSON-RPC `-32603` `internal error: insert note_
 
 **Status:** fixed ([intent-hq/intentd#138](https://github.com/intent-hq/intentd/pull/138), 2026-07-14)
 
-### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
 
-The "workspace start" indicator renders at the bottom of the workspace view instead of marking the chronological beginning of the workspace.
-
-**Repro:** Open a workspace with multiple activity items and locate the workspace start indicator. Observed while self-hosting: in a workspace whose first activity was the "Scaffold docs/01_stabilizing" work, the start indicator appeared way down at the bottom of the feed rather than at the top where the workspace began.
-
-**Expected:** The indicator anchors the beginning of the workspace (before/at the first item), regardless of feed ordering.
-
-**Status:** open
 
 ### STAB-3 (2026-07-13, area: intentd PR↔workspace linking, severity: P1)
 
@@ -109,17 +101,9 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 
 **Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
 
-**Status:** open (pending PROTOCOL §5.1 RPC design)
+**Status:** open (partial fix: [intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159) + [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), 2026-07-14) — git.getConfig RPC shipped with FS fallback only when workspaceId unavailable; workspace.getContext/updateContext turned out to be chat-context RPCs (domain mismatch), needs a dedicated daemon RPC for workspace UI-context adoption
 
-### STAB-33 (2026-07-14, area: intentd intent-acp session lifecycle, severity: P2)
 
-Fixed 1-hour prompt timeout kills healthy long turns.
-
-**Repro:** Any agent turn exceeding 60 minutes dies with "request `session/prompt` timed out" even while actively streaming session/updates. Observed 2026-07-14 when an implementor turn combining a CI watch (`gh pr checks --watch`) with a 20-thread review sweep exceeded the fixed `PROMPT_TIMEOUT` (intent-acp/src/session.rs, 60*60s). The deadline never resets on streaming activity, so busy and wedged turns are indistinguishable.
-
-**Expected:** Use activity-based idle timeout instead of fixed deadline — reset the timer on every streaming update so actively-working turns never time out. Only kill sessions that are truly silent/wedged.
-
-**Status:** open (fix approved: activity-based idle timeout)
 
 ---
 
@@ -172,6 +156,26 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
+
+The "workspace start" indicator renders at the bottom of the workspace view instead of marking the chronological beginning of the workspace.
+
+**Repro:** Open a workspace with multiple activity items and locate the workspace start indicator. Observed while self-hosting: in a workspace whose first activity was the "Scaffold docs/01_stabilizing" work, the start indicator appeared way down at the bottom of the feed rather than at the top where the workspace began.
+
+**Expected:** The indicator anchors the beginning of the workspace (before/at the first item), regardless of feed ordering.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#72](https://github.com/intent-hq/cloudlands-fe/pull/72), 2026-07-14) — timeline reducers sorted events by string localeCompare instead of Date.getTime()
+
+### STAB-33 (2026-07-14, area: intentd intent-acp session lifecycle, severity: P2)
+
+Fixed 1-hour prompt timeout kills healthy long turns.
+
+**Repro:** Any agent turn exceeding 60 minutes dies with "request `session/prompt` timed out" even while actively streaming session/updates. Observed 2026-07-14 when an implementor turn combining a CI watch (`gh pr checks --watch`) with a 20-thread review sweep exceeded the fixed `PROMPT_TIMEOUT` (intent-acp/src/session.rs, 60*60s). The deadline never resets on streaming activity, so busy and wedged turns are indistinguishable.
+
+**Expected:** Use activity-based idle timeout instead of fixed deadline — reset the timer on every streaming update so actively-working turns never time out. Only kill sessions that are truly silent/wedged.
+
+**Status:** fixed ([intent-hq/intentd#169](https://github.com/intent-hq/intentd/pull/169), 2026-07-14) — activity-based idle timeout, 15min default via INTENTD_PROMPT_IDLE_TIMEOUT_MS, replaces the fixed 1h ceiling
 
 ### STAB-11 (2026-07-13, area: cloudlands-fe sidecar watchdog + intentd store pool, severity: P1)
 *(Renumbered from STAB-6 to resolve duplicate)*
