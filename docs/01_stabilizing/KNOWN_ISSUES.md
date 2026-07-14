@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-29 (as of 2026-07-14)
+**Next available ID:** STAB-30 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -254,3 +254,13 @@ Interrupt-priority messages do not emit `agent:idle` after delivery, wedging com
 **Expected:** After delivering an interrupt-priority message, the agent runtime emits `agent:idle` (and `agent:stream:end`) so watchers can detect completion. Interrupt delivery follows the same event contract as normal message delivery.
 
 **Status:** fixed ([intent-hq/intentd#148](https://github.com/intent-hq/intentd/pull/148), 2026-07-14)
+
+### STAB-29 (2026-07-14, area: intentd workspace.purge orphan sweep / cloudlands-fe startup purge, severity: P0)
+
+Two daemons with separate SQLite DBs sharing the same default workspaces root triggered catastrophic data loss via workspace.purge orphan sweep.
+
+**Repro:** Run two intentd instances (prod app + dev stack) with separate SQLite databases but sharing the default workspaces root `~/intent/workspaces`. Each app launch triggered `workspace.purge` whose pass-2 orphan sweep called `remove_dir_all` on every workspace directory absent from that daemon's DB. Observed while self-hosting: the dev stack daemon wiped the any-fix workspace checkout because it existed only in the prod daemon's database.
+
+**Expected:** Workspace cleanup must never delete directories it doesn't own. The purge feature was removed entirely to prevent this class of data-loss bug.
+
+**Status:** fixed ([intent-hq/intentd#155](https://github.com/intent-hq/intentd/pull/155), [intent-hq/cloudlands-fe#64](https://github.com/intent-hq/cloudlands-fe/pull/64), 2026-07-14) — purge feature removed
