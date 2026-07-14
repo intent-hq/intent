@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-35 (as of 2026-07-14)
+**Next available ID:** STAB-36 (as of 2026-07-14)
 
 ## Intake Convention
 
@@ -304,6 +304,16 @@ Flaky CI test failure: `router_read_lifecycle_arms_over_wss` in `e2e_wss_agent_l
 **Expected:** WSS e2e tests exercise real JSON-RPC transport + method catalog; flawed test removed to reduce flakiness.
 
 **Status:** resolved ([intent-hq/intentd#134](https://github.com/intent-hq/intentd/pull/134), 2026-07-14) — test removed
+
+### STAB-33 (2026-07-14, area: intentd agent events / subscription dedupe + settlement coalescing, severity: P2)
+
+Duplicate agent completion notifications when parent agents repeatedly wake/send to the same child.
+
+**Repro:** Parent agent calls `agent.wakeOrCreate` or `agent.sendToTask` multiple times for the same child task. Observed while self-hosting: each call to `agent_watch_completion_op` or `agent_watch_completion_for_sender_op` created a new subscription with a fresh UUID, even when an identical watch already existed for the same (parent, child) pair. Additionally, `agent:idle` could fire prematurely when messages were queued, creating a race where concurrent message enqueuing between the turn-end check and the worker loop's dequeue call caused duplicate completion notifications.
+
+**Expected:** Completion watches are idempotent — repeated subscribe calls for the same (parent, child) pair return the same subscription ID and deliver exactly one notification per settle cycle. Settlement coalescing ensures `agent:idle` is only published when the target agent is both idle AND its message queue is empty (one notification per settle cycle, not one per turn).
+
+**Status:** fixed ([intent-hq/intentd#171](https://github.com/intent-hq/intentd/pull/171), 2026-07-14)
 
 ### STAB-34 (2026-07-14, area: intentd CI / agent_manager process-cap test, severity: P1)
 
