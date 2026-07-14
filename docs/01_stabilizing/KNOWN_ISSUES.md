@@ -99,6 +99,16 @@ Delegated agents stall: initial prompt never runs / agents go idle mid-flow.
 
 **Status:** open
 
+### STAB-10 (2026-07-14, area: cloudlands-fe workspace context — git config still FS-backed, severity: P2)
+
+The `context.*` and `git.config` MCP tools still read directly from the filesystem instead of using daemon RPCs.
+
+**Repro:** Following cloudlands-fe PR #60 (STAB-25, retire FileSystemWorkspaceRepository disk reads), workspace metadata reads now go through intentd `workspace.*` RPCs. However, the `context.*` and `git.config` tools in the workspace API MCP server still read git config directly from `.git/config` on disk rather than calling daemon RPCs.
+
+**Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
+
+**Status:** open (pending PROTOCOL §5.1 RPC design)
+
 ---
 
 ## Carried Over from 00_initial_porting
