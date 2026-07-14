@@ -2,6 +2,15 @@
 
 Index of the `docs/` tree for the Cloudlands monorepo.
 
+## Wire Contract — `PROTOCOL.md`
+
+**[PROTOCOL.md](./PROTOCOL.md)** is the **canonical, versioned wire contract** between
+Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). It
+specifies protocol v2.0 (frozen as of 2026-07-14), covering transport, authentication,
+JSON-RPC 2.0 envelope rules, the complete method catalog (280 dispatchable names), event
+subscriptions, and error codes. The method surface is enforced by golden tests in the
+`intent-transport` crate.
+
 ## `00_initial_porting/` — **COMPLETE / FROZEN**
 
 Documents for the **initial port of Intent's backend to a headless Rust daemon**
@@ -11,9 +20,10 @@ Documents for the **initial port of Intent's backend to a headless Rust daemon**
 - **[IMPLEMENTATION_SPEC.md](./00_initial_porting/IMPLEMENTATION_SPEC.md)** — the
   **target architecture**: crates/modules, persistence, ACP/GitHub/context integration,
   deployment, testing, and the phased plan.
-- **[PROTOCOL.md](./00_initial_porting/PROTOCOL.md)** — the **wire contract**: transport,
-  the JSON-RPC 2.0 envelope, the full method catalog, events, the permission flow, and
-  error codes the backend must reproduce.
+- **[00_initial_porting/PROTOCOL.md](./00_initial_porting/PROTOCOL.md)** — the **porting-era
+  wire contract** (frozen): transport, the JSON-RPC 2.0 envelope, the full method catalog,
+  events, the permission flow, and error codes the backend was targeting. This is a
+  **historical document** from the initial porting effort.
 - **[BREADCRUMBS.md](./00_initial_porting/BREADCRUMBS.md)** — the **progress log**
   (frozen): what was built, the final submodule HEADs, and the dated changelog.
 
@@ -25,9 +35,11 @@ Supporting documents:
 - **[WSS_OVER_SSH.md](./00_initial_porting/WSS_OVER_SSH.md)** — the surviving FE SSH
   surface and the WSS-over-SSH transport shape for future remote workspaces.
 
-In short: the **spec** was the target architecture, the **protocol** is the contract that
-was reproduced, and the **breadcrumbs** are the frozen record of how the port progressed;
-current work is tracked in [docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md).
+In short: the **spec** was the target architecture, the **00_initial_porting/PROTOCOL.md**
+is the porting-era contract that was reproduced, and the **breadcrumbs** are the frozen
+record of how the port progressed. The **canonical, versioned wire contract** is now
+[docs/PROTOCOL.md](./PROTOCOL.md) (protocol v2.0). Current work is tracked in
+[docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md).
 
 **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with
 the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto the
