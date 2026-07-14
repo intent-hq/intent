@@ -71,11 +71,11 @@ A child agent's completion report is re-delivered to the parent agent multiple t
 
 ### STAB-7 (2026-07-13, area: intentd CI / intent-store SQLite contention, severity: P2)
 
-Flaky CI test failure: 'database is locked' in workspace_duplicate_provisions_worktree_over_wss.
+Flaky CI test failure: `database is locked` in `workspace_duplicate_provisions_worktree_over_wss`.
 
-**Repro:** On intentd PR #137 (https://github.com/intent-hq/intentd/pull/137), the 'check' CI job failed once with "insert note_version failed: error returned from database: (code: 5) database is locked" in the workspace_duplicate_provisions_worktree_over_wss e2e test; a re-run passed. Intermittent under CI parallelism.
+**Repro:** On intentd PR #137 (https://github.com/intent-hq/intentd/pull/137), the `check` CI job failed once with `insert note_version failed: error returned from database: (code: 5) database is locked` in the `workspace_duplicate_provisions_worktree_over_wss` e2e test; a re-run passed. Intermittent under CI parallelism.
 
-**Expected:** e2e tests ride out SQLite write contention (busy_timeout should absorb it); no intermittent 'database is locked' failures.
+**Expected:** e2e tests ride out SQLite write contention (busy_timeout should absorb it); no intermittent `database is locked` failures.
 
 **Status:** open
 
