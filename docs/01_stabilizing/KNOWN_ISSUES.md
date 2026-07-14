@@ -99,7 +99,7 @@ Delegated agents stall: initial prompt never runs / agents go idle mid-flow.
 
 **Expected:** A delegated agent starts running its initial prompt immediately after creation, and either completes its task or reports a blocker; no silent stalls.
 
-**Status:** open
+**Status:** fixed (intent-hq/intentd#148, 2026-07-14)
 
 ### STAB-10 (2026-07-14, area: cloudlands-fe workspace context — git config still FS-backed, severity: P2)
 
