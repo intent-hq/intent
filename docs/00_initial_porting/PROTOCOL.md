@@ -704,6 +704,39 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.retry | workspaceId (req), agentId (req) | { ok: true \| false } — redrive a failed agent spawn. Only valid when the session status is `error`; returns `{ ok: false }` otherwise. Clears the error status back to pending, emits `agent:status-changed`, tears down any stale child handle, and attempts to redrive the front-of-queue message (requeued at exhaustion) plus any subsequent messages. Reuses the spawn-retry/backoff machinery, so a retry that fails again lands back in the `error` state with the full event sequence (`agent:stream:status` retry hints, terminal `agent:failed` + `agent:stream:end`, `agent:status-changed` persisting `error`) |
 | agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } — one-shot prompt-enhance / AI-layout generation via a spawned `auggie --print`; no agent session is created or persisted, no events emitted. Full contract in §5.31 |
 
+### 5.5a `sandbox.*` *(new in intentd — not part of the ported 104)*
+
+> **New namespace.** The `sandbox.*` methods manage CoW (copy-on-write) sandboxed agent workspaces. When `agent.delegate` provisions a CoW sandbox (§5.5), the agent works in an isolated repository clone. When the agent completes, `sandbox.merge` attempts to automatically merge the sandbox commits back to the canonical repository, preserving agent attribution. If the merge encounters conflicts or the canonical repository has uncommitted overlapping changes, the agent is bounced with resolution instructions or the merge is deferred to manual resolution. All `sandbox.*` methods require `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sandbox.merge | workspaceId (req), agentId (req) | { ok, outcome, canonicalHead?, conflictingPaths?, reason?, overlappingPaths? } — manually merge a sandbox back to the canonical repository. `outcome` is `"merged"` (clean merge succeeded; emits `sandbox:merged`), `"conflict"` (merge conflicts detected; canonical left pristine; returns `conflictingPaths`), or `"blocked"` (canonical has uncommitted changes overlapping with sandbox; returns `overlappingPaths` and `reason`). When `outcome = "merged"`, `canonicalHead` is the canonical repository HEAD SHA after the merge. `-32602 "Sandbox not found"` when no sandbox exists for the agent |
+| sandbox.discard | workspaceId (req), agentId (req) | { ok, removed } — discard a sandbox without merging. Removes the sandbox directory and database record. `removed` is `true` if the sandbox was discarded, `false` if no sandbox existed (no-op success). This is the escape hatch when a sandbox is no longer needed or the agent failed |
+
+**Automatic merge on completion.** When a sandboxed agent completes (`agent:idle` event), the daemon automatically attempts `sandbox.merge`. On a clean merge, the agent's coordinator sees the `merged` sandbox status in the completion event and receives a `sandbox:merged` event. On conflict, the agent is bounced with a list of conflicting paths and resolution instructions (conflict resolution is iterative; the agent re-completes after fixing conflicts). On `blocked` outcome or retry exhaustion, the completion propagates with `merge-pending` status, and the user must call `sandbox.merge` manually once canonical is clean.
+
+**Status lifecycle.** Sandbox records track status through the merge lifecycle: `created` (provisioned), `merging` (merge in progress), `merged` (successfully merged and discarded), `conflict_bounced` (conflicts detected; agent woken with paths), `merge_pending` (awaiting manual merge; blocked or retry cap hit), `discarded` (discarded without merging). The `agent:idle` completion event includes the sandbox status when applicable.
+
+**WIP snapshot exclusion.** Sandboxes provisioned from a dirty canonical repository create a snapshot commit of the WIP state (message prefix `"WIP snapshot for"`). These snapshot commits are **never merged back** to canonical — only commits made by the agent after the snapshot are cherry-picked. This ensures the user's uncommitted work stays local.
+
+**Attribution preservation.** Merged commits preserve the agent's original author/committer identity (from the sandbox git signature). The canonical repository gains the agent's commits as if the agent had worked directly in canonical, maintaining the audit trail.
+
+```json
+// Request: manual merge after resolution
+{ "jsonrpc":"2.0","id":80,"method":"sandbox.merge",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-123" } }
+// ← response (clean merge)
+{ "jsonrpc":"2.0","id":80,"result":{
+  "ok":true,"outcome":"merged","canonicalHead":"a1b2c3d4..." } }
+// ← (also emits sandbox:merged event)
+
+// Request: discard a failed sandbox
+{ "jsonrpc":"2.0","id":81,"method":"sandbox.discard",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-456" } }
+// ← response
+{ "jsonrpc":"2.0","id":81,"result":{ "ok":true,"removed":true } }
+```
+
 ### 5.6 `git.*`
 
 | Method | Params | Result |
@@ -2851,7 +2884,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed by the internal scan job (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
-| sandbox (new in intentd) | sandbox:created | Emitted when `agent.delegate` with `isolation: "cow"` successfully provisions a CoW worktree sandbox (§5.5). data = { workspaceId, sandboxId, sandboxPath, sandboxBranch, agentId } where `sandboxId` is the unique sandbox identifier, `sandboxPath` is the absolute filesystem path to the worktree clone, `sandboxBranch` is the ephemeral branch name (`sandbox/<uuid>`), and `agentId` is the delegated agent assigned to the sandbox. Self-sufficient payload (§6.7). |
+| sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with `isolation: "cow"` successfully provisions a CoW worktree sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository. `sandbox:created` → data { workspaceId, sandboxId, sandboxPath, sandboxBranch, agentId } where `sandboxId` is the unique sandbox identifier, `sandboxPath` is the absolute filesystem path to the worktree clone, `sandboxBranch` is the ephemeral branch name (`sandbox/<uuid>`), and `agentId` is the delegated agent assigned to the sandbox. `sandbox:merged` → data { workspaceId, agentId, canonicalHead } where `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
 ### 6.6 Batching window
 
