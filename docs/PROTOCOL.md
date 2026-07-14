@@ -285,7 +285,7 @@ The following 27 methods are intercepted **before** the main router for performa
 
 browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.status, host.toolAvailability, system.shutdown, system.status
 
-**UDS-only methods:** `system.shutdown` and `system.status` are only available on the Unix-domain socket transport.
+**UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports.
 
 ### 6.3 Method Aliases (2 total)
 
