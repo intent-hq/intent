@@ -89,7 +89,7 @@ Flaky CI test failure: `database is locked` in `workspace_duplicate_provisions_w
 
 **Expected:** e2e tests ride out SQLite write contention (busy_timeout should absorb it); no intermittent `database is locked` failures.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#147](https://github.com/intent-hq/intentd/pull/147), 2026-07-14)
 
 ### STAB-8 (2026-07-13, area: intentd agent runtime / delegation (self-hosted stack), severity: P1)
 
