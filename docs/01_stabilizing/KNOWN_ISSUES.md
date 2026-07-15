@@ -111,10 +111,6 @@ Repeated "Change history not initialized" warnings when change history is access
 
 **Status:** fixed ([intent-hq/cloudlands-fe#75](https://github.com/intent-hq/cloudlands-fe/pull/75), 2026-07-15) — Made change-history accessors async and added ensureInitialized() helper to gate access until initialization completes. Updated all call sites to await accessors. Added regression test.
 
-**Expected:** Accessors either wait for initialization to complete (await `initPromise` if not yet `initialized`) or trigger init on first access, ensuring no warnings during normal operation. Alternatively, callers that need history during startup/switch should explicitly await `initChangeHistory()` before accessing the cache.
-
-**Status:** open
-
 
 ---
 
