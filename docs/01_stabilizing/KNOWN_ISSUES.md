@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-38 (as of 2026-07-15)
+**Next available ID:** STAB-40 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -110,6 +110,16 @@ Repeated "Change history not initialized" warnings when change history is access
 **Repro:** During app startup or workspace switch, change-history accessors (`getChangeHistoryForWorkspace`, `getAllChangeHistory`, `setChangeHistoryForWorkspace`) are called from `change-detector-manager-impl.ts` (lines 923, 944, 987) and `workspace.service.ts` (line 314) before `initChangeHistory()` completes its async fetch from daemon `settings.get`. Observed while dogfooding: console logs show multiple "Change history not initialized, returning empty history for <workspaceId>" warnings from `change-history-persistence.ts:72` (`warnIfUninitialized` helper). The module fires `initChangeHistory()` asynchronously in `workspace.ipc.ts:280` at app startup, but callers do not await the `initPromise` — they synchronously access the cache while it is still initializing.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#75](https://github.com/intent-hq/cloudlands-fe/pull/75), 2026-07-15) — Made change-history accessors async and added ensureInitialized() helper to gate access until initialization completes. Updated all call sites to await accessors. Added regression test.
+
+### STAB-39 (2026-07-15, area: cloudlands-fe CI / auto-update-channel-persist test temp-dir cleanup race, severity: P2)
+
+Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently in CI with temp-directory cleanup race.
+
+**Repro:** The test suite's `afterEach` hook (line 58) calls `fs.rm(testUserDataPath, { recursive: true, force: true })` to clean up the temp directory created by `fs.mkdtemp` in `beforeEach` (line 47). This cleanup can race with async write operations that are still in flight when the test completes, causing intermittent failures. Observed 2026-07-15 on cloudlands-fe PR #75 (https://github.com/intent-hq/cloudlands-fe/pull/75): the test failed 5 times across CI runs while being completely unrelated to that PR's changes (change-history init race fix). Each test case in the suite (`setChannel(beta)`, `setChannel(stable)`, `loadChannelFromSettings`, etc.) uses `await expect.poll()` to wait for `local-prefs.json` writes, but the service's async file operations may not fully settle before `afterEach` fires, creating a race between cleanup and pending writes.
+
+**Expected:** Test is deterministic. Temp directories are created and cleaned per-test without cross-test races. The `afterEach` cleanup waits for all async operations to settle (e.g., explicit service teardown, extended poll timeout, or coordinated flush) before removing the temp directory.
+
+**Status:** open
 
 
 ---
