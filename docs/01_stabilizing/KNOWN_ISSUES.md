@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-42 (as of 2026-07-15)
+**Next available ID:** STAB-43 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -150,6 +150,16 @@ Flaky test failure: `intent-pty host::tests::kill_scope_leaves_no_process_group_
 **Expected:** Test passes reliably across all runner environments. Process group cleanup assertions should be robust to timing variations.
 
 **Status:** open
+
+### STAB-42 (2026-07-15, area: intentd CI / uds_concurrent_dispatch test, severity: P2)
+
+Flaky test failure: `uds_concurrent_dispatch::slow_host_exec_does_not_block_fast_workspace_list` under cargo-llvm-cov instrumentation.
+
+**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` fails consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. The test verifies that slow host.exec calls do not block fast workspace.list calls. Observed on local coverage runs for PR intent-hq/intentd#181 — the test times out reliably under llvm-cov but passes when run standalone. The instrumentation overhead appears to push the timing past the test's timeout threshold.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+
+**Status:** open (test skipped in scripts/coverage-all.sh and scripts/coverage-e2e.sh pending fix)
 
 
 ---
