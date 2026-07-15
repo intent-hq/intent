@@ -101,7 +101,7 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 
 **Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
 
-**Status:** open (partial fix: [intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159) + [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), 2026-07-14) — git.getConfig RPC shipped with FS fallback only when workspaceId unavailable; workspace.getContext/updateContext turned out to be chat-context RPCs (domain mismatch), needs a dedicated daemon RPC for workspace UI-context adoption
+**Status:** fixed ([intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159), [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), [intent-hq/intentd#175](https://github.com/intent-hq/intentd/pull/175), [intent-hq/cloudlands-fe#73](https://github.com/intent-hq/cloudlands-fe/pull/73), 2026-07-14/15) — git.getConfig RPC (intentd#159) adopted with FS fallback only when workspaceId unavailable (cloudlands-fe#70); workspace.getUiContext/updateUiContext RPCs (intentd#175) adopted with one-time FS→daemon migration and FS fallback (cloudlands-fe#73)
 
 
 
