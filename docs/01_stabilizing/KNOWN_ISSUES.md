@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-45 (as of 2026-07-15)
+**Next available ID:** STAB-46 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -18,6 +18,26 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-45 (2026-07-15, area: intentd auto-commit / commit message generation, severity: P2)
+
+Auto-commit subject was the agent/task title — e.g. commits titled "Coordinator" — ignoring conventional-commit conventions.
+
+**Repro:** Before the LLM auto-commit message generation fix, the daemon's auto-commit path (`intent-services/src/auto_commit.rs`) used a deterministic fallback chain (task title → agent name → "Agent changes") without LLM involvement. This resulted in commits with messages like "Coordinator" or the raw task title, which violate conventional-commit conventions required by the monorepo CI.
+
+**Expected:** Auto-commit messages should be conventional-commit-formatted (e.g., `feat:`, `fix:`, `chore:`) derived from the actual diff.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/186, 2026-07-15)
+
+### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
+
+Flaky CI test failure: `capture_login_shell_path_with_fake_shell` in `crates/intent-core/src/path_utils.rs` tests.
+
+**Repro:** On intentd PR #186 (https://github.com/intent-hq/intentd/pull/186), the `check` CI job failed once with test panic in `path_utils::tests::capture_login_shell_path_with_fake_shell`. The test creates a fake shell script, spawns it, and attempts to capture its output. Intermittent failure under CI parallelism; a re-run passed. The failure is unrelated to the PR's LLM auto-commit implementation (which was the only code changed).
+
+**Expected:** The test should pass reliably in CI without intermittent failures.
+
+**Status:** open (blocked PR #186 once, needs investigation)
 
 ### STAB-1 (2026-07-13, area: intentd note persistence, severity: P1)
 
