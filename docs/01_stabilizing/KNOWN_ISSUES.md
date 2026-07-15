@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-37 (as of 2026-07-14)
+**Next available ID:** STAB-38 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -103,6 +103,15 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 
 **Status:** fixed ([intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159), [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), [intent-hq/intentd#175](https://github.com/intent-hq/intentd/pull/175), [intent-hq/cloudlands-fe#73](https://github.com/intent-hq/cloudlands-fe/pull/73), 2026-07-14/15) — git.getConfig RPC (intentd#159) adopted with FS fallback only when workspaceId unavailable (cloudlands-fe#70); workspace.getUiContext/updateUiContext RPCs (intentd#175) adopted with one-time FS→daemon migration and FS fallback (cloudlands-fe#73)
 
+### STAB-37 (2026-07-15, area: cloudlands-fe change-history persistence / init race, severity: P2)
+
+Repeated "Change history not initialized" warnings when change history is accessed before initialization completes.
+
+**Repro:** During app startup or workspace switch, change-history accessors (`getChangeHistoryForWorkspace`, `getAllChangeHistory`, `setChangeHistoryForWorkspace`) are called from `change-detector-manager-impl.ts` (lines 923, 944, 987) and `workspace.service.ts` (line 314) before `initChangeHistory()` completes its async fetch from daemon `settings.get`. Observed while dogfooding: console logs show multiple "Change history not initialized, returning empty history for <workspaceId>" warnings from `change-history-persistence.ts:72` (`warnIfUninitialized` helper). The module fires `initChangeHistory()` asynchronously in `workspace.ipc.ts:280` at app startup, but callers do not await the `initPromise` — they synchronously access the cache while it is still initializing.
+
+**Expected:** Accessors either wait for initialization to complete (await `initPromise` if not yet `initialized`) or trigger init on first access, ensuring no warnings during normal operation. Alternatively, callers that need history during startup/switch should explicitly await `initChangeHistory()` before accessing the cache.
+
+**Status:** open
 
 
 ---
