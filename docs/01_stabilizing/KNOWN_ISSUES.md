@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-40 (as of 2026-07-15)
+**Next available ID:** STAB-42 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -130,6 +130,26 @@ Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently i
 **Expected:** Test is deterministic. Temp directories are created and cleaned per-test without cross-test races. The `afterEach` cleanup waits for all async operations to settle (e.g., explicit service teardown, extended poll timeout, or coordinated flush) before removing the temp directory.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#76](https://github.com/intent-hq/cloudlands-fe/pull/76), 2026-07-15)
+
+### STAB-40 (2026-07-15, area: intentd CI / coverage instrumentation, severity: P2)
+
+Flaky test failure: `wss_integration::wss_note_save_asset_round_trip` under cargo-llvm-cov instrumentation.
+
+**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passes reliably when run standalone (`cargo test`) but flakes intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passes consistently in the standalone `check` job but occasionally fails in the `coverage-e2e` job. The test exercises WSS note asset save/load round-trip; the flake suggests a race or timing sensitivity exposed only under llvm-cov's runtime hooks.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
+
+**Status:** open
+
+### STAB-41 (2026-07-15, area: intentd CI / intent-pty host tests, severity: P2)
+
+Flaky test failure: `intent-pty host::tests::kill_scope_leaves_no_process_group_orphan` on GitHub Actions runners.
+
+**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). The test verifies that killing a process scope leaves no orphaned process groups. The failing PR (intent-hq/intentd#179) touched no intent-pty files — the crate was unmodified. A rerun passed. Intermittent, likely runner-specific (process scheduling, signal delivery timing, or procfs read races).
+
+**Expected:** Test passes reliably across all runner environments. Process group cleanup assertions should be robust to timing variations.
+
+**Status:** open
 
 
 ---
