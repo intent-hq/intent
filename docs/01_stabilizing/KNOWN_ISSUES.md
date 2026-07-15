@@ -119,7 +119,7 @@ Force-send during agent processing queues the message instead of interrupting; r
 
 **Expected:** Force-send interrupts the current turn and delivers immediately when the agent is streaming (one interrupt, even if pressed multiple times before the turn ends). The FE send path should pass `priority: "interrupt"` to `agent.sendMessage` when `forceSubmit: true`, and the daemon should deduplicate repeated interrupt delivery with the same client-supplied `messageId` per PROTOCOL.md §5.5 ("duplicate interrupt delivery with the same `messageId` is absorbed idempotently as `{ success: true, queued: false, messageId, deduplicated: true }`").
 
-**Status:** open
+**Status:** fixed ([intent-hq/cloudlands-fe#77](https://github.com/intent-hq/cloudlands-fe/pull/77), 2026-07-15) — Root cause: FE middleware never extracted `forceSubmit` from the action payload or set `priority: "interrupt"` on the IPC call. Fixed by threading `forceSubmit` through `dispatchToLifecycle`, bypassing queue-on-send check when true, and passing `priority: forceSubmit ? "interrupt" : undefined` to the daemon. Also added `priority` field to `AgentBackendStreamMessageSchema` so Zod doesn't strip it. Regression test added asserting force-send bypasses queue and passes priority to lifecycle.
 
 ### STAB-39 (2026-07-15, area: cloudlands-fe CI / auto-update-channel-persist test temp-dir cleanup race, severity: P2)
 
