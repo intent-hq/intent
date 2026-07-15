@@ -2789,6 +2789,58 @@ events, no persistence.
 { "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
 ```
 
+### 5.33 `repoConfig.*` — per-repository configuration *(new in intentd — not part of the ported 104)*
+
+Four JSON-RPC methods for managing per-repository configuration (`.intent/config.json`) at the
+repository root. Each workspace lives in a git worktree; these methods resolve the **repository**
+root (via `worktreePath` → `repositoryPath` → `git_ops::worktree_path`) and read/write/check the
+shared `.intent/config.json` that sits at that root. The config carries project-wide settings
+(branch naming prefix, default setup script, agent instructions, repo scripts) that apply to all
+workspaces cloned from the same repo.
+
+All methods require `workspaceId` and map `Error::NotFound` to `-32602 "Workspace not found"`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| repoConfig.get | workspaceId (req) | { config: RepoConfig } — reads the config from the repo root; returns default empty config if the file is absent or contains invalid JSON |
+| repoConfig.save | workspaceId (req), config (req): RepoConfig | { config: RepoConfig } — writes the config, ensures `.intent/.gitignore`, and returns the persisted record |
+| repoConfig.has | workspaceId (req) | { exists: boolean } — checks whether `.intent/config.json` exists at the repo root |
+| repoConfig.ensureDir | workspaceId (req) | { ok: true } — creates the `.intent/` directory at the repo root if missing |
+
+**RepoConfig** — all fields are optional; absent fields have no effect on the workspace (fallback to workspace-level or global settings):
+
+- `branchPrefix?: string` — string prefix (e.g. `"feat/"`, `"aw/"`) prepended to auto-generated branch names in `workspace.create` (§5.1)
+- `setupScript?: string` — default setup script used when `workspace.create` omits `setupScript`
+- `instructions?: string` — repo-level instructions injected into agent prompts
+- `runScript?: string` — optional run script (reserved, no consumer in v1)
+- `archiveScript?: string` — optional archive script (reserved, no consumer in v1)
+- `scripts?: Array<{ id, name, command, mode, cwd?, env?, category?, autoStart? }>` — repo script definitions used to bootstrap workspace scripts when none exist
+
+The `defaultAutoCommit` field mentioned in early drafts was **not implemented** in the initial port.
+
+```json
+// → request — read the config
+{ "jsonrpc":"2.0","id":90,"method":"repoConfig.get","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":90,"result":{ "config":{ "branchPrefix":"feature/","setupScript":"npm install","instructions":"Use TypeScript strict mode" } } }
+
+// → request — write/update the config
+{ "jsonrpc":"2.0","id":91,"method":"repoConfig.save",
+  "params":{ "workspaceId":"ws-abc","config":{ "branchPrefix":"feat/","setupScript":"pnpm install" } } }
+// ← response
+{ "jsonrpc":"2.0","id":91,"result":{ "config":{ "branchPrefix":"feat/","setupScript":"pnpm install" } } }
+
+// → request — check existence
+{ "jsonrpc":"2.0","id":92,"method":"repoConfig.has","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":92,"result":{ "exists":true } }
+
+// → request — ensure the .intent directory exists
+{ "jsonrpc":"2.0","id":93,"method":"repoConfig.ensureDir","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
+```
+
 
 ## 6. Events & Subscriptions
 
