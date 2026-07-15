@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-38 (as of 2026-07-15)
+**Next available ID:** STAB-39 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -110,6 +110,16 @@ Repeated "Change history not initialized" warnings when change history is access
 **Repro:** During app startup or workspace switch, change-history accessors (`getChangeHistoryForWorkspace`, `getAllChangeHistory`, `setChangeHistoryForWorkspace`) are called from `change-detector-manager-impl.ts` (lines 923, 944, 987) and `workspace.service.ts` (line 314) before `initChangeHistory()` completes its async fetch from daemon `settings.get`. Observed while dogfooding: console logs show multiple "Change history not initialized, returning empty history for <workspaceId>" warnings from `change-history-persistence.ts:72` (`warnIfUninitialized` helper). The module fires `initChangeHistory()` asynchronously in `workspace.ipc.ts:280` at app startup, but callers do not await the `initPromise` — they synchronously access the cache while it is still initializing.
 
 **Expected:** Accessors either wait for initialization to complete (await `initPromise` if not yet `initialized`) or trigger init on first access, ensuring no warnings during normal operation. Alternatively, callers that need history during startup/switch should explicitly await `initChangeHistory()` before accessing the cache.
+
+**Status:** open
+
+### STAB-38 (2026-07-15, area: cloudlands-fe chat send path + intentd agent runtime / interrupt priority, severity: P1)
+
+Force-send during agent processing queues the message instead of interrupting; repeated force-send enqueues duplicates.
+
+**Repro:** Observed 2026-07-15 in cloudlands-fe chat UI: when an agent is busy in a long tool-heavy turn, the user pressed force-send (⌘Enter) twice on a new message. Both messages appeared under "Queued messages (2)" with identical content; the running turn was not interrupted. The chat UI `ChatPanel.svelte` `handleForceSubmit` (lines 2571–2614) dispatches `sendMessage` with `forceSubmit: true` and `skipQueueCheck: true`, which flows through `chat-send-service.ts` to `agent-stream-lifecycle.ts` `sendMessage` (lines 687+), then via `AGENT_BACKEND_CHANNELS.STREAM_MESSAGE` IPC to the daemon's `agent.sendMessage` RPC. PROTOCOL.md §5.5 specifies that `priority: "interrupt"` preempts an in-flight turn (§7: "with `priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately") — but the FE send path does not set `priority` in the IPC call (`agent-stream-lifecycle.ts:1423` invokes with `content`, `workspaceId`, `model`, `contextReferences`, `imageBlocks`, `fileBlocks`, `noteIds`, `personality`, `stdinContext`, `messages`, `resetHistory` — no `priority` field). Without `priority: "interrupt"`, the daemon treats force-send as a normal message and queues it when the agent is mid-turn, per the auto-queue fallback (§5.5: "auto-queues if the agent is mid-stream"). Repeated force-send with no dedup passes the same text again, creating duplicate queue entries.
+
+**Expected:** Force-send interrupts the current turn and delivers immediately when the agent is streaming (one interrupt, even if pressed multiple times before the turn ends). The FE send path should pass `priority: "interrupt"` to `agent.sendMessage` when `forceSubmit: true`, and the daemon should deduplicate repeated interrupt delivery with the same client-supplied `messageId` per PROTOCOL.md §5.5 ("duplicate interrupt delivery with the same `messageId` is absorbed idempotently as `{ success: true, queued: false, messageId, deduplicated: true }`").
 
 **Status:** open
 
