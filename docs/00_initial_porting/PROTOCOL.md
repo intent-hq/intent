@@ -757,6 +757,8 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 { "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
 ```
 
+**Auto-commit on `agent:idle` (daemon-internal, not wire surface).** When an agent turn completes (`agent:idle` event) and the workspace has uncommitted changes with `git.autoCommit` enabled (and the session did not set `skip_auto_commit`), the daemon automatically generates a conventional-commit-formatted message via `agent.completeOnce` (§5.32) with the bundled `commit-message` instruction as system prompt. The prompt context includes: the uncommitted diff (truncated), recent commit subjects (for style mimicry), the repo-root `AGENTS.md` when present (truncated), and the task title / agent name as hints. The generated output is parsed for `<<<COMMIT_MESSAGE>>>` tags. On any generation failure, timeout, or malformed output, the daemon falls back to the deterministic subject chain (`taskTitle` → agent name → `"Agent changes"`) so auto-commit is never blocked or skipped because generation failed. The `agent.completeOnce` binary resolution order (§5.32 Execution) honors the `context.auggiePath` setting when set, ensuring hermetic e2e tests and explicit user config are respected. This internal auto-commit path has no wire RPC — clients only observe the resulting `git:commit` event (§6.5).
+
 **`git.*` extensions (new in intentd — additive; do not change the ported count of 6).** The inverse of `git.stage` plus working-tree/branch reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
 
 | Method | Params | Result |
@@ -2767,12 +2769,17 @@ there is nothing to garbage-collect on the error path. Additive next to the port
   capped at `120000`. A hung CLI is reaped when the timeout elapses.
 
 **Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
-discovery (Intent-managed binary → enhanced PATH, §8.2), then
+binary resolution (`Services.auggie_bin` test seam → `context.auggiePath` setting when
+set and non-empty (exclusive; an invalid path is an error, no silent discovery fallback)
+→ `find_auggie()` discovery via Intent-managed binary → enhanced PATH, §8.2), then
 `auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
 tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
 (🤖-delimited response extraction plus tool-artifact line filtering, the FE
 `cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
-events, no persistence.
+events, no persistence. The binary resolution order honors the existing
+`context.auggiePath` settings key so explicit user config is never ignored and hermetic
+e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
+discovery.
 
 **Errors** (§9):
 
