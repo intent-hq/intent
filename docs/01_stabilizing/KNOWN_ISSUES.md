@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-43 (as of 2026-07-15)
+**Next available ID:** STAB-45 (as of 2026-07-15)
 
 ## Intake Convention
 
@@ -160,6 +160,26 @@ Flaky test failure: `uds_concurrent_dispatch::slow_host_exec_does_not_block_fast
 **Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
 
 **Status:** open (test skipped in scripts/coverage-all.sh and scripts/coverage-e2e.sh pending fix)
+
+### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
+
+Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` passes locally, fails in CI.
+
+**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` passes reliably when run locally (`cargo test`) but fails intermittently in CI under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage-all CI runs — test passes in the standalone `check` job but flakes in the `coverage-all` job. The test verifies shell path capture using a fake shell fixture. The flake suggests environment or timing sensitivity under llvm-cov's runtime hooks.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce flakes.
+
+**Status:** open (test skipped in scripts/coverage-all.sh pending fix)
+
+### STAB-44 (2026-07-15, area: intentd CI / WSS e2e test, severity: P2)
+
+Flaky test failure: `e2e_mock_agent_workspace_api_bindings::seeded_conversation_rehydrates_over_wss` timeout under coverage instrumentation.
+
+**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` times out intermittently under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage runs — test passes reliably when run standalone but occasionally times out in the coverage-e2e CI job. The test verifies that a seeded conversation rehydrates correctly over the WSS transport. The timeout suggests instrumentation overhead pushes execution time past the test's timeout threshold.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+
+**Status:** open (test skipped in scripts/coverage-e2e.sh pending fix)
 
 
 ---
