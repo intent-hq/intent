@@ -129,7 +129,7 @@ Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently i
 
 **Expected:** Test is deterministic. Temp directories are created and cleaned per-test without cross-test races. The `afterEach` cleanup waits for all async operations to settle (e.g., explicit service teardown, extended poll timeout, or coordinated flush) before removing the temp directory.
 
-**Status:** open
+**Status:** fixed ([intent-hq/cloudlands-fe#76](https://github.com/intent-hq/cloudlands-fe/pull/76), 2026-07-15)
 
 
 ---
