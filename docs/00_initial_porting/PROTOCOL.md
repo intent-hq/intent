@@ -2789,6 +2789,53 @@ events, no persistence.
 { "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
 ```
 
+### 5.33 `repoConfig.*` — per-repository configuration *(new in intentd — not part of the ported 104)*
+
+Four JSON-RPC methods for managing per-repository configuration (`.intent/config.json`) at the
+repository root. Each workspace lives in a git worktree; these methods resolve the **repository**
+root (via `worktreePath` → `repositoryPath` → `git_ops::worktree_path`) and read/write/check the
+shared `.intent/config.json` that sits at that root. The config carries project-wide settings
+(branch naming prefix, auto-commit policy) that apply to all workspaces cloned from the same repo.
+
+All methods require `workspaceId` and map `Error::NotFound` to `-32602 "Workspace not found"`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| repoConfig.get | workspaceId (req) | { config: RepoConfig } — reads the config from the repo root; returns default empty config if the file is absent |
+| repoConfig.save | workspaceId (req), config (req): RepoConfig | { config: RepoConfig } — writes the config and returns the persisted record |
+| repoConfig.has | workspaceId (req) | { exists: boolean } — checks whether `.intent/config.json` exists at the repo root |
+| repoConfig.ensureDir | workspaceId (req) | { ok: true } — creates the `.intent/` directory at the repo root if missing |
+
+**RepoConfig** — `{ branchPrefix?: string, defaultAutoCommit?: "enabled" | "disabled" }`. Both
+fields are optional; absent fields have no effect on the workspace (the workspace-level
+`Workspace.branchPrefix` setting or the daemon's internal auto-commit policy remain in effect).
+The `branchPrefix` is a string prefix (e.g. `"feat/"`, `"aw/"`) prepended to auto-generated
+branch names in `workspace.create` (§5.1). The `defaultAutoCommit` policy gates whether the
+daemon automatically commits agent changes to the workspace's worktree.
+
+```json
+// → request — read the config
+{ "jsonrpc":"2.0","id":90,"method":"repoConfig.get","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":90,"result":{ "config":{ "branchPrefix":"feature/","defaultAutoCommit":"enabled" } } }
+
+// → request — write/update the config
+{ "jsonrpc":"2.0","id":91,"method":"repoConfig.save",
+  "params":{ "workspaceId":"ws-abc","config":{ "branchPrefix":"feat/" } } }
+// ← response
+{ "jsonrpc":"2.0","id":91,"result":{ "config":{ "branchPrefix":"feat/" } } }
+
+// → request — check existence
+{ "jsonrpc":"2.0","id":92,"method":"repoConfig.has","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":92,"result":{ "exists":true } }
+
+// → request — ensure the .intent directory exists
+{ "jsonrpc":"2.0","id":93,"method":"repoConfig.ensureDir","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
+```
+
 
 ## 6. Events & Subscriptions
 
