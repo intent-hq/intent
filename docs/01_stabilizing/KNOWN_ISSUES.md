@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-37 (as of 2026-07-14)
+**Next available ID:** STAB-58 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -18,6 +18,107 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-56 (2026-07-16, area: intentd intent-acp / agent-log file permissions, severity: P2)
+
+Captured child stderr log files (`<data_dir>/agent-logs/<agent-id>/<YYYY-MM-DD>.log`, shipped in STAB-53) are created with default umask permissions. On typical Unix systems this can leave the log files world-readable, exposing potentially sensitive stderr content (auth tokens echoed by a crashing provider, file paths, prompt fragments, etc.) to any local user on shared or multi-user hosts.
+
+**Repro:** On a Unix host, run any agent so that at least one line of stderr is captured, then `ls -l <data_dir>/agent-logs/<agent-id>/`. The directory and daily log file are created with the process umask, which is commonly `022` → files `0644`, directories `0755` (world-readable).
+
+**Expected:** On Unix, the per-agent directory is created with mode `0700` and each daily log file with mode `0600` as a best-effort hardening step (ignore-if-fails on non-Unix or on filesystems that don't honor mode bits). Preserve the "capture never blocks the agent runtime" invariant from STAB-53.
+
+**Reference:** post-merge Copilot comment on [intent-hq/intentd#203](https://github.com/intent-hq/intentd/pull/203) touching `crates/intent-acp/src/transport.rs`.
+
+**Status:** open
+
+### STAB-55 (2026-07-16, area: cloudlands-fe chat send / transcript hydration, severity: P1)
+
+Chat transcript renders empty after sending a message to a non-hydrated agent.
+
+**Repro:** Have an agent in `error` state with existing message history in the DB. With the workspace already selected before a daemon restart (do NOT refresh), type a new message and send. The chat view goes blank — no prior messages, no user echo, no assistant reply — even though the daemon processes normally. Cmd-R refresh rehydrates the transcript correctly. Root cause is twofold: (1) `initializeChatRequested` only fires on ChatPanel mount/rebind, so hydration was never triggered for the pre-selected workspace; (2) the send path's session restore (`agent-mutation-service.handleRestore`) refetched `agent.get` — an AgentLite projection (PROTOCOL §5.5) with `messages` normalized to `[]` — and persisted it as-is, clobbering the transcript and seeding an empty one, while the queue-vs-send decision read stale pre-restart streaming flags.
+
+**Expected:** Sending to an agent whose transcript is not hydrated triggers hydration first (`loadChatTranscript`: session + `chat.subscribe` seq-0 snapshot + BE-owned streaming flags), and the restore/activate refetch paths preserve existing store messages when the fetched AgentLite projection carries none, so a mid-send restore can never clobber a hydrated transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#86](https://github.com/intent-hq/cloudlands-fe/pull/86), 2026-07-16)
+
+### STAB-54 (2026-07-16, area: intentd intent-services + cloudlands-fe / agent.retry RPC contract, severity: P1)
+
+`agent.retry` was a visible no-op when the retry queue was empty: the RPC returned `{ ok: true }` but the agent stayed parked in `status=Error` (STAB-52 gate) and the FE couldn't tell whether a message had actually been redriven, so the retry button appeared to do nothing.
+
+**Repro:** Drive an agent into `Error` with no queued ready-to-send messages (e.g. after a terminal spawn failure whose message the user then discarded). Click Retry. Backend returns `ok` but session stays in Error and no turn runs; FE shows no feedback.
+
+**Expected:** `agent.retry` returns `{ ok: true, redriven: bool }`. When the queue is empty, the backend clears `Error → Idle` and returns `redriven: false`; when a queued message is present, it flips to `Pending` and drains, returning `redriven: true`. FE converges local session status from the ack and shows an info toast when `redriven === false` so the user knows the retry cleared the error but had no queued work.
+
+**Status:** fixed ([intent-hq/intentd#206](https://github.com/intent-hq/intentd/pull/206), 2026-07-16) — FE half in-review at [intent-hq/cloudlands-fe#88](https://github.com/intent-hq/cloudlands-fe/pull/88); race-condition and WSS e2e follow-ups will land in a subsequent intentd PR
+
+### STAB-53 (2026-07-16, area: intentd intent-acp / agent child diagnostics, severity: P2)
+
+ACP child stderr is lost when the child dies: the transport keeps only a 5-entry in-memory ring buffer, so a crashed auggie/claude/gemini/codex child ("agent stdout closed") leaves no diagnosable trace on disk.
+
+**Repro:** Run any agent whose ACP child crashes mid-turn (e.g., the STAB-50 V8 OOM). The daemon WARN says "agent turn failed terminally" but the child's stderr — the only record of why it died — is gone with the process; nothing is persisted.
+
+**Expected:** Every spawned child's stderr is captured to `<data_dir>/agent-logs/<agent-id>/<YYYY-MM-DD>.log` (daily rotation, best-effort, never blocks the agent runtime), files older than 7 days are pruned on the daemon's hourly reaper cadence, and terminal-failure WARN lines point at the capture path when the child died.
+
+**Status:** fixed ([intent-hq/intentd#203](https://github.com/intent-hq/intentd/pull/203), 2026-07-16)
+
+### STAB-52 (2026-07-16, area: intentd intent-services / agent_manager queue drain, severity: P1)
+
+Agent crash-loop after a terminal spawn/turn failure leaks `is_active=1`: the failed message is requeued and the session parked in `status=Error, is_active=0`, but `try_drain_queue` did not consult the persisted status, so any queue kick (`agent.queueMessage`, edit-save, wake delivery) re-claimed the in-flight slot and re-spawned the same failing turn indefinitely.
+
+**Repro:** Send a message to an agent whose spawn or `run_turn` always fails terminally (e.g., provider binary missing). `handle_terminal_spawn_failure` / `handle_terminal_turn_failure` → `persist_error_and_requeue` parks the row in `Error` and requeues the message — then a queue-updated kick reaches `try_drain_queue`, which re-claims the slot and re-spawns the failing turn in a loop, flapping `is_active` and leaking `is_active=1` whenever the cycle is interrupted mid-claim.
+
+**Expected:** A session parked in `Error` is never auto-redriven. `try_drain_queue` bails when the persisted status is `AgentStatus::Error`; redriving is a deliberate act — `agent.retry` (which resets the status to `Pending` before draining) or a fresh `agent.sendMessage`. After a single terminal failure the row lands in exactly `status=Error, is_active=0` with the message requeued once.
+
+**Status:** fixed ([intent-hq/intentd#202](https://github.com/intent-hq/intentd/pull/202), 2026-07-16)
+
+### STAB-51 (2026-07-16, area: intent-services / agent_manager (persistence + retry), severity: P2)
+
+User message can disappear from the transcript on retry after a transient `persist_user` failure.
+
+**Repro:** Force a transient sqlx error on the `persist_user` path, then trigger a mid-turn failure, then retry via `agent.retry`. Observed: the user message is missing from the transcript on final success.
+
+**Root cause:** In the terminal-requeue path (`handle_terminal_spawn_failure` etc. — see [intent-hq/intentd#196](https://github.com/intent-hq/intentd/pull/196)), the requeued message is marked `persisted: true` unconditionally. However, `persist_user` is best-effort and can silently fail (transient SQLite error). When the user then runs `agent.retry`, the drain path skips `persist_user` because `persisted: true`, so the user message never lands in the transcript even though the retry succeeds.
+
+**Fix sketch:** Make `persist_user` return `bool` (or an `Option<MessageId>`) indicating durability. Thread that through the terminal-requeue callers and only set `persisted: true` on confirmed durability.
+
+**Reference:** Copilot review thread on PR #196 (https://github.com/intent-hq/intentd/pull/196#discussion_r3591844297).
+
+**Status:** open
+
+### STAB-45 (2026-07-15, area: intentd auto-commit / commit message generation, severity: P2)
+
+Auto-commit subject was the agent/task title — e.g. commits titled "Coordinator" — ignoring conventional-commit conventions.
+
+**Repro:** Before the LLM auto-commit message generation fix, the daemon's auto-commit path (`intent-services/src/auto_commit.rs`) used a deterministic fallback chain (task title → agent name → "Agent changes") without LLM involvement. This resulted in commits with messages like "Coordinator" or the raw task title, which violate conventional-commit conventions required by the monorepo CI.
+
+**Expected:** Auto-commit messages should be conventional-commit-formatted (e.g., `feat:`, `fix:`, `chore:`) derived from the actual diff.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/186, 2026-07-15)
+
+### STAB-46 (2026-07-16, area: intentd runtime listener control, severity: P1)
+
+Sidecar/dev build (FE spawns `intentd serve --listen uds`) — toggling `server.wsApi.enabled=true` fails with Internal("WSS listener not available...") and reverts.
+
+**Repro:**
+1. Start intentd in sidecar mode (FE spawns `intentd serve --listen uds` in dev OR packaged builds)
+2. Open Settings UI → WebSocket API
+3. Toggle `server.wsApi.enabled` to `true`
+4. **Expected:** WSS listener starts, bound port visible in system.status
+5. **Actual:** Error: "WSS listener not available (daemon started with --listen uds)", setting reverted
+
+**Root cause:** `main.rs` only constructed `WsRuntimeControl` when `serve_tcp_enabled` (`--listen tcp/both`). Under `--listen uds`, `DaemonControl.ws_runtime` was `None`, so `start_ws_listener` failed with the error above.
+
+**Status:** fixed ([intent-hq/intentd#195](https://github.com/intent-hq/intentd/pull/195), 2026-07-16)
+
+### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
+
+Flaky CI test failure: `capture_login_shell_path_with_fake_shell` in `crates/intent-core/src/path_utils.rs` tests.
+
+**Repro:** On intentd PR #186 (https://github.com/intent-hq/intentd/pull/186), the `check` CI job failed once with test panic in `path_utils::tests::capture_login_shell_path_with_fake_shell`. The test creates a fake shell script, spawns it, and attempts to capture its output. Intermittent failure under CI parallelism; a re-run passed. The failure is unrelated to the PR's LLM auto-commit implementation (which was the only code changed).
+
+**Expected:** The test should pass reliably in CI without intermittent failures.
+
+**Status:** open (blocked PR #186 once, needs investigation)
 
 ### STAB-1 (2026-07-13, area: intentd note persistence, severity: P1)
 
@@ -101,8 +202,85 @@ The `context.*` and `git.config` MCP tools still read directly from the filesyst
 
 **Expected:** All workspace state comes from intentd. The daemon should provide RPCs for git configuration (PROTOCOL §5.1) and the FE tools should consume them instead of reading the filesystem.
 
-**Status:** open (partial fix: [intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159) + [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), 2026-07-14) — git.getConfig RPC shipped with FS fallback only when workspaceId unavailable; workspace.getContext/updateContext turned out to be chat-context RPCs (domain mismatch), needs a dedicated daemon RPC for workspace UI-context adoption
+**Status:** fixed ([intent-hq/intentd#159](https://github.com/intent-hq/intentd/pull/159), [intent-hq/cloudlands-fe#70](https://github.com/intent-hq/cloudlands-fe/pull/70), [intent-hq/intentd#175](https://github.com/intent-hq/intentd/pull/175), [intent-hq/cloudlands-fe#73](https://github.com/intent-hq/cloudlands-fe/pull/73), 2026-07-14/15) — git.getConfig RPC (intentd#159) adopted with FS fallback only when workspaceId unavailable (cloudlands-fe#70); workspace.getUiContext/updateUiContext RPCs (intentd#175) adopted with one-time FS→daemon migration and FS fallback (cloudlands-fe#73)
 
+### STAB-37 (2026-07-15, area: cloudlands-fe change-history persistence / init race, severity: P2)
+
+Repeated "Change history not initialized" warnings when change history is accessed before initialization completes.
+
+**Repro:** During app startup or workspace switch, change-history accessors (`getChangeHistoryForWorkspace`, `getAllChangeHistory`, `setChangeHistoryForWorkspace`) are called from `change-detector-manager-impl.ts` (lines 923, 944, 987) and `workspace.service.ts` (line 314) before `initChangeHistory()` completes its async fetch from daemon `settings.get`. Observed while dogfooding: console logs show multiple "Change history not initialized, returning empty history for <workspaceId>" warnings from `change-history-persistence.ts:72` (`warnIfUninitialized` helper). The module fires `initChangeHistory()` asynchronously in `workspace.ipc.ts:280` at app startup, but callers do not await the `initPromise` — they synchronously access the cache while it is still initializing.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#75](https://github.com/intent-hq/cloudlands-fe/pull/75), 2026-07-15) — Made change-history accessors async and added ensureInitialized() helper to gate access until initialization completes. Updated all call sites to await accessors. Added regression test.
+
+### STAB-38 (2026-07-15, area: cloudlands-fe chat send path + intentd agent runtime / interrupt priority, severity: P1)
+
+Force-send during agent processing queues the message instead of interrupting; repeated force-send enqueues duplicates.
+
+**Repro:** Observed 2026-07-15 in cloudlands-fe chat UI: when an agent is busy in a long tool-heavy turn, the user pressed force-send (⌘Enter) twice on a new message. Both messages appeared under "Queued messages (2)" with identical content; the running turn was not interrupted. The chat UI `ChatPanel.svelte` `handleForceSubmit` (lines 2571–2614) dispatches `sendMessage` with `forceSubmit: true` and `skipQueueCheck: true`, which flows through `chat-send-service.ts` to `agent-stream-lifecycle.ts` `sendMessage` (lines 687+), then via `AGENT_BACKEND_CHANNELS.STREAM_MESSAGE` IPC to the daemon's `agent.sendMessage` RPC. PROTOCOL.md §5.5 specifies that `priority: "interrupt"` preempts an in-flight turn (§7: "with `priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately") — but the FE send path does not set `priority` in the IPC call (`agent-stream-lifecycle.ts:1423` invokes with `content`, `workspaceId`, `model`, `contextReferences`, `imageBlocks`, `fileBlocks`, `noteIds`, `personality`, `stdinContext`, `messages`, `resetHistory` — no `priority` field). Without `priority: "interrupt"`, the daemon treats force-send as a normal message and queues it when the agent is mid-turn, per the auto-queue fallback (§5.5: "auto-queues if the agent is mid-stream"). Repeated force-send with no dedup passes the same text again, creating duplicate queue entries.
+
+**Expected:** Force-send interrupts the current turn and delivers immediately when the agent is streaming (one interrupt, even if pressed multiple times before the turn ends). The FE send path should pass `priority: "interrupt"` to `agent.sendMessage` when `forceSubmit: true`, and the daemon should deduplicate repeated interrupt delivery with the same client-supplied `messageId` per PROTOCOL.md §5.5 ("duplicate interrupt delivery with the same `messageId` is absorbed idempotently as `{ success: true, queued: false, messageId, deduplicated: true }`").
+
+**Status:** fixed ([intent-hq/cloudlands-fe#77](https://github.com/intent-hq/cloudlands-fe/pull/77), 2026-07-15) — Root cause: FE middleware never extracted `forceSubmit` from the action payload or set `priority: "interrupt"` on the IPC call. Fixed by threading `forceSubmit` through `dispatchToLifecycle`, bypassing queue-on-send check when true, and passing `priority: forceSubmit ? "interrupt" : undefined` to the daemon. Also added `priority` field to `AgentBackendStreamMessageSchema` so Zod doesn't strip it. Regression test added asserting force-send bypasses queue and passes priority to lifecycle.
+
+### STAB-39 (2026-07-15, area: cloudlands-fe CI / auto-update-channel-persist test temp-dir cleanup race, severity: P2)
+
+Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently in CI with temp-directory cleanup race.
+
+**Repro:** The test suite's `afterEach` hook (line 58) calls `fs.rm(testUserDataPath, { recursive: true, force: true })` to clean up the temp directory created by `fs.mkdtemp` in `beforeEach` (line 47). This cleanup can race with async write operations that are still in flight when the test completes, causing intermittent failures. Observed 2026-07-15 on cloudlands-fe [#75](https://github.com/intent-hq/cloudlands-fe/pull/75): the test failed 5 times across CI runs while being completely unrelated to that PR's changes (change-history init race fix). Each test case in the suite (`setChannel(beta)`, `setChannel(stable)`, `loadChannelFromSettings`, etc.) uses `await expect.poll()` to wait for `local-prefs.json` writes, but the service's async file operations may not fully settle before `afterEach` fires, creating a race between cleanup and pending writes.
+
+**Expected:** Test is deterministic. Temp directories are created and cleaned per-test without cross-test races. The `afterEach` cleanup waits for all async operations to settle (e.g., explicit service teardown, extended poll timeout, or coordinated flush) before removing the temp directory.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#76](https://github.com/intent-hq/cloudlands-fe/pull/76), 2026-07-15)
+
+### STAB-40 (2026-07-15, area: intentd CI / coverage instrumentation, severity: P2)
+
+Flaky test failure: `wss_integration::wss_note_save_asset_round_trip` under cargo-llvm-cov instrumentation.
+
+**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passes reliably when run standalone (`cargo test`) but flakes intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passes consistently in the standalone `check` job but occasionally fails in the `coverage-e2e` job. The test exercises WSS note asset save/load round-trip; the flake suggests a race or timing sensitivity exposed only under llvm-cov's runtime hooks.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
+
+**Status:** open
+
+### STAB-41 (2026-07-15, area: intentd CI / intent-pty host tests, severity: P2)
+
+Flaky test failure: `intent-pty host::tests::kill_scope_leaves_no_process_group_orphan` on GitHub Actions runners.
+
+**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). The test verifies that killing a process scope leaves no orphaned process groups. The failing PR (intent-hq/intentd#179) touched no intent-pty files — the crate was unmodified. A rerun passed. Intermittent, likely runner-specific (process scheduling, signal delivery timing, or procfs read races).
+
+**Expected:** Test passes reliably across all runner environments. Process group cleanup assertions should be robust to timing variations.
+
+**Status:** open
+
+### STAB-42 (2026-07-15, area: intentd CI / uds_concurrent_dispatch test, severity: P2)
+
+Flaky test failure: `uds_concurrent_dispatch::slow_host_exec_does_not_block_fast_workspace_list` under cargo-llvm-cov instrumentation.
+
+**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` fails consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. The test verifies that slow host.exec calls do not block fast workspace.list calls. Observed on local coverage runs for PR intent-hq/intentd#181 — the test times out reliably under llvm-cov but passes when run standalone. The instrumentation overhead appears to push the timing past the test's timeout threshold.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+
+**Status:** open (test skipped in scripts/coverage-all.sh and scripts/coverage-e2e.sh pending fix)
+
+### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
+
+Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` passes locally, fails in CI.
+
+**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` passes reliably when run locally (`cargo test`) but fails intermittently in CI under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage-all CI runs — test passes in the standalone `check` job but flakes in the `coverage-all` job. The test verifies shell path capture using a fake shell fixture. The flake suggests environment or timing sensitivity under llvm-cov's runtime hooks.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce flakes.
+
+**Status:** open (test skipped in scripts/coverage-all.sh pending fix)
+
+### STAB-44 (2026-07-15, area: intentd CI / WSS e2e test, severity: P2)
+
+Flaky test failure: `e2e_mock_agent_workspace_api_bindings::seeded_conversation_rehydrates_over_wss` timeout under coverage instrumentation.
+
+**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` times out intermittently under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage runs — test passes reliably when run standalone but occasionally times out in the coverage-e2e CI job. The test verifies that a seeded conversation rehydrates correctly over the WSS transport. The timeout suggests instrumentation overhead pushes execution time past the test's timeout threshold.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+
+**Status:** open (test skipped in scripts/coverage-e2e.sh pending fix)
 
 
 ---
@@ -338,3 +516,13 @@ Flaky CI test failure: `agent_manager::tests::process_cap_events_queued_resumed_
 **Expected:** Test should pass reliably in CI without intermittent failures.
 
 **Status:** fixed ([intent-hq/intentd#164](https://github.com/intent-hq/intentd/pull/164), 2026-07-14)
+
+### STAB-57 (2026-07-16, area: cloudlands-fe changes panel / daemon event bridge, severity: P1)
+
+Agent commits do not appear in the sidebar Changes panel in a brand-new workspace until switching out of the workspace and back.
+
+**Repro:** In a brand-new workspace, have an agent make commits. Observe the sidebar Changes panel — the commits do not appear. Switch to a different workspace, then switch back to the original workspace. The commits now appear.
+
+**Expected:** Agent commits (and git pull / changes:tracked events) should trigger the Changes panel to refresh within ~2 seconds, without requiring a workspace switch.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#82](https://github.com/intent-hq/cloudlands-fe/pull/82), 2026-07-16) — frontend firehose daemon event bridge now dispatches per-workspace debounced (1s) `changes/refreshRequested` on `git:commit`, `git:pull`, and `changes:tracked` events
