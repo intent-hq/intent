@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-47 (as of 2026-07-16)
+**Next available ID:** STAB-52 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-51 (2026-07-16, area: intent-services / agent_manager (persistence + retry), severity: P2)
+
+User message can disappear from the transcript on retry after a transient `persist_user` failure.
+
+**Repro:** Force a transient sqlx error on the `persist_user` path, then trigger a mid-turn failure, then retry via `agent.retry`. Observed: the user message is missing from the transcript on final success.
+
+**Root cause:** In the terminal-requeue path (`handle_terminal_spawn_failure` etc. — see [intent-hq/intentd#196](https://github.com/intent-hq/intentd/pull/196)), the requeued message is marked `persisted: true` unconditionally. However, `persist_user` is best-effort and can silently fail (transient SQLite error). When the user then runs `agent.retry`, the drain path skips `persist_user` because `persisted: true`, so the user message never lands in the transcript even though the retry succeeds.
+
+**Fix sketch:** Make `persist_user` return `bool` (or an `Option<MessageId>`) indicating durability. Thread that through the terminal-requeue callers and only set `persisted: true` on confirmed durability.
+
+**Reference:** Copilot review thread on PR #196 (https://github.com/intent-hq/intentd/pull/196#discussion_r3591844297).
+
+**Status:** open
 
 ### STAB-45 (2026-07-15, area: intentd auto-commit / commit message generation, severity: P2)
 
