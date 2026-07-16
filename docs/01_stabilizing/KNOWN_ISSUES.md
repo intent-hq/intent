@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-57 (as of 2026-07-16)
+**Next available ID:** STAB-58 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -516,3 +516,13 @@ Flaky CI test failure: `agent_manager::tests::process_cap_events_queued_resumed_
 **Expected:** Test should pass reliably in CI without intermittent failures.
 
 **Status:** fixed ([intent-hq/intentd#164](https://github.com/intent-hq/intentd/pull/164), 2026-07-14)
+
+### STAB-57 (2026-07-16, area: cloudlands-fe changes panel / daemon event bridge, severity: P1)
+
+Agent commits do not appear in the sidebar Changes panel in a brand-new workspace until switching out of the workspace and back.
+
+**Repro:** In a brand-new workspace, have an agent make commits. Observe the sidebar Changes panel — the commits do not appear. Switch to a different workspace, then switch back to the original workspace. The commits now appear.
+
+**Expected:** Agent commits (and git pull / changes:tracked events) should trigger the Changes panel to refresh within ~2 seconds, without requiring a workspace switch.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#82](https://github.com/intent-hq/cloudlands-fe/pull/82), 2026-07-16) — frontend firehose daemon event bridge now dispatches per-workspace debounced (1s) `changes/refreshRequested` on `git:commit`, `git:pull`, and `changes:tracked` events
