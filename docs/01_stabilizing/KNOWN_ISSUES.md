@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-46 (as of 2026-07-15)
+**Next available ID:** STAB-47 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -28,6 +28,21 @@ Auto-commit subject was the agent/task title — e.g. commits titled "Coordinato
 **Expected:** Auto-commit messages should be conventional-commit-formatted (e.g., `feat:`, `fix:`, `chore:`) derived from the actual diff.
 
 **Status:** fixed (https://github.com/intent-hq/intentd/pull/186, 2026-07-15)
+
+### STAB-46 (2026-07-16, area: intentd runtime listener control, severity: P1)
+
+Sidecar/dev build (FE spawns `intentd serve --listen uds`) — toggling `server.wsApi.enabled=true` fails with Internal("WSS listener not available...") and reverts.
+
+**Repro:**
+1. Start intentd in sidecar mode (FE spawns `intentd serve --listen uds` in dev OR packaged builds)
+2. Open Settings UI → WebSocket API
+3. Toggle `server.wsApi.enabled` to `true`
+4. **Expected:** WSS listener starts, bound port visible in system.status
+5. **Actual:** Error: "WSS listener not available (daemon started with --listen uds)", setting reverted
+
+**Root cause:** `main.rs` only constructed `WsRuntimeControl` when `serve_tcp_enabled` (`--listen tcp/both`). Under `--listen uds`, `DaemonControl.ws_runtime` was `None`, so `start_ws_listener` failed with the error above.
+
+**Status:** fixed ([intent-hq/intentd#195](https://github.com/intent-hq/intentd/pull/195), 2026-07-16)
 
 ### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
 
