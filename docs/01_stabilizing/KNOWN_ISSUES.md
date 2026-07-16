@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-52 (as of 2026-07-16)
+**Next available ID:** STAB-57 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -18,6 +18,58 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-56 (2026-07-16, area: intentd intent-acp / agent-log file permissions, severity: P2)
+
+Captured child stderr log files (`<data_dir>/agent-logs/<agent-id>/<YYYY-MM-DD>.log`, shipped in STAB-53) are created with default umask permissions. On typical Unix systems this can leave the log files world-readable, exposing potentially sensitive stderr content (auth tokens echoed by a crashing provider, file paths, prompt fragments, etc.) to any local user on shared or multi-user hosts.
+
+**Repro:** On a Unix host, run any agent so that at least one line of stderr is captured, then `ls -l <data_dir>/agent-logs/<agent-id>/`. The directory and daily log file are created with the process umask, which is commonly `022` → files `0644`, directories `0755` (world-readable).
+
+**Expected:** On Unix, the per-agent directory is created with mode `0700` and each daily log file with mode `0600` as a best-effort hardening step (ignore-if-fails on non-Unix or on filesystems that don't honor mode bits). Preserve the "capture never blocks the agent runtime" invariant from STAB-53.
+
+**Reference:** post-merge Copilot comment on [intent-hq/intentd#203](https://github.com/intent-hq/intentd/pull/203) touching `crates/intent-acp/src/transport.rs`.
+
+**Status:** open
+
+### STAB-55 (2026-07-16, area: cloudlands-fe chat send / transcript hydration, severity: P1)
+
+Chat transcript renders empty after sending a message to a non-hydrated agent.
+
+**Repro:** Have an agent in `error` state with existing message history in the DB. With the workspace already selected before a daemon restart (do NOT refresh), type a new message and send. The chat view goes blank — no prior messages, no user echo, no assistant reply — even though the daemon processes normally. Cmd-R refresh rehydrates the transcript correctly. Root cause is twofold: (1) `initializeChatRequested` only fires on ChatPanel mount/rebind, so hydration was never triggered for the pre-selected workspace; (2) the send path's session restore (`agent-mutation-service.handleRestore`) refetched `agent.get` — an AgentLite projection (PROTOCOL §5.5) with `messages` normalized to `[]` — and persisted it as-is, clobbering the transcript and seeding an empty one, while the queue-vs-send decision read stale pre-restart streaming flags.
+
+**Expected:** Sending to an agent whose transcript is not hydrated triggers hydration first (`loadChatTranscript`: session + `chat.subscribe` seq-0 snapshot + BE-owned streaming flags), and the restore/activate refetch paths preserve existing store messages when the fetched AgentLite projection carries none, so a mid-send restore can never clobber a hydrated transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#86](https://github.com/intent-hq/cloudlands-fe/pull/86), 2026-07-16)
+
+### STAB-54 (2026-07-16, area: intentd intent-services + cloudlands-fe / agent.retry RPC contract, severity: P1)
+
+`agent.retry` was a visible no-op when the retry queue was empty: the RPC returned `{ ok: true }` but the agent stayed parked in `status=Error` (STAB-52 gate) and the FE couldn't tell whether a message had actually been redriven, so the retry button appeared to do nothing.
+
+**Repro:** Drive an agent into `Error` with no queued ready-to-send messages (e.g. after a terminal spawn failure whose message the user then discarded). Click Retry. Backend returns `ok` but session stays in Error and no turn runs; FE shows no feedback.
+
+**Expected:** `agent.retry` returns `{ ok: true, redriven: bool }`. When the queue is empty, the backend clears `Error → Idle` and returns `redriven: false`; when a queued message is present, it flips to `Pending` and drains, returning `redriven: true`. FE converges local session status from the ack and shows an info toast when `redriven === false` so the user knows the retry cleared the error but had no queued work.
+
+**Status:** fixed ([intent-hq/intentd#206](https://github.com/intent-hq/intentd/pull/206), 2026-07-16) — FE half in-review at [intent-hq/cloudlands-fe#88](https://github.com/intent-hq/cloudlands-fe/pull/88); race-condition and WSS e2e follow-ups will land in a subsequent intentd PR
+
+### STAB-53 (2026-07-16, area: intentd intent-acp / agent child diagnostics, severity: P2)
+
+ACP child stderr is lost when the child dies: the transport keeps only a 5-entry in-memory ring buffer, so a crashed auggie/claude/gemini/codex child ("agent stdout closed") leaves no diagnosable trace on disk.
+
+**Repro:** Run any agent whose ACP child crashes mid-turn (e.g., the STAB-50 V8 OOM). The daemon WARN says "agent turn failed terminally" but the child's stderr — the only record of why it died — is gone with the process; nothing is persisted.
+
+**Expected:** Every spawned child's stderr is captured to `<data_dir>/agent-logs/<agent-id>/<YYYY-MM-DD>.log` (daily rotation, best-effort, never blocks the agent runtime), files older than 7 days are pruned on the daemon's hourly reaper cadence, and terminal-failure WARN lines point at the capture path when the child died.
+
+**Status:** fixed ([intent-hq/intentd#203](https://github.com/intent-hq/intentd/pull/203), 2026-07-16)
+
+### STAB-52 (2026-07-16, area: intentd intent-services / agent_manager queue drain, severity: P1)
+
+Agent crash-loop after a terminal spawn/turn failure leaks `is_active=1`: the failed message is requeued and the session parked in `status=Error, is_active=0`, but `try_drain_queue` did not consult the persisted status, so any queue kick (`agent.queueMessage`, edit-save, wake delivery) re-claimed the in-flight slot and re-spawned the same failing turn indefinitely.
+
+**Repro:** Send a message to an agent whose spawn or `run_turn` always fails terminally (e.g., provider binary missing). `handle_terminal_spawn_failure` / `handle_terminal_turn_failure` → `persist_error_and_requeue` parks the row in `Error` and requeues the message — then a queue-updated kick reaches `try_drain_queue`, which re-claims the slot and re-spawns the failing turn in a loop, flapping `is_active` and leaking `is_active=1` whenever the cycle is interrupted mid-claim.
+
+**Expected:** A session parked in `Error` is never auto-redriven. `try_drain_queue` bails when the persisted status is `AgentStatus::Error`; redriving is a deliberate act — `agent.retry` (which resets the status to `Pending` before draining) or a fresh `agent.sendMessage`. After a single terminal failure the row lands in exactly `status=Error, is_active=0` with the message requeued once.
+
+**Status:** fixed ([intent-hq/intentd#202](https://github.com/intent-hq/intentd/pull/202), 2026-07-16)
 
 ### STAB-51 (2026-07-16, area: intent-services / agent_manager (persistence + retry), severity: P2)
 
