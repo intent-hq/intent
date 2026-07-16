@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-60 (as of 2026-07-16)
+**Next available ID:** STAB-61 (as of 2026-07-16)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-60 (2026-07-15, area: prompt assembly / settings, severity: P1)
+
+RTK prompt optimization silently stopped working when prompt assembly moved daemon-side.
+
+**Repro:** The RTK command-output optimization (injecting an instruction to prefix supported commands with `rtk` for compressed, LLM-friendly output) was broken in the intentd stack. Root cause: the porting spec classified `rtk.enabled` as FE-only (PROTOCOL.md §5.12 "Not exposed"), but prompt assembly moved daemon-side (`intent-services/src/rules.rs::assemble_system_prompt`), stranding the feature. The FE injection point (`cloudlands-fe src/features/agent/main/instructions/base-system-prompt.ts` → `getRtkPromptInstruction()`) sat on a dead path — `InstructionService.buildSystemPrompt` was only invoked by the sandbox preview, never for real agents spawned by intentd. Additionally, the FE toggle (`RtkSettings.svelte`) persisted to renderer `localStorage` while the detector (`rtk-detector.ts`) read main-process `local-prefs.json`, so the toggle and injector didn't even share a store.
+
+**Expected:** With `rtk.enabled = true` (daemon setting) and `rtk` on the daemon host's PATH, newly spawned agents' persisted `systemPrompt` contains the RTK instruction line with the filtered subcommand list. With the flag off (default) or rtk missing, prompts are unchanged.
+
+**Status:** fixed ([intent-hq/intentd#190](https://github.com/intent-hq/intentd/pull/190), [intent-hq/cloudlands-fe#89](https://github.com/intent-hq/cloudlands-fe/pull/89), [intent-hq/cloudlands-fe#90](https://github.com/intent-hq/cloudlands-fe/pull/90), 2026-07-16) — intentd now owns rtk.enabled as a daemon settings-catalog key (default false), detects/parses rtk on the daemon host, and injects the RTK prompt layer in assemble_system_prompt; cloudlands-fe toggle rewired to daemon settings.get/update, dead injection path and rtk-detector.ts removed, legacy-bridge mapping added, wire-contract test at transport boundary
 
 ### STAB-56 (2026-07-16, area: intentd intent-acp / agent-log file permissions, severity: P2)
 
