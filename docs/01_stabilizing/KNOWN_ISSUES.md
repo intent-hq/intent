@@ -29,6 +29,20 @@ Workspace creation auto-pull failed when the configured repository has submodule
 
 **Status:** fixed ([intent-hq/intentd#232](https://github.com/intent-hq/intentd/pull/232), 2026-07-17) — `git.pull` now runs bounded submodule sync after successful pull when `.gitmodules` exists; regression test verifies submodule worktree syncs to new gitlink
 
+### STAB-89 (2026-07-17, area: intentd file-tracking / cloudlands-fe changes panel, severity: P1)
+
+The "Workspace start" marker in the Changes panel sat ~50 commits in the past and pre-workspace base-branch commits were listed.
+
+**Repro:** Before the fix: create a workspace from a feature branch. Open the Changes side panel. Observed: (1) the "Workspace start" marker appeared ~50 commits deep in the base branch's history (not at the workspace's actual starting commit), and (2) the commit list included dozens of pre-workspace commits from the base branch.
+
+**Root causes:**
+- **BE root cause:** `file-tracking.loadCommits` returned the **unbounded** first-parent history of the worktree (newest 50 by default). It never bounded the walk at the workspace's `baseCommitSha` / merge-base with `baseRef`, so pre-workspace commits from the base branch were included.
+- **FE root cause:** `refreshChanges` in `lifecycle-read-service.ts` faked the boundary as `commits[commits.length - 1].hash` — the oldest commit of whatever page came back. The "Workspace start" marker therefore rendered ~50 commits deep in base-branch history.
+
+**Expected:** The "Workspace start" marker must sit at the workspace's true base commit (merge-base / baseCommitSha), and the default commit list must only include workspace-owned commits (boundary..HEAD range).
+
+**Status:** fixed ([intent-hq/intentd#235](https://github.com/intent-hq/intentd/pull/235) and [intent-hq/cloudlands-fe#137](https://github.com/intent-hq/cloudlands-fe/pull/137), 2026-07-17)
+
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
 Home-screen workspace delete did not remove spaces from the visible list, requiring a full app refresh (Cmd-R), and spammed logs with `resolveWorkspaceRoot` / `note.list spec reseed failed` errors for deleted workspaces.
