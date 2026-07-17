@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-69 (as of 2026-07-17)
+**Next available ID:** STAB-70 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-69 (2026-07-17, area: cloudlands-fe opencode IPC / host.exec, severity: P1)
+
+Opencode model picker failed to load models due to invalid `cwd` parameter in `host.exec` call.
+
+**Repro:** Open the model picker with the opencode CLI installed and authenticated. Expected: the picker lists available opencode models. Actual: FE logs show repeated warnings `[WARN] [OpenCodeIPC] Could not get models from opencode CLI { error="Invalid parameter: cwd requires workspaceId for the containment guard" }` and the picker shows no opencode models. The daemon rejects the `host.exec` JSON-RPC call with error `-32602` because the FE passed `cwd: os.homedir()` without a corresponding `workspaceId`, violating intentd's containment-guard invariant (PROTOCOL §6.6.4).
+
+**Root cause:** The cloudlands-fe `executeOpencodeCommand` helper in `src/features/opencode/main/opencode.ipc.ts` called `hostExec` with `{ command: "opencode", args, cwd: os.homedir(), timeoutMs }`. The daemon's `host.exec` handler (`intent-services/src/host_exec.rs`) requires that `cwd` is either absent or paired with a `workspaceId` (for workspace-containment enforcement). The FE invocation violated this rule by passing `cwd` with no `workspaceId`, causing the daemon to reject the request. The same invalid pattern appeared in `src/features/auggie/main/augment-cli.ts` for the deprecated augment-cli adapter.
+
+**Expected:** The FE `host.exec` calls for opencode (and augment-cli) pass only `{ command, args, timeoutMs }` with no `cwd` or `workspaceId`, allowing the daemon to execute the CLI command in its own working directory (inherited daemon cwd or the daemon's default). The model picker lists opencode models when the CLI is installed and authenticated.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/120, 2026-07-17)
 
 ### STAB-68 (2026-07-17, area: cloudlands-fe chat transcript hydration/rendering, severity: P1)
 
