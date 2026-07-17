@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-59 (as of 2026-07-16)
+**Next available ID:** STAB-64 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,38 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
+
+The `doctor_checks_data_dir_and_migrations` test fails deterministically when a live intentd daemon is running.
+
+**Repro:** Run the intentd stack locally with a daemon bound to WSS port 5181, then execute `make test` or `cargo test -p intentd --test e2e_core_cli_commands doctor_checks_data_dir_and_migrations`. Observed while dogfooding: `intentd doctor` exits with code 1 due to `[FAIL] WSS port 5181 not bindable: Address already in use (os error 48)` whenever a live intentd daemon holds the port (always true on a dogfooding machine). All other doctor checks pass. The test in `crates/intentd/tests/e2e_core_cli_commands.rs` asserts that doctor exits with success, so the whole test suite fails on any machine running the stack. Passes in CI where no daemon runs.
+
+**Expected:** The test should pass on developer machines running the intentd stack. Suggested direction: make the doctor port-bind check non-fatal (warning instead of failure) or modify the test to use an ephemeral/configurable port for the check.
+
+**Note:** This is distinct from STAB-62 (intermittent WSS integration test port-bind flake) but related in theme.
+
+**Status:** open
+
+### STAB-62 (2026-07-17, area: intentd tests / wss port binding, severity: P2)
+
+Intermittent WSS integration test failure due to port bind conflict.
+
+**Repro:** Observed once locally during `cargo test --workspace` on the flaky-test stabilization branch (2026-07-17). A WSS integration test failed with a port bind conflict error, suggesting that the test's WSS listener tried to bind to a port already in use by another test or process. The failure was intermittent and did not reproduce on subsequent runs. The specific test name was not captured, but the failure occurred during the full workspace test suite run (not during isolated test execution).
+
+**Expected:** All WSS integration tests should reliably acquire unique ports without conflicts, either through dynamic port allocation or proper test isolation/cleanup.
+
+**Status:** open (needs reproduction and root cause analysis)
+
+### STAB-60 (2026-07-15, area: prompt assembly / settings, severity: P1)
+
+RTK prompt optimization silently stopped working when prompt assembly moved daemon-side.
+
+**Repro:** The RTK command-output optimization (injecting an instruction to prefix supported commands with `rtk` for compressed, LLM-friendly output) was broken in the intentd stack. Root cause: the porting spec classified `rtk.enabled` as FE-only (PROTOCOL.md §5.12 "Not exposed"), but prompt assembly moved daemon-side (`intent-services/src/rules.rs::assemble_system_prompt`), stranding the feature. The FE injection point (`cloudlands-fe src/features/agent/main/instructions/base-system-prompt.ts` → `getRtkPromptInstruction()`) sat on a dead path — `InstructionService.buildSystemPrompt` was only invoked by the sandbox preview, never for real agents spawned by intentd. Additionally, the FE toggle (`RtkSettings.svelte`) persisted to renderer `localStorage` while the detector (`rtk-detector.ts`) read main-process `local-prefs.json`, so the toggle and injector didn't even share a store.
+
+**Expected:** With `rtk.enabled = true` (daemon setting) and `rtk` on the daemon host's PATH, newly spawned agents' persisted `systemPrompt` contains the RTK instruction line with the filtered subcommand list. With the flag off (default) or rtk missing, prompts are unchanged.
+
+**Status:** fixed ([intent-hq/intentd#190](https://github.com/intent-hq/intentd/pull/190), [intent-hq/cloudlands-fe#89](https://github.com/intent-hq/cloudlands-fe/pull/89), [intent-hq/cloudlands-fe#90](https://github.com/intent-hq/cloudlands-fe/pull/90), 2026-07-16) — intentd now owns rtk.enabled as a daemon settings-catalog key (default false), detects/parses rtk on the daemon host, and injects the RTK prompt layer in assemble_system_prompt; cloudlands-fe toggle rewired to daemon settings.get/update, dead injection path and rtk-detector.ts removed, legacy-bridge mapping added, wire-contract test at transport boundary
 
 ### STAB-56 (2026-07-16, area: intentd intent-acp / agent-log file permissions, severity: P2)
 
@@ -110,15 +142,7 @@ Sidecar/dev build (FE spawns `intentd serve --listen uds`) — toggling `server.
 
 **Status:** fixed ([intent-hq/intentd#195](https://github.com/intent-hq/intentd/pull/195), 2026-07-16)
 
-### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
 
-Flaky CI test failure: `capture_login_shell_path_with_fake_shell` in `crates/intent-core/src/path_utils.rs` tests.
-
-**Repro:** On intentd PR #186 (https://github.com/intent-hq/intentd/pull/186), the `check` CI job failed once with test panic in `path_utils::tests::capture_login_shell_path_with_fake_shell`. The test creates a fake shell script, spawns it, and attempts to capture its output. Intermittent failure under CI parallelism; a re-run passed. The failure is unrelated to the PR's LLM auto-commit implementation (which was the only code changed).
-
-**Expected:** The test should pass reliably in CI without intermittent failures.
-
-**Status:** open (blocked PR #186 once, needs investigation)
 
 ### STAB-1 (2026-07-13, area: intentd note persistence, severity: P1)
 
@@ -236,51 +260,51 @@ Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently i
 
 Flaky test failure: `wss_integration::wss_note_save_asset_round_trip` under cargo-llvm-cov instrumentation.
 
-**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passes reliably when run standalone (`cargo test`) but flakes intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passes consistently in the standalone `check` job but occasionally fails in the `coverage-e2e` job. The test exercises WSS note asset save/load round-trip; the flake suggests a race or timing sensitivity exposed only under llvm-cov's runtime hooks.
+**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passed reliably when run standalone (`cargo test`) but flaked intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passed consistently in the standalone `check` job but occasionally failed in the `coverage-e2e` job. The flake is no longer reproducible in 10/10 consecutive runs (both standalone and under llvm-cov); root cause remains unknown.
 
 **Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — flake no longer reproducible after 10+ consecutive runs; skip removed from coverage-e2e.sh and continuing to monitor
 
 ### STAB-41 (2026-07-15, area: intentd CI / intent-pty host tests, severity: P2)
 
 Flaky test failure: `intent-pty host::tests::kill_scope_leaves_no_process_group_orphan` on GitHub Actions runners.
 
-**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). The test verifies that killing a process scope leaves no orphaned process groups. The failing PR (intent-hq/intentd#179) touched no intent-pty files — the crate was unmodified. A rerun passed. Intermittent, likely runner-specific (process scheduling, signal delivery timing, or procfs read races).
+**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). Root cause: grandchild PID print raced a fixed 5s deadline on slow GitHub Actions runners.
 
 **Expected:** Test passes reliably across all runner environments. Process group cleanup assertions should be robust to timing variations.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — changed from fixed 5s sleep to bounded polling (100ms intervals, 5s max) to detect PID print reliably across runner speeds
 
 ### STAB-42 (2026-07-15, area: intentd CI / uds_concurrent_dispatch test, severity: P2)
 
 Flaky test failure: `uds_concurrent_dispatch::slow_host_exec_does_not_block_fast_workspace_list` under cargo-llvm-cov instrumentation.
 
-**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` fails consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. The test verifies that slow host.exec calls do not block fast workspace.list calls. Observed on local coverage runs for PR intent-hq/intentd#181 — the test times out reliably under llvm-cov but passes when run standalone. The instrumentation overhead appears to push the timing past the test's timeout threshold.
+**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` failed consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. Root cause: test used single-threaded `#[tokio::test]` since inception (45b25e3 / PR #79), serializing spawned tasks. The test never actually passed standalone — the KNOWN_ISSUES claim that it "passes standalone" was incorrect. Production dispatch is concurrent (daemon uses multi-threaded `#[tokio::main]`).
 
-**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+**Expected:** Test passes reliably under both standalone and instrumented execution.
 
-**Status:** open (test skipped in scripts/coverage-all.sh and scripts/coverage-e2e.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — changed test to use multi-threaded runtime via `#[tokio::test(flavor = "multi_thread")]`; skips removed from coverage-all.sh and coverage-e2e.sh
 
 ### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
 
-Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` passes locally, fails in CI.
+Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` in both plain CI and coverage runs.
 
-**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` passes reliably when run locally (`cargo test`) but fails intermittently in CI under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage-all CI runs — test passes in the standalone `check` job but flakes in the `coverage-all` job. The test verifies shell path capture using a fake shell fixture. The flake suggests environment or timing sensitivity under llvm-cov's runtime hooks.
+**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` failed intermittently in CI: once in the standalone `check` job (intentd PR #186) and intermittently in coverage-all runs (PRs #182, #183). Root cause: fake shell fixture file writes were not flushed before exec, causing intermittent reads of incomplete script content.
 
-**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce flakes.
+**Expected:** Test passes reliably in CI without intermittent failures.
 
-**Status:** open (test skipped in scripts/coverage-all.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — added `sync_all()` flush after writing the fake shell script; skip removed from coverage-all.sh
 
 ### STAB-44 (2026-07-15, area: intentd CI / WSS e2e test, severity: P2)
 
 Flaky test failure: `e2e_mock_agent_workspace_api_bindings::seeded_conversation_rehydrates_over_wss` timeout under coverage instrumentation.
 
-**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` times out intermittently under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage runs — test passes reliably when run standalone but occasionally times out in the coverage-e2e CI job. The test verifies that a seeded conversation rehydrates correctly over the WSS transport. The timeout suggests instrumentation overhead pushes execution time past the test's timeout threshold.
+**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` timed out intermittently under coverage instrumentation (`cargo llvm-cov`). Root cause: llvm-cov instrumentation overhead exceeded the test's fixed timeout.
 
-**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+**Expected:** Test passes reliably under both standalone and instrumented execution.
 
-**Status:** open (test skipped in scripts/coverage-e2e.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — introduced `INTENTD_TEST_TIMEOUT_MULTIPLIER` env var (default 1, coverage scripts set to 3); test harness now scales all timeouts by this multiplier; skip removed from coverage-e2e.sh
 
 
 ---
@@ -334,6 +358,28 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-61 (2026-07-17, area: cloudlands-fe repo / nested submodule gitlink, severity: P2)
+
+The cloudlands-fe repo carried an orphaned `intentd` submodule gitlink (mode `160000`) with no matching entry in its `.gitmodules`, breaking `git submodule update --init --recursive` in the parent monorepo.
+
+**Repro:** From a fresh monorepo clone, run `git submodule update --init --recursive`. It aborts with `fatal: No url found for submodule path 'packages/cloudlands-fe/intentd' in .gitmodules`, leaving `packages/ios` unpinned (checked out to `main` tip instead of the recorded commit) and `packages/intentd` with an empty working tree (index populated but files not extracted). `git -C packages/cloudlands-fe ls-files -s intentd` showed mode `160000` (gitlink) → commit `befdb2371f292ecd93886ffeee2d236123ee493b`, but `packages/cloudlands-fe/.gitmodules` had no entry for `intentd`.
+
+**Expected:** `git submodule update --init --recursive` from a fresh clone succeeds end-to-end, initializing all three top-level submodules at their pinned commits.
+
+**Root cause:** Leftover nested-submodule gitlink in the cloudlands-fe repo from before the monorepo restructure. Nothing in cloudlands-fe references the `intentd/` path anymore — the FE resolves the intentd binary by walking up from `process.cwd()` to `packages/intentd/target/{release,debug}/intentd`, and `scripts/copy-sidecar.cjs` targets a gitignored `resources/sidecar/intentd` staging path.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#92](https://github.com/intent-hq/cloudlands-fe/pull/92), 2026-07-17) — `git rm --cached intentd` in cloudlands-fe removes the stray gitlink; monorepo submodule bump follows.
+
+### STAB-59 (2026-07-16, area: WSS listener settings / Settings UI, severity: P2)
+
+Enabling the WebSocket API with the port already in use failed silently (error only in daemon stderr; no toast) and the port was not editable in the UI.
+
+**Repro:** Start intentd, enable the WebSocket API via Settings UI while another process is already bound to the default port (5181). Observed while dogfooding: the toggle appeared to enable but the listener never started (error only in daemon stderr: "Address already in use"); no user-facing error toast was shown. Additionally, the port input field was disabled/non-editable in the Settings UI, so there was no way to change the port to an available one without manually editing the daemon settings file.
+
+**Expected:** When enabling the WebSocket API fails (e.g., port in use), show a user-facing error toast with the failure reason. The port input field should always be editable regardless of the toggle state, allowing the user to pick a different port before retrying.
+
+**Status:** fixed ([intent-hq/intentd#201](https://github.com/intent-hq/intentd/pull/201), [intent-hq/cloudlands-fe#85](https://github.com/intent-hq/cloudlands-fe/pull/85), 2026-07-16)
 
 ### STAB-58 (2026-07-15, area: intentd agent spawn / provider binary resolution, severity: P1)
 
