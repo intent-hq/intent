@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-92 (as of 2026-07-17)
+**Next available ID:** STAB-93 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -400,6 +400,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-92 (2026-07-17, area: intentd agent spawn / providers, severity: P1)
+
+Agents whose model was switched to a different provider's compound id (e.g. `opencode:opencode-go/kimi-k3`) kept spawning the old provider binary (auggie), which logged `Unknown model` and silently fell back to its default model — user-selected model not honored.
+
+**Repro:** Create or select an agent with `provider: "auggie"` and `model: "fable-5"`. Switch the agent's model to a compound id from a different provider (e.g., `opencode:opencode-go/kimi-k3`). Send a prompt. Observed: the daemon spawns the auggie binary (old session.provider) with the opencode model name, auggie logs `⚠️ Unknown model: "opencode-go/kimi-k3", falling back to default model`, and the turn runs on auggie's default model instead of the user-selected kimi-k3 on the opencode provider.
+
+**Root cause:** `resolve_spawn` in `agent_manager.rs` gave precedence to `session.provider` over the compound model id's explicit provider prefix. When a user set an agent's model to `opencode:<model>`, the model field was persisted but the session.provider remained "auggie", so the next spawn used the stale provider. Additionally, `agent_set_model_op` did not reconcile session.provider when the new model's provider differed, and `agent_create_op` did not initialize provider from the compound id on agent creation.
+
+**Expected:** Setting an agent's model to `opencode:<model>` results in the next spawn using the opencode provider with the specified model. `resolve_spawn` honors the compound model id's provider prefix over session.provider, `agent_set_model_op` reconciles provider on cross-provider switch, and `agent_create_op` initializes provider from compound id. Provider is immutable after acp_session_id is set to prevent TOCTOU bypass.
+
+**Status:** fixed ([intent-hq/intentd#231](https://github.com/intent-hq/intentd/pull/231), 2026-07-17)
 
 ### STAB-91 (2026-07-17, area: cloudlands-fe sidebar / active-streams tracker, severity: P1)
 
