@@ -257,9 +257,9 @@ sandbox.discard, sandbox.merge
 
 script.create, script.list, script.output, script.remove, script.restart, script.run, script.start, script.status, script.stop
 
-#### `search.*` (8 methods)
+#### `search.*` (7 methods)
 
-search.cancel, search.codebase, search.events, search.fileNames, search.inFiles, search.memories, search.messages, search.notes
+search.cancel, search.codebase, search.events, search.fileNames, search.inFiles, search.messages, search.notes
 
 #### `sentry.*` (8 methods)
 
@@ -321,7 +321,7 @@ These 4 method names are **dual-role**: they appear in the dispatchable method c
 
 ### 6.6 Interrupted-Agent Resumption (v2.0 additions)
 
-The following methods manage agent resumption across daemon restarts. When `intentd` restarts, in-flight agent sessions (`active`, `processing`, `waiting` statuses) are captured as **interrupted records** before the heal sweep rewrites them to `idle`. Clients discover interrupted agents via `agent.listInterrupted` and resolve them via `agent.resolveInterrupted` (resume or abandon). For headless deployments, `intentd serve --resume-all` auto-resumes all interrupted agents at startup.
+The following methods manage agent resumption across daemon restarts. When `intentd` restarts, in-flight agent sessions (`active`, `processing`, `waiting` statuses) are captured as **interrupted records** before the heal sweep rewrites them to `idle`. This capture occurs on both graceful shutdown (`SIGINT`/`SIGTERM`) and crash scenarios, ensuring that agents mid-turn are always resumable. Clients discover interrupted agents via `agent.listInterrupted` and resolve them via `agent.resolveInterrupted` (resume or abandon). For headless deployments, `intentd serve --resume-all` auto-resumes all interrupted agents at startup.
 
 #### `agent.listInterrupted`
 

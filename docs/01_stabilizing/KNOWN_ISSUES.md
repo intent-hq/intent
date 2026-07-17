@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-89 (as of 2026-07-17)
+**Next available ID:** STAB-90 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -391,6 +391,46 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
+### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Re-entering a streaming conversation shows no deltas until the next tool call (or later).
+
+**Repro:** Start a conversation with a long-running agent task (e.g., multi-file edit or research). While the agent is mid-turn and streaming partial assistant text, navigate away from the chat (switch to another workspace or panel). Navigate back to the streaming chat. Observed: the partial assistant message is blank until the agent emits the next tool call or completes the turn. Expected: the partial text appears immediately and continues growing with each delta.
+
+**Root cause (traced):** Chat hydration (`chat-read-service.ts` → `loadChatTranscript`) pages through `agent.getConversation` only. On the daemon, the in-flight partial assistant message (live-turn slot, CS-0 D5) is merged **only** into the `chat.subscribe` seq-0 snapshot (`chat_snapshot` in `intent-transport/src/subscriptions.rs`) — `agent.getConversation` returns persisted messages only. The FE used to hydrate via `chat.subscribeSnapshot` but switched to `getConversation` paging (to fix >50-message truncation), silently losing the live-turn merge. Two compounding effects: (1) Hydration wipes the in-flight placeholder (the events bridge keeps the transcript growing in Redux even while the chat is closed, but `loadChatTranscript` replaces `messages` with the persisted-only page — dropping the in-flight assistant message), and (2) after an app restart mid-turn, the bridge accumulator (`streamsByAgent`) restarts empty and only holds the chunk tail; `resolveStreamContentBlocks`' `hasActiveStreamRegression` correctly rejects the shorter/poorer candidate versus the fuller hydrated partial — so deltas stay invisible until the candidate outgrows it (typically at the next tool call, which adds blocks).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
+
+### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
+
+**Repro:** Start a conversation and send a message that triggers a long-running agent task. While the agent is mid-turn (visible "Thinking" or streaming partial response), type a new message and press ⌘Enter (force-submit / interrupt). Observed: the UI switches to "Thinking" for the new message but never shows the message in the transcript. The session is wedged — subsequent messages show status ticks but no transcript. Restarting the app (Electron relaunch) recovers the UI but the interrupted message is lost. Restarting only intentd doesn't help because the renderer's wedged state persists (restarting intentd doesn't reset the renderer). Expected: the new message should interrupt the old turn, appear immediately in the transcript, and stream normally.
+
+**Root cause (traced):** The FE renderer is daemon-bridged via the mock IPC router. `chat-send-service.ts` and `agent-stream-lifecycle.ts` correctly thread `priority: "interrupt"` all the way into the `STREAM_MESSAGE` invoke (and the zod schema `AgentBackendStreamMessageSchema` allows it), **but the bridge handler in `src/store/renderer/seeders/agent-ipc-bridge-seeder.ts` (STREAM_MESSAGE → `agent.sendMessage`) never forwards `priority`** — it forwards messageId/imageBlocks/fileBlocks/model/messageMetadata/contextReferences/noteIds/stdinContext/app-ID trio only. Consequences, matching the reported symptoms exactly: (1) Daemon receives a plain `agent.sendMessage` while the turn is in flight → `try_begin` fails → the message is **silently auto-queued** (`{ success: true, queued: true }`) instead of preempting (`interrupt_send_message` is never invoked). (2) The FE only checks `response.success` — `queued: true` is ignored on this path. It has already torn down the old stream handler and registered a fresh one for a new assistant placeholder, so the old turn's chunks/complete are treated as stale and skipped → UI wedges in "Thinking". (3) The daemon queue is in-memory, so restarting intentd **loses the queued message**. (4) The renderer's stream-registry/session state stays wedged (restarting intentd doesn't reset the renderer), so subsequent sends show status ticks but no transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `agent-ipc-bridge-seeder.ts` now forwards `priority: "interrupt"` through STREAM_MESSAGE → agent.sendMessage; `agent-stream-lifecycle.ts` handles `{ success: true, queued: true }` responses (cleanup + queue seeding) to avoid wedged placeholders
+
+### STAB-89 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
+
+The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
+
+**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-88 fix), but the execution path was never implemented.
+
+**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
+
+### STAB-88 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
+
+Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
+
+**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
+
+**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
+
 ### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
 
 Notification settings (enabled, soundEnabled, soundOnlyWhenUnfocused, volume) were not persisted to the daemon, causing them to be lost on app relaunch.
@@ -566,26 +606,6 @@ Opencode model picker failed to load models due to invalid `cwd` parameter in `h
 **Expected:** The FE `host.exec` calls for opencode (and augment-cli) pass only `{ command, args, timeoutMs }` with no `cwd` or `workspaceId`, allowing the daemon to execute the CLI command in its own working directory (inherited daemon cwd or the daemon's default). The model picker lists opencode models when the CLI is installed and authenticated.
 
 **Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/120, 2026-07-17)
-
-### STAB-88 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
-
-The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
-
-**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-87 fix), but the execution path was never implemented.
-
-**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
-
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
-
-### STAB-87 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
-
-Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
-
-**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
-
-**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
-
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
 
 ### STAB-68 (2026-07-17, area: cloudlands-fe chat transcript hydration/rendering, severity: P1)
 
