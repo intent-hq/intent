@@ -389,7 +389,7 @@ Notification settings (enabled, soundEnabled, soundOnlyWhenUnfocused, volume) we
 
 **Expected:** Notification toggles persist via `settings.update` to the daemon's canonical `notifications.*` paths. Settings survive app relaunch because the daemon catalog is durable. Hydration-dispatched actions are suppressed from persistence to prevent echo-writes. Tests use fake timers and evolving state mocks.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#127](https://github.com/intent-hq/cloudlands-fe/pull/127), [intent-hq/cloudlands-fe#129](https://github.com/intent-hq/cloudlands-fe/pull/129), 2026-07-17)
+**Status:** fixed ([intent-hq/cloudlands-fe#127](https://github.com/intent-hq/cloudlands-fe/pull/127), [intent-hq/cloudlands-fe#129](https://github.com/intent-hq/cloudlands-fe/pull/129), [intent-hq/cloudlands-fe#130](https://github.com/intent-hq/cloudlands-fe/pull/130), 2026-07-17)
 
 ### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
 
