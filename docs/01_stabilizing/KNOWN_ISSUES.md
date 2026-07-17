@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-80 (as of 2026-07-17)
+**Next available ID:** STAB-81 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,22 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-80 (2026-07-17, area: cloudlands-fe chat drafts persistence, severity: P1)
+
+Chat drafts are not persisted to the backend, causing them to be lost when switching workspaces.
+
+**Repro:**
+1. Open a workspace and start typing a message in the chat input (do not send it)
+2. Switch to a different workspace
+3. Switch back to the original workspace
+4. Observe: the draft message is lost
+
+**Root cause:** The frontend is still using the old localStorage-based draft persistence (via `transient-ui-slice` Redux state, lines 14, 27, 75-80, 127-144 in `transient-ui-slice.ts`) instead of the backend `drafts.get`/`drafts.set`/`drafts.clear` RPC methods specified in IMPLEMENTATION_SPEC.md §9.10/§15 and PROTOCOL.md §5.16. The backend methods are implemented (in `intent-services/src/drafts.rs`) and tested (see `intentd/tests/uds_integration.rs`, `intentd/tests/wss_integration.rs`), but the frontend never calls them. `ChatPanel.svelte` (lines 940-973) restores and saves drafts using Redux actions `setChatDraft`/`clearChatDraft`, which only update in-memory state that's lost on workspace unmount (line 145: `workspaceUnmounted` clears the workspace's transient state).
+
+**Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
+
+**Status:** open
 
 ### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
 
