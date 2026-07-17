@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-90 (as of 2026-07-17)
+**Next available ID:** STAB-89 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -28,16 +28,6 @@ Home-screen workspace delete did not remove spaces from the visible list, requir
 **Root cause:** When `workspace:deleted` event arrived from daemon, `daemon-events-bridge.ts` dispatched `workspaceDeleted(wsId, agentIds)`. Other slices (`workspace-agents`, `chat-state`, `agent-session`) handled this action and purged their workspace-scoped state, BUT the `workspace-slice` reducer had NO case for `workspaceDeleted`. The workspace entity stayed in `state.workspace.workspaces` collection, and the FE continued to attempt operations (user-activity IPC, note subscriptions) on the deleted workspace.
 
 **Expected:** After clicking Delete on the Home screen OR receiving an external `workspace:deleted` event, the space must disappear from the list immediately and permanently. Zero occurrences of `resolveWorkspaceRoot` / `note.list spec reseed failed` log lines for deleted workspaces.
-
-**Status:** open
-
-### STAB-89 (2026-07-17, area: intentd CI / coverage instrumentation, severity: P2)
-
-Flaky test failure: `completion_report_cleared_when_new_turn_begins_over_wss` in `crates/intentd/tests/e2e_wss_agent_lifecycle.rs` under llvm-cov coverage instrumentation.
-
-**Repro:** The `completion_report_cleared_when_new_turn_begins_over_wss` test (introduced by intentd PR #221) fails deterministically-ish under coverage instrumentation (`cargo llvm-cov`) with "wss event timed out: Elapsed(())" at line 261 but passes in the standalone `check` job. Observed on intentd PR #223 CI runs 29577302534 and 29581147065 (both `coverage-all` and `coverage-e2e` jobs). Same flaky-under-coverage class as STAB-40/42/44 — coverage instrumentation overhead causes timing-sensitive tests to exceed fixed timeouts.
-
-**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
 
 **Status:** open
 
