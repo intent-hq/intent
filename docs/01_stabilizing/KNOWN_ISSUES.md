@@ -19,18 +19,6 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-64 (2026-07-17, area: intentd workspace.create / cloudlands-fe sidebar repo grouping, severity: P2)
-
-Sidebar repo groups show no GitHub avatar for workspaces created from local repo paths, unlike the reference app.
-
-**Repro:** Create a workspace from a local repository path that has a `github.com` origin remote (e.g., `intentd workspace create --path ~/code/monorepo`). Open the cloudlands-fe sidebar All-Workspaces repo view. The repo group for that workspace shows no GitHub owner avatar next to the repo group, even though the repository has a valid GitHub origin.
-
-**Expected:** The GitHub owner avatar appears next to the repo group in the sidebar, matching the reference app behavior. The sidebar (`AllWorkspacesCard.svelte`, repo view) renders the avatar when `group.owner` is set, which requires `workspace.repositoryOwner`.
-
-**Root cause:** The daemon never derives `repositoryOwner` from local paths. intentd only sets `repository_owner` when the caller explicitly supplies it or when the workspace is created by cloning a `github.com/OWNER/REPO` URL. PROTOCOL.md states: "`repositoryOwner` is never derived from local paths (no remote inspection)". The reference app (augmentcode/intent) backfilled `repositoryOwner` and `repositoryName` in the Electron main process (`performBackgroundEnrichment` → `git remote get-url origin`), but that enrichment path is out of the daemon-canonical data path in the ported stack — the cloudlands-fe sidebar lists workspaces straight from intentd `workspace.list` (`LiveWorkspacesClient`) with fields passing through untouched.
-
-**Status:** open
-
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
 The `doctor_checks_data_dir_and_migrations` test fails deterministically when a live intentd daemon is running.
@@ -370,6 +358,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-64 (2026-07-17, area: intentd workspace.create / cloudlands-fe sidebar repo grouping, severity: P2)
+
+Sidebar repo groups show no GitHub avatar for workspaces created from local repo paths, unlike the reference app.
+
+**Repro:** Create a workspace from a local repository path that has a `github.com` origin remote (e.g., `intentd workspace create --path ~/code/monorepo`). Open the cloudlands-fe sidebar All-Workspaces repo view. The repo group for that workspace shows no GitHub owner avatar next to the repo group, even though the repository has a valid GitHub origin.
+
+**Expected:** The GitHub owner avatar appears next to the repo group in the sidebar, matching the reference app behavior. The sidebar (`AllWorkspacesCard.svelte`, repo view) renders the avatar when `group.owner` is set, which requires `workspace.repositoryOwner`.
+
+**Root cause:** The daemon never derives `repositoryOwner` from local paths. intentd only sets `repository_owner` when the caller explicitly supplies it or when the workspace is created by cloning a `github.com/OWNER/REPO` URL. PROTOCOL.md states: "`repositoryOwner` is never derived from local paths (no remote inspection)". The reference app (augmentcode/intent) backfilled `repositoryOwner` and `repositoryName` in the Electron main process (`performBackgroundEnrichment` → `git remote get-url origin`), but that enrichment path is out of the daemon-canonical data path in the ported stack — the cloudlands-fe sidebar lists workspaces straight from intentd `workspace.list` (`LiveWorkspacesClient`) with fields passing through untouched.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/218, 2026-07-17)
 
 ### STAB-61 (2026-07-17, area: cloudlands-fe repo / nested submodule gitlink, severity: P2)
 
