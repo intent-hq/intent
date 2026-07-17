@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-98 (as of 2026-07-17)
+**Next available ID:** STAB-99 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -42,7 +42,6 @@ The "Workspace start" marker in the Changes panel sat ~50 commits in the past an
 **Expected:** The "Workspace start" marker must sit at the workspace's true base commit (merge-base / baseCommitSha), and the default commit list must only include workspace-owned commits (boundary..HEAD range).
 
 **Status:** fixed ([intent-hq/intentd#235](https://github.com/intent-hq/intentd/pull/235) and [intent-hq/cloudlands-fe#137](https://github.com/intent-hq/cloudlands-fe/pull/137), 2026-07-17)
->>>>>>> origin/main
 
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
@@ -86,7 +85,7 @@ The `doctor_checks_data_dir_and_migrations` test fails deterministically when a 
 
 **Note:** This is distinct from STAB-62 (intermittent WSS integration test port-bind flake) but related in theme.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#238](https://github.com/intent-hq/intentd/pull/238), 2026-07-17) — e2e_core_cli_commands.rs doctor test now runs hermetically with INTENTD_TCP_PORT=0 and 30s startup timeout for slow coverage instrumentation
 
 ### STAB-62 (2026-07-17, area: intentd tests / wss port binding, severity: P2)
 
@@ -96,7 +95,7 @@ Intermittent WSS integration test failure due to port bind conflict.
 
 **Expected:** All WSS integration tests should reliably acquire unique ports without conflicts, either through dynamic port allocation or proper test isolation/cleanup.
 
-**Status:** open (needs reproduction and root cause analysis)
+**Status:** fixed ([intent-hq/intentd#238](https://github.com/intent-hq/intentd/pull/238), 2026-07-17) — converted 30+ daemon-spawning e2e tests to INTENTD_TCP_PORT=0 with system.status readback for dynamic port allocation; converted in-process tests to base_port: 0; fixed bind_once in intent-transport to return actual bound port from listener.local_addr() instead of configured 0; removed hard-coded ports and bind-then-release helpers
 
 ### STAB-60 (2026-07-15, area: prompt assembly / settings, severity: P1)
 
@@ -415,6 +414,16 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-98 (2026-07-17, area: intentd CI / intent-core path_utils tests, severity: P2)
+
+Flaky test failure: fake-shell tests other than `capture_login_shell_path_with_fake_shell` intermittently failed due to missing fsync.
+
+**Repro:** Six path_utils fake-shell tests (`sudo_binary_path_with_fake_shell`, `user_binary_path_with_fake_shell`, `resolve_binary_path_with_fake_shell`, `resolve_binary_with_absolute_path_with_fake_shell`, `sudo_login_shell_path_with_fake_shell`, `user_login_shell_path_with_fake_shell`) wrote fake shell scripts using bare `fs::write` without fsync, causing intermittent CI failures when the script content was incompletely flushed before exec. This was a sibling recurrence of the STAB-43 pattern (same root cause, different test functions).
+
+**Expected:** All fake-shell tests flush their fixture files before exec. Test passes reliably in CI without intermittent failures.
+
+**Status:** fixed ([intent-hq/intentd#233](https://github.com/intent-hq/intentd/pull/233), 2026-07-17) — introduced shared `write_fake_shell` helper (File::create + write_all + sync_all + chmod 0o755) applied to all 7 fake-shell tests
 
 ### STAB-97 (2026-07-17, area: intentd workspace RPC / activity derivation, severity: P2)
 
