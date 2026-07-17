@@ -284,7 +284,7 @@ a replayed create returns the stored result and does not re-seed.
 **Setup script persistence and execution (`workspace.create`).** When an explicit
 `setupScript` parameter is supplied, the daemon writes it into
 `<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
-provisioning, using merge semantics — unrelated keys (e.g., `scripts[]`) are preserved;
+provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
 writes are no-op when the existing value is identical. The `.intent/config.json` file
 becomes the sole source of truth for the setup script; the workspace DB `setup_script`
 field is retired from all write paths (kept for wire compat and legacy read-only
@@ -293,7 +293,7 @@ resolved via worktree-first `.intent/config.json` read with legacy DB fallback),
 daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
 the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
 (the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
-(baseRef or "main"). Execution never fails workspace creation — errors are logged and
+(baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
 surfaced. Script output is streamed to a "Setup" terminal for the workspace,
 consistent with other workspace terminals.
 
@@ -1836,13 +1836,13 @@ setup script exists (non-empty, resolved from worktree `.intent/config.json` or 
 fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
 provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
 (repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
-branch), and `SOURCE_BRANCH` (baseRef or "main"). Execution never fails workspace creation —
+branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
 errors are logged and surfaced. Script output is streamed to a "Setup" terminal for the workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } — reads from worktree `.intent/config.json` (when present), falls back to legacy DB row `setup_script` (read-only) |
-| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written |
+| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written. Returns -32602 (invalid params) when the workspace has no `worktreePath` or `repositoryPath` |
 | workspace.detectProjectType | workspaceId (req) | { projectType: ProjectType \| null } — null when no known manifest is found |
 | workspace.generateSetupScript | workspaceId (req) | { setupScript: SetupScript } — AI-assisted draft (returned, not auto-saved; persist with saveSetupScript) |
 
