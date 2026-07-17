@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-79 (as of 2026-07-17)
+**Next available ID:** STAB-80 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
+
+Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
+
+**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to three related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'.
+
+**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), 2026-07-17)
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
