@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-88 (as of 2026-07-17)
+**Next available ID:** STAB-89 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-88 (2026-07-17, area: intentd workspace RPC / activity derivation, severity: P2)
+
+Renaming a workspace in the sidebar (any workspace.update/archive/dismissAttention mutation) while an agent runs flipped the sidebar to IDLE then bounced back; rapid busy→idle→busy agent transitions also flickered the indicator.
+
+**Repro:** Before the fix: with an agent actively running in a workspace, rename the workspace in the sidebar (or trigger any workspace mutation: archive, unarchive, dismiss attention, mark seen). Observed: the workspace activity indicator momentarily flashes to "IDLE" (gray) then snaps back to "AgentRunning" (blue). Similarly, rapid busy→idle→busy agent state transitions (e.g., an agent finishing a short task then starting another within milliseconds) caused visible sidebar flicker as the indicator oscillated IDLE/busy/IDLE/busy.
+
+**Root cause:** Workspace-returning mutation paths (`workspace.update`, `workspace.archive`, `workspace.unarchive`, `workspace.dismissAttention`, `workspace.markSeen`, `workspace.duplicate`) returned Workspace records without deriving the `activity` field from live agent state. The `activity` field was left at the stale persisted value (typically `Idle`) even when agents were actively running in the workspace. The `workspace.get` and `workspace.list` RPCs correctly derived activity via `workspace_activity()`, but mutations did not, causing a split-brain where the mutation response disagreed with the list/get view. On the FE, mutation responses overwrote the Redux workspace entity (including the stale `activity: "Idle"`), causing the sidebar to briefly show IDLE until the next `workspace:activity-changed` event arrived and corrected it. Additionally, workspace activity state transitions had no hysteresis on the busy→idle edge: the instant the last agent in a workspace transitioned to idle, a `workspace:activity-changed` event with `activity: "Idle"` was emitted — even if another agent in the same workspace was about to start (or if the agent was about to be woken by a parent). This caused rapid busy→idle→busy sequences to each emit a full state-change pair, flickering the sidebar.
+
+**Expected:** Workspace mutation responses carry derived `activity` matching live agent state, consistent with `workspace.get` / `workspace.list`. Busy→idle transitions are debounced (~3s, env-configurable) to suppress transient flicker when agents briefly go idle then resume.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/236 + https://github.com/intent-hq/intentd/pull/239, 2026-07-17) — PR #236 (d07a7f86) derives `activity` on all Workspace-returning mutation paths (update_workspace incl. chief branch, archive_workspace, unarchive_workspace, dismiss_attention, mark_seen, duplicate_workspace) via `workspace_activity()`, mirroring the `get_workspace` / `list_workspaces` pattern, with 5 regression tests asserting AgentRunning when agents are in-flight; PR #239 (0b02212ac9e15e4f8b9b920c2cd629c8acd89414) debounces the busy→idle edge by 3 seconds (env-configurable via `WORKSPACE_IDLE_DEBOUNCE_TEST_MS`) with generation counter + AbortHandle race guards, dual-path coverage (both `workspace:activity-changed` events and `workspace_activity()` getter check the debounce grace window), comprehensive unit tests (381 passing with 50ms test window) and WSS E2E test (`workspace_activity_changed_debounce`), and no impact on parent-agent wake latency (completion-delivery worker triggers on `agent:idle` events directly, independent of the workspace activity debounce)
 
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
