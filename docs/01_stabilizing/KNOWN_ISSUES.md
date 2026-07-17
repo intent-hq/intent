@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-82 (as of 2026-07-17)
+**Next available ID:** STAB-83 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
+
+Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
+
+**Repro:** Start intentd, spawn an agent and let it run a turn, then quit intentd gracefully via `SIGINT` or `SIGTERM` (normal quit, not a crash). Expected: after restart, `agent.listInterrupted` returns the agent and the FE shows the resumption modal. Actual before fix: `agent.listInterrupted` returned an empty list because the `signal_handler_task` settled all active agent sessions to `RuntimeIdle` without capturing them as interrupted records first. The heal sweep on next startup thus saw only `RuntimeIdle` rows (not `active`/`processing`/`waiting`) and never created interruption records. The resumption modal only appeared after crash scenarios (where the signal handler never ran).
+
+**Expected:** Graceful shutdown (`SIGINT`/`SIGTERM`) captures in-flight agents (`active`, `processing`, `waiting` statuses) as interrupted records before settling them to `RuntimeIdle`, exactly like the crash-recovery heal path. The resumption modal appears after both clean and unclean shutdowns whenever agents were mid-turn.
+
+**Status:** fixed ([intent-hq/intentd#219](https://github.com/intent-hq/intentd/pull/219), 2026-07-17)
 
 ### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
 
