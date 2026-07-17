@@ -29,7 +29,7 @@ Chief of Staff agent broken: cannot enumerate workspaces or access app-level ope
 
 **Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
 
-**Status:** open (fix in progress on branch `feat/ws-app-parity` in both `packages/intentd` and `packages/cloudlands-fe`; will mark fixed once PRs land)
+**Status:** fixed (intentd: commit bd4cf8a, b4b78ab, 5834cc0 on branch `feat/ws-app-parity`; E2E coverage added for WSS + MCP paths, 2026-07-17)
 
 ### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
 
