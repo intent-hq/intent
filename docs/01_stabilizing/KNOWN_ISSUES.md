@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-62 (as of 2026-07-17)
+**Next available ID:** STAB-63 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-62 (2026-07-17, area: intentd tests / wss port binding, severity: P2)
+
+Intermittent WSS integration test failure due to port bind conflict.
+
+**Repro:** Observed once locally during `cargo test --workspace` on the flaky-test stabilization branch (2026-07-17). A WSS integration test failed with a port bind conflict error, suggesting that the test's WSS listener tried to bind to a port already in use by another test or process. The failure was intermittent and did not reproduce on subsequent runs. The specific test name was not captured, but the failure occurred during the full workspace test suite run (not during isolated test execution).
+
+**Expected:** All WSS integration tests should reliably acquire unique ports without conflicts, either through dynamic port allocation or proper test isolation/cleanup.
+
+**Status:** open (needs reproduction and root cause analysis)
 
 ### STAB-60 (2026-07-15, area: prompt assembly / settings, severity: P1)
 
