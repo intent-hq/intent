@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-90 (as of 2026-07-17)
+**Next available ID:** STAB-91 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-90 (2026-07-17, area: intentd intent-git / git.pull, severity: P1)
+
+Workspace creation auto-pull failed when the configured repository has submodules and the remote had advanced with a gitlink bump.
+
+**Repro:** Clone a repository with submodules (e.g., `intent-hq/monorepo`), make a local commit that bumps a submodule gitlink, push to remote, then create a new workspace from the remote URL. The workspace-create flow's auto-pull (`git.pull` on the default branch before worktree provisioning) succeeded in fetching and rebasing the branch, but the submodule worktree stayed at the old commit instead of syncing to the new gitlink. This left the workspace in a dirty state immediately after creation — `git status` showed "modified: packages/intentd (new commits)" even though no user changes had been made. The root cause was that `git.pull` ran `git pull --rebase` but never followed up with `git submodule update --init --recursive` to sync the submodule worktrees to the updated gitlinks.
+
+**Expected:** After a successful pull in a repository with configured submodules (`.gitmodules` present), `git.pull` should automatically run `git submodule update --init --recursive` to sync submodule worktrees to the new gitlinks, matching the behavior users expect from a manual `git pull` workflow. The workspace should be clean after creation, with no spurious dirty submodule gitlink changes.
+
+**Status:** fixed ([intent-hq/intentd#232](https://github.com/intent-hq/intentd/pull/232), 2026-07-17) — `git.pull` now runs bounded submodule sync after successful pull when `.gitmodules` exists; regression test verifies submodule worktree syncs to new gitlink
 
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
