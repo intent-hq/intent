@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-80 (as of 2026-07-17)
+**Next available ID:** STAB-81 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-80 (2026-07-17, area: intentd intent-acp / workspace_api MCP, severity: P1)
+
+Chief of Staff agent broken: cannot enumerate workspaces or access app-level operations.
+
+**Repro:** Create a Chief of Staff workspace agent and try to use it. The agent reports that the `ws.app` namespace (which provides `workspaces.list`, `agents.list`, UI navigation, and proposal management) is not registered in the session. Only the single-workspace API surface is available, and since the Chief workspace has no repository attached, there's no way for the agent to enumerate or manage user workspaces.
+
+**Root cause:** The `ws.app.*` MCP tool bindings were not registered in the daemon's MCP server for chief-workspace sessions. The bindings existed in `intent-acp/src/mcp_server/bindings/app/` but were not exposed in the workspace_api tool description for chief agents.
+
+**Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
+
+**Status:** open (fix in progress on branch `feat/ws-app-parity` in both `packages/intentd` and `packages/cloudlands-fe`; will mark fixed once PRs land)
 
 ### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
 
