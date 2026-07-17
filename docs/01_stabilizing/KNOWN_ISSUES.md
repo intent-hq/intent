@@ -19,26 +19,6 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
-
-Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
-
-**Repro:** Start intentd, spawn an agent and let it run a turn, then quit intentd gracefully via `SIGINT` or `SIGTERM` (normal quit, not a crash). Expected: after restart, `agent.listInterrupted` returns the agent and the FE shows the resumption modal. Actual before fix: `agent.listInterrupted` returned an empty list because the `signal_handler_task` settled all active agent sessions to `RuntimeIdle` without capturing them as interrupted records first. The heal sweep on next startup thus saw only `RuntimeIdle` rows (not `active`/`processing`/`waiting`) and never created interruption records. The resumption modal only appeared after crash scenarios (where the signal handler never ran).
-
-**Expected:** Graceful shutdown (`SIGINT`/`SIGTERM`) captures in-flight agents (`active`, `processing`, `waiting` statuses) as interrupted records before settling them to `RuntimeIdle`, exactly like the crash-recovery heal path. The resumption modal appears after both clean and unclean shutdowns whenever agents were mid-turn.
-
-**Status:** fixed ([intent-hq/intentd#219](https://github.com/intent-hq/intentd/pull/219), 2026-07-17)
-
-### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
-
-Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
-
-**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to three related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'.
-
-**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'.
-
-**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), 2026-07-17)
-
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
 The `doctor_checks_data_dir_and_migrations` test fails deterministically when a live intentd daemon is running.
@@ -378,6 +358,26 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
+
+Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
+
+**Repro:** Start intentd, spawn an agent and let it run a turn, then quit intentd gracefully via `SIGINT` or `SIGTERM` (normal quit, not a crash). Expected: after restart, `agent.listInterrupted` returns the agent and the FE shows the resumption modal. Actual before fix: `agent.listInterrupted` returned an empty list because the `signal_handler_task` settled all active agent sessions to `RuntimeIdle` without capturing them as interrupted records first. The heal sweep on next startup thus saw only `RuntimeIdle` rows (not `active`/`processing`/`waiting`) and never created interruption records. The resumption modal only appeared after crash scenarios (where the signal handler never ran).
+
+**Expected:** Graceful shutdown (`SIGINT`/`SIGTERM`) captures in-flight agents (`active`, `processing`, `waiting` statuses) as interrupted records before settling them to `RuntimeIdle`, exactly like the crash-recovery heal path. The resumption modal appears after both clean and unclean shutdowns whenever agents were mid-turn.
+
+**Status:** fixed ([intent-hq/intentd#219](https://github.com/intent-hq/intentd/pull/219), 2026-07-17)
+
+### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
+
+Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
+
+**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to four related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'. (4) Edge-triggered workspace:activity-changed events could be missed (e.g., coordinator-only workspaces where the 0→1 agent transition fired before FE subscription or entity seeding), leaving workspaces stuck at Idle even while agents were mid-turn.
+
+**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'. Activity reconciliation detects missed edges via agent-implying events and refetches workspace.activity when FE state is stale.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), [intent-hq/cloudlands-fe#128](https://github.com/intent-hq/cloudlands-fe/pull/128), 2026-07-17)
 
 ### STAB-81 (2026-07-17, area: cloudlands-fe / settings auto-update, severity: P1)
 
