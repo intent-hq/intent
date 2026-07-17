@@ -1755,7 +1755,28 @@ unbounded and rotate independently of the config surface.
   { "serverId":"srv-linear","value":"********" } ] } }
 ```
 
-### 5.23 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 104)*
+### 5.23 Skills — `skill.list` *(new in intentd — not part of the ported 104)*
+
+The backend exposes daemon-side skills discovery so clients can list skills for a workspace. The daemon scans the 5-tier precedence (user p1-3: `~/.agents/skills`, `~/.claude/skills`, `~/.augment/skills`; project p4-5: `<workspace>/.agents/skills`, `<workspace>/.augment/skills`) and parses `SKILL.md` frontmatter (name, description, allowedTools, compatibility). Name collisions shadow by precedence with warn logs. The discovered skill set is cached and invalidated by file-watch.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — -32602 if the workspace is not found or has no worktree path |
+
+- `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p4-5) and `"user"` for user-tier skills (p1-3); `allowedTools` / `compatibility` are optional frontmatter fields.
+- Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
+- The daemon emits `skills:changed` (§6.5) when the discovered skill set changes for a workspace (file-watch on the five scan roots).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":64,"method":"skill.list","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":64,"result":[
+  { "name":"python-expert","description":"Python development specialist","location":"/Users/user/.augment/skills/python-expert/SKILL.md","scope":"user" },
+  { "name":"typescript-expert","description":"TypeScript specialist","location":"/workspace/.augment/skills/typescript-expert/SKILL.md","scope":"project","allowedTools":"*","compatibility":"typescript" } ] }
+```
+
+### 5.24 Usage metrics — `workspace.getTokenUsage` *(new in intentd — not part of the ported 104)*
 
 The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
 usage per agent and per model and writes the durable `tokenUsage` field on the `Workspace`; only the
@@ -2935,6 +2956,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
 | agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
+| skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace (file-watch on the five scan roots: `~/.agents/skills`, `~/.claude/skills`, `~/.augment/skills`, `<workspace>/.agents/skills`, `<workspace>/.augment/skills`). data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.23) to refresh the skill roster. New in intentd — not part of the ported reference taxonomy. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused in the reference impl. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (matches the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
