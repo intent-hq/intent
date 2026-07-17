@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-88 (as of 2026-07-17)
+**Next available ID:** STAB-90 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -410,6 +410,26 @@ Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "
 **Root cause (traced):** The FE renderer is daemon-bridged via the mock IPC router. `chat-send-service.ts` and `agent-stream-lifecycle.ts` correctly thread `priority: "interrupt"` all the way into the `STREAM_MESSAGE` invoke (and the zod schema `AgentBackendStreamMessageSchema` allows it), **but the bridge handler in `src/store/renderer/seeders/agent-ipc-bridge-seeder.ts` (STREAM_MESSAGE → `agent.sendMessage`) never forwards `priority`** — it forwards messageId/imageBlocks/fileBlocks/model/messageMetadata/contextReferences/noteIds/stdinContext/app-ID trio only. Consequences, matching the reported symptoms exactly: (1) Daemon receives a plain `agent.sendMessage` while the turn is in flight → `try_begin` fails → the message is **silently auto-queued** (`{ success: true, queued: true }`) instead of preempting (`interrupt_send_message` is never invoked). (2) The FE only checks `response.success` — `queued: true` is ignored on this path. It has already torn down the old stream handler and registered a fresh one for a new assistant placeholder, so the old turn's chunks/complete are treated as stale and skipped → UI wedges in "Thinking". (3) The daemon queue is in-memory, so restarting intentd **loses the queued message**. (4) The renderer's stream-registry/session state stays wedged (restarting intentd doesn't reset the renderer), so subsequent sends show status ticks but no transcript.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `agent-ipc-bridge-seeder.ts` now forwards `priority: "interrupt"` through STREAM_MESSAGE → agent.sendMessage; `agent-stream-lifecycle.ts` handles `{ success: true, queued: true }` responses (cleanup + queue seeding) to avoid wedged placeholders
+
+### STAB-89 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
+
+The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
+
+**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-88 fix), but the execution path was never implemented.
+
+**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
+
+### STAB-88 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
+
+Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
+
+**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
+
+**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
 
 ### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
 
