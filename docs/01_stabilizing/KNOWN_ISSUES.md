@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-88 (as of 2026-07-17)
+**Next available ID:** STAB-93 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-90 (2026-07-17, area: intentd intent-git / git.pull, severity: P1)
+
+Workspace creation auto-pull failed when the configured repository has submodules and the remote had advanced with a gitlink bump.
+
+**Repro:** Clone a repository with submodules (e.g., `intent-hq/monorepo`), make a local commit that bumps a submodule gitlink, push to remote, then create a new workspace from the remote URL. The workspace-create flow's auto-pull (`git.pull` on the default branch before worktree provisioning) succeeded in fetching and rebasing the branch, but the submodule worktree stayed at the old commit instead of syncing to the new gitlink. This left the workspace in a dirty state immediately after creation — `git status` showed "modified: packages/intentd (new commits)" even though no user changes had been made. The root cause was that `git.pull` ran `git pull --rebase` but never followed up with `git submodule update --init --recursive` to sync the submodule worktrees to the updated gitlinks.
+
+**Expected:** After a successful pull in a repository with configured submodules (`.gitmodules` present), `git.pull` should automatically run `git submodule update --init --recursive` to sync submodule worktrees to the new gitlinks, matching the behavior users expect from a manual `git pull` workflow. The workspace should be clean after creation, with no spurious dirty submodule gitlink changes.
+
+**Status:** fixed ([intent-hq/intentd#232](https://github.com/intent-hq/intentd/pull/232), 2026-07-17) — `git.pull` now runs bounded submodule sync after successful pull when `.gitmodules` exists; regression test verifies submodule worktree syncs to new gitlink
 
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
@@ -391,7 +401,7 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
-### STAB-87 (2026-07-17, area: cloudlands-fe home screen / workspace list, severity: P1)
+### STAB-92 (2026-07-17, area: cloudlands-fe home screen / workspace list, severity: P1)
 
 The "Show Archived" toggle on the Home screen had no effect — archived workspaces never appeared in the list even when toggled on.
 
@@ -402,6 +412,58 @@ The "Show Archived" toggle on the Home screen had no effect — archived workspa
 **Expected:** When "Show Archived" is toggled on, the Home screen displays both active and archived workspaces. The FE passes `includeArchived: true` to `workspace.list` when the toggle is enabled, and filters the full result set client-side.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#134](https://github.com/intent-hq/cloudlands-fe/pull/134), 2026-07-17)
+
+### STAB-91 (2026-07-17, area: cloudlands-fe sidebar / active-streams tracker, severity: P1)
+
+Sidebar agent-running icons never appeared for workspaces with active agents after app boot.
+
+**Repro:** Before the fix: start the app with a workspace that has one or more active agents (mid-turn). Open that workspace in the sidebar. Observe: the sidebar WorkspaceCard shows no running-agent icons (the avatars with "🔄" overlay or equivalent) for the active agents, even though the agents are actively processing turns and visible in the chat UI. The workspace appears idle in the sidebar.
+
+**Root cause:** The tracker→Redux bumpActiveStreamsVersion bridge was lost in the saga removal. The activeStreamsTracker (in features/agent/stream/active-streams-tracker.ts) maintained correct live state of active agents and fired activeStreamsChanged events when agents started or stopped streaming, but the saga that previously listened to these events and dispatched activeStreamsVersionBumped Redux actions (to trigger WorkspaceCard re-renders) was removed in commit 95d908a2 without being re-homed as middleware. After boot, when active-stream data arrived from the daemon (via agent:stream or agent:updated WSS events), the tracker updated its internal state but the Redux store's activeStreamsVersion counter never incremented, so the sidebar WorkspaceCard components never re-rendered to reflect the newly active agents.
+
+**Expected:** When activeStreamsTracker fires activeStreamsChanged events (agent started or stopped), a middleware immediately dispatches activeStreamsVersionBumped to bump the Redux store's version counter, triggering WorkspaceCard re-renders that reflect the current set of running agents in the sidebar.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#100](https://github.com/intent-hq/cloudlands-fe/pull/100), 2026-07-17)
+
+### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Re-entering a streaming conversation shows no deltas until the next tool call (or later).
+
+**Repro:** Start a conversation with a long-running agent task (e.g., multi-file edit or research). While the agent is mid-turn and streaming partial assistant text, navigate away from the chat (switch to another workspace or panel). Navigate back to the streaming chat. Observed: the partial assistant message is blank until the agent emits the next tool call or completes the turn. Expected: the partial text appears immediately and continues growing with each delta.
+
+**Root cause (traced):** Chat hydration (`chat-read-service.ts` → `loadChatTranscript`) pages through `agent.getConversation` only. On the daemon, the in-flight partial assistant message (live-turn slot, CS-0 D5) is merged **only** into the `chat.subscribe` seq-0 snapshot (`chat_snapshot` in `intent-transport/src/subscriptions.rs`) — `agent.getConversation` returns persisted messages only. The FE used to hydrate via `chat.subscribeSnapshot` but switched to `getConversation` paging (to fix >50-message truncation), silently losing the live-turn merge. Two compounding effects: (1) Hydration wipes the in-flight placeholder (the events bridge keeps the transcript growing in Redux even while the chat is closed, but `loadChatTranscript` replaces `messages` with the persisted-only page — dropping the in-flight assistant message), and (2) after an app restart mid-turn, the bridge accumulator (`streamsByAgent`) restarts empty and only holds the chunk tail; `resolveStreamContentBlocks`' `hasActiveStreamRegression` correctly rejects the shorter/poorer candidate versus the fuller hydrated partial — so deltas stay invisible until the candidate outgrows it (typically at the next tool call, which adds blocks).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
+
+### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
+
+**Repro:** Start a conversation and send a message that triggers a long-running agent task. While the agent is mid-turn (visible "Thinking" or streaming partial response), type a new message and press ⌘Enter (force-submit / interrupt). Observed: the UI switches to "Thinking" for the new message but never shows the message in the transcript. The session is wedged — subsequent messages show status ticks but no transcript. Restarting the app (Electron relaunch) recovers the UI but the interrupted message is lost. Restarting only intentd doesn't help because the renderer's wedged state persists (restarting intentd doesn't reset the renderer). Expected: the new message should interrupt the old turn, appear immediately in the transcript, and stream normally.
+
+**Root cause (traced):** The FE renderer is daemon-bridged via the mock IPC router. `chat-send-service.ts` and `agent-stream-lifecycle.ts` correctly thread `priority: "interrupt"` all the way into the `STREAM_MESSAGE` invoke (and the zod schema `AgentBackendStreamMessageSchema` allows it), **but the bridge handler in `src/store/renderer/seeders/agent-ipc-bridge-seeder.ts` (STREAM_MESSAGE → `agent.sendMessage`) never forwards `priority`** — it forwards messageId/imageBlocks/fileBlocks/model/messageMetadata/contextReferences/noteIds/stdinContext/app-ID trio only. Consequences, matching the reported symptoms exactly: (1) Daemon receives a plain `agent.sendMessage` while the turn is in flight → `try_begin` fails → the message is **silently auto-queued** (`{ success: true, queued: true }`) instead of preempting (`interrupt_send_message` is never invoked). (2) The FE only checks `response.success` — `queued: true` is ignored on this path. It has already torn down the old stream handler and registered a fresh one for a new assistant placeholder, so the old turn's chunks/complete are treated as stale and skipped → UI wedges in "Thinking". (3) The daemon queue is in-memory, so restarting intentd **loses the queued message**. (4) The renderer's stream-registry/session state stays wedged (restarting intentd doesn't reset the renderer), so subsequent sends show status ticks but no transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `agent-ipc-bridge-seeder.ts` now forwards `priority: "interrupt"` through STREAM_MESSAGE → agent.sendMessage; `agent-stream-lifecycle.ts` handles `{ success: true, queued: true }` responses (cleanup + queue seeding) to avoid wedged placeholders
+
+### STAB-89 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
+
+The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
+
+**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-88 fix), but the execution path was never implemented.
+
+**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
+
+### STAB-88 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
+
+Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
+
+**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
+
+**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
 
 ### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
 

@@ -281,6 +281,22 @@ workspace visibility. The seed captures an initial `v1` version snapshot and pub
 idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
 a replayed create returns the stored result and does not re-seed.
 
+**Setup script persistence and execution (`workspace.create`).** When an explicit
+`setupScript` parameter is supplied, the daemon writes it into
+`<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
+provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
+writes are no-op when the existing value is identical. The `.intent/config.json` file
+becomes the sole source of truth for the setup script; the workspace DB `setup_script`
+field is retired from all write paths (kept for wire compat and legacy read-only
+fallback only). After the config write, if an effective setup script exists (non-empty,
+resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
+daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
+the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+(the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
+(baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
+surfaced. Script output is streamed to a "Setup" terminal for the workspace,
+consistent with other workspace terminals.
+
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon minimally creates the agent session (honoring `agentId`/`name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
@@ -768,7 +784,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
 | git.discard | workspaceId (req), paths (req, CSV string or array) | { ok, paths } — discard working-tree changes: tracked paths restored from the index (equivalent to `git checkout -- <paths>`), untracked paths deleted from disk (files unlinked, directories removed recursively); staged changes are untouched. Rejects `./*/--all` with `-32603`; idempotent on already-clean tracked paths and on missing untracked paths (ENOENT parity with the reference's race-tolerant `fs.unlink`). Ports the legacy `git:discard-changes` IPC. |
 | git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
-| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
+| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). After a successful pull, if `.gitmodules` exists, runs `git submodule update --init --recursive` (bounded 100s timeout) to sync submodule worktrees to updated gitlinks. Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems, submodule sync timeout/failures) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
@@ -1809,21 +1825,31 @@ session. The same object appears as the `stats` field on `AgentSession` in `agen
 ### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` *(new in intentd — not part of the ported 104)*
 
 A per-workspace **setup script** that provisions a fresh worktree (install deps, build prereqs, …),
-persisted on the durable `setupScript` field of the `Workspace`. `detectProjectType` inspects
-manifest files to classify the project; `generateSetupScript` is the **AI-assisted** generator —
-this maps the reference UI's `generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every
-method requires `workspaceId`.
+**persisted in `.intent/config.json`** in the worktree (committable, repo-scoped). The workspace
+DB `setup_script` field is retired from all write paths (kept for wire compat and legacy
+read-only fallback only). `detectProjectType` inspects manifest files to classify the project;
+`generateSetupScript` is the **AI-assisted** generator — this maps the reference UI's
+`generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every method requires `workspaceId`.
+
+**Setup script execution:** When a workspace is created (`workspace.create`) and an effective
+setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
+fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
+provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
+(repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
+branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
+errors are logged and surfaced. Script output is streamed to a "Setup" terminal for the workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } |
-| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — persists the body and returns the stored record |
+| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } — reads from worktree `.intent/config.json` (when present), falls back to legacy DB row `setup_script` (read-only) |
+| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written. Returns -32602 (invalid params) when the workspace has no `worktreePath` or `repositoryPath` |
 | workspace.detectProjectType | workspaceId (req) | { projectType: ProjectType \| null } — null when no known manifest is found |
 | workspace.generateSetupScript | workspaceId (req) | { setupScript: SetupScript } — AI-assisted draft (returned, not auto-saved; persist with saveSetupScript) |
 
 - **SetupScript** — `{ script: string, projectType?: ProjectType, updatedAt: number,
   generatedBy?: "user"\|"agent" }`. `generatedBy` records whether the body was hand-written
   (`saveSetupScript`) or AI-drafted (`generateSetupScript`); `updatedAt` is the last-write epoch-ms.
+  When read from `.intent/config.json`, `generatedBy` is synthesized as `"user"`.
 - **ProjectType** — `"node" | "python" | "go" | "rust" | "ruby"` (detected from `package.json`,
   `pyproject.toml`/`requirements.txt`, `go.mod`, `Cargo.toml`, and `Gemfile` respectively).
 
