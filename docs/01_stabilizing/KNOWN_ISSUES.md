@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-68 (as of 2026-07-17)
+**Next available ID:** STAB-61 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-60 (2026-07-17, area: intentd CI / coverage instrumentation, severity: P2)
+
+Flaky test failure: `completion_report_cleared_when_new_turn_begins_over_wss` in `crates/intentd/tests/e2e_wss_agent_lifecycle.rs` under llvm-cov coverage instrumentation.
+
+**Repro:** The `completion_report_cleared_when_new_turn_begins_over_wss` test (introduced by intentd PR #221) fails deterministically-ish under coverage instrumentation (`cargo llvm-cov`) with "wss event timed out: Elapsed(())" at line 261 but passes in the standalone `check` job. Observed on intentd PR #223 CI runs 29577302534 and 29581147065 (both `coverage-all` and `coverage-e2e` jobs). Same flaky-under-coverage class as STAB-40/42/44 — coverage instrumentation overhead causes timing-sensitive tests to exceed fixed timeouts.
+
+**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
+
+**Status:** open
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
@@ -425,25 +435,25 @@ The cloudlands-fe repo carried an orphaned `intentd` submodule gitlink (mode `16
 
 **Status:** fixed ([intent-hq/cloudlands-fe#92](https://github.com/intent-hq/cloudlands-fe/pull/92), 2026-07-17) — `git rm --cached intentd` in cloudlands-fe removes the stray gitlink; monorepo submodule bump follows.
 
-### STAB-59 (2026-07-16, area: WSS listener settings / Settings UI, severity: P2)
+### STAB-59 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
 
-Enabling the WebSocket API with the port already in use failed silently (error only in daemon stderr; no toast) and the port was not editable in the UI.
+The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
 
-**Repro:** Start intentd, enable the WebSocket API via Settings UI while another process is already bound to the default port (5181). Observed while dogfooding: the toggle appeared to enable but the listener never started (error only in daemon stderr: "Address already in use"); no user-facing error toast was shown. Additionally, the port input field was disabled/non-editable in the Settings UI, so there was no way to change the port to an available one without manually editing the daemon settings file.
+**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-58 fix), but the execution path was never implemented.
 
-**Expected:** When enabling the WebSocket API fails (e.g., port in use), show a user-facing error toast with the failure reason. The port input field should always be editable regardless of the toggle state, allowing the user to pick a different port before retrying.
+**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
 
-**Status:** fixed ([intent-hq/intentd#201](https://github.com/intent-hq/intentd/pull/201), [intent-hq/cloudlands-fe#85](https://github.com/intent-hq/cloudlands-fe/pull/85), 2026-07-16)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
 
-### STAB-58 (2026-07-15, area: intentd agent spawn / provider binary resolution, severity: P1)
+### STAB-58 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
 
-Agent spawn fails with `spawn provider failed: claude-agent-acp: No such file or directory` when the provider CLI is not in the daemon's inherited PATH.
+Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
 
-**Repro:** Create a blank agent using the claude-code provider (or any ACP provider) when the provider binary exists only in a non-standard location (e.g., Reve's private app dir `~/Library/Application Support/revedev-52ae4245/bin`) not in the daemon's PATH and not in `~/.augment/bin`. Observed while self-hosting: attempting to spawn an agent with `claude-agent-acp` or `auggie` from the dogfooding daemon failed with `ENOENT` errors because both binaries existed only in Reve's private bin directory, which was not on the daemon's PATH. The spawn path called `Command::new(opts.provider.command)` with bare command names and never populated `SpawnOptions.provider_binary`, so `enhanced_path(None)` only searched `~/.augment/bin` (empty on this machine) + generic node/homebrew dirs + inherited PATH. The agent never responded and remained stuck.
+**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
 
-**Expected:** The daemon resolves provider binaries to absolute paths using 3-tier precedence: (1) `providers.paths.<id>` setting, (2) `~/.augment/bin/<command>`, (3) enhanced PATH directory scan (including discovery logic from `find_auggie` / `resolve_on_path`). The resolved absolute path is used for `Command::new` AND passed as `SpawnOptions.provider_binary` so `enhanced_path` prepends its parent directory (ensuring co-located node resolves for shebang scripts). If resolution fails at all three tiers, spawn proceeds with bare name (backward-compatible fallback). Uniform across all providers — no per-provider special cases. Spawn failure errors name the unresolvable command.
+**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
 
-**Status:** fixed ([intent-hq/intentd#189](https://github.com/intent-hq/intentd/pull/189), 2026-07-16) — generalized provider binary discovery with settings → managed bin → PATH-scan precedence, wired into agent spawn. The claude-code provider now falls back to `npx -y @agentclientprotocol/claude-agent-acp` when the adapter binary is absent ([intent-hq/intentd#215](https://github.com/intent-hq/intentd/pull/215), 2026-07-17).
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
 
 ### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
 
