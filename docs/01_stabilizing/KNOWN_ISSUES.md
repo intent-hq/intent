@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-93 (as of 2026-07-17)
+**Next available ID:** STAB-94 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -400,6 +400,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-93 (2026-07-17, area: cloudlands-fe home screen / workspace list, severity: P1)
+
+The "Show Archived" toggle on the Home screen had no effect — archived workspaces never appeared in the list even when toggled on.
+
+**Repro:** Before the fix: archive a workspace (via workspace settings or `workspace.archive` RPC), then navigate to the Home screen and toggle "Show Archived" to on. Observe: the archived workspace does not appear in the list; only active workspaces are visible regardless of toggle state.
+
+**Root cause:** The renderer `LiveWorkspacesClient.list()` (in `packages/cloudlands-fe/src/main/live-clients/live-workspaces-client.ts`) called the daemon's `workspace.list` RPC without the `includeArchived` parameter. The daemon defaults `includeArchived` to `false` when not specified (per PROTOCOL.md §5.1), so archived workspaces were never returned to the frontend store. The "Show Archived" toggle filtered an already-incomplete dataset (filtering `[]` yields `[]`), making the toggle appear completely non-functional.
+
+**Expected:** When "Show Archived" is toggled on, the Home screen displays both active and archived workspaces. The FE passes `includeArchived: true` to `workspace.list` when the toggle is enabled, and filters the full result set client-side.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#134](https://github.com/intent-hq/cloudlands-fe/pull/134), 2026-07-17)
 
 ### STAB-92 (2026-07-17, area: intentd agent spawn / providers, severity: P1)
 
