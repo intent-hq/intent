@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-86 (as of 2026-07-17)
+**Next available ID:** STAB-87 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
+
+Home-screen workspace delete did not remove spaces from the visible list, requiring a full app refresh (Cmd-R), and spammed logs with `resolveWorkspaceRoot` / `note.list spec reseed failed` errors for deleted workspaces.
+
+**Repro:** Before the fix: create a disposable workspace, delete it from the Home screen. Observed: (1) the deleted workspace remained visible in the workspaces list until Cmd-R refresh, and (2) `make dev` logs filled with paired errors per deleted workspace: main-process `[WorkspaceConfig] resolveWorkspaceRoot: workspace "<slug>" not found in any location` (from `user-activity.ipc.ts:51` calling `WorkspaceConfig.resolveWorkspaceRoot`) and daemon `WARN intent_services: note.list spec reseed failed; continuing with best-effort list workspace_id=<slug> error=internal error: insert note failed: error returned from database: (code: 787) FOREIGN KEY constraint failed`.
+
+**Root cause:** When `workspace:deleted` event arrived from daemon, `daemon-events-bridge.ts` dispatched `workspaceDeleted(wsId, agentIds)`. Other slices (`workspace-agents`, `chat-state`, `agent-session`) handled this action and purged their workspace-scoped state, BUT the `workspace-slice` reducer had NO case for `workspaceDeleted`. The workspace entity stayed in `state.workspace.workspaces` collection, and the FE continued to attempt operations (user-activity IPC, note subscriptions) on the deleted workspace.
+
+**Expected:** After clicking Delete on the Home screen OR receiving an external `workspace:deleted` event, the space must disappear from the list immediately and permanently. Zero occurrences of `resolveWorkspaceRoot` / `note.list spec reseed failed` log lines for deleted workspaces.
+
+**Status:** open
 
 ### STAB-85 (2026-07-17, area: intentd CI / e2e tests, severity: P1)
 
