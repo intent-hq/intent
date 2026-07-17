@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-63 (as of 2026-07-17)
+**Next available ID:** STAB-64 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
+
+The `doctor_checks_data_dir_and_migrations` test fails deterministically when a live intentd daemon is running.
+
+**Repro:** Run the intentd stack locally with a daemon bound to WSS port 5181, then execute `make test` or `cargo test -p intentd --test e2e_core_cli_commands doctor_checks_data_dir_and_migrations`. Observed while dogfooding: `intentd doctor` exits with code 1 due to `[FAIL] WSS port 5181 not bindable: Address already in use (os error 48)` whenever a live intentd daemon holds the port (always true on a dogfooding machine). All other doctor checks pass. The test in `crates/intentd/tests/e2e_core_cli_commands.rs` asserts that doctor exits with success, so the whole test suite fails on any machine running the stack. Passes in CI where no daemon runs.
+
+**Expected:** The test should pass on developer machines running the intentd stack. Suggested direction: make the doctor port-bind check non-fatal (warning instead of failure) or modify the test to use an ephemeral/configurable port for the check.
+
+**Note:** This is distinct from STAB-62 (intermittent WSS integration test port-bind flake) but related in theme.
+
+**Status:** open
 
 ### STAB-62 (2026-07-17, area: intentd tests / wss port binding, severity: P2)
 
