@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-83 (as of 2026-07-17)
+**Next available ID:** STAB-84 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -359,6 +359,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
+### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
+
+Notification settings (enabled, soundEnabled, soundOnlyWhenUnfocused, volume) were not persisted to the daemon, causing them to be lost on app relaunch.
+
+**Repro:** Before the fix: open Settings → Notifications in the app, toggle any notification setting (e.g., disable notifications entirely), then quit and relaunch the app. Observe: the setting has reset to the default value (notifications re-enabled), not the value you chose.
+
+**Root cause:** The `user-preferences-notification-persistence-service` middleware (added in PR #116) called `invoke('settings:set', { key: 'notificationSettings', ... })`, writing the entire settings bag to a retired `localStorage` key (`legacy-settings:notificationSettings`) that is never read on boot. The correct protocol is `settings.update` with individual `notifications.*` paths (`notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume`) that intentd persists in its settings catalog and surfaces to both main (for notification behavior) and renderer (for UI state). Additionally, the boot-time hydration dispatched actions that immediately triggered the persistence logic, causing echo-writes (the FE wrote back the values it just read from the daemon). Test mocks also simulated constant state (not evolving post-reducer state) and used real timers instead of fake timers.
+
+**Expected:** Notification toggles persist via `settings.update` to the daemon's canonical `notifications.*` paths. Settings survive app relaunch because the daemon catalog is durable. Hydration-dispatched actions are suppressed from persistence to prevent echo-writes. Tests use fake timers and evolving state mocks.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#127](https://github.com/intent-hq/cloudlands-fe/pull/127), [intent-hq/cloudlands-fe#129](https://github.com/intent-hq/cloudlands-fe/pull/129), 2026-07-17)
+
 ### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
 
 Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
@@ -404,8 +416,6 @@ Chat drafts are not persisted to the backend, causing them to be lost when switc
 **Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#126](https://github.com/intent-hq/cloudlands-fe/pull/126), 2026-07-17)
-
-### STAB-80 (2026-07-17, area: intentd workspace events / lastActivity propagation, severity: P1)
 
 Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
 
