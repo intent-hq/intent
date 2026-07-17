@@ -33,7 +33,7 @@ Chat transcript clobbered to blank after workspace reload.
 
 ### STAB-68 (2026-07-17, area: cloudlands-fe workspaces-seeder / reload, severity: P1)
 
-Sidebar Changes panel stuck indeterminate after workspace reload.
+Sidebar Changes panel stuck in indeterminate state after workspace reload.
 
 **Repro:** Open a workspace, make some file changes visible in the Changes panel. Reload the app (Cmd-R). Observe the sidebar Changes panel — it shows indeterminate state (spinner or blank) instead of the actual workspace state, even though the workspace is correctly selected in the URL.
 
