@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-67 (as of 2026-07-17)
+**Next available ID:** STAB-68 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,16 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-67 (2026-07-17, area: cloudlands-fe / files store, severity: P2)
+
+File-content entries leak in the files slice when tabs are closed.
+
+**Repro:** Open a file tab, then close it. The file-content entry remains in the files slice (memory leak), persisting indefinitely even though no tab references it.
+
+**Root cause:** The file-content prune watcher (`cleanupClosedFileContentEntries`) was deleted in saga-removal commit `95d908a2` without being re-homed. The saga's cleanup logic that watched for tab-close actions and pruned orphaned file-content entries was lost, leaving no mechanism to remove file-content when tabs close.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/105, https://github.com/intent-hq/cloudlands-fe/pull/109, https://github.com/intent-hq/cloudlands-fe/pull/110, https://github.com/intent-hq/cloudlands-fe/pull/111, 2026-07-17)
 
 ### STAB-66 (2026-07-17, area: cloudlands-fe / panel layout persistence, severity: P1)
 
