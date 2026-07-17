@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-68 (as of 2026-07-17)
+**Next available ID:** STAB-70 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,30 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-69 (2026-07-17, area: cloudlands-fe agents-seeder / reload, severity: P1)
+
+Chat transcript clobbered to blank after workspace reload.
+
+**Repro:** Open a workspace with an agent that has existing chat messages. Reload the app (Cmd-R). Observe the agent panel — the chat transcript is completely blank even though the conversation history exists in the daemon.
+
+**Root cause:** `agents-seeder` unconditionally replaced Redux `agentSessions` with the AgentLite list from `client.agents.list()`. When AgentLite payloads have `messages: []` (daemon optimization to reduce payload size), seeder wiped existing conversation transcripts that were already hydrated in the store.
+
+**Expected:** Agent chat transcript is preserved across workspace reloads. Seeder should preserve existing session messages when incoming agent has `messages.length === 0` and existing session has `messages.length > 0`, mirroring the merge logic in `hydrateWorkspaceAgents` from `lifecycle-read-service.ts`.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
+
+### STAB-68 (2026-07-17, area: cloudlands-fe workspaces-seeder / reload, severity: P1)
+
+Sidebar Changes panel stuck indeterminate after workspace reload.
+
+**Repro:** Open a workspace, make some file changes visible in the Changes panel. Reload the app (Cmd-R). Observe the sidebar Changes panel — it shows indeterminate state (spinner or blank) instead of the actual workspace state, even though the workspace is correctly selected in the URL.
+
+**Root cause:** `workspaces-seeder` read `store.state` BEFORE the async `client.workspaces.list()` call, then unconditionally dispatched `setActiveWorkspaceId` + `openWorkspaceTab` for the first workspace. On reload, route loader sets `activeWorkspaceId` during the fetch; seeder's stale empty-state read clobbered it.
+
+**Expected:** Workspace selection and sidebar state correctly reflect the loaded workspace after reload. Seeder should only auto-select the first workspace when BOTH `activeWorkspaceId` AND `currentTabId` are unset (fresh boot scenario), avoiding clobbering route-driven state.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
