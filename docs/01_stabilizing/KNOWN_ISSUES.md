@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-81 (as of 2026-07-17)
+**Next available ID:** STAB-82 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -368,6 +368,16 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-81 (2026-07-17, area: cloudlands-fe / settings auto-update, severity: P1)
+
+Beta-updates toggle in Settings unresponsive when clicked. Toggle does not reflect actual update channel on app boot in real (non-mock) mode.
+
+**Repro:** Launch app in real mode (not mock). Open Settings → About → Beta Updates. Click the beta-updates toggle. Observe: toggle does not flip, no channel switch occurs. Relaunch app. Observe: toggle shows wrong state (doesn't match actual channel).
+
+**Root cause:** (1) Middleware called dead `invoke('settings:set')` with no main-process handler — the IPC call silently failed. (2) Real-mode boot hydration missing — only mock seeder synced Redux `betaUpdatesEnabled` with main-process channel from `autoUpdateClient.getState()`. The middleware also called `autoUpdateClient.setChannel()` which already persisted via local-prefs, making the dead settings:set call redundant.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
 
 ### STAB-80 (2026-07-17, area: intentd workspace events / lastActivity propagation, severity: P1)
 
