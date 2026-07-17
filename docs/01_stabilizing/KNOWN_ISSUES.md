@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-87 (as of 2026-07-17)
+**Next available ID:** STAB-88 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -390,6 +390,26 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Re-entering a streaming conversation shows no deltas until the next tool call (or later).
+
+**Repro:** Start a conversation with a long-running agent task (e.g., multi-file edit or research). While the agent is mid-turn and streaming partial assistant text, navigate away from the chat (switch to another workspace or panel). Navigate back to the streaming chat. Observed: the partial assistant message is blank until the agent emits the next tool call or completes the turn. Expected: the partial text appears immediately and continues growing with each delta.
+
+**Root cause (traced):** Chat hydration (`chat-read-service.ts` → `loadChatTranscript`) pages through `agent.getConversation` only. On the daemon, the in-flight partial assistant message (live-turn slot, CS-0 D5) is merged **only** into the `chat.subscribe` seq-0 snapshot (`chat_snapshot` in `intent-transport/src/subscriptions.rs`) — `agent.getConversation` returns persisted messages only. The FE used to hydrate via `chat.subscribeSnapshot` but switched to `getConversation` paging (to fix >50-message truncation), silently losing the live-turn merge. Two compounding effects: (1) Hydration wipes the in-flight placeholder (the events bridge keeps the transcript growing in Redux even while the chat is closed, but `loadChatTranscript` replaces `messages` with the persisted-only page — dropping the in-flight assistant message), and (2) after an app restart mid-turn, the bridge accumulator (`streamsByAgent`) restarts empty and only holds the chunk tail; `resolveStreamContentBlocks`' `hasActiveStreamRegression` correctly rejects the shorter/poorer candidate versus the fuller hydrated partial — so deltas stay invisible until the candidate outgrows it (typically at the next tool call, which adds blocks).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
+
+### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
+
+**Repro:** Start a conversation and send a message that triggers a long-running agent task. While the agent is mid-turn (visible "Thinking" or streaming partial response), type a new message and press ⌘Enter (force-submit / interrupt). Observed: the UI switches to "Thinking" for the new message but never shows the message in the transcript. The session is wedged — subsequent messages show status ticks but no transcript. Restarting the app (Electron relaunch) recovers the UI but the interrupted message is lost. Restarting only intentd doesn't help because the renderer's wedged state persists (restarting intentd doesn't reset the renderer). Expected: the new message should interrupt the old turn, appear immediately in the transcript, and stream normally.
+
+**Root cause (traced):** The FE renderer is daemon-bridged via the mock IPC router. `chat-send-service.ts` and `agent-stream-lifecycle.ts` correctly thread `priority: "interrupt"` all the way into the `STREAM_MESSAGE` invoke (and the zod schema `AgentBackendStreamMessageSchema` allows it), **but the bridge handler in `src/store/renderer/seeders/agent-ipc-bridge-seeder.ts` (STREAM_MESSAGE → `agent.sendMessage`) never forwards `priority`** — it forwards messageId/imageBlocks/fileBlocks/model/messageMetadata/contextReferences/noteIds/stdinContext/app-ID trio only. Consequences, matching the reported symptoms exactly: (1) Daemon receives a plain `agent.sendMessage` while the turn is in flight → `try_begin` fails → the message is **silently auto-queued** (`{ success: true, queued: true }`) instead of preempting (`interrupt_send_message` is never invoked). (2) The FE only checks `response.success` — `queued: true` is ignored on this path. It has already torn down the old stream handler and registered a fresh one for a new assistant placeholder, so the old turn's chunks/complete are treated as stale and skipped → UI wedges in "Thinking". (3) The daemon queue is in-memory, so restarting intentd **loses the queued message**. (4) The renderer's stream-registry/session state stays wedged (restarting intentd doesn't reset the renderer), so subsequent sends show status ticks but no transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `agent-ipc-bridge-seeder.ts` now forwards `priority: "interrupt"` through STREAM_MESSAGE → agent.sendMessage; `agent-stream-lifecycle.ts` handles `{ success: true, queued: true }` responses (cleanup + queue seeding) to avoid wedged placeholders
 
 ### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
 
