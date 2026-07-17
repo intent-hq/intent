@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-88 (as of 2026-07-17)
+**Next available ID:** STAB-89 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-88 (2026-07-17, area: intentd agent prompt assembly, severity: P1)
+
+Daemon-spawned agents received no Agent Skills catalog in their prompts.
+
+**Repro:** Before the fix: call `agent.create` via daemon RPC (e.g., from another agent or external client), inspect the resulting agent's system prompt. Observed: the `<available_skills>` section was empty, even when skills were present in workspace/user `.augment/skills` directories. This occurred because skills discovery was implemented only in the cloudlands-fe Electron main process (`skills-loader.ts`) and injected only through the FE-specific prompt assembly code path. Agents spawned directly by intentd via `agent.create` followed the daemon's `assemble_system_prompt` logic, which had no skills discovery or catalog injection wired in.
+
+**Root cause:** Skills discovery module lived in cloudlands-fe; intentd's prompt assembly (`intent-services::rules::assemble_system_prompt`) had no access to the skills catalog and therefore couldn't inject `<available_skills>` for daemon-created agents.
+
+**Expected:** All agents — whether spawned from the FE sidebar or via daemon `agent.create` — receive the full skills catalog in their system prompt. The catalog should reflect workspace-tier (`<workspace>/.augment/skills/`) and user-tier (`~/.augment/skills/`) skill definitions merged and formatted consistently.
+
+**Status:** fixed ([intent-hq/intentd#240](https://github.com/intent-hq/intentd/pull/240) + [intent-hq/cloudlands-fe#138](https://github.com/intent-hq/cloudlands-fe/pull/138), 2026-07-17) — ported skills discovery to intentd core (`intent-services::skills` module), wired catalog injection into daemon prompt assembly, migrated FE to call daemon `skill.list` RPC instead of running discovery locally, added `skills:changed` event emission on file-watch
 
 ### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
