@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-61 (as of 2026-07-17)
+**Next available ID:** STAB-90 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -19,7 +19,19 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-60 (2026-07-17, area: intentd CI / coverage instrumentation, severity: P2)
+### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
+
+Home-screen workspace delete did not remove spaces from the visible list, requiring a full app refresh (Cmd-R), and spammed logs with `resolveWorkspaceRoot` / `note.list spec reseed failed` errors for deleted workspaces.
+
+**Repro:** Before the fix: create a disposable workspace, delete it from the Home screen. Observed: (1) the deleted workspace remained visible in the workspaces list until Cmd-R refresh, and (2) `make dev` logs filled with paired errors per deleted workspace: main-process `[WorkspaceConfig] resolveWorkspaceRoot: workspace "<slug>" not found in any location` (from `user-activity.ipc.ts:51` calling `WorkspaceConfig.resolveWorkspaceRoot`) and daemon `WARN intent_services: note.list spec reseed failed; continuing with best-effort list workspace_id=<slug> error=internal error: insert note failed: error returned from database: (code: 787) FOREIGN KEY constraint failed`.
+
+**Root cause:** When `workspace:deleted` event arrived from daemon, `daemon-events-bridge.ts` dispatched `workspaceDeleted(wsId, agentIds)`. Other slices (`workspace-agents`, `chat-state`, `agent-session`) handled this action and purged their workspace-scoped state, BUT the `workspace-slice` reducer had NO case for `workspaceDeleted`. The workspace entity stayed in `state.workspace.workspaces` collection, and the FE continued to attempt operations (user-activity IPC, note subscriptions) on the deleted workspace.
+
+**Expected:** After clicking Delete on the Home screen OR receiving an external `workspace:deleted` event, the space must disappear from the list immediately and permanently. Zero occurrences of `resolveWorkspaceRoot` / `note.list spec reseed failed` log lines for deleted workspaces.
+
+**Status:** open
+
+### STAB-89 (2026-07-17, area: intentd CI / coverage instrumentation, severity: P2)
 
 Flaky test failure: `completion_report_cleared_when_new_turn_begins_over_wss` in `crates/intentd/tests/e2e_wss_agent_lifecycle.rs` under llvm-cov coverage instrumentation.
 
@@ -28,6 +40,26 @@ Flaky test failure: `completion_report_cleared_when_new_turn_begins_over_wss` in
 **Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
 
 **Status:** open
+
+### STAB-85 (2026-07-17, area: intentd CI / e2e tests, severity: P1)
+
+The `completion_report_cleared_when_new_turn_begins_over_wss` e2e test hung indefinitely in CI, timing out every coverage-e2e and coverage-all job at 30 minutes.
+
+**Repro:** PR #221 added the `completion_report_cleared_when_new_turn_begins_over_wss` test to `crates/intentd/tests/e2e_wss_agent_lifecycle.rs`. The test delegated a mock child agent, waited for `agent:created` to retrieve the child's ID, then sent a new message to the parent and awaited `agent:updated` with `completionReportCleared: true`. The test hung from 2026-07-17 10:16 UTC onward because: (1) it called `wss_event(rx, "agent:created").await` expecting a `parentAgentId` field that `agent:created` events never carry (the field exists only on `agent:updated`), so the test retrieved `null` for the child ID and subsequent filters matched nothing, and (2) the `wss_event` helper's 30-second timeout reset on every WebSocket heartbeat Ping frame, allowing the hung wait to extend indefinitely. Every coverage-e2e and coverage-all CI run timed out at GitHub Actions' 30-minute job limit from that point forward, blocking all PRs and main pushes.
+
+**Expected:** E2e tests use deadline-bounded event waits that fail fast when expected events never arrive. The `wss_event_opt` helper (with a single overall deadline, no heartbeat resets) should be used for waits that may legitimately time out, and child agent IDs should be retrieved from the parent agent's `waitingForAgentIds` field rather than expecting a `parentAgentId` on `agent:created`.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test switched to `wss_event_opt` for deadline-bounded waits and retrieves child ID from parent's `waitingForAgentIds`; added nextest slow-timeout guard (~5 min) to catch similar hangs; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent merging PRs with failing coverage jobs
+
+### STAB-84 (2026-07-17, area: intentd workspace RPC / setup scripts, severity: P1)
+
+The `workspace.saveSetupScript` RPC contract changed in PR #223 to require a repository path, breaking the `uds_integration::uds_slice_end_to_end` test on main.
+
+**Repro:** PR #223 ("feat: make .intent/config.json sole source of truth for setup scripts", merged 2026-07-17 12:49 UTC) changed `workspace.saveSetupScript` to return InvalidParams when called without a repository path, aligning the RPC with the new config.json-backed persistence model. The `uds_slice_end_to_end` integration test in `crates/intentd/tests/uds_integration.rs` (lines 331+) asserted the old §5.25 contract: empty default, save returns stored record with `generatedBy: "user"`, get round-trips. After #223 merged, `saveSetupScript` returned `Null` (InvalidParams) instead of the expected stored script, causing the test to fail deterministically on main. The regression went undetected because coverage-e2e and coverage-all jobs were timing out at 30 minutes (STAB-85) and were not required merge-queue checks at the time #223 merged.
+
+**Expected:** Tests align with the current RPC contract. When `saveSetupScript` is called without a repository path in the new config.json model, the RPC should either return InvalidParams (as implemented in #223) or persist to a workspace-scoped default location, and the integration test assertions should match the implemented behavior.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test updated to expect InvalidParams error when saving setup scripts without repository path; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent similar regressions
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
@@ -369,6 +401,214 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
+### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
+
+Notification settings (enabled, soundEnabled, soundOnlyWhenUnfocused, volume) were not persisted to the daemon, causing them to be lost on app relaunch.
+
+**Repro:** Before the fix: open Settings → Notifications in the app, toggle any notification setting (e.g., disable notifications entirely), then quit and relaunch the app. Observe: the setting has reset to the default value (notifications re-enabled), not the value you chose.
+
+**Root cause:** The `user-preferences-notification-persistence-service` middleware (added in PR #116) called `invoke('settings:set', { key: 'notificationSettings', ... })`, writing the entire settings bag to a retired `localStorage` key (`legacy-settings:notificationSettings`) that is never read on boot. The correct protocol is `settings.update` with individual `notifications.*` paths (`notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume`) that intentd persists in its settings catalog and surfaces to both main (for notification behavior) and renderer (for UI state). Additionally, the boot-time hydration dispatched actions that immediately triggered the persistence logic, causing echo-writes (the FE wrote back the values it just read from the daemon). Test mocks also simulated constant state (not evolving post-reducer state) and used real timers instead of fake timers.
+
+**Expected:** Notification toggles persist via `settings.update` to the daemon's canonical `notifications.*` paths. Settings survive app relaunch because the daemon catalog is durable. Hydration-dispatched actions are suppressed from persistence to prevent echo-writes. Tests use fake timers and evolving state mocks.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#127](https://github.com/intent-hq/cloudlands-fe/pull/127), [intent-hq/cloudlands-fe#129](https://github.com/intent-hq/cloudlands-fe/pull/129), [intent-hq/cloudlands-fe#130](https://github.com/intent-hq/cloudlands-fe/pull/130), 2026-07-17)
+
+### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
+
+Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
+
+**Repro:** Start intentd, spawn an agent and let it run a turn, then quit intentd gracefully via `SIGINT` or `SIGTERM` (normal quit, not a crash). Expected: after restart, `agent.listInterrupted` returns the agent and the FE shows the resumption modal. Actual before fix: `agent.listInterrupted` returned an empty list because the `signal_handler_task` settled all active agent sessions to `RuntimeIdle` without capturing them as interrupted records first. The heal sweep on next startup thus saw only `RuntimeIdle` rows (not `active`/`processing`/`waiting`) and never created interruption records. The resumption modal only appeared after crash scenarios (where the signal handler never ran).
+
+**Expected:** Graceful shutdown (`SIGINT`/`SIGTERM`) captures in-flight agents (`active`, `processing`, `waiting` statuses) as interrupted records before settling them to `RuntimeIdle`, exactly like the crash-recovery heal path. The resumption modal appears after both clean and unclean shutdowns whenever agents were mid-turn.
+
+**Status:** fixed ([intent-hq/intentd#219](https://github.com/intent-hq/intentd/pull/219), 2026-07-17)
+
+### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
+
+Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
+
+**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to four related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'. (4) Edge-triggered workspace:activity-changed events could be missed (e.g., coordinator-only workspaces where the 0→1 agent transition fired before FE subscription or entity seeding), leaving workspaces stuck at Idle even while agents were mid-turn.
+
+**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'. Activity reconciliation detects missed edges via agent-implying events and refetches workspace.activity when FE state is stale.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), [intent-hq/cloudlands-fe#128](https://github.com/intent-hq/cloudlands-fe/pull/128), 2026-07-17)
+
+### STAB-81 (2026-07-17, area: cloudlands-fe / settings auto-update, severity: P1)
+
+Beta-updates toggle in Settings unresponsive when clicked. Toggle does not reflect actual update channel on app boot in real (non-mock) mode.
+
+**Repro:** Launch app in real mode (not mock). Open Settings → About → Beta Updates. Click the beta-updates toggle. Observe: toggle does not flip, no channel switch occurs. Relaunch app. Observe: toggle shows wrong state (doesn't match actual channel).
+
+**Root cause:** (1) Middleware called dead `invoke('settings:set')` with no main-process handler — the IPC call silently failed. (2) Real-mode boot hydration missing — only mock seeder synced Redux `betaUpdatesEnabled` with main-process channel from `autoUpdateClient.getState()`. The middleware also called `autoUpdateClient.setChannel()` which already persisted via local-prefs, making the dead settings:set call redundant.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
+
+### STAB-80 (2026-07-17, area: cloudlands-fe chat drafts persistence, severity: P1)
+
+Chat drafts are not persisted to the backend, causing them to be lost when switching workspaces.
+
+**Repro:**
+1. Open a workspace and start typing a message in the chat input (do not send it)
+2. Switch to a different workspace
+3. Switch back to the original workspace
+4. Observe: the draft message is lost
+
+**Root cause:** The frontend is still using the old localStorage-based draft persistence (via `transient-ui-slice` Redux state, lines 14, 27, 75-80, 127-144 in `transient-ui-slice.ts`) instead of the backend `drafts.get`/`drafts.set`/`drafts.clear` RPC methods specified in IMPLEMENTATION_SPEC.md §9.10/§15 and PROTOCOL.md §5.16. The backend methods are implemented (in `intent-services/src/drafts.rs`) and tested (see `intentd/tests/uds_integration.rs`, `intentd/tests/wss_integration.rs`), but the frontend never calls them. `ChatPanel.svelte` (lines 940-973) restores and saves drafts using Redux actions `setChatDraft`/`clearChatDraft`, which only update in-memory state that's lost on workspace unmount (line 145: `workspaceUnmounted` clears the workspace's transient state).
+
+**Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#126](https://github.com/intent-hq/cloudlands-fe/pull/126), 2026-07-17)
+
+Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
+
+**Repro:** Before this fix, workspace `lastActivity` was updated in the DB on every daemon-side activity (agent turn, commit, note edit), but no live event carried the new timestamp to the frontend. The sidebar only re-sorted when the user clicked a workspace, triggering a workspace.get fetch with the fresh `lastActivity`. Even with the WSS event stream connected, newly-active workspaces stayed at the bottom of the sidebar until clicked.
+
+**Expected:** When an agent or daemon operation updates workspace `lastActivity`, a debounced `workspace:updated` event with the new timestamp is emitted over the WSS connection, and the FE sidebar re-sorts in real-time without user interaction.
+
+**Status:** fixed ([intent-hq/intentd#224](https://github.com/intent-hq/intentd/pull/224), [intent-hq/intentd#225](https://github.com/intent-hq/intentd/pull/225), 2026-07-17) — `workspace:updated` event now emitted with debounced (200ms) trailing-edge logic; follow-up PR #225 addressed Copilot review findings: debounce insertion race condition (generation counter guard), lexicographical RFC3339 comparison bug (chrono::DateTime parsing for timestamp advancement assertions), and RAII environment variable isolation in tests (DebounceEnvGuard)
+
+### STAB-78 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+External-editors persistence (Open-In action, hidden editors) and window:zoom-changed listener never persisted after saga removal.
+
+**Repro:** Select a default "Open In" editor in Settings → External Editors, or hide an editor from the list, quit and relaunch the app. Expected: the selected default and hidden editors persist. Actual: selections were lost on relaunch — the store slice was never persisted to daemon settings. Similarly, the window:zoom-changed IPC listener (which syncs Electron's zoom level to the renderer store) was registered in a saga effect that was deleted in saga-removal commit `95d908a2` without being re-homed, so zoom level changes never updated the store.
+
+**Root cause:** The external-editors saga (`external-editors-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers and window:zoom-changed IPC listener registration were lost, leaving no mechanism to save external-editors state or sync zoom changes.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/119, 2026-07-17)
+
+### STAB-77 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+Terminal persistence (overlay height, renames, metadata, per-workspace overlay state) never persisted after saga removal.
+
+**Repro:** Rename a terminal, resize the terminal overlay, or toggle the terminal visibility, quit and relaunch the app. Expected: terminal state persists. Actual: all terminal state was lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The terminal-saga (`terminal-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save terminal state (overlay height, terminal renames, terminal metadata, per-workspace overlay visibility).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/114, 2026-07-17)
+
+### STAB-76 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+User-preferences persistence (spellcheck, show-archived, group-by-repo, provider-setup flag, agent/note font styles, code font family, activity-log presets, promo-banner dismissals) never persisted after saga removal.
+
+**Repro:** Toggle spellcheck in Settings → Preferences, or change the activity-log preset, quit and relaunch the app. Expected: user preferences persist. Actual: preferences were lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The user-preferences saga (`user-preferences-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save user preferences (spellcheck enabled, show archived workspaces, group by repo, provider setup completed flag, agent message font style, note font style, code font family, activity log presets, promo banner dismissals).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/117, 2026-07-17)
+
+### STAB-75 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P1)
+
+Workspace settings persistence (auto-commit toggle, beta-updates toggle, notification settings) never persisted after saga removal.
+
+**Repro:** Toggle auto-commit in Settings → Workspace Settings, or change notification settings, quit and relaunch the app. Expected: settings persist per-workspace. Actual: settings were lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The workspace-settings saga (`workspace-settings-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save workspace settings (auto-commit enabled, beta updates channel, notification preferences).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/116, 2026-07-17)
+
+### STAB-74 (2026-07-17, area: cloudlands-fe agents-seeder / reload, severity: P1)
+
+Chat transcript clobbered to blank after workspace reload.
+
+**Repro:** Open a workspace with an agent that has existing chat messages. Reload the app (Cmd-R). Observe the agent panel — the chat transcript is completely blank even though the conversation history exists in the daemon.
+
+**Root cause:** `agents-seeder` unconditionally replaced Redux `agentSessions` with the AgentLite list from `client.agents.list()`. When AgentLite payloads have `messages: []` (daemon optimization to reduce payload size), seeder wiped existing conversation transcripts that were already hydrated in the store.
+
+**Expected:** Agent chat transcript is preserved across workspace reloads. Seeder should preserve existing session messages when incoming agent has `messages.length === 0` and existing session has `messages.length > 0`, mirroring the merge logic in `hydrateWorkspaceAgents` from `lifecycle-read-service.ts`.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
+
+### STAB-73 (2026-07-17, area: cloudlands-fe workspaces-seeder / reload, severity: P1)
+
+Sidebar Changes panel stuck in indeterminate state after workspace reload.
+
+**Repro:** Open a workspace, make some file changes visible in the Changes panel. Reload the app (Cmd-R). Observe the sidebar Changes panel — it shows indeterminate state (spinner or blank) instead of the actual workspace state, even though the workspace is correctly selected in the URL.
+
+**Root cause:** `workspaces-seeder` read `store.state` BEFORE the async `client.workspaces.list()` call, then unconditionally dispatched `setActiveWorkspaceId` + `openWorkspaceTab` for the first workspace. On reload, route loader sets `activeWorkspaceId` during the fetch; seeder's stale empty-state read clobbered it.
+
+**Expected:** Workspace selection and sidebar state correctly reflect the loaded workspace after reload. Seeder should only auto-select the first workspace when BOTH `activeWorkspaceId` AND `currentTabId` are unset (fresh boot scenario), avoiding clobbering route-driven state.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
+
+### STAB-72 (2026-07-17, area: intentd workspace.create initial-agent orchestration, severity: P1)
+
+Images attached to the first message of a new workspace were persisted on the session but never delivered to the initial agent turn.
+
+**Repro:** Create a workspace from the new-workspace panel with an image attached to the first message. The daemon's `agent_create_op` correctly persists the `imageBlocks` on the created session, but intentd's daemon-owned initial-agent orchestration in `crates/intent-services/src/lib.rs` (`workspace.create`, ~line 6338) delivers the initial prompt with `TurnOptions::default()` — `image_blocks` (and `context_references`) are never threaded into the send, so `append_attachment_blocks` has nothing to append and the first ACP turn goes out text-only. The agent never sees the attached image.
+
+**Expected:** The `workspace.create` handler threads the persisted `initialAgent.imageBlocks` and `contextReferences` into the first turn's `TurnOptions`, so the initial ACP prompt includes the attachments that were already persisted on the agent session. Image-only initial messages (no text prompt) also trigger a turn.
+
+**Note:** The submodule PR/code comments reference this issue as STAB-69 — the ID was reassigned due to a concurrent numbering race; this tracker entry is canonical.
+
+**Status:** fixed ([intent-hq/intentd#220](https://github.com/intent-hq/intentd/pull/220), 2026-07-17)
+
+### STAB-71 (2026-07-17, area: cloudlands-fe chat send middleware / queued-message force-send, severity: P1)
+
+Clicking "Send now" on a queued message delivered it twice: once immediately via interrupt, then again when the queue drained.
+
+**Repro:** Queue a message by sending it while the agent is busy processing another turn. Click "Send now" on the queued message. Observe: the message is delivered immediately (interrupt turn starts), but the queued entry remains visible in the UI during the forced turn. When the interrupt turn ends, the queue drains and the same message is delivered a second time. Root cause: `ChatPanel.svelte` → `handleSendQueuedMessageNow()` dispatches `sendMessage` with `queuedMessageId`, `forceSubmit: true`, and `skipQueueCheck: true`, but `createChatSendMiddleware()` in `packages/cloudlands-fe/src/features/agent/chat-send-service.ts` never reads `queuedMessageId` — it only extracts `forceSubmit` and sends via the lifecycle with `priority: "interrupt"`. No queue removal ever happens (the `SendMessagePayload.queuedMessageId` field is documented but unused). On the daemon side, the interrupt path deliberately preserves the pending queue (per PROTOCOL.md), so when the interrupt turn ends, the queue drains and the original copy is re-delivered.
+
+**Expected:** When `sendMessage` carries `queuedMessageId`, the middleware (1) removes the entry locally (optimistic), (2) calls `agent.removeQueuedMessage` on the wire (awaited), and (3) only then dispatches the lifecycle send with `priority: "interrupt"`. The queued message disappears from the queue list immediately when "Send now" is clicked, and exactly one turn is delivered (no duplicate).
+
+**Note:** The submodule PR/code comments reference this issue as STAB-68 — the ID was reassigned due to a concurrent numbering race; this tracker entry is canonical.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#118](https://github.com/intent-hq/cloudlands-fe/pull/118), 2026-07-17)
+
+### STAB-70 (2026-07-17, area: intentd agent runtime / reportToParent persistence, severity: P2)
+
+A delegated agent's completion report stays sticky in agent metadata and the FE agent card footer forever, even after the parent sends new work and the agent goes active again.
+
+**Repro:** Delegate a task to an agent, let it complete and call `report_to_parent`. The completion report appears in the agent metadata (`completionReport` field) and the FE agent card footer. Send a new message to the same agent (or delegate new work). The agent becomes active again and processes the new turn, but the old completion report remains visible in the metadata and UI — it never clears when the new turn begins.
+
+**Expected:** The completion report should clear when a new turn begins (when the agent transitions from a completed state back to active work). The `completionReport` field should be reset to `null` in agent metadata when the agent starts processing a new message.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/221, 2026-07-17)
+
+### STAB-69 (2026-07-17, area: cloudlands-fe opencode IPC / host.exec, severity: P1)
+
+Opencode model picker failed to load models due to invalid `cwd` parameter in `host.exec` call.
+
+**Repro:** Open the model picker with the opencode CLI installed and authenticated. Expected: the picker lists available opencode models. Actual: FE logs show repeated warnings `[WARN] [OpenCodeIPC] Could not get models from opencode CLI { error="Invalid parameter: cwd requires workspaceId for the containment guard" }` and the picker shows no opencode models. The daemon rejects the `host.exec` JSON-RPC call with error `-32602` because the FE passed `cwd: os.homedir()` without a corresponding `workspaceId`, violating intentd's containment-guard invariant (PROTOCOL §6.6.4).
+
+**Root cause:** The cloudlands-fe `executeOpencodeCommand` helper in `src/features/opencode/main/opencode.ipc.ts` called `hostExec` with `{ command: "opencode", args, cwd: os.homedir(), timeoutMs }`. The daemon's `host.exec` handler (`intent-services/src/host_exec.rs`) requires that `cwd` is either absent or paired with a `workspaceId` (for workspace-containment enforcement). The FE invocation violated this rule by passing `cwd` with no `workspaceId`, causing the daemon to reject the request. The same invalid pattern appeared in `src/features/auggie/main/augment-cli.ts` for the deprecated augment-cli adapter.
+
+**Expected:** The FE `host.exec` calls for opencode (and augment-cli) pass only `{ command, args, timeoutMs }` with no `cwd` or `workspaceId`, allowing the daemon to execute the CLI command in its own working directory (inherited daemon cwd or the daemon's default). The model picker lists opencode models when the CLI is installed and authenticated.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/120, 2026-07-17)
+
+### STAB-88 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
+
+The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
+
+**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-87 fix), but the execution path was never implemented.
+
+**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
+
+### STAB-87 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
+
+Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
+
+**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
+
+**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
+
+### STAB-68 (2026-07-17, area: cloudlands-fe chat transcript hydration/rendering, severity: P1)
+
+Chat transcript intermittently showed only the newest ~50 messages or flickered blank, losing earlier turns until a refresh.
+
+**Repro:** Open a workspace with an agent conversation containing more than 50 messages. Navigate to the chat view. Observed while dogfooding on 2026-07-17 (Coordinator agent, workspace warnings-warn): earlier turns intermittently vanished from the transcript, showing either a blank flicker or only the last few messages, until a full refresh (Cmd-R) which correctly loaded the full conversation.
+
+**Root cause:** The renderer's `loadChatTranscript` (in `chat-read-service.ts`) hydrated the transcript from `chat.subscribeSnapshot`, which returns only the newest ~50 messages (a single page of the `agent.getConversation` pagination). Earlier messages were never fetched, so they did not appear in the UI.
+
+**Expected:** The chat transcript loads the full conversation history on hydration, regardless of message count. All messages from the first turn to the latest should be visible without requiring a refresh.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#121](https://github.com/intent-hq/cloudlands-fe/pull/121), 2026-07-17) — Changed `loadChatTranscript` to page through `agent.getConversation` with pagination (limit=200/page, following `nextToken` until null) to assemble the full transcript. Added a 125-message regression test.
+
 ### STAB-67 (2026-07-17, area: cloudlands-fe / files store, severity: P2)
 
 File-content entries leak in the files slice when tabs are closed.
@@ -435,25 +675,25 @@ The cloudlands-fe repo carried an orphaned `intentd` submodule gitlink (mode `16
 
 **Status:** fixed ([intent-hq/cloudlands-fe#92](https://github.com/intent-hq/cloudlands-fe/pull/92), 2026-07-17) — `git rm --cached intentd` in cloudlands-fe removes the stray gitlink; monorepo submodule bump follows.
 
-### STAB-59 (2026-07-17, area: intentd intent-services / setup-script execution, severity: P1)
+### STAB-59 (2026-07-16, area: WSS listener settings / Settings UI, severity: P2)
 
-The setup script was never executed after worktree provisioning (no Setup terminal, no env vars).
+Enabling the WebSocket API with the port already in use failed silently (error only in daemon stderr; no toast) and the port was not editable in the UI.
 
-**Repro:** Create a workspace with an explicit `setupScript` or with a repo that has a setup script in `.intent/config.json`. Observed while dogfooding: after workspace creation completed, the setup script was never executed — no "Setup" terminal appeared in the workspace, and the script body was never run. The script was correctly persisted to `.intent/config.json` (STAB-58 fix), but the execution path was never implemented.
+**Repro:** Start intentd, enable the WebSocket API via Settings UI while another process is already bound to the default port (5181). Observed while dogfooding: the toggle appeared to enable but the listener never started (error only in daemon stderr: "Address already in use"); no user-facing error toast was shown. Additionally, the port input field was disabled/non-editable in the Settings UI, so there was no way to change the port to an available one without manually editing the daemon settings file.
 
-**Expected:** After worktree provisioning in `workspace.create`, if an effective setup script exists (non-empty), execute it in the worktree directory with `MAIN_CHECKOUT`, `WORKTREE_PATH`, `BRANCH_NAME`, and `SOURCE_BRANCH` env vars. Execution is non-blocking (spawned async) and never fails workspace creation. Script output is surfaced in a "Setup" terminal.
+**Expected:** When enabling the WebSocket API fails (e.g., port in use), show a user-facing error toast with the failure reason. The port input field should always be editable regardless of the toggle state, allowing the user to pick a different port before retrying.
 
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/228, 2026-07-17)
+**Status:** fixed ([intent-hq/intentd#201](https://github.com/intent-hq/intentd/pull/201), [intent-hq/cloudlands-fe#85](https://github.com/intent-hq/cloudlands-fe/pull/85), 2026-07-16)
 
-### STAB-58 (2026-07-17, area: intentd intent-services / setup-script persistence, severity: P1)
+### STAB-58 (2026-07-15, area: intentd agent spawn / provider binary resolution, severity: P1)
 
-Setup scripts created/selected during workspace creation were only persisted to the daemon DB, never written to `.intent/config.json` — no committable change appeared in the workspace.
+Agent spawn fails with `spawn provider failed: claude-agent-acp: No such file or directory` when the provider CLI is not in the daemon's inherited PATH.
 
-**Repro:** Create a workspace with an explicit `setupScript` parameter. Observed while dogfooding: the setup script was stored in the daemon's SQLite database (workspace row `setup_script` column), but no `.intent/config.json` file was created/updated in the worktree, so the script never became a committable part of the repository. Subsequent workspace creates from the same repo couldn't inherit the script because it only existed in the daemon DB of the original machine.
+**Repro:** Create a blank agent using the claude-code provider (or any ACP provider) when the provider binary exists only in a non-standard location (e.g., Reve's private app dir `~/Library/Application Support/revedev-52ae4245/bin`) not in the daemon's PATH and not in `~/.augment/bin`. Observed while self-hosting: attempting to spawn an agent with `claude-agent-acp` or `auggie` from the dogfooding daemon failed with `ENOENT` errors because both binaries existed only in Reve's private bin directory, which was not on the daemon's PATH. The spawn path called `Command::new(opts.provider.command)` with bare command names and never populated `SpawnOptions.provider_binary`, so `enhanced_path(None)` only searched `~/.augment/bin` (empty on this machine) + generic node/homebrew dirs + inherited PATH. The agent never responded and remained stuck.
 
-**Expected:** `workspace.create` with an explicit `setupScript` writes the script into `<worktree-root>/.intent/config.json` (merge semantics — unrelated keys preserved; no-op when identical) and leaves the workspace DB row's `setup_script` NULL. The `.intent/config.json` becomes the sole source of truth; the DB field is retained for wire compat and legacy read-only fallback only. Repo config write is best-effort (warn on failure, don't fail the create).
+**Expected:** The daemon resolves provider binaries to absolute paths using 3-tier precedence: (1) `providers.paths.<id>` setting, (2) `~/.augment/bin/<command>`, (3) enhanced PATH directory scan (including discovery logic from `find_auggie` / `resolve_on_path`). The resolved absolute path is used for `Command::new` AND passed as `SpawnOptions.provider_binary` so `enhanced_path` prepends its parent directory (ensuring co-located node resolves for shebang scripts). If resolution fails at all three tiers, spawn proceeds with bare name (backward-compatible fallback). Uniform across all providers — no per-provider special cases. Spawn failure errors name the unresolvable command.
 
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/223, 2026-07-17)
+**Status:** fixed ([intent-hq/intentd#189](https://github.com/intent-hq/intentd/pull/189), 2026-07-16) — generalized provider binary discovery with settings → managed bin → PATH-scan precedence, wired into agent spawn. The claude-code provider now falls back to `npx -y @agentclientprotocol/claude-agent-acp` when the adapter binary is absent ([intent-hq/intentd#215](https://github.com/intent-hq/intentd/pull/215), 2026-07-17).
 
 ### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
 
