@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-71 (as of 2026-07-17)
+**Next available ID:** STAB-73 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -382,6 +382,30 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-72 (2026-07-17, area: intentd workspace.create initial-agent orchestration, severity: P1)
+
+Images attached to the first message of a new workspace were persisted on the session but never delivered to the initial agent turn.
+
+**Repro:** Create a workspace from the new-workspace panel with an image attached to the first message. The daemon's `agent_create_op` correctly persists the `imageBlocks` on the created session, but intentd's daemon-owned initial-agent orchestration in `crates/intent-services/src/lib.rs` (`workspace.create`, ~line 6338) delivers the initial prompt with `TurnOptions::default()` — `image_blocks` (and `context_references`) are never threaded into the send, so `append_attachment_blocks` has nothing to append and the first ACP turn goes out text-only. The agent never sees the attached image.
+
+**Expected:** The `workspace.create` handler threads the persisted `initialAgent.imageBlocks` and `contextReferences` into the first turn's `TurnOptions`, so the initial ACP prompt includes the attachments that were already persisted on the agent session. Image-only initial messages (no text prompt) also trigger a turn.
+
+**Note:** The submodule PR/code comments reference this issue as STAB-69 — the ID was reassigned due to a concurrent numbering race; this tracker entry is canonical.
+
+**Status:** fixed ([intent-hq/intentd#220](https://github.com/intent-hq/intentd/pull/220), 2026-07-17)
+
+### STAB-71 (2026-07-17, area: cloudlands-fe chat send middleware / queued-message force-send, severity: P1)
+
+Clicking "Send now" on a queued message delivered it twice: once immediately via interrupt, then again when the queue drained.
+
+**Repro:** Queue a message by sending it while the agent is busy processing another turn. Click "Send now" on the queued message. Observe: the message is delivered immediately (interrupt turn starts), but the queued entry remains visible in the UI during the forced turn. When the interrupt turn ends, the queue drains and the same message is delivered a second time. Root cause: `ChatPanel.svelte` → `handleSendQueuedMessageNow()` dispatches `sendMessage` with `queuedMessageId`, `forceSubmit: true`, and `skipQueueCheck: true`, but `createChatSendMiddleware()` in `packages/cloudlands-fe/src/features/agent/chat-send-service.ts` never reads `queuedMessageId` — it only extracts `forceSubmit` and sends via the lifecycle with `priority: "interrupt"`. No queue removal ever happens (the `SendMessagePayload.queuedMessageId` field is documented but unused). On the daemon side, the interrupt path deliberately preserves the pending queue (per PROTOCOL.md), so when the interrupt turn ends, the queue drains and the original copy is re-delivered.
+
+**Expected:** When `sendMessage` carries `queuedMessageId`, the middleware (1) removes the entry locally (optimistic), (2) calls `agent.removeQueuedMessage` on the wire (awaited), and (3) only then dispatches the lifecycle send with `priority: "interrupt"`. The queued message disappears from the queue list immediately when "Send now" is clicked, and exactly one turn is delivered (no duplicate).
+
+**Note:** The submodule PR/code comments reference this issue as STAB-68 — the ID was reassigned due to a concurrent numbering race; this tracker entry is canonical.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#118](https://github.com/intent-hq/cloudlands-fe/pull/118), 2026-07-17)
 
 ### STAB-70 (2026-07-17, area: intentd agent runtime / reportToParent persistence, severity: P2)
 
