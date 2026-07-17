@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-70 (as of 2026-07-17)
+**Next available ID:** STAB-71 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -382,6 +382,16 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-70 (2026-07-17, area: intentd agent runtime / reportToParent persistence, severity: P2)
+
+A delegated agent's completion report stays sticky in agent metadata and the FE agent card footer forever, even after the parent sends new work and the agent goes active again.
+
+**Repro:** Delegate a task to an agent, let it complete and call `report_to_parent`. The completion report appears in the agent metadata (`completionReport` field) and the FE agent card footer. Send a new message to the same agent (or delegate new work). The agent becomes active again and processes the new turn, but the old completion report remains visible in the metadata and UI — it never clears when the new turn begins.
+
+**Expected:** The completion report should clear when a new turn begins (when the agent transitions from a completed state back to active work). The `completionReport` field should be reset to `null` in agent metadata when the agent starts processing a new message.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/221, 2026-07-17)
 
 ### STAB-69 (2026-07-17, area: cloudlands-fe opencode IPC / host.exec, severity: P1)
 
