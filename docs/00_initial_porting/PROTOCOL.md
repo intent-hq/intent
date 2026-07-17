@@ -281,6 +281,22 @@ workspace visibility. The seed captures an initial `v1` version snapshot and pub
 idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
 a replayed create returns the stored result and does not re-seed.
 
+**Setup script persistence and execution (`workspace.create`).** When an explicit
+`setupScript` parameter is supplied, the daemon writes it into
+`<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
+provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
+writes are no-op when the existing value is identical. The `.intent/config.json` file
+becomes the sole source of truth for the setup script; the workspace DB `setup_script`
+field is retired from all write paths (kept for wire compat and legacy read-only
+fallback only). After the config write, if an effective setup script exists (non-empty,
+resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
+daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
+the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+(the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
+(baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
+surfaced. Script output is streamed to a "Setup" terminal for the workspace,
+consistent with other workspace terminals.
+
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon minimally creates the agent session (honoring `agentId`/`name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
@@ -1809,21 +1825,31 @@ session. The same object appears as the `stats` field on `AgentSession` in `agen
 ### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` *(new in intentd — not part of the ported 104)*
 
 A per-workspace **setup script** that provisions a fresh worktree (install deps, build prereqs, …),
-persisted on the durable `setupScript` field of the `Workspace`. `detectProjectType` inspects
-manifest files to classify the project; `generateSetupScript` is the **AI-assisted** generator —
-this maps the reference UI's `generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every
-method requires `workspaceId`.
+**persisted in `.intent/config.json`** in the worktree (committable, repo-scoped). The workspace
+DB `setup_script` field is retired from all write paths (kept for wire compat and legacy
+read-only fallback only). `detectProjectType` inspects manifest files to classify the project;
+`generateSetupScript` is the **AI-assisted** generator — this maps the reference UI's
+`generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every method requires `workspaceId`.
+
+**Setup script execution:** When a workspace is created (`workspace.create`) and an effective
+setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
+fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
+provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
+(repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
+branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
+errors are logged and surfaced. Script output is streamed to a "Setup" terminal for the workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } |
-| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — persists the body and returns the stored record |
+| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } — reads from worktree `.intent/config.json` (when present), falls back to legacy DB row `setup_script` (read-only) |
+| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written. Returns -32602 (invalid params) when the workspace has no `worktreePath` or `repositoryPath` |
 | workspace.detectProjectType | workspaceId (req) | { projectType: ProjectType \| null } — null when no known manifest is found |
 | workspace.generateSetupScript | workspaceId (req) | { setupScript: SetupScript } — AI-assisted draft (returned, not auto-saved; persist with saveSetupScript) |
 
 - **SetupScript** — `{ script: string, projectType?: ProjectType, updatedAt: number,
   generatedBy?: "user"\|"agent" }`. `generatedBy` records whether the body was hand-written
   (`saveSetupScript`) or AI-drafted (`generateSetupScript`); `updatedAt` is the last-write epoch-ms.
+  When read from `.intent/config.json`, `generatedBy` is synthesized as `"user"`.
 - **ProjectType** — `"node" | "python" | "go" | "rust" | "ruby"` (detected from `package.json`,
   `pyproject.toml`/`requirements.txt`, `go.mod`, `Cargo.toml`, and `Gemfile` respectively).
 
