@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-66 (as of 2026-07-17)
+**Next available ID:** STAB-67 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,16 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-66 (2026-07-17, area: cloudlands-fe / panel layout persistence, severity: P1)
+
+Workspaces did not restore previously opened tabs/layouts (splits, active tab, focused panel) across relaunches.
+
+**Repro:** Open a workspace, open multiple tabs and/or create panel splits, quit and relaunch the app. Expected: the workspace reopens with the same panel layout (tabs, splits, active tab, focused panel) as before. Actual: the layout was never persisted to `localStorage` nor restored on `workspaceMounted`, and `restoreStatus` stayed `"idle"` — the workspace always opens with a default/empty layout.
+
+**Root cause:** The `panel-layout-saga` (which handled persistence and restore) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's `PERSIST_ACTIONS` / `HISTORY_ACTIONS` handlers, `localStorage` persistence, and `workspaceMounted` restore logic were lost, leaving no mechanism to save or restore panel layouts.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/102, 2026-07-17)
 
 ### STAB-65 (2026-07-17, area: cloudlands-fe Settings / Specialists persistence, severity: P1)
 
