@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-84 (as of 2026-07-17)
+**Next available ID:** STAB-86 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -18,6 +18,26 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-85 (2026-07-17, area: intentd CI / e2e tests, severity: P1)
+
+The `completion_report_cleared_when_new_turn_begins_over_wss` e2e test hung indefinitely in CI, timing out every coverage-e2e and coverage-all job at 30 minutes.
+
+**Repro:** PR #221 added the `completion_report_cleared_when_new_turn_begins_over_wss` test to `crates/intentd/tests/e2e_wss_agent_lifecycle.rs`. The test delegated a mock child agent, waited for `agent:created` to retrieve the child's ID, then sent a new message to the parent and awaited `agent:updated` with `completionReportCleared: true`. The test hung from 2026-07-17 10:16 UTC onward because: (1) it called `wss_event(rx, "agent:created").await` expecting a `parentAgentId` field that `agent:created` events never carry (the field exists only on `agent:updated`), so the test retrieved `null` for the child ID and subsequent filters matched nothing, and (2) the `wss_event` helper's 30-second timeout reset on every WebSocket heartbeat Ping frame, allowing the hung wait to extend indefinitely. Every coverage-e2e and coverage-all CI run timed out at GitHub Actions' 30-minute job limit from that point forward, blocking all PRs and main pushes.
+
+**Expected:** E2e tests use deadline-bounded event waits that fail fast when expected events never arrive. The `wss_event_opt` helper (with a single overall deadline, no heartbeat resets) should be used for waits that may legitimately time out, and child agent IDs should be retrieved from the parent agent's `waitingForAgentIds` field rather than expecting a `parentAgentId` on `agent:created`.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test switched to `wss_event_opt` for deadline-bounded waits and retrieves child ID from parent's `waitingForAgentIds`; added nextest slow-timeout guard (~5 min) to catch similar hangs; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent merging PRs with failing coverage jobs
+
+### STAB-84 (2026-07-17, area: intentd workspace RPC / setup scripts, severity: P1)
+
+The `workspace.saveSetupScript` RPC contract changed in PR #223 to require a repository path, breaking the `uds_integration::uds_slice_end_to_end` test on main.
+
+**Repro:** PR #223 ("feat: make .intent/config.json sole source of truth for setup scripts", merged 2026-07-17 12:49 UTC) changed `workspace.saveSetupScript` to return InvalidParams when called without a repository path, aligning the RPC with the new config.json-backed persistence model. The `uds_slice_end_to_end` integration test in `crates/intentd/tests/uds_integration.rs` (lines 331+) asserted the old §5.25 contract: empty default, save returns stored record with `generatedBy: "user"`, get round-trips. After #223 merged, `saveSetupScript` returned `Null` (InvalidParams) instead of the expected stored script, causing the test to fail deterministically on main. The regression went undetected because coverage-e2e and coverage-all jobs were timing out at 30 minutes (STAB-85) and were not required merge-queue checks at the time #223 merged.
+
+**Expected:** Tests align with the current RPC contract. When `saveSetupScript` is called without a repository path in the new config.json model, the RPC should either return InvalidParams (as implemented in #223) or persist to a workspace-scoped default location, and the integration test assertions should match the implemented behavior.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test updated to expect InvalidParams error when saving setup scripts without repository path; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent similar regressions
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
