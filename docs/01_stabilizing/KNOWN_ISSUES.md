@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-75 (as of 2026-07-17)
+**Next available ID:** STAB-79 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,46 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-78 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+External-editors persistence (Open-In action, hidden editors) and window:zoom-changed listener never persisted after saga removal.
+
+**Repro:** Select a default "Open In" editor in Settings → External Editors, or hide an editor from the list, quit and relaunch the app. Expected: the selected default and hidden editors persist. Actual: selections were lost on relaunch — the store slice was never persisted to daemon settings. Similarly, the window:zoom-changed IPC listener (which syncs Electron's zoom level to the renderer store) was registered in a saga effect that was deleted in saga-removal commit `95d908a2` without being re-homed, so zoom level changes never updated the store.
+
+**Root cause:** The external-editors saga (`external-editors-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers and window:zoom-changed IPC listener registration were lost, leaving no mechanism to save external-editors state or sync zoom changes.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/119, 2026-07-17)
+
+### STAB-77 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+Terminal persistence (overlay height, renames, metadata, per-workspace overlay state) never persisted after saga removal.
+
+**Repro:** Rename a terminal, resize the terminal overlay, or toggle the terminal visibility, quit and relaunch the app. Expected: terminal state persists. Actual: all terminal state was lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The terminal-saga (`terminal-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save terminal state (overlay height, terminal renames, terminal metadata, per-workspace overlay visibility).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/114, 2026-07-17)
+
+### STAB-76 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+User-preferences persistence (spellcheck, show-archived, group-by-repo, provider-setup flag, agent/note font styles, code font family, activity-log presets, promo-banner dismissals) never persisted after saga removal.
+
+**Repro:** Toggle spellcheck in Settings → Preferences, or change the activity-log preset, quit and relaunch the app. Expected: user preferences persist. Actual: preferences were lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The user-preferences saga (`user-preferences-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save user preferences (spellcheck enabled, show archived workspaces, group by repo, provider setup completed flag, agent message font style, note font style, code font family, activity log presets, promo banner dismissals).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/117, 2026-07-17)
+
+### STAB-75 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P1)
+
+Workspace settings persistence (auto-commit toggle, beta-updates toggle, notification settings) never persisted after saga removal.
+
+**Repro:** Toggle auto-commit in Settings → Workspace Settings, or change notification settings, quit and relaunch the app. Expected: settings persist per-workspace. Actual: settings were lost on relaunch — the store slice was never persisted to daemon settings.
+
+**Root cause:** The workspace-settings saga (`workspace-settings-saga.ts`) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's persistence handlers were lost, leaving no mechanism to save workspace settings (auto-commit enabled, beta updates channel, notification preferences).
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/116, 2026-07-17)
 
 ### STAB-74 (2026-07-17, area: cloudlands-fe agents-seeder / reload, severity: P1)
 
