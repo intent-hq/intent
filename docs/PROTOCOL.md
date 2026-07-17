@@ -168,18 +168,18 @@ Returns commit history with attribution and workspace boundary information.
 
 **Request:**
 
-```json
+```jsonc
 {
   "workspaceId": "workspace-abc",
   "limit": 50,           // optional, default 50
   "nextToken": "...",    // optional, for pagination
-  "includeOlder": false  // optional, default false - when true, returns pre-boundary commits
+  "includeOlder": false  // optional, default false - when true, returns commits before and including the boundary
 }
 ```
 
 **Result:**
 
-```json
+```jsonc
 {
   "commits": [
     {
@@ -194,7 +194,7 @@ Returns commit history with attribution and workspace boundary information.
       "linkedNoteId": "note-..."   // optional
     }
   ],
-  "boundarySha": "def456...",  // workspace boundary commit SHA, or null
+  "boundarySha": "def456...",  // workspace boundary commit SHA, or null when no boundary info or unresolvable
   "nextToken": "..."            // pagination token, or null
 }
 ```
@@ -203,8 +203,10 @@ Returns commit history with attribution and workspace boundary information.
 
 - When `includeOlder` is `false` (default), returns commits in the `boundary..HEAD` range (workspace-owned commits only)
 - When `includeOlder` is `true`, returns commits before and including the workspace boundary (for "show previous" functionality; the boundary commit itself is included)
-- `boundarySha` is `null` when the workspace has no boundary info (`baseRef` or `baseCommitSha` not set)
-- **Fail-closed safety net:** When boundary info exists but cannot be resolved (e.g., shallow clone, nonexistent ref), returns an empty commit list to prevent leaking arbitrary base-branch history. This holds regardless of `includeOlder` value.
+- `boundarySha` is `null` when:
+  - The workspace has no boundary info (`baseRef` or `baseCommitSha` not set), OR
+  - Boundary info exists but cannot be resolved (e.g., shallow clone, nonexistent ref, base commit not an ancestor of HEAD)
+- **Fail-closed safety net:** When boundary info exists but cannot be resolved, the method returns an empty commit list (regardless of `includeOlder` value) to prevent leaking arbitrary base-branch history
 
 **Boundary Resolution Strategy:**
 
