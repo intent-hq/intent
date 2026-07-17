@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-91 (as of 2026-07-17)
+**Next available ID:** STAB-92 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -400,6 +400,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-91 (2026-07-17, area: cloudlands-fe sidebar / active-streams tracker, severity: P1)
+
+Sidebar agent-running icons never appeared for workspaces with active agents after app boot.
+
+**Repro:** Before the fix: start the app with a workspace that has one or more active agents (mid-turn). Open that workspace in the sidebar. Observe: the sidebar WorkspaceCard shows no running-agent icons (the avatars with "🔄" overlay or equivalent) for the active agents, even though the agents are actively processing turns and visible in the chat UI. The workspace appears idle in the sidebar.
+
+**Root cause:** The tracker→Redux bumpActiveStreamsVersion bridge was lost in the saga removal. The activeStreamsTracker (in features/agent/stream/active-streams-tracker.ts) maintained correct live state of active agents and fired activeStreamsChanged events when agents started or stopped streaming, but the saga that previously listened to these events and dispatched activeStreamsVersionBumped Redux actions (to trigger WorkspaceCard re-renders) was removed in commit 95d908a2 without being re-homed as middleware. After boot, when active-stream data arrived from the daemon (via agent:stream or agent:updated WSS events), the tracker updated its internal state but the Redux store's activeStreamsVersion counter never incremented, so the sidebar WorkspaceCard components never re-rendered to reflect the newly active agents.
+
+**Expected:** When activeStreamsTracker fires activeStreamsChanged events (agent started or stopped), a middleware immediately dispatches activeStreamsVersionBumped to bump the Redux store's version counter, triggering WorkspaceCard re-renders that reflect the current set of running agents in the sidebar.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#100](https://github.com/intent-hq/cloudlands-fe/pull/100), 2026-07-17)
 
 ### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
 
