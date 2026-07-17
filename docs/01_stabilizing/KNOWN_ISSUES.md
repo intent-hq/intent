@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-96 (as of 2026-07-17)
+**Next available ID:** STAB-97 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-88 (2026-07-17, area: intentd agent prompt assembly, severity: P1)
+### STAB-96 (2026-07-17, area: intentd agent prompt assembly, severity: P1)
 
 Daemon-spawned agents received no Agent Skills catalog in their prompts.
 
