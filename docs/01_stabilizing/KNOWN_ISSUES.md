@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-94 (as of 2026-07-17)
+**Next available ID:** STAB-95 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -400,6 +400,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-94 (2026-07-17, area: cloudlands-fe chat markdown rendering / messageParser, severity: P2)
+
+Inline-code list items like `pr-title` rendered as "Workspace not found" cards instead of code formatting in chat.
+
+**Repro:** Before the fix, the messageParser's bare-ID promotion heuristic (`promoteWorkspaceIdLists`, `classifyLineForWorkspaceCard`, `tryExtractWorkspaceIdFromLine`) matched workspace slug patterns against everyday hyphenated terms in inline code (e.g., list items like `- pr-title`, `- api-endpoint`). These were incorrectly promoted to workspace card components, which then failed to resolve and rendered as "Workspace not found" cards instead of preserving the original inline-code formatting.
+
+**Expected:** Only explicit @@@workspace ... @@@ sentinel blocks render workspace cards. Inline code, fenced code blocks, and legacy ~~~workspace / ```workspace fences render as code/text without workspace card promotion.
+
+**Resolution:** Removed bare-ID promotion heuristic entirely; added explicit @@@workspace sentinel parsing; updated chief-of-staff specialist prompt to use sentinel syntax instead of fenced blocks.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#131](https://github.com/intent-hq/cloudlands-fe/pull/131), [intent-hq/intentd#229](https://github.com/intent-hq/intentd/pull/229), 2026-07-17)
 
 ### STAB-93 (2026-07-17, area: cloudlands-fe home screen / workspace list, severity: P1)
 
