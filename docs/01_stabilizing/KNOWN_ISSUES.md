@@ -379,6 +379,22 @@ Beta-updates toggle in Settings unresponsive when clicked. Toggle does not refle
 
 **Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
 
+### STAB-80 (2026-07-17, area: cloudlands-fe chat drafts persistence, severity: P1)
+
+Chat drafts are not persisted to the backend, causing them to be lost when switching workspaces.
+
+**Repro:**
+1. Open a workspace and start typing a message in the chat input (do not send it)
+2. Switch to a different workspace
+3. Switch back to the original workspace
+4. Observe: the draft message is lost
+
+**Root cause:** The frontend is still using the old localStorage-based draft persistence (via `transient-ui-slice` Redux state, lines 14, 27, 75-80, 127-144 in `transient-ui-slice.ts`) instead of the backend `drafts.get`/`drafts.set`/`drafts.clear` RPC methods specified in IMPLEMENTATION_SPEC.md §9.10/§15 and PROTOCOL.md §5.16. The backend methods are implemented (in `intent-services/src/drafts.rs`) and tested (see `intentd/tests/uds_integration.rs`, `intentd/tests/wss_integration.rs`), but the frontend never calls them. `ChatPanel.svelte` (lines 940-973) restores and saves drafts using Redux actions `setChatDraft`/`clearChatDraft`, which only update in-memory state that's lost on workspace unmount (line 145: `workspaceUnmounted` clears the workspace's transient state).
+
+**Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#126](https://github.com/intent-hq/cloudlands-fe/pull/126), 2026-07-17)
+
 ### STAB-80 (2026-07-17, area: intentd workspace events / lastActivity propagation, severity: P1)
 
 Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
