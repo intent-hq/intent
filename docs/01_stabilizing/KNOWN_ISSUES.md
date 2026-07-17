@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-95 (as of 2026-07-17)
+**Next available ID:** STAB-96 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -29,7 +29,7 @@ Workspace creation auto-pull failed when the configured repository has submodule
 
 **Status:** fixed ([intent-hq/intentd#232](https://github.com/intent-hq/intentd/pull/232), 2026-07-17) — `git.pull` now runs bounded submodule sync after successful pull when `.gitmodules` exists; regression test verifies submodule worktree syncs to new gitlink
 
-### STAB-89 (2026-07-17, area: intentd file-tracking / cloudlands-fe changes panel, severity: P1)
+### STAB-95 (2026-07-17, area: intentd file-tracking / cloudlands-fe changes panel, severity: P1)
 
 The "Workspace start" marker in the Changes panel sat ~50 commits in the past and pre-workspace base-branch commits were listed.
 
