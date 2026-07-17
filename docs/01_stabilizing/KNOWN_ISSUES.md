@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-65 (as of 2026-07-17)
+**Next available ID:** STAB-66 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,28 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-65 (2026-07-17, area: cloudlands-fe Settings / Specialists persistence, severity: P1)
+
+**Repro:**
+1. Open Settings → Specialists
+2. Click "Use for all specialists" (to apply the selected model to all)
+3. Observe: no effect — button stays visible, no `.md` files written to `~/.augment/specialists/`
+4. Similarly, per-specialist model changes, prompt edits, create-new, delete, and reset-to-default produce no wire call
+
+**Root cause:**
+Saga-trigger write actions (`saveFileSpecialist`, `deleteFileSpecialist`, `exportBuiltinToFile`, `loadFileSpecialists`) were orphaned when the saga runtime was removed (their handlers lived in the removed saga). Dispatch sites in AIBehaviorEditor.svelte and Settings remained unchanged, so the actions dispatched but produced no daemon call.
+
+Additionally, the SpecialistsClient seam lacked write methods (`create` / `edit` / `delete`) — only `list` was implemented.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/101, 2026-07-17)
+
+**Fix:**
+1. Extended SpecialistsClient seam with `create` / `edit` / `delete` matching PROTOCOL §5.11 (live client propagates errors, mock client stubs; 16 tests)
+2. Created specialists mutation middleware (`createSpecialistsMutationMiddleware()`) re-homing the orphaned write actions — middleware chooses create vs edit by checking store state for existing file specialist (daemon semantics: create errors on existing id, edit errors on missing id), refetches `specialist.list` after every write, surfaces toast errors on failure (8 tests)
+3. Registered middleware in `src/store/renderer/middleware.ts`
+
+Result: clicking "Use for all specialists" now writes one file per specialist via `specialist.create`/`edit`, the store refreshes from `specialist.list`, and the button hides once all specialists use the selected model.
 
 ### STAB-64 (2026-07-17, area: intentd workspace.create / cloudlands-fe sidebar repo grouping, severity: P2)
 
