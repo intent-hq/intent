@@ -120,15 +120,7 @@ Sidecar/dev build (FE spawns `intentd serve --listen uds`) — toggling `server.
 
 **Status:** fixed ([intent-hq/intentd#195](https://github.com/intent-hq/intentd/pull/195), 2026-07-16)
 
-### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
 
-Flaky CI test failure: `capture_login_shell_path_with_fake_shell` in `crates/intent-core/src/path_utils.rs` tests.
-
-**Repro:** On intentd PR #186 (https://github.com/intent-hq/intentd/pull/186), the `check` CI job failed once with test panic in `path_utils::tests::capture_login_shell_path_with_fake_shell`. The test creates a fake shell script, spawns it, and attempts to capture its output. Intermittent failure under CI parallelism; a re-run passed. The failure is unrelated to the PR's LLM auto-commit implementation (which was the only code changed).
-
-**Expected:** The test should pass reliably in CI without intermittent failures.
-
-**Status:** open (blocked PR #186 once, needs investigation)
 
 ### STAB-1 (2026-07-13, area: intentd note persistence, severity: P1)
 
@@ -246,51 +238,51 @@ Flaky test failure: `auto-update-channel-persist.test.ts` fails intermittently i
 
 Flaky test failure: `wss_integration::wss_note_save_asset_round_trip` under cargo-llvm-cov instrumentation.
 
-**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passes reliably when run standalone (`cargo test`) but flakes intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passes consistently in the standalone `check` job but occasionally fails in the `coverage-e2e` job. The test exercises WSS note asset save/load round-trip; the flake suggests a race or timing sensitivity exposed only under llvm-cov's runtime hooks.
+**Repro:** The `wss_integration::wss_note_save_asset_round_trip` test passed reliably when run standalone (`cargo test`) but flaked intermittently when run under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PR #179 coverage-e2e CI runs (https://github.com/intent-hq/intentd/pull/179) — test passed consistently in the standalone `check` job but occasionally failed in the `coverage-e2e` job. The flake is no longer reproducible in 10/10 consecutive runs (both standalone and under llvm-cov); root cause remains unknown.
 
 **Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce timing-dependent failures.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — flake no longer reproducible after 10+ consecutive runs; skip removed from coverage-e2e.sh and continuing to monitor
 
 ### STAB-41 (2026-07-15, area: intentd CI / intent-pty host tests, severity: P2)
 
 Flaky test failure: `intent-pty host::tests::kill_scope_leaves_no_process_group_orphan` on GitHub Actions runners.
 
-**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). The test verifies that killing a process scope leaves no orphaned process groups. The failing PR (intent-hq/intentd#179) touched no intent-pty files — the crate was unmodified. A rerun passed. Intermittent, likely runner-specific (process scheduling, signal delivery timing, or procfs read races).
+**Repro:** The `kill_scope_leaves_no_process_group_orphan` test in intent-pty failed once on a GitHub Actions runner with "grandchild pid printed" panic (run 29397285947, https://github.com/intent-hq/intentd/actions/runs/29397285947). Root cause: grandchild PID print raced a fixed 5s deadline on slow GitHub Actions runners.
 
 **Expected:** Test passes reliably across all runner environments. Process group cleanup assertions should be robust to timing variations.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — changed from fixed 5s sleep to bounded polling (100ms intervals, 5s max) to detect PID print reliably across runner speeds
 
 ### STAB-42 (2026-07-15, area: intentd CI / uds_concurrent_dispatch test, severity: P2)
 
 Flaky test failure: `uds_concurrent_dispatch::slow_host_exec_does_not_block_fast_workspace_list` under cargo-llvm-cov instrumentation.
 
-**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` fails consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. The test verifies that slow host.exec calls do not block fast workspace.list calls. Observed on local coverage runs for PR intent-hq/intentd#181 — the test times out reliably under llvm-cov but passes when run standalone. The instrumentation overhead appears to push the timing past the test's timeout threshold.
+**Repro:** The `slow_host_exec_does_not_block_fast_workspace_list` test in `crates/intentd/tests/uds_concurrent_dispatch.rs` failed consistently under coverage instrumentation (`cargo llvm-cov`) with "timed out waiting for a frame: Elapsed(())" panic at line 63. Root cause: test used single-threaded `#[tokio::test]` since inception (45b25e3 / PR #79), serializing spawned tasks. The test never actually passed standalone — the KNOWN_ISSUES claim that it "passes standalone" was incorrect. Production dispatch is concurrent (daemon uses multi-threaded `#[tokio::main]`).
 
-**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+**Expected:** Test passes reliably under both standalone and instrumented execution.
 
-**Status:** open (test skipped in scripts/coverage-all.sh and scripts/coverage-e2e.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — changed test to use multi-threaded runtime via `#[tokio::test(flavor = "multi_thread")]`; skips removed from coverage-all.sh and coverage-e2e.sh
 
 ### STAB-43 (2026-07-15, area: intentd CI / intent-core unit test, severity: P2)
 
-Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` passes locally, fails in CI.
+Flaky test failure: `path_utils::tests::capture_login_shell_path_with_fake_shell` in both plain CI and coverage runs.
 
-**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` passes reliably when run locally (`cargo test`) but fails intermittently in CI under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage-all CI runs — test passes in the standalone `check` job but flakes in the `coverage-all` job. The test verifies shell path capture using a fake shell fixture. The flake suggests environment or timing sensitivity under llvm-cov's runtime hooks.
+**Repro:** The `capture_login_shell_path_with_fake_shell` test in `crates/intent-core/src/path_utils.rs` failed intermittently in CI: once in the standalone `check` job (intentd PR #186) and intermittently in coverage-all runs (PRs #182, #183). Root cause: fake shell fixture file writes were not flushed before exec, causing intermittent reads of incomplete script content.
 
-**Expected:** Test passes reliably under both standalone and instrumented execution. Coverage instrumentation should not introduce flakes.
+**Expected:** Test passes reliably in CI without intermittent failures.
 
-**Status:** open (test skipped in scripts/coverage-all.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — added `sync_all()` flush after writing the fake shell script; skip removed from coverage-all.sh
 
 ### STAB-44 (2026-07-15, area: intentd CI / WSS e2e test, severity: P2)
 
 Flaky test failure: `e2e_mock_agent_workspace_api_bindings::seeded_conversation_rehydrates_over_wss` timeout under coverage instrumentation.
 
-**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` times out intermittently under coverage instrumentation (`cargo llvm-cov`). Observed on intentd PRs #182 and #183 coverage runs — test passes reliably when run standalone but occasionally times out in the coverage-e2e CI job. The test verifies that a seeded conversation rehydrates correctly over the WSS transport. The timeout suggests instrumentation overhead pushes execution time past the test's timeout threshold.
+**Repro:** The `seeded_conversation_rehydrates_over_wss` test in `crates/intentd/tests/e2e_mock_agent_workspace_api_bindings.rs` timed out intermittently under coverage instrumentation (`cargo llvm-cov`). Root cause: llvm-cov instrumentation overhead exceeded the test's fixed timeout.
 
-**Expected:** Test passes reliably under both standalone and instrumented execution, or the timeout is raised to accommodate instrumentation overhead.
+**Expected:** Test passes reliably under both standalone and instrumented execution.
 
-**Status:** open (test skipped in scripts/coverage-e2e.sh pending fix)
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/214, 2026-07-17) — introduced `INTENTD_TEST_TIMEOUT_MULTIPLIER` env var (default 1, coverage scripts set to 3); test harness now scales all timeouts by this multiplier; skip removed from coverage-e2e.sh
 
 
 ---
