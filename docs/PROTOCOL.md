@@ -13,6 +13,12 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 4. [Message Envelope (JSON-RPC 2.0)](#4-message-envelope-json-rpc-20)
 5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
 6. [Method Catalog](#6-method-catalog)
+   - 6.1 [Router Methods](#61-router-methods-253-total)
+   - 6.2 [Fast-Path Methods](#62-fast-path-methods-27-total)
+   - 6.3 [Method Aliases](#63-method-aliases-2-total)
+   - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
+   - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
+   - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
 7. [Events & Subscriptions](#7-events--subscriptions)
 8. [Error Codes](#8-error-codes)
 
@@ -160,28 +166,28 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 6. Method Catalog
 
-The API exposes **280 dispatchable method names** across the following categories:
+The API exposes **282 dispatchable method names** across the following categories:
 
-- **Router methods:** 251 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 253 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 27 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 280 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 282 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
 
-**Total:** 280 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 282 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields `-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires `workspaceId` (see §4.6) and may return `-32603 Internal error` if the underlying service throws.
 
-### 6.1 Router Methods (251 total)
+### 6.1 Router Methods (253 total)
 
-The following 251 methods are routed through the main dispatch match in `router.rs`.
+The following 253 methods are routed through the main dispatch match in `router.rs`.
 
-#### `agent.*` (35 methods)
+#### `agent.*` (37 methods)
 
-agent.appendMessage, agent.cancelSubscriptions, agent.completeOnce, agent.create, agent.delegate, agent.delete, agent.diagnostics, agent.editQueuedMessage, agent.enhancePrompt, agent.forceMessage, agent.get, agent.getConversation, agent.getModels, agent.getQueue, agent.getSession, agent.getSessionStats, agent.getSubscriptions, agent.list, agent.pendingPermissions, agent.queueMessage, agent.removeQueuedMessage, agent.rename, agent.replaceMessages, agent.reportToParent, agent.respondPermission, agent.retry, agent.sendMessage, agent.sendToTask, agent.setModel, agent.stop, agent.subscribe, agent.summary, agent.unsubscribe, agent.update, agent.wakeOrCreate
+agent.appendMessage, agent.cancelSubscriptions, agent.completeOnce, agent.create, agent.delegate, agent.delete, agent.diagnostics, agent.editQueuedMessage, agent.enhancePrompt, agent.forceMessage, agent.get, agent.getConversation, agent.getModels, agent.getQueue, agent.getSession, agent.getSessionStats, agent.getSubscriptions, agent.list, agent.listInterrupted, agent.pendingPermissions, agent.queueMessage, agent.removeQueuedMessage, agent.rename, agent.replaceMessages, agent.reportToParent, agent.resolveInterrupted, agent.respondPermission, agent.retry, agent.sendMessage, agent.sendToTask, agent.setModel, agent.stop, agent.subscribe, agent.summary, agent.unsubscribe, agent.update, agent.wakeOrCreate
 
 #### `comment.*` (6 methods)
 
@@ -310,6 +316,100 @@ These 4 method names are **dual-role**: they appear in the dispatchable method c
 - **`host.openExternal`** — open a URL in the default browser
 - **`host.openInEditor`** — open a file or directory in the user's editor
 - **`host.pickApplication`** — prompt the user to select an application
+
+---
+
+### 6.6 Interrupted-Agent Resumption (v2.0 additions)
+
+The following methods manage agent resumption across daemon restarts. When `intentd` restarts, in-flight agent sessions (`active`, `processing`, `waiting` statuses) are captured as **interrupted records** before the heal sweep rewrites them to `idle`. Clients discover interrupted agents via `agent.listInterrupted` and resolve them via `agent.resolveInterrupted` (resume or abandon). For headless deployments, `intentd serve --resume-all` auto-resumes all interrupted agents at startup.
+
+#### `agent.listInterrupted`
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+```json
+{
+  "agents": [
+    {
+      "agentId": "agent-abc123",
+      "workspaceId": "ws-xyz",
+      "workspaceName": "Feature: Dark mode",
+      "agentName": "Implementor",
+      "prevStatus": "active",
+      "interruptedAt": "2026-07-16T10:15:30.123Z"
+    }
+  ]
+}
+```
+
+Returns pending interrupted agents across all workspaces. Each `InterruptedAgent` includes:
+- `agentId`, `workspaceId` — session and workspace IDs
+- `workspaceName`, `agentName` — joined from workspace/agent-session tables (may be empty if session deleted after interruption)
+- `prevStatus` — the agent's status before interruption (`active`, `processing`, or `waiting`)
+- `interruptedAt` — ISO 8601 timestamp when the agent was interrupted
+
+Rows with `resolution='pending'` survive multiple restarts (idempotent capture). Resolved rows (`resumed` / `abandoned`) are excluded.
+
+#### `agent.resolveInterrupted`
+
+**Request:**
+```json
+{
+  "resume": ["agent-abc123"],
+  "abandon": ["agent-def456"]
+}
+```
+
+**Validation rules:**
+- `resume` and `abandon` are **optional** parameters.
+- When present, each must be an **array of strings** (non-array → `-32602 "resume/abandon must be an array"`; non-string element → `-32602 "resume[i]/abandon[i] must be a string"`).
+- `null` is treated as non-array and rejected with `-32602`.
+- At least one of `resume` or `abandon` **does not** need to be present; both can be absent or empty arrays (no-op).
+
+**Response:**
+```json
+{
+  "resumed": ["agent-abc123"],
+  "abandoned": ["agent-def456"],
+  "failed": []
+}
+```
+
+Resolves interrupted agents:
+- **Resume:** Atomically marks row `resolved='resumed'` (claim-first), re-registers parent completion watches (if delegated), delivers a continuation message (`"intentd restarted while you were working. Review your last steps and continue the task."`) via `agent.sendMessage`. Delivery lazily respawns the ACP provider and resumes via `session/load` (with `session/new` recreate fallback). If any post-claim step fails, the row is reset to `pending` (resolution=NULL) to restore retryability, and the error is returned.
+- **Abandon:** Marks row `resolved='abandoned'`, appends a system-role interruption message (text block with `meta.kind="interruption"`: `"This conversation was interrupted because intentd restarted. The agent's in-flight work was terminated."`), emits `agent:message` + `agent:updated` events.
+
+**Errors:**
+- An agent ID appearing in both `resume` and `abandon` → `-32602 "Agent id X appears in both resume and abandon"`
+- Unknown or already-resolved IDs land in the `failed` array: `{ agentId, error }` (error string describes the failure reason)
+
+Per-agent failures are isolated; other agents in the same call proceed normally.
+
+#### Delegation-Group Persistence
+
+**`after_all` groups survive restarts.** When a parent delegates children with `waitMode: "after_all"`, the delegation group is persisted in the `delegation_group` SQLite table. At daemon startup, the heal sweep rehydrates all sealed groups and re-registers the aggregated-wake delivery watch. Resumed grouped children automatically re-enroll in their persisted group; when all children complete, the daemon delivers exactly one aggregated wake to the parent containing all children's reports.
+
+**Durable-before-observable:** Child completions are recorded durably in `delegation_group` **before** the `agent:idle` event publishes. A daemon kill between completion and event delivery cannot lose completion state — the resumed child's completion is already persisted when the daemon restarts.
+
+**Group-wake format:** The aggregated wake is a single agent turn delivered to the parent, containing a `[WORKSPACE EVENTS]` summary block listing all children's completion reports. Each child's report line: `**{child_name}** (agent-{id}) completed. Report: {completion_report_text}`. After delivery, the group row is pruned.
+
+#### `serve --resume-all` CLI Flag
+
+`intentd serve --resume-all` is a headless deployment flag that automatically resumes all interrupted agents at startup without waiting for `agent.resolveInterrupted` RPC.
+
+**Execution:** After the daemon is fully up (services wired, event bus live, RPC servers listening), a background task enumerates `agent.listInterrupted` and calls the resume service operation for each pending agent. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup.
+
+**Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes.
+
+**Logged output:**
+- `INFO`: `--resume-all: enumerating interrupted agents`
+- `INFO`: `--resume-all: resuming interrupted agents` (with `count` field)
+- `INFO`: `--resume-all: resumed agent` (per success; includes `agent_id`, `workspace`)
+- `WARN`: `--resume-all: failed to resume agent` (per failure; includes `agent_id`, `error`)
+- `INFO`: `--resume-all: auto-resume sweep complete` (with `resumed`, `failed` counts)
+
+After the sweep completes, `agent.listInterrupted` returns an empty list.
 
 ---
 
@@ -458,7 +558,7 @@ The daemon uses the following JSON-RPC 2.0 error codes:
 
 ## Summary
 
-**Protocol v2.0** exposes **280 dispatchable method names** (251 router methods + 27 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 280 dispatchable names AND are also issued daemon→client on remote connections.
+**Protocol v2.0** exposes **282 dispatchable method names** (253 router methods + 27 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 282 dispatchable names AND are also issued daemon→client on remote connections.
 
 The method surface is frozen and enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift causes CI failure with the instruction to update the catalog, this document, and bump the protocol version.
 
