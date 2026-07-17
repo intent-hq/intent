@@ -389,7 +389,7 @@ Agent spawn fails with `spawn provider failed: claude-agent-acp: No such file or
 
 **Expected:** The daemon resolves provider binaries to absolute paths using 3-tier precedence: (1) `providers.paths.<id>` setting, (2) `~/.augment/bin/<command>`, (3) enhanced PATH directory scan (including discovery logic from `find_auggie` / `resolve_on_path`). The resolved absolute path is used for `Command::new` AND passed as `SpawnOptions.provider_binary` so `enhanced_path` prepends its parent directory (ensuring co-located node resolves for shebang scripts). If resolution fails at all three tiers, spawn proceeds with bare name (backward-compatible fallback). Uniform across all providers — no per-provider special cases. Spawn failure errors name the unresolvable command.
 
-**Status:** fixed ([intent-hq/intentd#189](https://github.com/intent-hq/intentd/pull/189), 2026-07-16) — generalized provider binary discovery with settings → managed bin → PATH-scan precedence, wired into agent spawn
+**Status:** fixed ([intent-hq/intentd#189](https://github.com/intent-hq/intentd/pull/189), 2026-07-16) — generalized provider binary discovery with settings → managed bin → PATH-scan precedence, wired into agent spawn. The claude-code provider now falls back to `npx -y @agentclientprotocol/claude-agent-acp` when the adapter binary is absent ([intent-hq/intentd#215](https://github.com/intent-hq/intentd/pull/215), 2026-07-17).
 
 ### STAB-2 (2026-07-13, area: cloudlands-fe UI — workspace timeline/feed, severity: P2)
 
