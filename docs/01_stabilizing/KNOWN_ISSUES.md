@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-61 (as of 2026-07-16)
+**Next available ID:** STAB-62 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -344,6 +344,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-61 (2026-07-17, area: cloudlands-fe repo / nested submodule gitlink, severity: P2)
+
+The cloudlands-fe repo carried an orphaned `intentd` submodule gitlink (mode `160000`) with no matching entry in its `.gitmodules`, breaking `git submodule update --init --recursive` in the parent monorepo.
+
+**Repro:** From a fresh monorepo clone, run `git submodule update --init --recursive`. It aborts with `fatal: No url found for submodule path 'packages/cloudlands-fe/intentd' in .gitmodules`, leaving `packages/ios` unpinned (checked out to `main` tip instead of the recorded commit) and `packages/intentd` with an empty working tree (index populated but files not extracted). `git -C packages/cloudlands-fe ls-files -s intentd` showed mode `160000` (gitlink) → commit `befdb2371f292ecd93886ffeee2d236123ee493b`, but `packages/cloudlands-fe/.gitmodules` had no entry for `intentd`.
+
+**Expected:** `git submodule update --init --recursive` from a fresh clone succeeds end-to-end, initializing all three top-level submodules at their pinned commits.
+
+**Root cause:** Leftover nested-submodule gitlink in the cloudlands-fe repo from before the monorepo restructure. Nothing in cloudlands-fe references the `intentd/` path anymore — the FE resolves the intentd binary by walking up from `process.cwd()` to `packages/intentd/target/{release,debug}/intentd`, and `scripts/copy-sidecar.cjs` targets a gitignored `resources/sidecar/intentd` staging path.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#92](https://github.com/intent-hq/cloudlands-fe/pull/92), 2026-07-17) — `git rm --cached intentd` in cloudlands-fe removes the stray gitlink; monorepo submodule bump follows.
 
 ### STAB-59 (2026-07-16, area: WSS listener settings / Settings UI, severity: P2)
 
