@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-81 (as of 2026-07-17)
+**Next available ID:** STAB-82 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -384,6 +384,26 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-81 (2026-07-17, area: cloudlands-fe / settings auto-update, severity: P1)
+
+Beta-updates toggle in Settings unresponsive when clicked. Toggle does not reflect actual update channel on app boot in real (non-mock) mode.
+
+**Repro:** Launch app in real mode (not mock). Open Settings → About → Beta Updates. Click the beta-updates toggle. Observe: toggle does not flip, no channel switch occurs. Relaunch app. Observe: toggle shows wrong state (doesn't match actual channel).
+
+**Root cause:** (1) Middleware called dead `invoke('settings:set')` with no main-process handler — the IPC call silently failed. (2) Real-mode boot hydration missing — only mock seeder synced Redux `betaUpdatesEnabled` with main-process channel from `autoUpdateClient.getState()`. The middleware also called `autoUpdateClient.setChannel()` which already persisted via local-prefs, making the dead settings:set call redundant.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
+
+### STAB-80 (2026-07-17, area: intentd workspace events / lastActivity propagation, severity: P1)
+
+Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
+
+**Repro:** Before this fix, workspace `lastActivity` was updated in the DB on every daemon-side activity (agent turn, commit, note edit), but no live event carried the new timestamp to the frontend. The sidebar only re-sorted when the user clicked a workspace, triggering a workspace.get fetch with the fresh `lastActivity`. Even with the WSS event stream connected, newly-active workspaces stayed at the bottom of the sidebar until clicked.
+
+**Expected:** When an agent or daemon operation updates workspace `lastActivity`, a debounced `workspace:updated` event with the new timestamp is emitted over the WSS connection, and the FE sidebar re-sorts in real-time without user interaction.
+
+**Status:** fixed ([intent-hq/intentd#224](https://github.com/intent-hq/intentd/pull/224), [intent-hq/intentd#225](https://github.com/intent-hq/intentd/pull/225), 2026-07-17) — `workspace:updated` event now emitted with debounced (200ms) trailing-edge logic; follow-up PR #225 addressed Copilot review findings: debounce insertion race condition (generation counter guard), lexicographical RFC3339 comparison bug (chrono::DateTime parsing for timestamp advancement assertions), and RAII environment variable isolation in tests (DebounceEnvGuard)
 
 ### STAB-78 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
 
