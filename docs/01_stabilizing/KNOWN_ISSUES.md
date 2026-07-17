@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-65 (as of 2026-07-17)
+**Next available ID:** STAB-71 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -19,17 +19,29 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-64 (2026-07-17, area: intentd workspace.create / cloudlands-fe sidebar repo grouping, severity: P2)
+### STAB-69 (2026-07-17, area: cloudlands-fe agents-seeder / reload, severity: P1)
 
-Sidebar repo groups show no GitHub avatar for workspaces created from local repo paths, unlike the reference app.
+Chat transcript clobbered to blank after workspace reload.
 
-**Repro:** Create a workspace from a local repository path that has a `github.com` origin remote (e.g., `intentd workspace create --path ~/code/monorepo`). Open the cloudlands-fe sidebar All-Workspaces repo view. The repo group for that workspace shows no GitHub owner avatar next to the repo group, even though the repository has a valid GitHub origin.
+**Repro:** Open a workspace with an agent that has existing chat messages. Reload the app (Cmd-R). Observe the agent panel — the chat transcript is completely blank even though the conversation history exists in the daemon.
 
-**Expected:** The GitHub owner avatar appears next to the repo group in the sidebar, matching the reference app behavior. The sidebar (`AllWorkspacesCard.svelte`, repo view) renders the avatar when `group.owner` is set, which requires `workspace.repositoryOwner`.
+**Root cause:** `agents-seeder` unconditionally replaced Redux `agentSessions` with the AgentLite list from `client.agents.list()`. When AgentLite payloads have `messages: []` (daemon optimization to reduce payload size), seeder wiped existing conversation transcripts that were already hydrated in the store.
 
-**Root cause:** The daemon never derives `repositoryOwner` from local paths. intentd only sets `repository_owner` when the caller explicitly supplies it or when the workspace is created by cloning a `github.com/OWNER/REPO` URL. PROTOCOL.md states: "`repositoryOwner` is never derived from local paths (no remote inspection)". The reference app (augmentcode/intent) backfilled `repositoryOwner` and `repositoryName` in the Electron main process (`performBackgroundEnrichment` → `git remote get-url origin`), but that enrichment path is out of the daemon-canonical data path in the ported stack — the cloudlands-fe sidebar lists workspaces straight from intentd `workspace.list` (`LiveWorkspacesClient`) with fields passing through untouched.
+**Expected:** Agent chat transcript is preserved across workspace reloads. Seeder should preserve existing session messages when incoming agent has `messages.length === 0` and existing session has `messages.length > 0`, mirroring the merge logic in `hydrateWorkspaceAgents` from `lifecycle-read-service.ts`.
 
-**Status:** open
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
+
+### STAB-68 (2026-07-17, area: cloudlands-fe workspaces-seeder / reload, severity: P1)
+
+Sidebar Changes panel stuck in indeterminate state after workspace reload.
+
+**Repro:** Open a workspace, make some file changes visible in the Changes panel. Reload the app (Cmd-R). Observe the sidebar Changes panel — it shows indeterminate state (spinner or blank) instead of the actual workspace state, even though the workspace is correctly selected in the URL.
+
+**Root cause:** `workspaces-seeder` read `store.state` BEFORE the async `client.workspaces.list()` call, then unconditionally dispatched `setActiveWorkspaceId` + `openWorkspaceTab` for the first workspace. On reload, route loader sets `activeWorkspaceId` during the fetch; seeder's stale empty-state read clobbered it.
+
+**Expected:** Workspace selection and sidebar state correctly reflect the loaded workspace after reload. Seeder should only auto-select the first workspace when BOTH `activeWorkspaceId` AND `currentTabId` are unset (fresh boot scenario), avoiding clobbering route-driven state.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#122](https://github.com/intent-hq/cloudlands-fe/pull/122), 2026-07-17)
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
@@ -370,6 +382,94 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-70 (2026-07-17, area: intentd agent runtime / reportToParent persistence, severity: P2)
+
+A delegated agent's completion report stays sticky in agent metadata and the FE agent card footer forever, even after the parent sends new work and the agent goes active again.
+
+**Repro:** Delegate a task to an agent, let it complete and call `report_to_parent`. The completion report appears in the agent metadata (`completionReport` field) and the FE agent card footer. Send a new message to the same agent (or delegate new work). The agent becomes active again and processes the new turn, but the old completion report remains visible in the metadata and UI — it never clears when the new turn begins.
+
+**Expected:** The completion report should clear when a new turn begins (when the agent transitions from a completed state back to active work). The `completionReport` field should be reset to `null` in agent metadata when the agent starts processing a new message.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/221, 2026-07-17)
+
+### STAB-69 (2026-07-17, area: cloudlands-fe opencode IPC / host.exec, severity: P1)
+
+Opencode model picker failed to load models due to invalid `cwd` parameter in `host.exec` call.
+
+**Repro:** Open the model picker with the opencode CLI installed and authenticated. Expected: the picker lists available opencode models. Actual: FE logs show repeated warnings `[WARN] [OpenCodeIPC] Could not get models from opencode CLI { error="Invalid parameter: cwd requires workspaceId for the containment guard" }` and the picker shows no opencode models. The daemon rejects the `host.exec` JSON-RPC call with error `-32602` because the FE passed `cwd: os.homedir()` without a corresponding `workspaceId`, violating intentd's containment-guard invariant (PROTOCOL §6.6.4).
+
+**Root cause:** The cloudlands-fe `executeOpencodeCommand` helper in `src/features/opencode/main/opencode.ipc.ts` called `hostExec` with `{ command: "opencode", args, cwd: os.homedir(), timeoutMs }`. The daemon's `host.exec` handler (`intent-services/src/host_exec.rs`) requires that `cwd` is either absent or paired with a `workspaceId` (for workspace-containment enforcement). The FE invocation violated this rule by passing `cwd` with no `workspaceId`, causing the daemon to reject the request. The same invalid pattern appeared in `src/features/auggie/main/augment-cli.ts` for the deprecated augment-cli adapter.
+
+**Expected:** The FE `host.exec` calls for opencode (and augment-cli) pass only `{ command, args, timeoutMs }` with no `cwd` or `workspaceId`, allowing the daemon to execute the CLI command in its own working directory (inherited daemon cwd or the daemon's default). The model picker lists opencode models when the CLI is installed and authenticated.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/120, 2026-07-17)
+
+### STAB-68 (2026-07-17, area: cloudlands-fe chat transcript hydration/rendering, severity: P1)
+
+Chat transcript intermittently showed only the newest ~50 messages or flickered blank, losing earlier turns until a refresh.
+
+**Repro:** Open a workspace with an agent conversation containing more than 50 messages. Navigate to the chat view. Observed while dogfooding on 2026-07-17 (Coordinator agent, workspace warnings-warn): earlier turns intermittently vanished from the transcript, showing either a blank flicker or only the last few messages, until a full refresh (Cmd-R) which correctly loaded the full conversation.
+
+**Root cause:** The renderer's `loadChatTranscript` (in `chat-read-service.ts`) hydrated the transcript from `chat.subscribeSnapshot`, which returns only the newest ~50 messages (a single page of the `agent.getConversation` pagination). Earlier messages were never fetched, so they did not appear in the UI.
+
+**Expected:** The chat transcript loads the full conversation history on hydration, regardless of message count. All messages from the first turn to the latest should be visible without requiring a refresh.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#121](https://github.com/intent-hq/cloudlands-fe/pull/121), 2026-07-17) — Changed `loadChatTranscript` to page through `agent.getConversation` with pagination (limit=200/page, following `nextToken` until null) to assemble the full transcript. Added a 125-message regression test.
+
+### STAB-67 (2026-07-17, area: cloudlands-fe / files store, severity: P2)
+
+File-content entries leak in the files slice when tabs are closed.
+
+**Repro:** Open a file tab, then close it. The file-content entry remains in the files slice (memory leak), persisting indefinitely even though no tab references it.
+
+**Root cause:** The file-content prune watcher (`cleanupClosedFileContentEntries`) was deleted in saga-removal commit `95d908a2` without being re-homed. The saga's cleanup logic that watched for tab-close actions and pruned orphaned file-content entries was lost, leaving no mechanism to remove file-content when tabs close.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/105, https://github.com/intent-hq/cloudlands-fe/pull/109, https://github.com/intent-hq/cloudlands-fe/pull/110, https://github.com/intent-hq/cloudlands-fe/pull/111, 2026-07-17)
+
+### STAB-66 (2026-07-17, area: cloudlands-fe / panel layout persistence, severity: P1)
+
+Workspaces did not restore previously opened tabs/layouts (splits, active tab, focused panel) across relaunches.
+
+**Repro:** Open a workspace, open multiple tabs and/or create panel splits, quit and relaunch the app. Expected: the workspace reopens with the same panel layout (tabs, splits, active tab, focused panel) as before. Actual: the layout was never persisted to `localStorage` nor restored on `workspaceMounted`, and `restoreStatus` stayed `"idle"` — the workspace always opens with a default/empty layout.
+
+**Root cause:** The `panel-layout-saga` (which handled persistence and restore) was deleted in saga-removal commit `95d908a2` without being re-homed as a middleware. The saga's `PERSIST_ACTIONS` / `HISTORY_ACTIONS` handlers, `localStorage` persistence, and `workspaceMounted` restore logic were lost, leaving no mechanism to save or restore panel layouts.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/102, 2026-07-17)
+
+### STAB-65 (2026-07-17, area: cloudlands-fe Settings / Specialists persistence, severity: P1)
+
+**Repro:**
+1. Open Settings → Specialists
+2. Click "Use for all specialists" (to apply the selected model to all)
+3. Observe: no effect — button stays visible, no `.md` files written to `~/.augment/specialists/`
+4. Similarly, per-specialist model changes, prompt edits, create-new, delete, and reset-to-default produce no wire call
+
+**Root cause:**
+Saga-trigger write actions (`saveFileSpecialist`, `deleteFileSpecialist`, `exportBuiltinToFile`, `loadFileSpecialists`) were orphaned when the saga runtime was removed (their handlers lived in the removed saga). Dispatch sites in AIBehaviorEditor.svelte and Settings remained unchanged, so the actions dispatched but produced no daemon call.
+
+Additionally, the SpecialistsClient seam lacked write methods (`create` / `edit` / `delete`) — only `list` was implemented.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/101, 2026-07-17)
+
+**Fix:**
+1. Extended SpecialistsClient seam with `create` / `edit` / `delete` matching PROTOCOL §5.11 (live client propagates errors, mock client stubs; 16 tests)
+2. Created specialists mutation middleware (`createSpecialistsMutationMiddleware()`) re-homing the orphaned write actions — middleware chooses create vs edit by checking store state for existing file specialist (daemon semantics: create errors on existing id, edit errors on missing id), refetches `specialist.list` after every write, surfaces toast errors on failure (8 tests)
+3. Registered middleware in `src/store/renderer/middleware.ts`
+
+Result: clicking "Use for all specialists" now writes one file per specialist via `specialist.create`/`edit`, the store refreshes from `specialist.list`, and the button hides once all specialists use the selected model.
+
+### STAB-64 (2026-07-17, area: intentd workspace.create / cloudlands-fe sidebar repo grouping, severity: P2)
+
+Sidebar repo groups show no GitHub avatar for workspaces created from local repo paths, unlike the reference app.
+
+**Repro:** Create a workspace from a local repository path that has a `github.com` origin remote (e.g., `intentd workspace create --path ~/code/monorepo`). Open the cloudlands-fe sidebar All-Workspaces repo view. The repo group for that workspace shows no GitHub owner avatar next to the repo group, even though the repository has a valid GitHub origin.
+
+**Expected:** The GitHub owner avatar appears next to the repo group in the sidebar, matching the reference app behavior. The sidebar (`AllWorkspacesCard.svelte`, repo view) renders the avatar when `group.owner` is set, which requires `workspace.repositoryOwner`.
+
+**Root cause:** The daemon never derives `repositoryOwner` from local paths. intentd only sets `repository_owner` when the caller explicitly supplies it or when the workspace is created by cloning a `github.com/OWNER/REPO` URL. PROTOCOL.md states: "`repositoryOwner` is never derived from local paths (no remote inspection)". The reference app (augmentcode/intent) backfilled `repositoryOwner` and `repositoryName` in the Electron main process (`performBackgroundEnrichment` → `git remote get-url origin`), but that enrichment path is out of the daemon-canonical data path in the ported stack — the cloudlands-fe sidebar lists workspaces straight from intentd `workspace.list` (`LiveWorkspacesClient`) with fields passing through untouched.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/218, 2026-07-17)
 
 ### STAB-61 (2026-07-17, area: cloudlands-fe repo / nested submodule gitlink, severity: P2)
 

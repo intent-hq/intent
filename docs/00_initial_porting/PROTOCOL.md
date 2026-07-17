@@ -202,7 +202,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } |
+| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
@@ -267,9 +267,11 @@ On success the checkout becomes the workspace's `repositoryPath` and, when the U
 carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
 daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
 left them blank. Independently of cloning, any create that ends up with a local
-`repositoryPath` but no caller-supplied `repositoryName` persists the path basename as
-`repositoryName`; `repositoryOwner` is never derived from local paths (no remote
-inspection).
+`repositoryPath` but no caller-supplied `repositoryOwner`/`repositoryName` best-effort
+derives them from the local repository's `origin` remote URL (local git config read only,
+no network) when the remote is a GitHub URL (https or ssh forms, strict `github.com` host
+check); non-GitHub or missing remotes leave `repositoryOwner` unset. Caller-supplied
+values always win; `repositoryName` persists the path basename as a last resort when blank.
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
