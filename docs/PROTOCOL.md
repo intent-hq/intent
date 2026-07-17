@@ -257,9 +257,9 @@ sandbox.discard, sandbox.merge
 
 script.create, script.list, script.output, script.remove, script.restart, script.run, script.start, script.status, script.stop
 
-#### `search.*` (8 methods)
+#### `search.*` (7 methods)
 
-search.cancel, search.codebase, search.events, search.fileNames, search.inFiles, search.memories, search.messages, search.notes
+search.cancel, search.codebase, search.events, search.fileNames, search.inFiles, search.messages, search.notes
 
 #### `sentry.*` (8 methods)
 
