@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-68 (as of 2026-07-17)
+**Next available ID:** STAB-69 (as of 2026-07-17)
 
 ## Intake Convention
 
@@ -358,6 +358,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-68 (2026-07-17, area: cloudlands-fe chat transcript hydration/rendering, severity: P1)
+
+Chat transcript intermittently showed only the newest ~50 messages or flickered blank, losing earlier turns until a refresh.
+
+**Repro:** Open a workspace with an agent conversation containing more than 50 messages. Navigate to the chat view. Observed while dogfooding on 2026-07-17 (Coordinator agent, workspace warnings-warn): earlier turns intermittently vanished from the transcript, showing either a blank flicker or only the last few messages, until a full refresh (Cmd-R) which correctly loaded the full conversation.
+
+**Root cause:** The renderer's `loadChatTranscript` (in `chat-read-service.ts`) hydrated the transcript from `chat.subscribeSnapshot`, which returns only the newest ~50 messages (a single page of the `agent.getConversation` pagination). Earlier messages were never fetched, so they did not appear in the UI.
+
+**Expected:** The chat transcript loads the full conversation history on hydration, regardless of message count. All messages from the first turn to the latest should be visible without requiring a refresh.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#121](https://github.com/intent-hq/cloudlands-fe/pull/121), 2026-07-17) — Changed `loadChatTranscript` to page through `agent.getConversation` with pagination (limit=200/page, following `nextToken` until null) to assemble the full transcript. Added a 125-message regression test.
 
 ### STAB-67 (2026-07-17, area: cloudlands-fe / files store, severity: P2)
 
