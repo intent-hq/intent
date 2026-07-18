@@ -42,13 +42,12 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 â†
 - **Conventional commits** are required. PR titles are validated by CI
   (`amannn/action-semantic-pull-request`) against: `feat`, `fix`, `chore`, `docs`,
   `refactor`, `test`, `ci`, `perf`.
-- **Merge queue**: `intent-hq/monorepo` main branch uses a merge queue. Do NOT use
-  `gh pr merge --squash` (it will be rejected). Instead, enqueue PRs via GraphQL:
-  `gh api graphql -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position state } } }' -f id="$(gh pr view <PR_NUMBER> --json id --jq .id)"`.
-  **Critical**: the queue's squash message defaults to the sole commit's message, NOT the
-  PR title. On single-commit PRs, ensure every branch commit message is itself a valid
-  conventional commit (amend auto-commits like "Coordinator" before pushing) to prevent
-  non-conventional commits from landing on main (e.g., PR #102 incident).
+- **Merging**: The repository allows squash and rebase merges. When squash-merging, the
+  commit title defaults to the commit message (or PR title as fallback), and the commit
+  message includes all commit messages from the PR. On single-commit PRs, ensure the branch
+  commit message is itself a valid conventional commit (amend auto-commits like
+  "Coordinator" before pushing) to prevent non-conventional commits from landing on main
+  (e.g., PR #102 incident).
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: keep `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo build`
   green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
