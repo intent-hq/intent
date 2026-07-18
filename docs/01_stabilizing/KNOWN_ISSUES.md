@@ -25,7 +25,7 @@ A delegated child calling `reportToParent` before ending its turn caused the par
 
 **Repro:** Before the fix: delegate a task to a child agent, have the child call `reportToParent` during its turn, then let the turn complete. Observed: the parent received two wakes — one at `agent:idle` time containing the report, and another at turn-end. The report delivery was tied to the idle event instead of being delivered immediately when `reportToParent` was called.
 
-**Expected:** `reportToParent` is the definitive completion signal, delivering exactly one immediate parent wake at call time (directly to `session.parent_agent_id`). The child's later `agent:idle` event is suppressed for that parent (oneShot watches marked `report_delivered`). `agent:failed` / `agent:deleted` after a report still deliver. Children that never report keep the idle-driven wake. Grouped children (`after_all`) retain the aggregated-wake semantics.
+**Expected:** `reportToParent` is the definitive completion signal, delivering exactly one immediate parent wake at call time (directly to `session.parent_agent_id`). The child's later `agent:idle` event is suppressed for that parent (oneShot watches marked `report_delivered`). `agent:failed` / `agent:deleted` after a report still deliver wakes. Children that never report keep the idle-driven wake. Grouped children (`after_all`) retain the aggregated-wake semantics.
 
 **Status:** fixed ([intent-hq/intentd#237](https://github.com/intent-hq/intentd/pull/237), [intent-hq/intentd#242](https://github.com/intent-hq/intentd/pull/242), 2026-07-18)
 
