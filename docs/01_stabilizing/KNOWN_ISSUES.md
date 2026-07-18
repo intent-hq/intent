@@ -415,6 +415,18 @@ Dequeued and agent-to-agent user messages did not emit `agent:message` workspace
 
 **Status:** fixed ([intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234), [intent-hq/cloudlands-fe#135](https://github.com/intent-hq/cloudlands-fe/pull/135), 2026-07-17) — intentd now emits `agent:message` from queue-drain and wake-delivery paths with persisted row IDs; cloudlands-fe transcript subscriber processes these events to update the UI
 
+### STAB-92 (2026-07-18, area: intentd CI / intent-transport TLS test, severity: P2)
+
+Flaky TLS fingerprint test failure in `intent-transport/src/tls/tests.rs::test_client_cert_fingerprint_verification_rejects_wrong_fingerprint`.
+
+**Repro:** Run `cargo test --workspace` under parallelism (e.g., CI default or local with high CPU count). The test intermittently fails with assertion error when the client cert fingerprint check accepts a previously-rejected wrong fingerprint, suggesting cached TLS state is leaking between test runs.
+
+**Root cause:** OpenSSL caches certificate validation state globally across all tests. The test creates a TLS client that intentionally uses a mismatched fingerprint to verify rejection, then verifies acceptance with the correct fingerprint. When tests run in parallel or sequentially without clearing the cache, OpenSSL reuses cached validation results from prior test runs, causing the fingerprint check to pass when it should fail or vice versa.
+
+**Expected:** Each TLS test run clears OpenSSL's internal cert cache before setting up the client connection, ensuring test hermiticity regardless of execution order or parallelism.
+
+**Status:** fixed ([intent-hq/intentd#243](https://github.com/intent-hq/intentd/pull/243), 2026-07-18) — added `SSL_CTX_flush_sessions` call to clear cert cache before each test client setup
+
 ### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
 
 Re-entering a streaming conversation shows no deltas until the next tool call (or later).
