@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-103 (as of 2026-07-18)
+**Next available ID:** STAB-104 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-103 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
+
+Task notes got stuck in `review_required` status: when a delegated implementor called `report_to_parent`, the daemon transitioned the linked task note to `review_required`, but after a verifier approved the work, nothing marked the task `complete`.
+
+**Repro:** Delegate a task to an implementor agent via `ws.agent.delegate({ taskNoteId: "abc-123", specialist: "implementor" })`. The implementor completes and calls `report_to_parent` with a summary. The daemon transitions the task note to `review_required` status (`transition_linked_task_to_review_required` in `packages/intentd/crates/intent-services/src/agent_ops.rs`). Delegate verification to a verifier agent. The verifier reviews the work, approves it (verdict: APPROVED), and calls `report_to_parent` with the approval verdict. Observed: the task note remains in `review_required` status indefinitely — it is never marked `complete`. Tasks accumulate stuck in "Review Requested" state.
+
+**Root cause:** The daemon mechanically sets `review_required` via `report_to_parent` (the "TASK-B" writer in `agent_ops.rs`), but there was no automatic transition to `complete`. The bundled verifier prompt (`packages/intentd/crates/intent-services/resources/specialists/verifier.md`) instructed "Call `report_to_parent` with your verdict" but never told the verifier to mark verified task notes `complete` via `update_note_task_status`. The bundled coordinator prompt (`spec-writer.md`) similarly lacked completion instructions after verification. Verifiers already had tool access (confirmed in `tool_restrictions.rs`), so a prompt fix was sufficient.
+
+**Expected:** After a verifier approves a task (verdict: APPROVED), the task note is marked `complete`. The bundled verifier prompt instructs marking each verified task note `complete` via `update_note_task_status` on an APPROVED verdict, and the coordinator backstops task completion after verification.
+
+**Status:** fixed ([intent-hq/intentd#247](https://github.com/intent-hq/intentd/pull/247), 2026-07-18) — verifier.md updated to list `update_note_task_status` tool and instruct marking each verified task `complete` only on APPROVED verdicts; spec-writer.md updated to backstop completion after approved verification; rot-check unit test in specialists.rs fails if completion instruction removed from verifier prompt
 
 ### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
