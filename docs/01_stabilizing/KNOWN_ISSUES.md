@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-103 (as of 2026-07-18)
+**Next available ID:** STAB-104 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-103 (2026-07-18, area: intentd workspace.delete + cloudlands-fe bulk operations, severity: P1)
+
+Bulk deletion of archived workspaces timed out client-side during heavy cleanup, despite daemon eventually succeeding.
+
+**Repro:** Before the fix: accumulate 15+ archived workspaces (each 1–4 GB), select all on the Home screen, click Delete. Observed: after 30–60 seconds the FE showed "Operation timed out" errors for most workspaces (typically all but the first 2–3), but the daemon logs confirmed all deletes eventually succeeded — the `workspace:deleted` events arrived 2–10 minutes later as the background cleanup finished.
+
+**Root cause:** The FE fired parallel `workspace.delete` calls with a 30-second IPC timeout. The daemon serialized multi-GB `remove_dir_all` operations under a per-repository lock to prevent race conditions with concurrent deletes/recreations. Later deletes in the batch queued behind earlier ones, exceeding the 30s client timeout even though the daemon completed them successfully in the background. The polling implementor pushed a follow-up commit (445b8b9) that updated intentd delete tests to poll for the now-asynchronous filesystem cleanup, confirming the background task model works as designed.
+
+**Expected:** Bulk delete of large archived workspaces completes without client-side timeouts. The daemon returns success as soon as the database row is deleted and the event is emitted (fast-ack), and the FE waits long enough for the initial response.
+
+**Status:** fixed ([intent-hq/intentd#245](https://github.com/intent-hq/intentd/pull/245), [intent-hq/cloudlands-fe#148](https://github.com/intent-hq/cloudlands-fe/pull/148), 2026-07-18) — intentd now returns immediately after database delete + event emission, running filesystem cleanup in a background task under per-repo lock; cloudlands-fe raised `workspace.delete` timeout to 120s for bulk operations
 
 ### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
