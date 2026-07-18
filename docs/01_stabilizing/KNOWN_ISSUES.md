@@ -19,25 +19,13 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
-
-Dequeued and agent-to-agent user messages did not emit `agent:message` workspace events, preventing live clients from converging on transcript state for user messages appended by daemon-side operations (queue drain, wake delivery).
-
-**Repro:** Before the fix: (1) Send a message to a busy agent (it queues), wait for the agent to finish its current turn. The queued message is drained and persisted by the daemon (`persist_user` in `agent_manager.rs`), but no `agent:message` event is published. The FE chat continues to show the message as queued/pending until refresh. (2) Call `agent.wakeOrCreate` to wake an idle task agent. The daemon delivers the wake message via `deliver_wake_message` runtime path and persists the user row, but again no `agent:message` event is published. The FE never sees the user message appear in the transcript.
-
-**Root cause:** The daemon emitted `agent:message` events only for store-only fallback paths (`agent_send_message_op`, `agent_force_message_op`) when no `AgentManager` runtime was attached. When an `AgentManager` WAS attached, the runtime `agent.sendMessage` path returned the message ID immediately for FE optimistic rendering and did NOT emit an event. However, the queue-drain (`persist_user`) and wake-delivery (`deliver_wake_message`) runtime paths also skipped event emission, leaving no mechanism for the FE to learn about daemon-persisted user messages. The cloudlands-fe transcript subscribed to `agent:message` events but never received them for these paths, causing the UI to diverge from the persisted transcript.
-
-**Expected:** All daemon-side user-row appends (send, force, queue drain, wake delivery) emit `agent:message` workspace events with the persisted message row ID so live clients can converge on transcript state.
-
-**Status:** fixed ([intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234), [intent-hq/cloudlands-fe#135](https://github.com/intent-hq/cloudlands-fe/pull/135), 2026-07-17) — intentd now emits `agent:message` from queue-drain and wake-delivery paths with persisted row IDs; cloudlands-fe transcript subscriber processes these events to update the UI
-
 ### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
 The `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` e2e test fails intermittently when run in parallel (`make test`) on a developer machine with multiple live intentd daemons running, but passes consistently in isolation.
 
 **Repro:** Run the intentd stack locally with multiple intentd daemons bound to various ports across different workspace directories, then execute `make test` in the monorepo. Observed: the full test suite (29 tests) sometimes fails with test hangs or timeouts. Running the same test in isolation 3 times: `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` passes 3/3 times with 6.17-6.35s duration. The intentd CI at the same commit (cc6dec88) was green, confirming this is a local environment issue, not a product bug.
 
-**Root cause:** Similar to STAB-63, local intentd daemons interfere with e2e test hermeticity when tests run in parallel. The tests use ephemeral ports (`INTENTD_TCP_PORT=0`) but may still experience resource contention or event delivery interference from the multiple background daemons detected via `pgrep -fl intentd` (8662, 23020, 86264, 87112, and others).
+**Root cause:** Similar to STAB-63, local intentd daemons interfere with e2e test hermeticity when tests run in parallel. The tests use ephemeral ports (`INTENTD_TCP_PORT=0`) but may still experience resource contention or event delivery interference from multiple background daemons detected via `pgrep -fl intentd`.
 
 **Expected:** E2e tests should be hermetic and pass reliably on developer machines regardless of local daemon state, or the test suite should detect and skip tests when hermeticity cannot be guaranteed.
 
@@ -414,6 +402,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
+
+Dequeued and agent-to-agent user messages did not emit `agent:message` workspace events, preventing live clients from converging on transcript state for user messages appended by daemon-side operations (queue drain, wake delivery).
+
+**Repro:** Before the fix: (1) Send a message to a busy agent (it queues), wait for the agent to finish its current turn. The queued message is drained and persisted by the daemon (`persist_user` in `agent_manager.rs`), but no `agent:message` event is published. The FE chat continues to show the message as queued/pending until refresh. (2) Call `agent.wakeOrCreate` to wake an idle task agent. The daemon delivers the wake message via `deliver_wake_message` runtime path and persists the user row, but again no `agent:message` event is published. The FE never sees the user message appear in the transcript.
+
+**Root cause:** The daemon emitted `agent:message` events only for store-only fallback paths (`agent_send_message_op`, `agent_force_message_op`) when no `AgentManager` runtime was attached. When an `AgentManager` WAS attached, the runtime `agent.sendMessage` path returned the message ID immediately for FE optimistic rendering and did NOT emit an event. However, the queue-drain (`persist_user`) and wake-delivery (`deliver_wake_message`) runtime paths also skipped event emission, leaving no mechanism for the FE to learn about daemon-persisted user messages. The cloudlands-fe transcript subscribed to `agent:message` events but never received them for these paths, causing the UI to diverge from the persisted transcript.
+
+**Expected:** All daemon-side user-row appends (send, force, queue drain, wake delivery) emit `agent:message` workspace events with the persisted message row ID so live clients can converge on transcript state.
+
+**Status:** fixed ([intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234), [intent-hq/cloudlands-fe#135](https://github.com/intent-hq/cloudlands-fe/pull/135), 2026-07-17) — intentd now emits `agent:message` from queue-drain and wake-delivery paths with persisted row IDs; cloudlands-fe transcript subscriber processes these events to update the UI
 
 ### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
 
