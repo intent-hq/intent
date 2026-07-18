@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-100 (as of 2026-07-18)
+**Next available ID:** STAB-101 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-100 (2026-07-18, area: cloudlands-fe sidebar / workspace status grouping, severity: P2)
+
+Clicking or switching between workspaces momentarily bumped a workspace in the Complete status group to Idle in the sidebar status view.
+
+**Repro:** Before the fix: have at least one workspace in Complete status visible in the sidebar. Click into a different workspace or perform other sidebar navigation. Observed: for a brief moment (typically 100-300ms), the Complete workspace jumped to the Idle status group before settling back to Complete. Root cause: the `workspaceUnmounted` action in `workspace-tasks-slice.ts` cleared cached task stats (`delete state.workspaceTaskStats[workspaceId]`) when navigating away from a workspace. The sidebar's status derivation logic relied on those stats to compute the display status; when stats were absent, the FE-side `deriveWorkspaceStatus` fell through `not_started → idle` until the next task refetch restored the cache. The flicker was most visible for Complete workspaces because they often had no active subscriptions driving immediate updates.
+
+**Expected:** Workspace status grouping in the sidebar must remain stable across workspace mount/unmount cycles. Cached task stats should persist as long as the workspace entity exists in the store, independent of which workspace is currently active.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#143](https://github.com/intent-hq/cloudlands-fe/pull/143), 2026-07-18)
 
 ### STAB-99 (2026-07-18, area: FE/interrupted-agents, severity: P1)
 
