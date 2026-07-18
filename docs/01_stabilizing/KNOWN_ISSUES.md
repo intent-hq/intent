@@ -513,21 +513,17 @@ Beta-updates toggle in Settings unresponsive when clicked. Toggle does not refle
 
 **Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
 
-### STAB-80 (2026-07-17, area: cloudlands-fe chat drafts persistence, severity: P1)
+### STAB-80 (2026-07-17, area: intentd intent-acp / workspace_api MCP, severity: P1)
 
-Chat drafts are not persisted to the backend, causing them to be lost when switching workspaces.
+Chief of Staff agent broken: cannot enumerate workspaces or access app-level operations.
 
-**Repro:**
-1. Open a workspace and start typing a message in the chat input (do not send it)
-2. Switch to a different workspace
-3. Switch back to the original workspace
-4. Observe: the draft message is lost
+**Repro:** Create a Chief of Staff workspace agent and try to use it. The agent reports that the `ws.app` namespace (which provides `ws.app.workspaces.list`, `ws.app.agents.list`, UI navigation, and proposal management) is not registered in the session. Only the single-workspace API surface is available, and since the Chief workspace has no repository attached, there's no way for the agent to enumerate or manage user workspaces.
 
-**Root cause:** The frontend is still using the old localStorage-based draft persistence (via `transient-ui-slice` Redux state, lines 14, 27, 75-80, 127-144 in `transient-ui-slice.ts`) instead of the backend `drafts.get`/`drafts.set`/`drafts.clear` RPC methods specified in IMPLEMENTATION_SPEC.md §9.10/§15 and PROTOCOL.md §5.16. The backend methods are implemented (in `intent-services/src/drafts.rs`) and tested (see `intentd/tests/uds_integration.rs`, `intentd/tests/wss_integration.rs`), but the frontend never calls them. `ChatPanel.svelte` (lines 940-973) restores and saves drafts using Redux actions `setChatDraft`/`clearChatDraft`, which only update in-memory state that's lost on workspace unmount (line 145: `workspaceUnmounted` clears the workspace's transient state).
+**Root cause:** The `ws.app.*` MCP tool bindings were not registered in the daemon's MCP server for chief-workspace sessions. The bindings existed in `intent-acp/src/mcp_server/bindings/app/` but were not exposed in the workspace_api tool description for chief agents.
 
-**Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
+**Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#126](https://github.com/intent-hq/cloudlands-fe/pull/126), 2026-07-17)
+**Status:** fixed ([intent-hq/intentd#241](https://github.com/intent-hq/intentd/pull/241), [intent-hq/cloudlands-fe#139](https://github.com/intent-hq/cloudlands-fe/pull/139), 2026-07-18)
 
 Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
 
