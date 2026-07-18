@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-108 (as of 2026-07-18)
+**Next available ID:** STAB-109 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-108 (2026-07-18, area: intentd agent runtime / delegation group rehydration, severity: P1)
+
+Delegation groups are lost or stale across daemon restart: a coordinator waiting on a delegation group with `after_all` wait mode can be stuck forever if the daemon restarts mid-delegation and a child completes before the group is rehydrated back into memory.
+
+**Repro:** Coordinator `agent-c01bfe39` (workspace `agent-broken`) delegated child `agent-0d3b8877` with `after_all` wait mode; delegation group `2d6f0821-fae3-42b6-aef4-929b6213c607` was created and persisted (2026-07-17 12:27:23). The daemon restarted (~12:28:25, `make dev`). In-memory subscription state (watches + group copy) was wiped. Startup heal (`heal_stale_agent_sessions`) only fixes agent statuses; it does NOT rehydrate delegation groups. The child was restarted via a plain user message (not `agent.resolveInterrupted`), so `rehydrate_delegation_groups` never ran for the workspace. Child called `agent.reportToParent` (12:35:04) and went idle (12:35:14). Both `record_group_completion_pre_publish` and `deliver_completion_to_watches` only consult the in-memory registry — the group wasn't loaded, so the SQLite row's `completed_agent_ids` stayed `[]`. On 2026-07-18 a different agent resumed via the proper interrupted path, which rehydrated group `2d6f0821` (sealed, incomplete) back into memory. Rehydration does no reconciliation, so the group waits forever for an `agent:idle` that already happened — the FE shows the coordinator perpetually "waiting".
+
+**Root cause:** Two distinct failures: (1) **No rehydration at daemon startup** — undelivered delegation groups are only rehydrated lazily on interrupted-agent resume/abandon paths (`agent_ops.rs:4078`, `:4203`). Completions recorded while a group is not in memory are silently lost. (2) **No reconciliation on rehydration** — `rehydrate_delegation_groups` (`agent_subscriptions.rs:743`) blindly loads groups as sealed without checking whether expected children are already idle/completed (with persisted `completion_report`). Side effect: a stale in-memory group makes `child_in_undelivered_group` return true for its children, suppressing future `reportToParent` immediate wakes.
+
+**Expected:** A daemon restart mid-delegation can no longer strand a delegation group: after restart, groups are back in memory without requiring the resume path. A child that completed while its group was not in memory is reconciled on rehydration and the parent receives exactly one aggregated wake.
+
+**Status:** open
 
 ### STAB-104 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
 
