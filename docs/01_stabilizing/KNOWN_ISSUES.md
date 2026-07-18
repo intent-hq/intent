@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-103 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
+### STAB-104 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
 
 Task notes got stuck in `review_required` status: when a delegated implementor called `report_to_parent`, the daemon transitioned the linked task note to `review_required`, but after a verifier approved the work, nothing marked the task `complete`.
 
