@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-106 (as of 2026-07-18)
+**Next available ID:** STAB-108 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-104 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
+
+Task notes got stuck in `review_required` status: when a delegated implementor called `report_to_parent`, the daemon transitioned the linked task note to `review_required`, but after a verifier approved the work, nothing marked the task `complete`.
+
+**Repro:** Delegate a task to an implementor agent via `ws.agent.delegate({ taskNoteId: "abc-123", specialist: "implementor" })`. The implementor completes and calls `report_to_parent` with a summary. The daemon transitions the task note to `review_required` status (`transition_linked_task_to_review_required` in `packages/intentd/crates/intent-services/src/agent_ops.rs`). Delegate verification to a verifier agent. The verifier reviews the work, approves it (verdict: APPROVED), and calls `report_to_parent` with the approval verdict. Observed: the task note remains in `review_required` status indefinitely — it is never marked `complete`. Tasks accumulate stuck in "Review Requested" state.
+
+**Root cause:** The daemon mechanically sets `review_required` via `report_to_parent` (the "TASK-B" writer in `agent_ops.rs`), but there was no automatic transition to `complete`. The bundled verifier prompt (`packages/intentd/crates/intent-services/resources/specialists/verifier.md`) instructed "Call `report_to_parent` with your verdict" but never told the verifier to mark verified task notes `complete` via `update_note_task_status`. The bundled coordinator prompt (`spec-writer.md`) similarly lacked completion instructions after verification. Verifiers already had tool access (confirmed in `tool_restrictions.rs`), so a prompt fix was sufficient.
+
+**Expected:** After a verifier approves a task (verdict: APPROVED), the task note is marked `complete`. The bundled verifier prompt instructs marking each verified task note `complete` via `update_note_task_status` on an APPROVED verdict, and the coordinator backstops task completion after verification.
+
+**Status:** fixed ([intent-hq/intentd#247](https://github.com/intent-hq/intentd/pull/247), 2026-07-18) — verifier.md updated to list `update_note_task_status` tool and instruct marking each verified task `complete` only on APPROVED verdicts; spec-writer.md updated to backstop completion after approved verification; rot-check unit test in specialists.rs fails if completion instruction removed from verifier prompt
 
 ### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
@@ -403,7 +415,7 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ## Fixed Issues
 
-### STAB-105 (2026-07-18, area: cloudlands-fe / CI + live client seam, severity: P1)
+### STAB-107 (2026-07-18, area: cloudlands-fe / CI + live client seam, severity: P1)
 
 PR #148 (commit bb588763, "120s timeout override for workspace.delete") changed runMutation/runMutationWithId to forward a third options arg to backendRequest, breaking arity-strict toHaveBeenCalledWith(method, params) assertions in the live-notes/live-comments/live-settings/live-files/live-git client test suites; went unnoticed because main-push CI runs only CodeQL (unit tests run on PRs only).
 
@@ -415,7 +427,7 @@ PR #148 (commit bb588763, "120s timeout override for workspace.delete") changed 
 
 **Status:** fixed ([intent-hq/cloudlands-fe#150](https://github.com/intent-hq/cloudlands-fe/pull/150), 2026-07-18)
 
-### STAB-104 (2026-07-18, area: cloudlands-fe / renderer store persistence, severity: P2)
+### STAB-106 (2026-07-18, area: cloudlands-fe / renderer store persistence, severity: P2)
 
 Home-screen repo selector does not default to the most recent repository; workspace-initializer persistence never re-homed after saga removal.
 
@@ -426,6 +438,30 @@ Home-screen repo selector does not default to the most recent repository; worksp
 **Expected:** Workspace-initializer form state (selected repo ID, branch, prompt) persists across app restarts and defaults to the most recent repository.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#149](https://github.com/intent-hq/cloudlands-fe/pull/149), [intent-hq/intentd#246](https://github.com/intent-hq/intentd/pull/246), 2026-07-18) — workspace-initializer state promoted to daemon-owned `workspaceInitializer.state` setting; FE reads/writes via `settings.get`/`settings.update`; repo selector defaults to most recent repository on app launch
+
+### STAB-105 (2026-07-18, area: intentd workspace.delete + cloudlands-fe bulk operations, severity: P1)
+
+Bulk deletion of archived workspaces timed out client-side during heavy cleanup, despite daemon eventually succeeding.
+
+**Repro:** Before the fix: accumulate 15+ archived workspaces (each 1–4 GB), select all on the Home screen, click Delete. Observed: after 30–60 seconds the FE showed "Operation timed out" errors for most workspaces (typically all but the first 2–3), but the daemon logs confirmed all deletes eventually succeeded — the `workspace:deleted` events arrived 2–10 minutes later as the background cleanup finished.
+
+**Root cause:** The FE fired parallel `workspace.delete` calls with a 30-second IPC timeout. The daemon serialized multi-GB `remove_dir_all` operations under a per-repository lock to prevent race conditions with concurrent deletes/recreations. Later deletes in the batch queued behind earlier ones, exceeding the 30s client timeout even though the daemon completed them successfully in the background. The polling implementor pushed a follow-up commit (445b8b9) that updated intentd delete tests to poll for the now-asynchronous filesystem cleanup, confirming the background task model works as designed.
+
+**Expected:** Bulk delete of large archived workspaces completes without client-side timeouts. The daemon returns success as soon as the database row is deleted and the event is emitted (fast-ack), and the FE waits long enough for the initial response.
+
+**Status:** fixed ([intent-hq/intentd#245](https://github.com/intent-hq/intentd/pull/245), [intent-hq/cloudlands-fe#148](https://github.com/intent-hq/cloudlands-fe/pull/148), 2026-07-18) — intentd now returns immediately after database delete + event emission, running filesystem cleanup in a background task under per-repo lock; cloudlands-fe raised `workspace.delete` timeout to 120s for bulk operations
+
+### STAB-103 (2026-07-18, area: cloudlands-fe chat error card / agent-session state, severity: P2)
+
+Agent turn failures rendered as generic "Agent spawn failed" instead of the daemon's `agent:failed` error text (observed with a session/prompt idle-timeout failure on 2026-07-18).
+
+**Repro:** Before the fix: trigger an agent turn failure that emits `agent:failed` with an error message (e.g., session idle timeout). The chat error card displayed "Agent spawn failed" instead of the actual error text from the daemon event.
+
+**Root cause:** Two issues: (1) `handleAgentFailedStream` in `daemon-events-bridge.ts` early-returned before dispatching `chatSendFailed` when `streamsByAgent` had no state for the agent (occurred when agent spawn failed before any streaming started, e.g., before `agent:stream:chunk` arrived); (2) `canonicalSessionUpdates` in `agent-session-slice.ts` unconditionally set `updates.stopReason = fields.stopReason` even when `fields.stopReason` was `undefined`, so the trailing `agent:status-changed` event (which arrived milliseconds after `agent:failed` without its own `stopReason` field) overwrote the error text with `undefined`.
+
+**Expected:** Chat error card displays the daemon's actual error text from `agent:failed` events.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#147](https://github.com/intent-hq/cloudlands-fe/pull/147), 2026-07-18)
 
 ### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
 
@@ -513,21 +549,17 @@ Beta-updates toggle in Settings unresponsive when clicked. Toggle does not refle
 
 **Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
 
-### STAB-80 (2026-07-17, area: cloudlands-fe chat drafts persistence, severity: P1)
+### STAB-80 (2026-07-17, area: intentd intent-acp / workspace_api MCP, severity: P1)
 
-Chat drafts are not persisted to the backend, causing them to be lost when switching workspaces.
+Chief of Staff agent broken: cannot enumerate workspaces or access app-level operations.
 
-**Repro:**
-1. Open a workspace and start typing a message in the chat input (do not send it)
-2. Switch to a different workspace
-3. Switch back to the original workspace
-4. Observe: the draft message is lost
+**Repro:** Create a Chief of Staff workspace agent and try to use it. The agent reports that the `ws.app` namespace (which provides `ws.app.workspaces.list`, `ws.app.agents.list`, UI navigation, and proposal management) is not registered in the session. Only the single-workspace API surface is available, and since the Chief workspace has no repository attached, there's no way for the agent to enumerate or manage user workspaces.
 
-**Root cause:** The frontend is still using the old localStorage-based draft persistence (via `transient-ui-slice` Redux state, lines 14, 27, 75-80, 127-144 in `transient-ui-slice.ts`) instead of the backend `drafts.get`/`drafts.set`/`drafts.clear` RPC methods specified in IMPLEMENTATION_SPEC.md §9.10/§15 and PROTOCOL.md §5.16. The backend methods are implemented (in `intent-services/src/drafts.rs`) and tested (see `intentd/tests/uds_integration.rs`, `intentd/tests/wss_integration.rs`), but the frontend never calls them. `ChatPanel.svelte` (lines 940-973) restores and saves drafts using Redux actions `setChatDraft`/`clearChatDraft`, which only update in-memory state that's lost on workspace unmount (line 145: `workspaceUnmounted` clears the workspace's transient state).
+**Root cause:** The `ws.app.*` MCP tool bindings were not registered in the daemon's MCP server for chief-workspace sessions. The bindings existed in `intent-acp/src/mcp_server/bindings/app/` but were not exposed in the workspace_api tool description for chief agents.
 
-**Expected:** The frontend should call `appClient.drafts.get(workspaceId, agentId)` on workspace mount to restore drafts and `appClient.drafts.set(workspaceId, agentId, text)` (debounced) as the user types. The backend persists drafts keyed by `(workspaceId, agentId, clientId)` with `ON DELETE CASCADE` to workspace, so drafts survive workspace switches and are properly cleaned up when workspaces are deleted.
+**Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#126](https://github.com/intent-hq/cloudlands-fe/pull/126), 2026-07-17)
+**Status:** fixed ([intent-hq/intentd#241](https://github.com/intent-hq/intentd/pull/241), [intent-hq/cloudlands-fe#139](https://github.com/intent-hq/cloudlands-fe/pull/139), 2026-07-18)
 
 Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
 
