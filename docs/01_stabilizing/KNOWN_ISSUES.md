@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-103 (as of 2026-07-18)
+**Next available ID:** STAB-104 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -402,6 +402,18 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-103 (2026-07-18, area: cloudlands-fe chat error card / agent-session state, severity: P2)
+
+Agent turn failures rendered as generic "Agent spawn failed" instead of the daemon's `agent:failed` error text (observed with a session/prompt idle-timeout failure on 2026-07-18).
+
+**Repro:** Before the fix: trigger an agent turn failure that emits `agent:failed` with an error message (e.g., session idle timeout). The chat error card displayed "Agent spawn failed" instead of the actual error text from the daemon event.
+
+**Root cause:** Two issues: (1) `handleAgentFailedStream` in `daemon-events-bridge.ts` early-returned before dispatching `chatSendFailed` when `streamsByAgent` had no state for the agent (occurred when agent spawn failed before any streaming started, e.g., before `agent:stream:chunk` arrived); (2) `canonicalSessionUpdates` in `agent-session-slice.ts` unconditionally set `updates.stopReason = fields.stopReason` even when `fields.stopReason` was `undefined`, so the trailing `agent:status-changed` event (which arrived milliseconds after `agent:failed` without its own `stopReason` field) overwrote the error text with `undefined`.
+
+**Expected:** Chat error card displays the daemon's actual error text from `agent:failed` events.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#147](https://github.com/intent-hq/cloudlands-fe/pull/147), 2026-07-18)
 
 ### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
 
