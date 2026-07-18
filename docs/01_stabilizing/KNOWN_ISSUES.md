@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-106 (as of 2026-07-18)
+**Next available ID:** STAB-108 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -414,6 +414,30 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-107 (2026-07-18, area: cloudlands-fe / CI + live client seam, severity: P1)
+
+[intent-hq/cloudlands-fe#148](https://github.com/intent-hq/cloudlands-fe/pull/148) (commit bb588763, "120s timeout override for workspace.delete") changed runMutation/runMutationWithId to forward a third options arg to backendRequest, breaking arity-strict toHaveBeenCalledWith(method, params) assertions in the live-notes/live-comments/live-settings/live-files/live-git client test suites; went unnoticed because cloudlands-fe main-push CI runs only CodeQL (unit tests run on PRs only).
+
+**Repro:** Before the fix: [intent-hq/cloudlands-fe#148](https://github.com/intent-hq/cloudlands-fe/pull/148) added a `timeout?: number` field to `backendRequest`'s third options arg to support the 120s override for bulk workspace.delete. `runMutation` and `runMutationWithId` were updated to forward a third `{ timeout }` object when provided. However, the live-client unit tests (`live-notes.test.ts`, `live-comments.test.ts`, `live-settings.test.ts`, `live-files.test.ts`, `live-git.test.ts`) used strict 2-arg assertions: `expect(backendRequest).toHaveBeenCalledWith(method, params)`. After bb588763, every call to `runMutation` forwarded `{}` as the third arg (even when `timeout` was undefined), causing all these assertions to fail with "Expected: 2 arguments, Received: 3 arguments". The test suite went from 100% pass to 28 failures across 5 suites. The breakage went undetected on main because the cloudlands-fe `.github/workflows/intent-pr.yml` workflow runs only on `pull_request` events, not on `push` to main — unit tests are never re-run after PR merge. Main-push CI (CodeQL analysis) does not run unit tests.
+
+**Root cause:** `runMutation` / `runMutationWithId` forwarded the third `options` object unconditionally (as `{}` when no timeout was provided) instead of omitting it when empty. Arity-strict `toHaveBeenCalledWith` assertions failed because they expected exactly 2 arguments. The regression landed on main undetected because cloudlands-fe's `.github/workflows/intent-pr.yml` is gated to `pull_request` only — main-push CI runs only CodeQL, which does not execute unit tests.
+
+**Expected:** `runMutation` / `runMutationWithId` forward the third options arg only when it contains actual options (non-empty object), preserving 2-arg call shape when no options are present. Unit test assertions remain valid for both 2-arg and 3-arg call shapes.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#150](https://github.com/intent-hq/cloudlands-fe/pull/150), 2026-07-18)
+
+### STAB-106 (2026-07-18, area: cloudlands-fe / renderer store persistence, severity: P2)
+
+Home-screen repo selector does not default to the most recent repository; workspace-initializer persistence never re-homed after saga removal.
+
+**Repro:** Before the fix: Open the Cloudlands home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
+
+**Root cause:** The workspace-initializer component (`WorkspaceInitializer.svelte`) previously persisted its form state (selected repo, branch, prompt text) via a Redux-observable saga (`workspace-initializer-saga.ts`). The saga subscribed to form-state actions and wrote to an electron-store `workspace-initializer` bag. Commit 95d908a2 ("refactor: remove redux-observable") deleted the saga file and all persistence logic, but the component continued to read from the now-static electron-store entry. New form interactions (repo selection, branch typing, prompt edits) updated local component state and Redux store state but never persisted, so the electron-store bag stayed frozen at its last pre-saga-removal value. On app restart, the component rehydrated from the stale electron-store entry, discarding all session state. The repo selector defaulted to no selection (or the stale repo) instead of the most recent repository.
+
+**Expected:** Workspace-initializer form state (selected repo ID, branch, prompt) persists across app restarts and defaults to the most recent repository.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#149](https://github.com/intent-hq/cloudlands-fe/pull/149), [intent-hq/intentd#246](https://github.com/intent-hq/intentd/pull/246), 2026-07-18) — workspace-initializer state promoted to daemon-owned `workspaceInitializer.state` setting; FE reads/writes via `settings.get`/`settings.update`; repo selector defaults to most recent repository on app launch
 
 ### STAB-105 (2026-07-18, area: intentd workspace.delete + cloudlands-fe bulk operations, severity: P1)
 
