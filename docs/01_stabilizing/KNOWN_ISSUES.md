@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-99 (as of 2026-07-17)
+**Next available ID:** STAB-100 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-99 (2026-07-18, area: FE/interrupted-agents, severity: P1)
+
+The interrupted-agents modal never appeared on fresh app launch even when interrupted_agent rows existed in the database.
+
+**Repro:** Quit the app normally while an agent is mid-turn. Restart the app. Expected: the interrupted-agents resumption modal appears with the agent listed. Actual before fix: no modal appeared, even though the daemon correctly recorded the interrupted agent and `agent.listInterrupted` returned it over the wire. Root cause: the interrupted-agents service (`src/features/agent/interrupted-agents-service.ts`) only listened for `backend:status` "connected" events but was installed in `+layout.svelte` onMount, which happens AFTER the Electron main process already connected to intentd. The initial "connected" event was broadcast before the listener existed, so the service never ran its check. The `BACKEND.GET_STATUS` IPC handler existed but was unused — the catch-up path was missing.
+
+**Expected:** On install, the service queries `backend:get-status` via IPC; if status is already "connected", it immediately runs `checkInterruptedAgents` for a new epoch. Existing listeners for initial-connect and reconnect remain intact. Per-epoch deduplication prevents double-showing the modal.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#141](https://github.com/intent-hq/cloudlands-fe/pull/141), 2026-07-18)
 
 ### STAB-90 (2026-07-17, area: intentd intent-git / git.pull, severity: P1)
 
