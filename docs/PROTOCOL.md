@@ -162,6 +162,58 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 - **Disconnect cleanup:** On `close` or socket `error`, the server removes the client and all of its event subscriptions. Subscriptions are **per-connection** and do **not** survive reconnects.
 - **Reconnection guidance:** Clients should reconnect with backoff, re-authenticate on the new upgrade, and **re-establish all subscriptions** (re-send `events.subscribe`). After reconnect, a client should **re-fetch** the entities it cares about rather than assuming it missed nothing.
 
+### 5.19 `file-tracking.loadCommits`
+
+Returns commit history with attribution and workspace boundary information.
+
+**Request:**
+
+```jsonc
+{
+  "workspaceId": "workspace-abc",
+  "limit": 50,           // optional, default 50
+  "nextToken": "...",    // optional, for pagination
+  "includeOlder": false  // optional, default false - when true, returns commits before and including the boundary
+}
+```
+
+**Result:**
+
+```jsonc
+{
+  "commits": [
+    {
+      "hash": "abc123...",
+      "message": "feat: add feature",
+      "author": "...",
+      "date": "...",
+      "files": ["..."],
+      "filesChanged": 3,
+      "isPushed": true,
+      "agentId": "agent-...",      // optional
+      "linkedNoteId": "note-..."   // optional
+    }
+  ],
+  "boundarySha": "def456...",  // workspace boundary commit SHA, or null when no boundary info or unresolvable
+  "nextToken": "..."            // pagination token, or null
+}
+```
+
+**Boundary Semantics:**
+
+- When `includeOlder` is `false` (default), returns commits in the `boundary..HEAD` range (workspace-owned commits only)
+- When `includeOlder` is `true`, returns commits before and including the workspace boundary (for "show previous" functionality; the boundary commit itself is included)
+- `boundarySha` is `null` when:
+  - The workspace has no boundary info (`baseRef` or `baseCommitSha` not set), OR
+  - Boundary info exists but cannot be resolved (e.g., shallow clone, nonexistent ref, base commit not an ancestor of HEAD)
+- **Fail-closed safety net:** When boundary info exists but cannot be resolved, the method returns an empty commit list (regardless of `includeOlder` value) to prevent leaking arbitrary base-branch history
+
+**Boundary Resolution Strategy:**
+
+1. Prefer merge-base of HEAD with `origin/<baseRef>` or `<baseRef>` (rebase-resilient)
+2. Fall back to `baseCommitSha` if it is a valid ancestor of HEAD
+3. Return `null` if neither resolves
+
 ---
 
 ## 6. Method Catalog

@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-90 (as of 2026-07-18)
+**Next available ID:** STAB-103 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-88 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
+### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
 
 Dequeued and agent-to-agent user messages did not emit `agent:message` workspace events, preventing live clients from converging on transcript state for user messages appended by daemon-side operations (queue drain, wake delivery).
 
@@ -31,7 +31,7 @@ Dequeued and agent-to-agent user messages did not emit `agent:message` workspace
 
 **Status:** fixed ([intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234), [intent-hq/cloudlands-fe#135](https://github.com/intent-hq/cloudlands-fe/pull/135), 2026-07-17) — intentd now emits `agent:message` from queue-drain and wake-delivery paths with persisted row IDs; cloudlands-fe transcript subscriber processes these events to update the UI
 
-### STAB-89 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
+### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
 The `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` e2e test fails intermittently when run in parallel (`make test`) on a developer machine with multiple live intentd daemons running, but passes consistently in isolation.
 
