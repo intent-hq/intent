@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-81 (as of 2026-07-17)
+**Next available ID:** STAB-106 (as of 2026-07-18)
 
 ## Intake Convention
 
@@ -19,27 +19,49 @@ Each issue entry includes:
 
 ## Open Issues
 
-### STAB-80 (2026-07-17, area: intentd intent-acp / workspace_api MCP, severity: P1)
+### STAB-102 (2026-07-18, area: intentd e2e tests / local environment, severity: P2)
 
-Chief of Staff agent broken: cannot enumerate workspaces or access app-level operations.
+The `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` e2e test fails intermittently when run in parallel (`make test`) on a developer machine with multiple live intentd daemons running, but passes consistently in isolation.
 
-**Repro:** Create a Chief of Staff workspace agent and try to use it. The agent reports that the `ws.app` namespace (which provides `workspaces.list`, `agents.list`, UI navigation, and proposal management) is not registered in the session. Only the single-workspace API surface is available, and since the Chief workspace has no repository attached, there's no way for the agent to enumerate or manage user workspaces.
+**Repro:** Run the intentd stack locally with multiple intentd daemons bound to various ports across different workspace directories, then execute `make test` in the monorepo. Observed: the full test suite (29 tests) sometimes fails with test hangs or timeouts. Running the same test in isolation 3 times: `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` passes 3/3 times with 6.17-6.35s duration. The intentd CI at the same commit (cc6dec88) was green, confirming this is a local environment issue, not a product bug.
 
-**Root cause:** The `ws.app.*` MCP tool bindings were not registered in the daemon's MCP server for chief-workspace sessions. The bindings existed in `intent-acp/src/mcp_server/bindings/app/` but were not exposed in the workspace_api tool description for chief agents.
+**Root cause:** Similar to STAB-63, local intentd daemons interfere with e2e test hermeticity when tests run in parallel. The tests use ephemeral ports (`INTENTD_TCP_PORT=0`) but may still experience resource contention or event delivery interference from multiple background daemons detected via `pgrep -fl intentd`.
 
-**Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
+**Expected:** E2e tests should be hermetic and pass reliably on developer machines regardless of local daemon state, or the test suite should detect and skip tests when hermeticity cannot be guaranteed.
 
-**Status:** fixed (intent-hq/intentd#241, intent-hq/cloudlands-fe#139, 2026-07-18)
+**Status:** open
 
-### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
+### STAB-86 (2026-07-17, area: cloudlands-fe / workspace delete, severity: P1)
 
-Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
+Home-screen workspace delete did not remove spaces from the visible list, requiring a full app refresh (Cmd-R), and spammed logs with `resolveWorkspaceRoot` / `note.list spec reseed failed` errors for deleted workspaces.
 
-**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to three related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'.
+**Repro:** Before the fix: create a disposable workspace, delete it from the Home screen. Observed: (1) the deleted workspace remained visible in the workspaces list until Cmd-R refresh, and (2) `make dev` logs filled with paired errors per deleted workspace: main-process `[WorkspaceConfig] resolveWorkspaceRoot: workspace "<slug>" not found in any location` (from `user-activity.ipc.ts:51` calling `WorkspaceConfig.resolveWorkspaceRoot`) and daemon `WARN intent_services: note.list spec reseed failed; continuing with best-effort list workspace_id=<slug> error=internal error: insert note failed: error returned from database: (code: 787) FOREIGN KEY constraint failed`.
 
-**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'.
+**Root cause:** When `workspace:deleted` event arrived from daemon, `daemon-events-bridge.ts` dispatched `workspaceDeleted(wsId, agentIds)`. Other slices (`workspace-agents`, `chat-state`, `agent-session`) handled this action and purged their workspace-scoped state, BUT the `workspace-slice` reducer had NO case for `workspaceDeleted`. The workspace entity stayed in `state.workspace.workspaces` collection, and the FE continued to attempt operations (user-activity IPC, note subscriptions) on the deleted workspace.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), 2026-07-17)
+**Expected:** After clicking Delete on the Home screen OR receiving an external `workspace:deleted` event, the space must disappear from the list immediately and permanently. Zero occurrences of `resolveWorkspaceRoot` / `note.list spec reseed failed` log lines for deleted workspaces.
+
+**Status:** open
+
+### STAB-85 (2026-07-17, area: intentd CI / e2e tests, severity: P1)
+
+The `completion_report_cleared_when_new_turn_begins_over_wss` e2e test hung indefinitely in CI, timing out every coverage-e2e and coverage-all job at 30 minutes.
+
+**Repro:** PR #221 added the `completion_report_cleared_when_new_turn_begins_over_wss` test to `crates/intentd/tests/e2e_wss_agent_lifecycle.rs`. The test delegated a mock child agent, waited for `agent:created` to retrieve the child's ID, then sent a new message to the parent and awaited `agent:updated` with `completionReportCleared: true`. The test hung from 2026-07-17 10:16 UTC onward because: (1) it called `wss_event(rx, "agent:created").await` expecting a `parentAgentId` field that `agent:created` events never carry (the field exists only on `agent:updated`), so the test retrieved `null` for the child ID and subsequent filters matched nothing, and (2) the `wss_event` helper's 30-second timeout reset on every WebSocket heartbeat Ping frame, allowing the hung wait to extend indefinitely. Every coverage-e2e and coverage-all CI run timed out at GitHub Actions' 30-minute job limit from that point forward, blocking all PRs and main pushes.
+
+**Expected:** E2e tests use deadline-bounded event waits that fail fast when expected events never arrive. The `wss_event_opt` helper (with a single overall deadline, no heartbeat resets) should be used for waits that may legitimately time out, and child agent IDs should be retrieved from the parent agent's `waitingForAgentIds` field rather than expecting a `parentAgentId` on `agent:created`.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test switched to `wss_event_opt` for deadline-bounded waits and retrieves child ID from parent's `waitingForAgentIds`; added nextest slow-timeout guard (~5 min) to catch similar hangs; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent merging PRs with failing coverage jobs
+
+### STAB-84 (2026-07-17, area: intentd workspace RPC / setup scripts, severity: P1)
+
+The `workspace.saveSetupScript` RPC contract changed in PR #223 to require a repository path, breaking the `uds_integration::uds_slice_end_to_end` test on main.
+
+**Repro:** PR #223 ("feat: make .intent/config.json sole source of truth for setup scripts", merged 2026-07-17 12:49 UTC) changed `workspace.saveSetupScript` to return InvalidParams when called without a repository path, aligning the RPC with the new config.json-backed persistence model. The `uds_slice_end_to_end` integration test in `crates/intentd/tests/uds_integration.rs` (lines 331+) asserted the old §5.25 contract: empty default, save returns stored record with `generatedBy: "user"`, get round-trips. After #223 merged, `saveSetupScript` returned `Null` (InvalidParams) instead of the expected stored script, causing the test to fail deterministically on main. The regression went undetected because coverage-e2e and coverage-all jobs were timing out at 30 minutes (STAB-85) and were not required merge-queue checks at the time #223 merged.
+
+**Expected:** Tests align with the current RPC contract. When `saveSetupScript` is called without a repository path in the new config.json model, the RPC should either return InvalidParams (as implemented in #223) or persist to a workspace-scoped default location, and the integration test assertions should match the implemented behavior.
+
+**Status:** fixed ([intent-hq/intentd#227](https://github.com/intent-hq/intentd/pull/227), 2026-07-17) — test updated to expect InvalidParams error when saving setup scripts without repository path; intentd main ruleset now requires coverage-e2e and coverage-all as merge-queue checks to prevent similar regressions
 
 ### STAB-63 (2026-07-17, area: intentd doctor / e2e_core_cli_commands test, severity: P2)
 
@@ -380,6 +402,136 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 ---
 
 ## Fixed Issues
+
+### STAB-105 (2026-07-18, area: intentd workspace.delete + cloudlands-fe bulk operations, severity: P1)
+
+Bulk deletion of archived workspaces timed out client-side during heavy cleanup, despite daemon eventually succeeding.
+
+**Repro:** Before the fix: accumulate 15+ archived workspaces (each 1–4 GB), select all on the Home screen, click Delete. Observed: after 30–60 seconds the FE showed "Operation timed out" errors for most workspaces (typically all but the first 2–3), but the daemon logs confirmed all deletes eventually succeeded — the `workspace:deleted` events arrived 2–10 minutes later as the background cleanup finished.
+
+**Root cause:** The FE fired parallel `workspace.delete` calls with a 30-second IPC timeout. The daemon serialized multi-GB `remove_dir_all` operations under a per-repository lock to prevent race conditions with concurrent deletes/recreations. Later deletes in the batch queued behind earlier ones, exceeding the 30s client timeout even though the daemon completed them successfully in the background. The polling implementor pushed a follow-up commit (445b8b9) that updated intentd delete tests to poll for the now-asynchronous filesystem cleanup, confirming the background task model works as designed.
+
+**Expected:** Bulk delete of large archived workspaces completes without client-side timeouts. The daemon returns success as soon as the database row is deleted and the event is emitted (fast-ack), and the FE waits long enough for the initial response.
+
+**Status:** fixed ([intent-hq/intentd#245](https://github.com/intent-hq/intentd/pull/245), [intent-hq/cloudlands-fe#148](https://github.com/intent-hq/cloudlands-fe/pull/148), 2026-07-18) — intentd now returns immediately after database delete + event emission, running filesystem cleanup in a background task under per-repo lock; cloudlands-fe raised `workspace.delete` timeout to 120s for bulk operations
+
+### STAB-103 (2026-07-18, area: cloudlands-fe chat error card / agent-session state, severity: P2)
+
+Agent turn failures rendered as generic "Agent spawn failed" instead of the daemon's `agent:failed` error text (observed with a session/prompt idle-timeout failure on 2026-07-18).
+
+**Repro:** Before the fix: trigger an agent turn failure that emits `agent:failed` with an error message (e.g., session idle timeout). The chat error card displayed "Agent spawn failed" instead of the actual error text from the daemon event.
+
+**Root cause:** Two issues: (1) `handleAgentFailedStream` in `daemon-events-bridge.ts` early-returned before dispatching `chatSendFailed` when `streamsByAgent` had no state for the agent (occurred when agent spawn failed before any streaming started, e.g., before `agent:stream:chunk` arrived); (2) `canonicalSessionUpdates` in `agent-session-slice.ts` unconditionally set `updates.stopReason = fields.stopReason` even when `fields.stopReason` was `undefined`, so the trailing `agent:status-changed` event (which arrived milliseconds after `agent:failed` without its own `stopReason` field) overwrote the error text with `undefined`.
+
+**Expected:** Chat error card displays the daemon's actual error text from `agent:failed` events.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#147](https://github.com/intent-hq/cloudlands-fe/pull/147), 2026-07-18)
+
+### STAB-101 (2026-07-17, area: intentd + cloudlands-fe / user message events, severity: P1)
+
+Dequeued and agent-to-agent user messages did not emit `agent:message` workspace events, preventing live clients from converging on transcript state for user messages appended by daemon-side operations (queue drain, wake delivery).
+
+**Repro:** Before the fix: (1) Send a message to a busy agent (it queues), wait for the agent to finish its current turn. The queued message is drained and persisted by the daemon (`persist_user` in `agent_manager.rs`), but no `agent:message` event is published. The FE chat continues to show the message as queued/pending until refresh. (2) Call `agent.wakeOrCreate` to wake an idle task agent. The daemon delivers the wake message via `deliver_wake_message` runtime path and persists the user row, but again no `agent:message` event is published. The FE never sees the user message appear in the transcript.
+
+**Root cause:** The daemon emitted `agent:message` events only for store-only fallback paths (`agent_send_message_op`, `agent_force_message_op`) when no `AgentManager` runtime was attached. When an `AgentManager` WAS attached, the runtime `agent.sendMessage` path returned the message ID immediately for FE optimistic rendering and did NOT emit an event. However, the queue-drain (`persist_user`) and wake-delivery (`deliver_wake_message`) runtime paths also skipped event emission, leaving no mechanism for the FE to learn about daemon-persisted user messages. The cloudlands-fe transcript subscribed to `agent:message` events but never received them for these paths, causing the UI to diverge from the persisted transcript.
+
+**Expected:** All daemon-side user-row appends (send, force, queue drain, wake delivery) emit `agent:message` workspace events with the persisted message row ID so live clients can converge on transcript state.
+
+**Status:** fixed ([intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234), [intent-hq/cloudlands-fe#135](https://github.com/intent-hq/cloudlands-fe/pull/135), 2026-07-17) — intentd now emits `agent:message` from queue-drain and wake-delivery paths with persisted row IDs; cloudlands-fe transcript subscriber processes these events to update the UI
+
+### STAB-92 (2026-07-18, area: intentd CI / intent-transport TLS test, severity: P2)
+
+Flaky TLS fingerprint test failure in `intent-transport/src/tls/tests.rs::test_client_cert_fingerprint_verification_rejects_wrong_fingerprint`.
+
+**Repro:** Run `cargo test --workspace` under parallelism (e.g., CI default or local with high CPU count). The test intermittently fails with assertion error when the client cert fingerprint check accepts a previously-rejected wrong fingerprint, suggesting cached TLS state is leaking between test runs.
+
+**Root cause:** OpenSSL caches certificate validation state globally across all tests. The test creates a TLS client that intentionally uses a mismatched fingerprint to verify rejection, then verifies acceptance with the correct fingerprint. When tests run in parallel or sequentially without clearing the cache, OpenSSL reuses cached validation results from prior test runs, causing the fingerprint check to pass when it should fail or vice versa.
+
+**Expected:** Each TLS test run clears OpenSSL's internal cert cache before setting up the client connection, ensuring test hermiticity regardless of execution order or parallelism.
+
+**Status:** fixed ([intent-hq/intentd#243](https://github.com/intent-hq/intentd/pull/243), 2026-07-18) — added `SSL_CTX_flush_sessions` call to clear cert cache before each test client setup
+
+### STAB-87 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Re-entering a streaming conversation shows no deltas until the next tool call (or later).
+
+**Repro:** Start a conversation with a long-running agent task (e.g., multi-file edit or research). While the agent is mid-turn and streaming partial assistant text, navigate away from the chat (switch to another workspace or panel). Navigate back to the streaming chat. Observed: the partial assistant message is blank until the agent emits the next tool call or completes the turn. Expected: the partial text appears immediately and continues growing with each delta.
+
+**Root cause (traced):** Chat hydration (`chat-read-service.ts` → `loadChatTranscript`) pages through `agent.getConversation` only. On the daemon, the in-flight partial assistant message (live-turn slot, CS-0 D5) is merged **only** into the `chat.subscribe` seq-0 snapshot (`chat_snapshot` in `intent-transport/src/subscriptions.rs`) — `agent.getConversation` returns persisted messages only. The FE used to hydrate via `chat.subscribeSnapshot` but switched to `getConversation` paging (to fix >50-message truncation), silently losing the live-turn merge. Two compounding effects: (1) Hydration wipes the in-flight placeholder (the events bridge keeps the transcript growing in Redux even while the chat is closed, but `loadChatTranscript` replaces `messages` with the persisted-only page — dropping the in-flight assistant message), and (2) after an app restart mid-turn, the bridge accumulator (`streamsByAgent`) restarts empty and only holds the chunk tail; `resolveStreamContentBlocks`' `hasActiveStreamRegression` correctly rejects the shorter/poorer candidate versus the fuller hydrated partial — so deltas stay invisible until the candidate outgrows it (typically at the next tool call, which adds blocks).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
+
+### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+
+Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
+
+**Repro:** Start a conversation and send a message that triggers a long-running agent task. While the agent is mid-turn (visible "Thinking" or streaming partial response), type a new message and press ⌘Enter (force-submit / interrupt). Observed: the UI switches to "Thinking" for the new message but never shows the message in the transcript. The session is wedged — subsequent messages show status ticks but no transcript. Restarting the app (Electron relaunch) recovers the UI but the interrupted message is lost. Restarting only intentd doesn't help because the renderer's wedged state persists (restarting intentd doesn't reset the renderer). Expected: the new message should interrupt the old turn, appear immediately in the transcript, and stream normally.
+
+**Root cause (traced):** The FE renderer is daemon-bridged via the mock IPC router. `chat-send-service.ts` and `agent-stream-lifecycle.ts` correctly thread `priority: "interrupt"` all the way into the `STREAM_MESSAGE` invoke (and the zod schema `AgentBackendStreamMessageSchema` allows it), **but the bridge handler in `src/store/renderer/seeders/agent-ipc-bridge-seeder.ts` (STREAM_MESSAGE → `agent.sendMessage`) never forwards `priority`** — it forwards messageId/imageBlocks/fileBlocks/model/messageMetadata/contextReferences/noteIds/stdinContext/app-ID trio only. Consequences, matching the reported symptoms exactly: (1) Daemon receives a plain `agent.sendMessage` while the turn is in flight → `try_begin` fails → the message is **silently auto-queued** (`{ success: true, queued: true }`) instead of preempting (`interrupt_send_message` is never invoked). (2) The FE only checks `response.success` — `queued: true` is ignored on this path. It has already torn down the old stream handler and registered a fresh one for a new assistant placeholder, so the old turn's chunks/complete are treated as stale and skipped → UI wedges in "Thinking". (3) The daemon queue is in-memory, so restarting intentd **loses the queued message**. (4) The renderer's stream-registry/session state stays wedged (restarting intentd doesn't reset the renderer), so subsequent sends show status ticks but no transcript.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `agent-ipc-bridge-seeder.ts` now forwards `priority: "interrupt"` through STREAM_MESSAGE → agent.sendMessage; `agent-stream-lifecycle.ts` handles `{ success: true, queued: true }` responses (cleanup + queue seeding) to avoid wedged placeholders
+
+### STAB-83 (2026-07-17, area: cloudlands-fe notification settings persistence, severity: P1)
+
+Notification settings (enabled, soundEnabled, soundOnlyWhenUnfocused, volume) were not persisted to the daemon, causing them to be lost on app relaunch.
+
+**Repro:** Before the fix: open Settings → Notifications in the app, toggle any notification setting (e.g., disable notifications entirely), then quit and relaunch the app. Observe: the setting has reset to the default value (notifications re-enabled), not the value you chose.
+
+**Root cause:** The `user-preferences-notification-persistence-service` middleware (added in PR #116) called `invoke('settings:set', { key: 'notificationSettings', ... })`, writing the entire settings bag to a retired `localStorage` key (`legacy-settings:notificationSettings`) that is never read on boot. The correct protocol is `settings.update` with individual `notifications.*` paths (`notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume`) that intentd persists in its settings catalog and surfaces to both main (for notification behavior) and renderer (for UI state). Additionally, the boot-time hydration dispatched actions that immediately triggered the persistence logic, causing echo-writes (the FE wrote back the values it just read from the daemon). Test mocks also simulated constant state (not evolving post-reducer state) and used real timers instead of fake timers.
+
+**Expected:** Notification toggles persist via `settings.update` to the daemon's canonical `notifications.*` paths. Settings survive app relaunch because the daemon catalog is durable. Hydration-dispatched actions are suppressed from persistence to prevent echo-writes. Tests use fake timers and evolving state mocks.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#127](https://github.com/intent-hq/cloudlands-fe/pull/127), [intent-hq/cloudlands-fe#129](https://github.com/intent-hq/cloudlands-fe/pull/129), [intent-hq/cloudlands-fe#130](https://github.com/intent-hq/cloudlands-fe/pull/130), 2026-07-17)
+
+### STAB-82 (2026-07-17, area: intentd agent resumption / graceful shutdown, severity: P1)
+
+Agents mid-turn during graceful shutdown were settled to `RuntimeIdle` instead of being captured as interrupted, so the resumption modal never appeared after a clean restart.
+
+**Repro:** Start intentd, spawn an agent and let it run a turn, then quit intentd gracefully via `SIGINT` or `SIGTERM` (normal quit, not a crash). Expected: after restart, `agent.listInterrupted` returns the agent and the FE shows the resumption modal. Actual before fix: `agent.listInterrupted` returned an empty list because the `signal_handler_task` settled all active agent sessions to `RuntimeIdle` without capturing them as interrupted records first. The heal sweep on next startup thus saw only `RuntimeIdle` rows (not `active`/`processing`/`waiting`) and never created interruption records. The resumption modal only appeared after crash scenarios (where the signal handler never ran).
+
+**Expected:** Graceful shutdown (`SIGINT`/`SIGTERM`) captures in-flight agents (`active`, `processing`, `waiting` statuses) as interrupted records before settling them to `RuntimeIdle`, exactly like the crash-recovery heal path. The resumption modal appears after both clean and unclean shutdowns whenever agents were mid-turn.
+
+**Status:** fixed ([intent-hq/intentd#219](https://github.com/intent-hq/intentd/pull/219), 2026-07-17)
+
+### STAB-79 (2026-07-17, area: cloudlands-fe sidebar status grouping / workspace activity, severity: P1)
+
+Sidebar showed every workspace as Idle even with working agents; workspaces with running agents appeared under Complete/PR sections; running agent icons did not clear when all agents went idle.
+
+**Repro:** Before the fix, the sidebar displayed incorrect workspace statuses due to four related issues: (1) Workspace.activity field was not wired from the daemon (intentd emitted workspace:activity-changed events but the FE did not subscribe or merge them), so the FE had no knowledge of when workspaces transitioned between Idle and AgentRunning states. (2) The sidebar grouping logic did not consider running agents when determining display status — workspaces with active agents could be grouped under "Complete" or "Ready for PR" based solely on their base status (e.g., pr_merged), ignoring ongoing agent work. (3) WorkspaceCard running agent avatars were controlled only by activeStreamsTracker and cached Redux agent state, which could remain stale after all agents went idle, leaving running-state icons visible indefinitely even when workspace.activity === 'idle'. (4) Edge-triggered workspace:activity-changed events could be missed (e.g., coordinator-only workspaces where the 0→1 agent transition fired before FE subscription or entity seeding), leaving workspaces stuck at Idle even while agents were mid-turn.
+
+**Expected:** Sidebar accurately reflects workspace activity: workspaces with running agents always appear under "In Progress" regardless of PR/merge status, and workspace cards show no running agent avatars when workspace.activity === 'idle'. Activity reconciliation detects missed edges via agent-implying events and refetches workspace.activity when FE state is stale.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#123](https://github.com/intent-hq/cloudlands-fe/pull/123), [intent-hq/cloudlands-fe#124](https://github.com/intent-hq/cloudlands-fe/pull/124), [intent-hq/cloudlands-fe#128](https://github.com/intent-hq/cloudlands-fe/pull/128), 2026-07-17)
+
+### STAB-81 (2026-07-17, area: cloudlands-fe / settings auto-update, severity: P1)
+
+Beta-updates toggle in Settings unresponsive when clicked. Toggle does not reflect actual update channel on app boot in real (non-mock) mode.
+
+**Repro:** Launch app in real mode (not mock). Open Settings → About → Beta Updates. Click the beta-updates toggle. Observe: toggle does not flip, no channel switch occurs. Relaunch app. Observe: toggle shows wrong state (doesn't match actual channel).
+
+**Root cause:** (1) Middleware called dead `invoke('settings:set')` with no main-process handler — the IPC call silently failed. (2) Real-mode boot hydration missing — only mock seeder synced Redux `betaUpdatesEnabled` with main-process channel from `autoUpdateClient.getState()`. The middleware also called `autoUpdateClient.setChannel()` which already persisted via local-prefs, making the dead settings:set call redundant.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/125, 2026-07-17)
+
+### STAB-80 (2026-07-17, area: intentd intent-acp / workspace_api MCP, severity: P1)
+
+Chief of Staff agent broken: cannot enumerate workspaces or access app-level operations.
+
+**Repro:** Create a Chief of Staff workspace agent and try to use it. The agent reports that the `ws.app` namespace (which provides `ws.app.workspaces.list`, `ws.app.agents.list`, UI navigation, and proposal management) is not registered in the session. Only the single-workspace API surface is available, and since the Chief workspace has no repository attached, there's no way for the agent to enumerate or manage user workspaces.
+
+**Root cause:** The `ws.app.*` MCP tool bindings were not registered in the daemon's MCP server for chief-workspace sessions. The bindings existed in `intent-acp/src/mcp_server/bindings/app/` but were not exposed in the workspace_api tool description for chief agents.
+
+**Expected:** Chief of Staff agents should have access to `ws.app.workspaces.list/get/archive`, `ws.app.agents.list/readConversation`, `ws.app.settings.list/get`, `ws.app.specialists.list/get`, `ws.app.proposal.show`, `ws.app.ui.navigate/highlight/targets`, and `ws.app.workspaces.open` to perform cross-workspace management tasks.
+
+**Status:** fixed ([intent-hq/intentd#241](https://github.com/intent-hq/intentd/pull/241), [intent-hq/cloudlands-fe#139](https://github.com/intent-hq/cloudlands-fe/pull/139), 2026-07-18)
+
+Workspace sidebar does not re-sort by lastActivity when an agent makes progress — workspaces only re-sorted when clicked.
+
+**Repro:** Before this fix, workspace `lastActivity` was updated in the DB on every daemon-side activity (agent turn, commit, note edit), but no live event carried the new timestamp to the frontend. The sidebar only re-sorted when the user clicked a workspace, triggering a workspace.get fetch with the fresh `lastActivity`. Even with the WSS event stream connected, newly-active workspaces stayed at the bottom of the sidebar until clicked.
+
+**Expected:** When an agent or daemon operation updates workspace `lastActivity`, a debounced `workspace:updated` event with the new timestamp is emitted over the WSS connection, and the FE sidebar re-sorts in real-time without user interaction.
+
+**Status:** fixed ([intent-hq/intentd#224](https://github.com/intent-hq/intentd/pull/224), [intent-hq/intentd#225](https://github.com/intent-hq/intentd/pull/225), 2026-07-17) — `workspace:updated` event now emitted with debounced (200ms) trailing-edge logic; follow-up PR #225 addressed Copilot review findings: debounce insertion race condition (generation counter guard), lexicographical RFC3339 comparison bug (chrono::DateTime parsing for timestamp advancement assertions), and RAII environment variable isolation in tests (DebounceEnvGuard)
 
 ### STAB-78 (2026-07-17, area: cloudlands-fe / renderer store persistence, severity: P2)
 

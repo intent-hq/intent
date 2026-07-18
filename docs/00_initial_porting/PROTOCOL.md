@@ -206,7 +206,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { agentId, prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
-| workspace.delete | workspaceId (req) | { success: true } |
+| workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup (`remove_dir_all`) runs in a background task under a per-repository lock |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
@@ -280,6 +280,22 @@ workspace visibility. The seed captures an initial `v1` version snapshot and pub
 `note:created` so subscribers see the standard note lifecycle. Seeding runs inside the
 idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
 a replayed create returns the stored result and does not re-seed.
+
+**Setup script persistence and execution (`workspace.create`).** When an explicit
+`setupScript` parameter is supplied, the daemon writes it into
+`<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
+provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
+writes are no-op when the existing value is identical. The `.intent/config.json` file
+becomes the sole source of truth for the setup script; the workspace DB `setup_script`
+field is retired from all write paths (kept for wire compat and legacy read-only
+fallback only). After the config write, if an effective setup script exists (non-empty,
+resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
+daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
+the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+(the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
+(baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
+surfaced. Script output is streamed to a "Setup" terminal for the workspace,
+consistent with other workspace terminals.
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon minimally creates the agent session (honoring `agentId`/`name`/`model`/
@@ -652,7 +668,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.delete | agentId (req), workspaceId? | { success: true } |
 | agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. |
 | agent.summary | agentId (req) | quick summary of what the agent did |
-| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` (P3-1.2b). Delivery: a caller enrolled in an undelivered `after_all` delegation group does **not** message the parent immediately — the persisted report reaches the parent only inside the group's single aggregated wake (as that child's `Report:` line, which wins over the event's `lastResponseSummary`); non-grouped callers deliver to the parent immediately. All internal parent wakes (one-shot completion watches, the aggregated group wake, immediate reports) run a real parent turn through the runtime send-message path — normal `agent:stream:*` / `agent:idle` lifecycle, queued if the parent is mid-turn |
+| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` (P3-1.2b). Delivery: a non-grouped delegated child delivers the single immediate parent wake at reportToParent time (directly to `session.parent_agent_id`, no watch required); the parent's oneShot watches are marked `report_delivered` so the child's later `agent:idle` is suppressed for that parent. `agent:failed` / `agent:deleted` after a report still deliver wakes. Children that never report keep the idle-driven wake with `lastResponseSummary`. Grouped children (`after_all`) do not get an immediate wake — the persisted report reaches the parent only inside the group's single aggregated wake (as that child's `Report:` line, which wins over `lastResponseSummary`); a late report after group delivery wakes immediately. All internal parent wakes (one-shot completion watches, the aggregated group wake, immediate reports) run a real parent turn through the runtime send-message path — normal `agent:stream:*` / `agent:idle` lifecycle, queued if the parent is mid-turn |
 | agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses } (filter fields flattened; legacy filter kept) |
 | agent.cancelSubscriptions | agentId (req), workspaceId (req) | { success: true } |
 | agent.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — not the WS streaming surface (use events.subscribe) |
@@ -768,7 +784,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
 | git.discard | workspaceId (req), paths (req, CSV string or array) | { ok, paths } — discard working-tree changes: tracked paths restored from the index (equivalent to `git checkout -- <paths>`), untracked paths deleted from disk (files unlinked, directories removed recursively); staged changes are untouched. Rejects `./*/--all` with `-32603`; idempotent on already-clean tracked paths and on missing untracked paths (ENOENT parity with the reference's race-tolerant `fs.unlink`). Ports the legacy `git:discard-changes` IPC. |
 | git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
-| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
+| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). After a successful pull, if `.gitmodules` exists, runs `git submodule update --init --recursive` (bounded 100s timeout) to sync submodule worktrees to updated gitlinks. Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems, submodule sync timeout/failures) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
@@ -1809,21 +1825,31 @@ session. The same object appears as the `stats` field on `AgentSession` in `agen
 ### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript` *(new in intentd — not part of the ported 104)*
 
 A per-workspace **setup script** that provisions a fresh worktree (install deps, build prereqs, …),
-persisted on the durable `setupScript` field of the `Workspace`. `detectProjectType` inspects
-manifest files to classify the project; `generateSetupScript` is the **AI-assisted** generator —
-this maps the reference UI's `generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every
-method requires `workspaceId`.
+**persisted in `.intent/config.json`** in the worktree (committable, repo-scoped). The workspace
+DB `setup_script` field is retired from all write paths (kept for wire compat and legacy
+read-only fallback only). `detectProjectType` inspects manifest files to classify the project;
+`generateSetupScript` is the **AI-assisted** generator — this maps the reference UI's
+`generateWithAgent` (`SetupScriptAgent.svelte`) and **is v1**. Every method requires `workspaceId`.
+
+**Setup script execution:** When a workspace is created (`workspace.create`) and an effective
+setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
+fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
+provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
+(repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
+branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
+errors are logged and surfaced. Script output is streamed to a "Setup" terminal for the workspace.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } |
-| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — persists the body and returns the stored record |
+| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } — reads from worktree `.intent/config.json` (when present), falls back to legacy DB row `setup_script` (read-only) |
+| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written. Returns -32602 (invalid params) when the workspace has no `worktreePath` or `repositoryPath` |
 | workspace.detectProjectType | workspaceId (req) | { projectType: ProjectType \| null } — null when no known manifest is found |
 | workspace.generateSetupScript | workspaceId (req) | { setupScript: SetupScript } — AI-assisted draft (returned, not auto-saved; persist with saveSetupScript) |
 
 - **SetupScript** — `{ script: string, projectType?: ProjectType, updatedAt: number,
   generatedBy?: "user"\|"agent" }`. `generatedBy` records whether the body was hand-written
   (`saveSetupScript`) or AI-drafted (`generateSetupScript`); `updatedAt` is the last-write epoch-ms.
+  When read from `.intent/config.json`, `generatedBy` is synthesized as `"user"`.
 - **ProjectType** — `"node" | "python" | "go" | "rust" | "ruby"` (detected from `package.json`,
   `pyproject.toml`/`requirements.txt`, `go.mod`, `Cargo.toml`, and `Gemfile` respectively).
 
@@ -2851,6 +2877,27 @@ The `defaultAutoCommit` field mentioned in early drafts was **not implemented** 
 { "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
 ```
 
+### 5.34 Skills — `skill.list` *(new in intentd — not part of the ported 104)*
+
+The backend exposes daemon-side skills discovery so clients can list skills for a workspace. The daemon scans the 5-tier precedence (user p1-3: `~/.agents/skills`, `~/.claude/skills`, `~/.augment/skills`; project p4-5: `<workspace>/.agents/skills`, `<workspace>/.augment/skills`) and parses `SKILL.md` frontmatter (name, description, allowedTools, compatibility). Name collisions shadow by precedence with warn logs. The discovered skill set is cached (with mtime-based fingerprints for cache invalidation) and monitored via filesystem watchers on all five scan roots; the daemon emits `skills:changed` events when SKILL.md files are created, modified, or deleted.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — -32602 if the workspace is not found or has no worktree path |
+
+- `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p4-5) and `"user"` for user-tier skills (p1-3); `allowedTools` / `compatibility` are optional frontmatter fields.
+- Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
+- The daemon watches all five scan roots recursively (using `notify` watchers, the same infrastructure as workspace `file:changed` events); when a SKILL.md file is created/modified/deleted under a watched root, the daemon re-runs discovery for the affected workspace(s) (user-tier changes affect all workspaces; project-tier changes are workspace-scoped), compares the newly-discovered set against the cached skill set, and emits `skills:changed` (§6.5) only if the set actually changed (500ms debounce per workspace). Non-existent roots are handled gracefully by watching the nearest existing ancestor. The `skill.list` handler also performs a check-on-read as a fallback safety net.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":64,"method":"skill.list","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":64,"result":[
+  { "name":"python-expert","description":"Python development specialist","location":"/Users/user/.augment/skills/python-expert/SKILL.md","scope":"user" },
+  { "name":"typescript-expert","description":"TypeScript specialist","location":"/workspace/.augment/skills/typescript-expert/SKILL.md","scope":"project","allowedTools":"*","compatibility":"typescript" } ] }
+```
+
 
 ## 6. Events & Subscriptions
 
@@ -2929,12 +2976,13 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
 | agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint restoring the reference-implementation pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
-| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` — so subscribers see per-session teardown before the workspace row disappears. |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task under a per-repository lock. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
 | agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
+| skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace. The daemon watches the 5 scan roots (user p1-3 + project p4-5) via `notify` watchers; when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the set actually changed. User-tier changes (p1-3) affect all workspaces; project-tier changes (p4-5) are workspace-scoped. data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.34) to refresh the skill roster. New in intentd — not part of the ported reference taxonomy. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused in the reference impl. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (matches the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
