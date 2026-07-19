@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-116 (as of 2026-07-19)
+**Next available ID:** STAB-118 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-115 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
+### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
 
 Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
 
@@ -30,6 +30,48 @@ Model selector inconsistency: picker showed Claude Fable 5 while the request act
 **Expected:** Changing the model on an agent with a live provider process takes effect on that agent's next turn. Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). The footer picker never displays a concrete model name for a session whose model is null; it shows the default-model option instead.
 
 **Status:** fixed ([intent-hq/intentd#257](https://github.com/intent-hq/intentd/pull/257) + [intent-hq/cloudlands-fe#160](https://github.com/intent-hq/cloudlands-fe/pull/160), 2026-07-19) — intentd: respawn-on-setModel + creation-time settings-default resolution, 4 unit tests + WSS e2e test; cloudlands-fe: call-site fallbacks removed, AgentSession.model nullable end-to-end (type + Zod schema + stream-lifecycle wire coercion), all 7 review threads resolved.
+
+---
+
+### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
+
+iOS agent footer was missing for ungrouped completion watches (immediate-mode/oneShot subscriptions) — navigating to an agent conversation that had active subscriptions showed the agent footer in cloudlands-fe but not in the iOS app.
+
+**Repro:** Navigate to an agent conversation in the iOS app where the agent ended its turn with an immediate-mode subscription (e.g., after delegating a task with `waitMode: "immediate"`). Observed: the iOS conversation view showed no agent footer (no "Waiting for..." indicator, no watched agent list), but the same conversation in cloudlands-fe displayed the footer with the watched agent. Some workspaces showed the footer on iOS (when delegation groups were present), but conversations with only ungrouped subscriptions never did.
+
+**Root cause:** ConversationStore.swift `fetchSubscriptions` (lines 1032-1035) only read `sub["filter"]["actorIds"]`, which intentd no longer sends. The protocol's actual wire shape (per `packages/intentd/crates/intent-services/src/agent_ops.rs:2715`) sends `actorIds` at the top level of each subscription object. iOS never extracted watched agent IDs from immediate-mode subscriptions, so `watchedAgentIds` stayed empty and `isWaitingForAgents` stayed false.
+
+**Expected:** iOS derives watched agent IDs from top-level `actorIds` (union with `delegationGroups[].expectedAgentIds`), so the footer appears for immediate-mode/oneShot watches just as it does in cloudlands-fe.
+
+**Status:** fixed ([intent-hq/ios#24](https://github.com/intent-hq/ios/pull/24), 2026-07-19) — ConversationStore.swift now reads top-level `actorIds` first, with a fallback to `filter.actorIds` for backward compatibility. Added 3 regression tests: `parsesTopLevelActorIdsFromSubscriptions`, `fallsBackToFilterActorIdsForLegacyFormat`, `combinesActorIdsFromSubscriptionsAndDelegationGroups`.
+
+---
+
+### STAB-114 (2026-07-19, area: cloudlands-fe / NewSpaceModal repo defaulting, severity: P2)
+
+After previously using a repo, opening the New Workspace modal (Cmd+N or sidebar +) showed 'Select a repository' instead of the most recent repo.
+
+**Repro:** Open the New Workspace modal (Cmd+N or sidebar +) after previously using a repo. Observed: the repository selector shows 'Select a repository' instead of the most recent repo, forcing the user to manually re-select their working repo every time.
+
+**Root cause:** NewSpaceModal never called `applyPrefill()` so stale workspace-prefill sessionStorage blocked last-repo hydration forever, and there was no fallback to recent repos when `lastSelectedRepo` was unset.
+
+**Expected:** The repository selector defaults to the most recently used repo when opening the New Workspace modal.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/161, 2026-07-19)
+
+---
+
+### STAB-115 (2026-07-19, area: cloudlands-fe terminal footer / scripts hydration, severity: P2)
+
+Switching workspaces briefly flashed "Detect Scripts" in the terminal footer before the detected script count appeared, creating a jarring UX and implying no scripts were detected when they were.
+
+**Repro:** With script detection enabled, switch to a different workspace that has detected scripts (e.g., via the workspace switcher or by opening a new workspace from the Home screen). Observed: the terminal footer button briefly flashed "Detect Scripts" text for 100-500ms before updating to show "Scripts (N)" with the detected count, even though the workspace had N>0 scripts already detected and persisted.
+
+**Root cause:** The "Detect Scripts" button visibility was gated only on `scriptEntries.length === 0` (checking whether any scripts exist in the store), without checking whether the scripts slice had finished hydrating for the newly-selected workspace. On workspace switch, the scripts slice starts with `initialized: false` and an empty `scriptEntries` array until the `workspaceMounted` fan-out's `scripts.list` RPC resolves. During this initialization window, the button showed "Detect Scripts" (the empty-state CTA) instead of waiting for hydration to complete.
+
+**Expected:** The "Detect Scripts" button should only appear when the scripts slice is initialized AND the workspace has zero detected scripts. During initial hydration (scripts not yet loaded), the button should not render at all or should show a loading skeleton.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#162](https://github.com/intent-hq/cloudlands-fe/pull/162), 2026-07-19) — Gated button visibility on `initialized && scriptEntries.length === 0` in `TerminalFooter.svelte`, ensuring the button only appears after scripts have been loaded and confirmed empty. Scripts slice already tracked `initialized` state from the seeder.
 
 ---
 
