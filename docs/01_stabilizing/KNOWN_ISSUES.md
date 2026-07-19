@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-113 (as of 2026-07-19)
+**Next available ID:** STAB-114 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-112 (2026-07-19, area: intentd/cloudlands-fe (queued message failure indicator), severity: P2)
+### STAB-113 (2026-07-19, area: intentd/cloudlands-fe (queued message failure indicator), severity: P2)
 
 After a terminal failure causes a queued message to be requeued, the UI showed no visual distinction between the retry attempt and the original entry — users could not tell which messages had failed and were being retried.
 
@@ -30,6 +30,20 @@ After a terminal failure causes a queued message to be requeued, the UI showed n
 **Expected:** Requeued messages display a retry indicator (rotate-right icon + "Failed — will retry" tooltip and screen-reader text) so users can see which messages failed and are being retried.
 
 **Status:** fixed ([intent-hq/intentd#252](https://github.com/intent-hq/intentd/pull/252) + [intent-hq/cloudlands-fe#157](https://github.com/intent-hq/cloudlands-fe/pull/157), 2026-07-19) — backend: `QueuedMessage::to_value` emits `requeuedAfterFailure: true` when `persisted == true`; frontend: `QueuedMessageList.svelte` displays retry indicator with accessible screen-reader text (`sr-only` class) and `aria-hidden` decorative icon; regression test `test_queue_operations::terminal_failure_requeues_with_persisted_flag` verifies wire shape.
+
+---
+
+### STAB-112 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
+
+WSS toggle ON but listener not running after daemon restart: when `server.wsApi.enabled` is persisted as `true`, the WSS listener does not actually start after a daemon restart, leaving the Settings toggle showing ON but "Show QR Code" displaying "WebSocket API server is not running" until the user toggles OFF→ON.
+
+**Repro:** Enable WSS in the packaged app (Settings → WebSocket API → toggle ON), relaunch the app, click "Show QR Code". Observed: the toggle shows ON (setting reads `true`), but the toast says "WebSocket API server is not running" and no QR code is displayed. Existing mobile clients cannot connect until the user toggles the setting OFF and back ON.
+
+**Root cause:** The packaged/sidecar app spawned the daemon with `intentd serve --listen uds` (`packages/cloudlands-fe/src/features/backend/main/intentd-sidecar.ts:360`). Before the fix, in `packages/intentd/crates/intentd/src/main.rs` (`cmd_serve`, ~lines 545–553), the WSS listener auto-started at boot ONLY for `--listen tcp/both`. Persisted `server.wsApi.enabled` was explicitly NOT honored at boot: "With --listen uds: listener does NOT auto-start at boot (regardless of persisted server.wsApi.enabled)". Result after any app relaunch: the setting read `true` (toggle showed ON), but no listener was bound. `server.pairingInfo` returned `port: null`, so the FE's `handleShowQr` (`WebSocketApiSettings.svelte:186-190`) showed "WebSocket API server is not running", and clients could not connect until the user toggled OFF→ON.
+
+**Expected:** After app relaunch with WSS previously enabled: Settings shows toggle ON, "Show QR Code" renders a QR (no "not running" toast), and a client can connect to `wss://<host>:<port>/ws`.
+
+**Status:** fixed ([intent-hq/intentd#251](https://github.com/intent-hq/intentd/pull/251), 2026-07-19) — Boot-time auto-start of the WSS listener when persisted `server.wsApi.enabled=true` under `--listen uds`, plus `Store::close()` WAL checkpoint so the setting survives restart.
 
 ---
 
@@ -47,6 +61,18 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 **Status:** fixed ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250), 2026-07-19) — Modified `history_xml::sanitize_messages_for_history` to perform two-pass sanitization: first pass collects all tool_use IDs and valid tool_result IDs, second pass drops tool_use blocks lacking a matching valid tool_result. Regression test `sanitizes_dangling_tool_use_blocks` added. All 19 history_xml tests pass.
 
+### STAB-112 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
+
+WSS toggle ON but listener not running after daemon restart: when `server.wsApi.enabled` is persisted as `true`, the WSS listener does not actually start after a daemon restart, leaving the Settings toggle showing ON but "Show QR Code" displaying "WebSocket API server is not running" until the user toggles OFF→ON.
+
+**Repro:** Enable WSS in the packaged app (Settings → WebSocket API → toggle ON), relaunch the app, click "Show QR Code". Observed: the toggle shows ON (setting reads `true`), but the toast says "WebSocket API server is not running" and no QR code is displayed. Existing mobile clients cannot connect until the user toggles the setting OFF and back ON.
+
+**Root cause:** The packaged/sidecar app spawned the daemon with `intentd serve --listen uds` (`packages/cloudlands-fe/src/features/backend/main/intentd-sidecar.ts:360`). Before the fix, in `packages/intentd/crates/intentd/src/main.rs` (`cmd_serve`, ~lines 545–553), the WSS listener auto-started at boot ONLY for `--listen tcp/both`. Persisted `server.wsApi.enabled` was explicitly NOT honored at boot: "With --listen uds: listener does NOT auto-start at boot (regardless of persisted server.wsApi.enabled)". Result after any app relaunch: the setting read `true` (toggle showed ON), but no listener was bound. `server.pairingInfo` returned `port: null`, so the FE's `handleShowQr` (`WebSocketApiSettings.svelte:186-190`) showed "WebSocket API server is not running", and clients could not connect until the user toggled OFF→ON.
+
+**Expected:** After app relaunch with WSS previously enabled: Settings shows toggle ON, "Show QR Code" renders a QR (no "not running" toast), and a client can connect to `wss://<host>:<port>/ws`.
+
+**Status:** fixed ([intent-hq/intentd#251](https://github.com/intent-hq/intentd/pull/251), 2026-07-19) — Boot-time auto-start of the WSS listener when persisted `server.wsApi.enabled=true` under `--listen uds`, plus `Store::close()` WAL checkpoint so the setting survives restart.
+
 ---
 
 ## Open Issues
@@ -63,6 +89,17 @@ Agent failure text was held only in FE memory — after a daemon restart or FE r
 
 **Status:** fixed ([intent-hq/intentd#249](https://github.com/intent-hq/intentd/pull/249) + [intent-hq/cloudlands-fe#152](https://github.com/intent-hq/cloudlands-fe/pull/152), 2026-07-19) — daemon: migration 0045 adds `stop_reason TEXT` column to `agent_session`; `set_stop_reason` / `clear_stop_reason` in `agent_repo.rs` persist it; `agent.list` / `agent.get` serve it on AgentLite; `agent:status-changed` carries it as string when setting / JSON null when clearing / omitted when untouched; FE: `applySessionUpsert` guard preserves existing `stopReason` when incoming snapshot omits the key (mirrors Phase 1's `canonicalSessionUpdates` guard); 7 regression tests (4 slice-level, 3 live-client)
 
+### STAB-110 (2026-07-19, area: cloudlands-fe sidebar / workspaces-seeder, severity: P2)
+
+On refresh, the sidebar workspace list briefly shows a single workspace or "No workspaces yet" message until `workspace.list` resolves, creating a jarring flash of incorrect state.
+
+**Repro:** Refresh the app (Cmd-R) while viewing a workspace. Observed: the sidebar workspaces list immediately renders with either a single workspace entry or the "No workspaces yet" placeholder for a brief moment (typically <500ms) until the `workspace.list` RPC completes and hydrates the full workspace collection. This flashing interim state creates a perception of lost data or broken state, even though it resolves automatically.
+
+**Root cause:** The sidebar workspace list component (`WorkspaceList.svelte` or equivalent) was rendering the current Redux store state synchronously on mount without checking whether workspaces data was still loading. The workspace slice initialized with an empty or minimal collection, and the seeder (`workspaces-seeder.ts`) fired `workspace.list` asynchronously. The component bound to the store's transient loading state, showing whatever partial data existed before the RPC settled.
+
+**Expected:** During the initial workspace list load (on app start or refresh), the sidebar should display an indeterminate loading skeleton or spinner instead of rendering a partial/empty workspace collection. Once `workspace.list` resolves, transition to the populated list. The loading state should be tracked in the workspace slice and consumed by the UI component.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#155](https://github.com/intent-hq/cloudlands-fe/pull/155) + [intent-hq/cloudlands-fe#156](https://github.com/intent-hq/cloudlands-fe/pull/156), 2026-07-19) — workspace slice tracks `isLoadingWorkspaceList` boolean; seeder sets it true before `workspace.list` and false on settle; sidebar component gates rendering on `!isLoadingWorkspaceList` and shows skeleton during load; error handling improved with user-facing toast and fallback to empty array
 
 ### STAB-108 (2026-07-18, area: intentd agent runtime / delegation group rehydration, severity: P1)
 
