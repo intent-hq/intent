@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-112 (as of 2026-07-19)
+**Next available ID:** STAB-113 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -33,7 +33,7 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 **Status:** fixed ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250), 2026-07-19) — Modified `history_xml::sanitize_messages_for_history` to perform two-pass sanitization: first pass collects all tool_use IDs and valid tool_result IDs, second pass drops tool_use blocks lacking a matching valid tool_result. Regression test `sanitizes_dangling_tool_use_blocks` added. All 19 history_xml tests pass.
 
-### STAB-110 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
+### STAB-112 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
 
 WSS toggle ON but listener not running after daemon restart: when `server.wsApi.enabled` is persisted as `true`, the WSS listener does not actually start after a daemon restart, leaving the Settings toggle showing ON but "Show QR Code" displaying "WebSocket API server is not running" until the user toggles OFF→ON.
 
