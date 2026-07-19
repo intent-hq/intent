@@ -19,6 +19,20 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
+
+Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
+
+**Repro:** Open an agent conversation while the backend is slow to respond to the transcript fetch (e.g., during high load, slow disk I/O, or initial cold-start transcript hydration). Observed: the chat panel immediately rendered the specialist welcome page ("I'm ready to help..." / empty state) for a brief moment until the transcript loaded, then replaced it with the actual conversation history.
+
+**Root cause:** `ChatPanel.svelte` gated the welcome state only on `session exists && messages.length === 0`, but transcript hydration ran asynchronously. During the hydration window, the session existed (agent record loaded) but messages were still empty (transcript fetch in flight), so the component incorrectly rendered the welcome page. The welcome page is semantically meant only for never-used sessions (`backendSessionId === null`), not for existing conversations whose transcript is still loading.
+
+**Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
+
+---
+
 ### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
 
 Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
