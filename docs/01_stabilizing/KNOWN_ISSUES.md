@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-120 (as of 2026-07-19)
+**Next available ID:** STAB-122 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-120 (2026-07-19, area: intentd agent subscriptions / SUB-1 delegation-group dedupe, severity: P1)
+
+Coordinator received duplicate completion notifications when sending coordination messages to children already covered by an undelivered after_all delegation group.
+
+**Repro:** Coordinator delegates 2 tasks with `waitMode: after_all`, sends `agent.sendToTask` or `agent.sendMessage` follow-ups to each child (triggering SUB-1 auto-watch), both children complete. Observed: parent received an individual wake for child A, the aggregated "All 2 settled" wake, AND a duplicate individual wake for child B.
+
+**Root cause:** `agent_watch_completion_for_sender_op` (SUB-1) did not check whether the (caller, target) pair was already in an undelivered `after_all` delegation group before registering an ungrouped oneShot watch. This mirrors the existing `child_in_undelivered_group` suppression used for `reportToParent` wakes but was missing for sender auto-watch.
+
+**Expected:** When a coordinator sends coordination messages to children already covered by an `after_all` group, the parent receives exactly ONE aggregated wake (not individual wakes + aggregated).
+
+**Status:** fixed ([intent-hq/intentd#258](https://github.com/intent-hq/intentd/pull/258), 2026-07-19) — Added SUB-1 delegation-group conflict suppression check in `agent_ops.rs`; added Services-level regression test + WSS e2e test covering the real wire flow and client-visible transcript delivery
+
+---
 
 ### STAB-119 (2026-07-19, area: ios ConversationStore reconnect/resubscribe, severity: P2)
 
@@ -219,6 +233,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-121 (2026-07-19, area: intentd CI / coverage-all test, severity: P2)
+
+The `burst_above_threshold_collapses_to_directory_summaries` test in the coverage-all suite fails intermittently with event count mismatches.
+
+**Repro:** In `packages/intentd`, run `cargo test --workspace` or `make test`, or observe the coverage-all CI job on main. The test `burst_above_threshold_collapses_to_directory_summaries` fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
+
+**Root cause:** Unknown. The test validates event batching/collapsing logic under high-volume file-change scenarios. Intermittent failures suggest a race condition or non-deterministic event emission pattern that occasionally produces more events than the collapse threshold.
+
+**Expected:** The test passes reliably on all runs, or the event count assertions are made more lenient to account for legitimate variance in event emission patterns.
+
+**Status:** open
+
+---
 
 ### STAB-109 (2026-07-19, area: intentd/cloudlands-fe (agent error surfacing), severity: P1)
 
