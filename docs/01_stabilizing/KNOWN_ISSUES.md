@@ -33,17 +33,88 @@ ConversationStoreIntegrationTests/connectionLossClearsLiveThenReconnectResubscri
 
 ---
 
-### STAB-118 (2026-07-19, area: intentd agent events / SUB-1 sender auto-watch vs delegation groups, severity: P2)
+### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
 
-Coordinator received duplicate completion notifications when sending coordination messages (sendToTask) to children already covered by an undelivered after_all delegation group.
+Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
 
-**Repro:** Coordinator delegated 2 tasks with `waitMode: 'after_all'`, sent sendToTask follow-ups to each child, then both children completed. Observed: parent received an individual wake for child A, the aggregated "All 2 settled" wake, AND a duplicate individual wake for child B. Expected: parent receives exactly ONE aggregated wake with both reports.
+**Repro:** Open an agent conversation while the backend is slow to respond to the transcript fetch (e.g., during high load, slow disk I/O, or initial cold-start transcript hydration). Observed: the chat panel immediately rendered the specialist welcome page ("I'm ready to help..." / empty state) for a brief moment until the transcript loaded, then replaced it with the actual conversation history.
 
-**Root cause:** `agent_watch_completion_for_sender_op` (SUB-1, the sender auto-watch path) created an ungrouped oneShot watch whenever a coordination message was sent, without checking if the (caller, target) pair was already enrolled in an undelivered after_all delegation group. The grouped watch and the new ungrouped watch competed, causing duplicate wakes. This mirrored STAB-5 (where `reportToParent` created duplicate wakes until the `child_in_undelivered_group` suppression was added), but affected the sendToTask/coordination-message path instead.
+**Root cause:** `ChatPanel.svelte` gated the welcome state only on `session exists && messages.length === 0`, but transcript hydration ran asynchronously. During the hydration window, the session existed (agent record loaded) but messages were still empty (transcript fetch in flight), so the component incorrectly rendered the welcome page. The welcome page is semantically meant only for never-used sessions (`backendSessionId === null`), not for existing conversations whose transcript is still loading.
 
-**Expected:** sendToTask messages to grouped children do not create competing ungrouped watches. Only the delegation group's aggregated wake fires.
+**Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
 
-**Status:** fixed ([intent-hq/intentd#258](https://github.com/intent-hq/intentd/pull/258), 2026-07-19) — SUB-1 now checks `child_in_undelivered_group` before registering an ungrouped watch, mirroring the existing reportToParent suppression. Added unit tests for the helper.
+**Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
+
+---
+
+### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
+
+Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
+
+**Repro:** Observed: picker showed "Claude Fable 5" but the agent replied as Claude Sonnet 4.5. Delegated agents (implementor/verifier) created without an explicit model ignored the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides) and fell through to the CLI's own default.
+
+**Root cause:** Three compounding bugs: (A) `agent.setModel` only persisted `session.model`. The model is applied only at spawn time (`ensure_started` → `resolve_spawn` → `--model`). When the agent's child process is alive, `ensure_started` short-circuits and returns the existing `acpSessionId`, so the running provider keeps its spawn-time model indefinitely. (B) For agents created without an explicit model (e.g., delegated verifier/implementor agents), `session.model` is null and intentd spawns the CLI without `--model` (CLI's own default applies). The FE footer picker falls back to `hydratedInputModel ?? agentModel` where `agentModel` defaults to the FE constant `DEFAULT_AGENT_MODEL`, displaying a model the agent is not actually using. (C) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` are defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignore the settings-configured default entirely and fall through to the CLI's own default.
+
+**Expected:** Changing the model on an agent with a live provider process takes effect on that agent's next turn. Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). The footer picker never displays a concrete model name for a session whose model is null; it shows the default-model option instead.
+
+**Status:** fixed ([intent-hq/intentd#257](https://github.com/intent-hq/intentd/pull/257) + [intent-hq/cloudlands-fe#160](https://github.com/intent-hq/cloudlands-fe/pull/160), 2026-07-19) — intentd: respawn-on-setModel + creation-time settings-default resolution, 4 unit tests + WSS e2e test; cloudlands-fe: call-site fallbacks removed, AgentSession.model nullable end-to-end (type + Zod schema + stream-lifecycle wire coercion), all 7 review threads resolved.
+
+---
+
+### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
+
+iOS app crashed when parsing `agent.getSubscriptions` responses due to hard-coded `Subscription` decoder expecting fields the backend no longer returns.
+
+**Repro:** Open iOS app, select a workspace with live subscriptions. Observed: app crashed with "No value associated with key CodingKeys(stringValue: \"lastProcessedAt\", intValue: nil)" when trying to display the agent footer.
+
+**Root cause:** `Subscription.swift` defined `lastProcessedAt` and `errorState` as non-optional, but the backend never populated them (`intentd` subscription table only tracks `lastEventId`). `StreamingSubscription` likewise assumed `nextCursor` was always present. The iOS decoder crashed when these keys were absent in the JSON.
+
+**Expected:** iOS app successfully parses `agent.getSubscriptions` responses and displays subscription state in the footer (or gracefully degrades if optional metadata is missing).
+
+**Status:** fixed ([intent-hq/ios#24](https://github.com/intent-hq/ios/pull/24), 2026-07-19) — Made `Subscription.lastProcessedAt`, `errorState`, and `StreamingSubscription.nextCursor` optional. Added fallback display for missing values (shows "Never" for nil `lastProcessedAt`). Added unit tests for both present/absent decoder paths.
+
+---
+
+### STAB-115 (2026-07-19, area: intentd agent runtime actorIds, severity: P2)
+
+Agent creation failed with `missingActorIds` error for agent-created notes, blocking multi-agent coordination and delegation flows. Affected notes: task notes, linked notes, agent-authored spec updates.
+
+**Repro:** (A) Coordinator delegates a task → child agent creates a task note → intentd rejects the note insertion with "missingActorIds for note X". (B) Agent calls `create_agent` with `createLinkedNote: true` → daemon rejects the linked note with "missingActorIds".
+
+**Root cause:** `note_insert_op` computed `actorIds` from the note's `primitiveFragments` (code refs, patches, agent actions). Agent-created notes (task notes, linked notes) had no such fragments at creation time, so `actorIds` was empty. The `notes` table migration (0024) added `actorIds TEXT NOT NULL DEFAULT '{}'`, but the CHECK constraint rejected empty JSON arrays, breaking zero-fragment note creation.
+
+**Expected:** Notes with no primitives (yet) insert successfully with `actorIds = []`. The CHECK constraint accepts empty arrays. Primitives added later update `actorIds` via the existing `note_primitive_add_op` path.
+
+**Status:** fixed ([intent-hq/intentd#256](https://github.com/intent-hq/intentd/pull/256), 2026-07-19) — Migration 0024 amended to allow empty `actorIds` arrays (`CHECK(json_array_length(actorIds) >= 0)`). Retested both zero-fragment and multi-fragment note creation paths; all green.
+
+---
+
+### STAB-114 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
+
+SQLite pool contention under heavy concurrent write load caused reads to block for multiple seconds and occasional `database is locked` errors.
+
+**Repro:** Run ~30 concurrent agents or other write-heavy operations (note edits, event-producing calls). Observed: lightweight read RPCs like `workspace.list` or `system.status` issued mid-load took multiple seconds to respond (pool acquire timeouts), and occasional `database is locked` errors surfaced to clients. The single shared pool blocked readers behind long-running write transactions.
+
+**Root cause:** The daemon used a single SQLite connection pool shared by all read and write operations. Heavy concurrent write load (e.g., 30 agents editing notes simultaneously, batched event-log writes from the event bus) exhausted the pool, starving lightweight read operations. SQLite's single-writer MVCC model meant write transactions held exclusive locks, blocking readers. The event bus's synchronous write-per-event pattern amplified contention.
+
+**Expected:** Concurrent writes do not starve reads. A lightweight read RPC (`workspace.list`) issued mid-heavy-write-load responds within a small bound (< 2s). No `database is locked` errors surface to clients.
+
+**Status:** fixed ([intent-hq/intentd#259](https://github.com/intent-hq/intentd/pull/259), 2026-07-19) — Pool split into single-writer pool (size 1) and read pool (size 16), routing all mutations to the write pool and all reads to the read pool. Added periodic WAL checkpointing (every 60s) to prevent unbounded WAL growth. Batched event-log writes behind a dedicated writer task in the event bus (flushes every 20ms or 64 events). Made `agent:stream:chunk` events transient (broadcast-only, never persisted) to reduce write pressure. Stress e2e test `concurrent_writes_do_not_starve_reads` asserts 30 concurrent note writes + mid-load read < 2s.
+
+---
+
+### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
+
+Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
+
+**Repro:** Open an agent conversation while the backend is slow to respond to the transcript fetch (e.g., during high load, slow disk I/O, or initial cold-start transcript hydration). Observed: the chat panel immediately rendered the specialist welcome page ("I'm ready to help..." / empty state) for a brief moment until the transcript loaded, then replaced it with the actual conversation history.
+
+**Root cause:** `ChatPanel.svelte` gated the welcome state only on `session exists && messages.length === 0`, but transcript hydration ran asynchronously. During the hydration window, the session existed (agent record loaded) but messages were still empty (transcript fetch in flight), so the component incorrectly rendered the welcome page. The welcome page is semantically meant only for never-used sessions (`backendSessionId === null`), not for existing conversations whose transcript is still loading.
+
+**Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
+
+**Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
+>>>>>>> origin/main
 
 ---
 
