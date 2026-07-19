@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-114 (as of 2026-07-19)
+**Next available ID:** STAB-116 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-115 (2026-07-19, area: cloudlands-fe terminal footer / scripts hydration, severity: P2)
+
+Switching workspaces briefly flashed "Detect Scripts" in the terminal footer before the detected script count appeared, creating a jarring UX and implying no scripts were detected when they were.
+
+**Repro:** With script detection enabled, switch to a different workspace that has detected scripts (e.g., via the workspace switcher or by opening a new workspace from the Home screen). Observed: the terminal footer button briefly flashed "Detect Scripts" text for 100-500ms before updating to show "Scripts (N)" with the detected count, even though the workspace had N>0 scripts already detected and persisted.
+
+**Root cause:** The "Detect Scripts" button visibility was gated only on `scriptEntries.length === 0` (checking whether any scripts exist in the store), without checking whether the scripts slice had finished hydrating for the newly-selected workspace. On workspace switch, the scripts slice starts with `initialized: false` and an empty `scriptEntries` array until the `workspaceMounted` fan-out's `scripts.list` RPC resolves. During this initialization window, the button showed "Detect Scripts" (the empty-state CTA) instead of waiting for hydration to complete.
+
+**Expected:** The "Detect Scripts" button should only appear when the scripts slice is initialized AND the workspace has zero detected scripts. During initial hydration (scripts not yet loaded), the button should not render at all or should show a loading skeleton.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#162](https://github.com/intent-hq/cloudlands-fe/pull/162), 2026-07-19) — Gated button visibility on `initialized && scriptEntries.length === 0` in `TerminalFooter.svelte`, ensuring the button only appears after scripts have been loaded and confirmed empty. Scripts slice already tracked `initialized` state from the seeder.
+
+---
 
 ### STAB-113 (2026-07-19, area: intentd/cloudlands-fe (queued message failure indicator), severity: P2)
 
