@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-108 (as of 2026-07-18)
+**Next available ID:** STAB-111 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -14,6 +14,22 @@ Each issue entry includes:
 - **Severity** — P0 (crash/data-loss), P1 (broken feature), P2 (papercut)
 - **Repro** — minimal steps to reproduce
 - **Status** — `open` or `open (optional note)` | `fixed (PR link, date)`
+
+---
+
+## Fixed Issues
+
+### STAB-108 (2026-07-19, area: intentd agent manager / session resume, severity: P1)
+
+Agent becomes wedged in `error` status with an undrainable queue after a mid-turn provider failure, because persisted history contains dangling `tool_use` blocks (tool_use without corresponding tool_result), triggering provider rejection (`400 invalidArgument`) on every session resume attempt.
+
+**Repro:** Trigger a mid-turn provider failure (e.g., timeout, 400 error) after a `tool_use` block is persisted but before the corresponding `tool_result` arrives. The agent flips to `error` status and requeues the user message. Every subsequent `agent.retry` or queue drain attempt resumes the ACP session with the malformed history and gets the same 400 rejection. The queue (multiple entries) can never drain; no recovery path exists.
+
+**Root cause:** `history_xml::sanitize_messages_for_history` was keeping all `tool_use` blocks unconditionally during history sanitization, even those lacking matching `tool_result` blocks. On session resume, the malformed history (dangling tool_use) was rendered into the `<supervisor>` XML block and sent to the provider, which rejected it per protocol schema (tool_use blocks without results violate ACP contract).
+
+**Expected:** After a mid-turn terminal provider failure, `agent.retry`/queue drain succeeds against the previously-failing transcript shape. History sanitization drops dangling `tool_use` blocks before rendering the `<supervisor>` block.
+
+**Status:** fixed ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250), 2026-07-19) — Modified `history_xml::sanitize_messages_for_history` to perform two-pass sanitization: first pass collects all tool_use IDs and valid tool_result IDs, second pass drops tool_use blocks lacking a matching valid tool_result. Regression test `sanitizes_dangling_tool_use_blocks` added. All 19 history_xml tests pass.
 
 ---
 
