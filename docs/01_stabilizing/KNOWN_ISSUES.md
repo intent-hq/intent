@@ -43,7 +43,7 @@ WSS toggle ON but listener not running after daemon restart: when `server.wsApi.
 
 **Expected:** After app relaunch with WSS previously enabled: Settings shows toggle ON, "Show QR Code" renders a QR (no "not running" toast), and a client can connect to `wss://<host>:<port>/ws`.
 
-**Status:** fixed ([intent-hq/intentd#251](https://github.com/intent-hq/intentd/pull/251), 2026-07-19) — Boot-time auto-start of the WSS listener when persisted `server.wsApi.enabled=true` under `--listen uds`, plus `Store::close()` WAL checkpoint so the setting survives restart
+**Status:** fixed ([intent-hq/intentd#251](https://github.com/intent-hq/intentd/pull/251), 2026-07-19) — Boot-time auto-start of the WSS listener when persisted `server.wsApi.enabled=true` under `--listen uds`, plus `Store::close()` WAL checkpoint so the setting survives restart.
 
 ---
 
