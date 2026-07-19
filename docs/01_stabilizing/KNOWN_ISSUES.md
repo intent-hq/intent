@@ -19,6 +19,20 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-114 (2026-07-19, area: cloudlands-fe / NewSpaceModal repo defaulting, severity: P2)
+
+After previously using a repo, opening the New Workspace modal (Cmd+N or sidebar +) showed 'Select a repository' instead of the most recent repo.
+
+**Repro:** Open the New Workspace modal (Cmd+N or sidebar +) after previously using a repo. Observed: the repository selector shows 'Select a repository' instead of the most recent repo, forcing the user to manually re-select their working repo every time.
+
+**Root cause:** NewSpaceModal never called `applyPrefill()` so stale workspace-prefill sessionStorage blocked last-repo hydration forever, and there was no fallback to recent repos when `lastSelectedRepo` was unset.
+
+**Expected:** The repository selector defaults to the most recently used repo when opening the New Workspace modal.
+
+**Status:** fixed (https://github.com/intent-hq/cloudlands-fe/pull/161, 2026-07-19)
+
+---
+
 ### STAB-115 (2026-07-19, area: cloudlands-fe terminal footer / scripts hydration, severity: P2)
 
 Switching workspaces briefly flashed "Detect Scripts" in the terminal footer before the detected script count appeared, creating a jarring UX and implying no scripts were detected when they were.
