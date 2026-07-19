@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-118 (as of 2026-07-19)
+**Next available ID:** STAB-119 (as of 2026-07-19)
 
 ## Intake Convention
 
