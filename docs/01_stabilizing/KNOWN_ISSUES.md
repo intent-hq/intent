@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-111 (as of 2026-07-19)
+**Next available ID:** STAB-112 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -19,7 +19,9 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-108 (2026-07-19, area: intentd agent manager / session resume, severity: P1)
+### STAB-111 (2026-07-19, area: intentd agent manager / session resume, severity: P1)
+
+(Referenced as STAB-108 in the intent-hq/intentd#250 PR title; renumbered due to ID collision.)
 
 Agent becomes wedged in `error` status with an undrainable queue after a mid-turn provider failure, because persisted history contains dangling `tool_use` blocks (tool_use without corresponding tool_result), triggering provider rejection (`400 invalidArgument`) on every session resume attempt.
 
