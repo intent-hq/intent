@@ -29,7 +29,7 @@ Delegation groups are lost or stale across daemon restart: a coordinator waiting
 
 **Expected:** A daemon restart mid-delegation can no longer strand a delegation group: after restart, groups are back in memory without requiring the resume path. A child that completed while its group was not in memory is reconciled on rehydration and the parent receives exactly one aggregated wake.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/248, 2026-07-19)
 
 ### STAB-104 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
 
