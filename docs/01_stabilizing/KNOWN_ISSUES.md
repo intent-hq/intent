@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-119 (as of 2026-07-19)
+**Next available ID:** STAB-121 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -134,6 +134,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-120 (2026-07-19, area: intentd CI / coverage-all test, severity: P2)
+
+The `burst_above_threshold_collapses_to_directory_summaries` test in the coverage-all suite fails intermittently with event count mismatches.
+
+**Repro:** Run `cargo test --workspace` or `make test` on main. The test `burst_above_threshold_collapses_to_directory_summaries` fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
+
+**Root cause:** Unknown. The test validates event batching/collapsing logic under high-volume file-change scenarios. Intermittent failures suggest a race condition or non-deterministic event emission pattern that occasionally produces more events than the collapse threshold.
+
+**Expected:** The test passes reliably on all runs, or the event count assertions are made more lenient to account for legitimate variance in event emission patterns.
+
+**Status:** open
+
+---
 
 ### STAB-109 (2026-07-19, area: intentd/cloudlands-fe (agent error surfacing), severity: P1)
 
