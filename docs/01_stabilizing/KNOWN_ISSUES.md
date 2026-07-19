@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-117 (as of 2026-07-19)
+**Next available ID:** STAB-118 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-117 (2026-07-19, area: intentd agent events / SUB-1 sender auto-watch vs delegation groups, severity: P2)
+
+Coordinator received duplicate completion notifications when sending coordination messages (sendToTask) to children already covered by an undelivered after_all delegation group.
+
+**Repro:** Coordinator delegated 2 tasks with `waitMode: 'after_all'`, sent sendToTask follow-ups to each child, then both children completed. Observed: parent received an individual wake for child A, the aggregated "All 2 settled" wake, AND a duplicate individual wake for child B. Expected: parent receives exactly ONE aggregated wake with both reports.
+
+**Root cause:** `agent_watch_completion_for_sender_op` (SUB-1, the sender auto-watch path) created an ungrouped oneShot watch whenever a coordination message was sent, without checking if the (caller, target) pair was already enrolled in an undelivered after_all delegation group. The grouped watch and the new ungrouped watch competed, causing duplicate wakes. This mirrored STAB-5 (where `reportToParent` created duplicate wakes until the `child_in_undelivered_group` suppression was added), but affected the sendToTask/coordination-message path instead.
+
+**Expected:** sendToTask messages to grouped children do not create competing ungrouped watches. Only the delegation group's aggregated wake fires.
+
+**Status:** fixed ([intent-hq/intentd#258](https://github.com/intent-hq/intentd/pull/258), 2026-07-19) — SUB-1 now checks `child_in_undelivered_group` before registering an ungrouped watch, mirroring the existing reportToParent suppression. Added unit tests for the helper.
+
+---
 
 ### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
 
