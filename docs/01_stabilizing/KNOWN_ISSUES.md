@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-112 (as of 2026-07-19)
+**Next available ID:** STAB-113 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-112 (2026-07-19, area: intentd/cloudlands-fe (queued message failure indicator), severity: P2)
+
+After a terminal failure causes a queued message to be requeued, the UI showed no visual distinction between the retry attempt and the original entry — users could not tell which messages had failed and were being retried.
+
+**Repro:** Start an agent with queued messages. Trigger a terminal failure (e.g., provider timeout, crash, idle timeout) that causes the agent to enter `error` status and requeue the in-flight message. Observed: the requeued message appeared in the queue list indistinguishable from the original — no visual indicator that it had failed and was being retried.
+
+**Root cause:** The backend marked requeued-after-failure messages with the `persisted` flag (to include `requeuedAfterFailure: true` in the wire format), but the frontend did not render any visual indicator for this state.
+
+**Expected:** Requeued messages display a retry indicator (rotate-right icon + "Failed — will retry" tooltip and screen-reader text) so users can see which messages failed and are being retried.
+
+**Status:** fixed ([intent-hq/intentd#252](https://github.com/intent-hq/intentd/pull/252) + [intent-hq/cloudlands-fe#157](https://github.com/intent-hq/cloudlands-fe/pull/157), 2026-07-19) — backend: `QueuedMessage::to_value` emits `requeuedAfterFailure: true` when `persisted == true`; frontend: `QueuedMessageList.svelte` displays retry indicator with accessible screen-reader text (`sr-only` class) and `aria-hidden` decorative icon; regression test `test_queue_operations::terminal_failure_requeues_with_persisted_flag` verifies wire shape.
+
+---
 
 ### STAB-111 (2026-07-19, area: intentd agent manager / session resume, severity: P1)
 
