@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-116 (as of 2026-07-19)
+**Next available ID:** STAB-117 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
+
+iOS agent footer was missing for ungrouped completion watches (immediate-mode/oneShot subscriptions) — navigating to an agent conversation that had active subscriptions showed the agent footer in cloudlands-fe but not in the iOS app.
+
+**Repro:** Navigate to an agent conversation in the iOS app where the agent ended its turn with an immediate-mode subscription (e.g., after delegating a task with `waitMode: "immediate"`). Observed: the iOS conversation view showed no agent footer (no "Waiting for..." indicator, no watched agent list), but the same conversation in cloudlands-fe displayed the footer with the watched agent. Some workspaces showed the footer on iOS (when delegation groups were present), but conversations with only ungrouped subscriptions never did.
+
+**Root cause:** ConversationStore.swift `fetchSubscriptions` (lines 1032-1035) only read `sub["filter"]["actorIds"]`, which intentd no longer sends. The protocol's actual wire shape (per `packages/intentd/crates/intent-services/src/agent_ops.rs:2715`) sends `actorIds` at the top level of each subscription object. iOS never extracted watched agent IDs from immediate-mode subscriptions, so `watchedAgentIds` stayed empty and `isWaitingForAgents` stayed false.
+
+**Expected:** iOS derives watched agent IDs from top-level `actorIds` (union with `delegationGroups[].expectedAgentIds`), so the footer appears for immediate-mode/oneShot watches just as it does in cloudlands-fe.
+
+**Status:** fixed ([intent-hq/ios#24](https://github.com/intent-hq/ios/pull/24), 2026-07-19) — ConversationStore.swift now reads top-level `actorIds` first, with a fallback to `filter.actorIds` for backward compatibility. Added 3 regression tests: `parsesTopLevelActorIdsFromSubscriptions`, `fallsBackToFilterActorIdsForLegacyFormat`, `combinesActorIdsFromSubscriptionsAndDelegationGroups`.
+
+---
 
 ### STAB-115 (2026-07-19, area: cloudlands-fe terminal footer / scripts hydration, severity: P2)
 
