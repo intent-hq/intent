@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-109 (as of 2026-07-18)
+**Next available ID:** STAB-110 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,19 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-109 (2026-07-19, area: intentd/cloudlands-fe (agent error surfacing), severity: P1)
+
+Agent failure text was held only in FE memory — after a daemon restart or FE reload, error sessions showed the generic "Agent spawn failed" fallback (follow-up to STAB-103).
+
+**Repro:** Start an agent that fails spawn or mid-turn (e.g., a session/prompt idle-timeout, a provider crash, quota exceeded). Observe the chat error card displays the specific error text from `agent:failed` / `agent:idle` `stopReason` (e.g., "Session idle timeout after 60s"). Reload the FE (`Cmd-R`) or restart the daemon. Observed: the error card reverted to "Agent spawn failed" — the daemon did not persist the error text, and the FE did not hydrate it from `agent.list` / `agent.get`.
+
+**Root cause:** The daemon stored agent status (`active`, `idle`, `error`, etc.) but did not persist the `stop_reason` (finish reason / error text) to the database. The `agent.list` / `agent.get` RPCs omitted `stopReason` from the AgentLite projection. The FE preserved `stopReason` from live events (`agent:failed`, `agent:idle`, `agent:status-changed`) but did not guard the hydration path (`bulkUpsertSessions` / `applySessionUpsert`) against older snapshots lacking the field — an FE reload would clobber the live-event `stopReason` with `undefined` from the snapshot.
+
+**Expected:** The daemon persists `stop_reason` to the `agent_session` table, serves it on `agent.list` / `agent.get`, and emits it on set/clear `agent:status-changed` events. The FE hydrates `stopReason` from snapshots and preserves a fresher live-event value when an older snapshot omits the field. After a daemon restart or FE reload, error sessions retain the specific error text in the chat error card.
+
+**Status:** fixed ([intent-hq/intentd#249](https://github.com/intent-hq/intentd/pull/249) + [intent-hq/cloudlands-fe#152](https://github.com/intent-hq/cloudlands-fe/pull/152), 2026-07-19) — daemon: migration 0045 adds `stop_reason TEXT` column to `agent_session`; `set_stop_reason` / `clear_stop_reason` in `agent_repo.rs` persist it; `agent.list` / `agent.get` serve it on AgentLite; `agent:status-changed` carries it as string when setting / JSON null when clearing / omitted when untouched; FE: `applySessionUpsert` guard preserves existing `stopReason` when incoming snapshot omits the key (mirrors Phase 1's `canonicalSessionUpdates` guard); 7 regression tests (4 slice-level, 3 live-client)
+
 
 ### STAB-108 (2026-07-18, area: intentd agent runtime / delegation group rehydration, severity: P1)
 
