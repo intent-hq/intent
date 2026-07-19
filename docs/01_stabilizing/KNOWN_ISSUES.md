@@ -19,6 +19,20 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-114 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
+
+SQLite pool contention under heavy concurrent write load caused reads to block for multiple seconds and occasional `database is locked` errors.
+
+**Repro:** Run ~30 concurrent agents or other write-heavy operations (note edits, event-producing calls). Observed: lightweight read RPCs like `workspace.list` or `system.status` issued mid-load took multiple seconds to respond (pool acquire timeouts), and occasional `database is locked` errors surfaced to clients. The single shared pool blocked readers behind long-running write transactions.
+
+**Root cause:** The daemon used a single SQLite connection pool shared by all read and write operations. Heavy concurrent write load (e.g., 30 agents editing notes simultaneously, batched event-log writes from the event bus) exhausted the pool, starving lightweight read operations. SQLite's single-writer MVCC model meant write transactions held exclusive locks, blocking readers. The event bus's synchronous write-per-event pattern amplified contention.
+
+**Expected:** Concurrent writes do not starve reads. A lightweight read RPC (`workspace.list`) issued mid-heavy-write-load responds within a small bound (< 2s). No `database is locked` errors surface to clients.
+
+**Status:** fixed ([intent-hq/intentd#259](https://github.com/intent-hq/intentd/pull/259), 2026-07-19) — Pool split into single-writer pool (size 1) and read pool (size 16), routing all mutations to the write pool and all reads to the read pool. Added periodic WAL checkpointing (every 60s) to prevent unbounded WAL growth. Batched event-log writes behind a dedicated writer task in the event bus (flushes every 20ms or 64 events). Made `agent:stream:chunk` events transient (broadcast-only, never persisted) to reduce write pressure. Stress e2e test `concurrent_writes_do_not_starve_reads` asserts 30 concurrent note writes + mid-load read < 2s.
+
+---
+
 ### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
 
 Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
