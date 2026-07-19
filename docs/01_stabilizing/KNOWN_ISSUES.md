@@ -65,7 +65,7 @@ Home-screen workspace delete did not remove spaces from the visible list, requir
 
 **Expected:** After clicking Delete on the Home screen OR receiving an external `workspace:deleted` event, the space must disappear from the list immediately and permanently. Zero occurrences of `resolveWorkspaceRoot` / `note.list spec reseed failed` log lines for deleted workspaces.
 
-**Status:** open
+**Status:** fixed ([intent-hq/cloudlands-fe#133](https://github.com/intent-hq/cloudlands-fe/pull/133), 2026-07-17) — workspace-slice.ts now handles the `workspaceDeleted` action: removes the workspace from the collection, clears `activeWorkspaceId` if it matched, and purges `pendingDeletions` / `pendingArchives` / `pendingCreations` / `recency.lastViewedAt` entries for the deleted id. Downstream: user-activity IPC and note subscriptions stop firing for the ghost workspace, eliminating `resolveWorkspaceRoot` and `note.list spec reseed failed` log spam.
 
 ### STAB-85 (2026-07-17, area: intentd CI / e2e tests, severity: P1)
 
