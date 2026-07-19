@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-122 (as of 2026-07-19)
+**Next available ID:** STAB-124 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -233,6 +233,28 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-122 (2026-07-19, area: cloudlands-fe auto-update, severity: P1)
+
+Packaged 2.0.6 app cannot download or install updates: the Install button is a no-op, downloads stall at "Preparing download…", and clicking the "Update available" toast does nothing.
+
+**Repro:** Run the packaged 2.0.6 app with an update available on the feed. (1) Click the "Update available" toast — nothing happens (it dispatches the `downloadUpdate` trigger whose IPC channel was removed). (2) Open Settings → About and click Install — no-op. (3) Trigger a download — the UI remains stuck at "Preparing download…" indefinitely. At startup, the console logs "Auto-update is not available in this build" errors from `AutoUpdateMutationService` and `UserPreferencesBetaPersistenceService`.
+
+**Root cause:** Regression from [intent-hq/cloudlands-fe#108](https://github.com/intent-hq/cloudlands-fe/pull/108), which removed auto-update download/install IPC channels still used by the renderer.
+
+**Expected:** In packaged builds, the "Update available" toast and the Install button trigger download/install via functioning IPC channels; download progress advances past "Preparing download…"; no "Auto-update is not available in this build" errors at startup.
+
+**Status:** open
+
+### STAB-123 (2026-07-19, area: cloudlands-fe storage, severity: P2)
+
+`[SafeStorage]` warning at every startup: the localStorage key `intent:all-spaces-view-mode` holds the bare string `repo` instead of JSON, so `JSON.parse` fails on every launch.
+
+**Repro:** Launch the app with `intent:all-spaces-view-mode` set to the bare string `repo` in localStorage (the value the app itself writes). Observed: a `[SafeStorage]` warn is logged on every launch because `JSON.parse("repo")` throws.
+
+**Expected:** The value is written and read consistently (JSON-encoded, or the reader tolerates the legacy bare-string value); no `[SafeStorage]` warning on launch.
+
+**Status:** open
 
 ### STAB-121 (2026-07-19, area: intentd CI / coverage-all test, severity: P2)
 
