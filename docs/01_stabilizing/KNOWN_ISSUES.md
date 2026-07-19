@@ -61,18 +61,6 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 **Status:** fixed ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250), 2026-07-19) — Modified `history_xml::sanitize_messages_for_history` to perform two-pass sanitization: first pass collects all tool_use IDs and valid tool_result IDs, second pass drops tool_use blocks lacking a matching valid tool_result. Regression test `sanitizes_dangling_tool_use_blocks` added. All 19 history_xml tests pass.
 
-### STAB-112 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
-
-WSS toggle ON but listener not running after daemon restart: when `server.wsApi.enabled` is persisted as `true`, the WSS listener does not actually start after a daemon restart, leaving the Settings toggle showing ON but "Show QR Code" displaying "WebSocket API server is not running" until the user toggles OFF→ON.
-
-**Repro:** Enable WSS in the packaged app (Settings → WebSocket API → toggle ON), relaunch the app, click "Show QR Code". Observed: the toggle shows ON (setting reads `true`), but the toast says "WebSocket API server is not running" and no QR code is displayed. Existing mobile clients cannot connect until the user toggles the setting OFF and back ON.
-
-**Root cause:** The packaged/sidecar app spawned the daemon with `intentd serve --listen uds` (`packages/cloudlands-fe/src/features/backend/main/intentd-sidecar.ts:360`). Before the fix, in `packages/intentd/crates/intentd/src/main.rs` (`cmd_serve`, ~lines 545–553), the WSS listener auto-started at boot ONLY for `--listen tcp/both`. Persisted `server.wsApi.enabled` was explicitly NOT honored at boot: "With --listen uds: listener does NOT auto-start at boot (regardless of persisted server.wsApi.enabled)". Result after any app relaunch: the setting read `true` (toggle showed ON), but no listener was bound. `server.pairingInfo` returned `port: null`, so the FE's `handleShowQr` (`WebSocketApiSettings.svelte:186-190`) showed "WebSocket API server is not running", and clients could not connect until the user toggled OFF→ON.
-
-**Expected:** After app relaunch with WSS previously enabled: Settings shows toggle ON, "Show QR Code" renders a QR (no "not running" toast), and a client can connect to `wss://<host>:<port>/ws`.
-
-**Status:** fixed ([intent-hq/intentd#251](https://github.com/intent-hq/intentd/pull/251), 2026-07-19) — Boot-time auto-start of the WSS listener when persisted `server.wsApi.enabled=true` under `--listen uds`, plus `Store::close()` WAL checkpoint so the setting survives restart.
-
 ---
 
 ## Open Issues
