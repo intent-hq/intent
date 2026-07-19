@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-110 (as of 2026-07-19)
+**Next available ID:** STAB-111 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Open Issues
+
+### STAB-110 (2026-07-19, area: intentd serve / WSS listener lifecycle, severity: P1)
+
+WSS toggle ON but listener not running after daemon restart: when `server.wsApi.enabled` is persisted as `true`, the WSS listener does not actually start after a daemon restart, leaving the Settings toggle showing ON but "Show QR Code" displaying "WebSocket API server is not running" until the user toggles OFF→ON.
+
+**Repro:** Enable WSS in the packaged app (Settings → WebSocket API → toggle ON), relaunch the app, click "Show QR Code". Observed: the toggle shows ON (setting reads `true`), but the toast says "WebSocket API server is not running" and no QR code is displayed. Existing mobile clients cannot connect until the user toggles the setting OFF and back ON.
+
+**Root cause:** The packaged/sidecar app spawns the daemon with `intentd serve --listen uds` (`packages/cloudlands-fe/src/features/backend/main/intentd-sidecar.ts:360`). In `packages/intentd/crates/intentd/src/main.rs` (`cmd_serve`, ~lines 545–553), the WSS listener auto-starts at boot ONLY for `--listen tcp/both`. Persisted `server.wsApi.enabled` is explicitly NOT honored at boot: "With --listen uds: listener does NOT auto-start at boot (regardless of persisted server.wsApi.enabled)". Result after any app relaunch: the setting reads `true` (toggle shows ON), but no listener is bound. `server.pairingInfo` returns `port: null`, so the FE's `handleShowQr` (`WebSocketApiSettings.svelte:186-190`) shows "WebSocket API server is not running", and clients cannot connect until the user toggles OFF→ON.
+
+**Expected:** After app relaunch with WSS previously enabled: Settings shows toggle ON, "Show QR Code" renders a QR (no "not running" toast), and a client can connect to `wss://<host>:<port>/ws`.
+
+**Status:** open
 
 ### STAB-109 (2026-07-19, area: intentd/cloudlands-fe (agent error surfacing), severity: P1)
 
