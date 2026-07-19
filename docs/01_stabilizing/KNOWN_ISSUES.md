@@ -238,7 +238,7 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 The `burst_above_threshold_collapses_to_directory_summaries` test in the coverage-all suite fails intermittently with event count mismatches.
 
-**Repro:** Run `cargo test --workspace` or the coverage-all CI job on main. The test fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
+**Repro:** In `packages/intentd`, run `cargo test --workspace` or `make test`, or observe the coverage-all CI job on main. The test `burst_above_threshold_collapses_to_directory_summaries` fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
 
 **Root cause:** Unknown. The test validates event batching/collapsing logic under high-volume file-change scenarios. Intermittent failures suggest a race condition or non-deterministic event emission pattern that occasionally produces more events than the collapse threshold.
 
