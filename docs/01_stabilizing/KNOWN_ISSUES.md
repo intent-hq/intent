@@ -31,6 +31,7 @@ Agent failure text was held only in FE memory — after a daemon restart or FE r
 
 **Status:** fixed ([intent-hq/intentd#249](https://github.com/intent-hq/intentd/pull/249) + [intent-hq/cloudlands-fe#152](https://github.com/intent-hq/cloudlands-fe/pull/152), 2026-07-19) — daemon: migration 0045 adds `stop_reason TEXT` column to `agent_session`; `set_stop_reason` / `clear_stop_reason` in `agent_repo.rs` persist it; `agent.list` / `agent.get` serve it on AgentLite; `agent:status-changed` carries it as string when setting / JSON null when clearing / omitted when untouched; FE: `applySessionUpsert` guard preserves existing `stopReason` when incoming snapshot omits the key (mirrors Phase 1's `canonicalSessionUpdates` guard); 7 regression tests (4 slice-level, 3 live-client)
 
+
 ### STAB-108 (2026-07-18, area: intentd agent runtime / delegation group rehydration, severity: P1)
 
 Delegation groups are lost or stale across daemon restart: a coordinator waiting on a delegation group with `after_all` wait mode can be stuck forever if the daemon restarts mid-delegation and a child completes before the group is rehydrated back into memory.
@@ -41,7 +42,7 @@ Delegation groups are lost or stale across daemon restart: a coordinator waiting
 
 **Expected:** A daemon restart mid-delegation can no longer strand a delegation group: after restart, groups are back in memory without requiring the resume path. A child that completed while its group was not in memory is reconciled on rehydration and the parent receives exactly one aggregated wake.
 
-**Status:** open
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/248, 2026-07-19)
 
 ### STAB-104 (2026-07-18, area: intentd specialists / task status lifecycle, severity: P1)
 
