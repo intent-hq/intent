@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-119 (as of 2026-07-19)
+**Next available ID:** STAB-120 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-119 (2026-07-19, area: ios ConversationStore reconnect/resubscribe, severity: P2)
+
+ConversationStoreIntegrationTests/connectionLossClearsLiveThenReconnectResubscribes failed intermittently when run with the full test suite.
+
+**Repro:** Run the full iOS test suite. The test `connectionLossClearsLiveThenReconnectResubscribes` fails occasionally (passes in isolation, fails under load).
+
+**Root cause:** Test-side race condition. The test used a fixed 100ms sleep after `simulateConnect()`, which was insufficient when running under load. The connection state change triggers `onReconnected()` asynchronously via a Combine publisher on the main actor. Under full test suite load, the async operations (parallel fetches + sequential subscriptions) took longer than 100ms to complete. Additionally, the initial polling fix checked `didCallMethod("chat.subscribe")`, but `FakeConnectionManager` appends to `requestLog` at the START of `request(_:)`, which races with handler registration in the product code.
+
+**Expected:** Test waits for the subscription handler to be registered (post-completion signal) rather than relying on fixed sleep durations or request log entries.
+
+**Status:** fixed ([intent-hq/ios#25](https://github.com/intent-hq/ios/pull/25), 2026-07-19) — Added `Task.yield()` to allow Combine publisher callbacks to run, then poll on `hasSubscriptionHandler(id:)` which signals that the subscribe operation completed and the handler was registered. Test now passes 15/15 runs deterministically.
+
+---
 
 ### STAB-118 (2026-07-19, area: intentd agent events / SUB-1 sender auto-watch vs delegation groups, severity: P2)
 
