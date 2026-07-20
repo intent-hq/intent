@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-142 (as of 2026-07-20)
+**Next available ID:** STAB-144 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -19,6 +19,34 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-142 (2026-07-20, area: cloudlands-fe notifications, severity: P1)
+
+Desktop notifications were silently dead: when an agent completed, there was no OS banner, no notification sound, and clicking a banner (if one had appeared) would not navigate to the workspace.
+
+**Repro:** Enable notifications in settings, let an agent run to completion with the app focused or backgrounded. Observed: no OS banner, no sound, and no click navigation in either case.
+
+**Root cause:** Both saga handlers were deleted without re-homing the behavior — `2931d014` removed the main-process `agent:idle` trigger (the code that subscribed to daemon `agent:idle` events and produced the OS banner) along with the saga runtime, and `95d908a2` removed the renderer `ui-notifications-saga` (the `notification:show` → sound and `notification:navigate` → workspace-navigation handlers). Same lost-saga-handler pattern as STAB-75/76/83.
+
+**Expected:** On agent completion, an OS banner is shown (gated by `soundOnlyWhenUnfocused`: ON suppresses the banner while a workspace window is focused, OFF shows it even while focused), the notification sound plays per the renderer sound gate, and clicking the banner navigates to the workspace.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#195](https://github.com/intent-hq/cloudlands-fe/pull/195), 2026-07-20) — main process: `NotificationService` owns a long-lived `events.subscribe` for `agent:idle` (re-issued on reconnect, prefs read fresh per event, `agent.list` enrichment/suppression); renderer: new `notification-ipc-service` middleware re-homes the sound and click-navigation handlers.
+
+---
+
+### STAB-141 (2026-07-20, area: cloudlands-fe Settings / provider-settings persistence, severity: P1)
+
+The additional-agent enable toggle (e.g. OpenCode) in Settings was not persisted: it flipped back to its previous state after a reload.
+
+**Repro:** Open Settings → Agents and enable OpenCode (or disable an enabled additional provider), then reload the app (cmd+R). Observed: the toggle reverts to its pre-toggle state.
+
+**Root cause:** The provider-settings-persistence middleware only observed `setActiveProvider`; nothing wrote `providers.enabled` to the daemon, so the local toggle change was reverted by settings hydration on the next boot.
+
+**Expected:** Toggling an additional provider's enabled state persists `providers.enabled` to the daemon and survives reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#186](https://github.com/intent-hq/cloudlands-fe/pull/186), 2026-07-20) — provider-settings-persistence middleware now also observes the enabled-providers toggle and persists `providers.enabled` to the daemon.
+
+---
+
 ### STAB-140 (2026-07-20, area: intentd agent transcript persistence, severity: P1)
 
 Image/file attachments on user messages were not persisted to transcript rows, so the new-workspace initial message (and any reloaded conversation) showed no image in the conversation view even though the agent received it.
@@ -30,6 +58,18 @@ Image/file attachments on user messages were not persisted to transcript rows, s
 **Expected:** User transcript rows persist image/file content blocks alongside the text block, so reloaded conversations (including the new-workspace initial message) render attachments.
 
 **Status:** fixed ([intent-hq/intentd#276](https://github.com/intent-hq/intentd/pull/276), 2026-07-20) — a shared `user_message_blocks` helper now builds the persisted block array (one `text` block followed by `image` blocks and `file` blocks, malformed entries skipped) and all user-row persist paths use it (send/force/interrupt, queue drain via the blocks captured on the `QueuedMessage`, and the store-only fallbacks); requeue paths marked `persisted: true` still skip `persist_user`, so retries never duplicate attachment blocks. Covered by unit tests plus WSS e2e regressions for `agent.sendMessage` and the `workspace.create` initial-agent path. Note: PR #276 references this issue as "STAB-133" — that ID was reserved from a stale tracker copy and already belongs to the intent-store pool-contention entry, so it is filed here as STAB-140.
+
+---
+
+### STAB-139 (2026-07-20, area: ios chat streaming, severity: P1)
+
+iOS chat streaming was broken: sending a message showed the thinking indicator but no chunks ever streamed in, and re-entering a chat mid-turn showed only the user message with no thinking indicator. The full response only appeared after the turn ended.
+
+**Repro:** Send a message to an agent from the iOS app while connected to intentd. Observed: no streamed content until the turn completes. Also: leave and re-enter the conversation mid-turn — no partial content or thinking indicator.
+
+**Root cause:** Wire-shape mismatch per PROTOCOL §7.1. `SubscriptionPush.parse` only accepted **array** snapshots, but the chat channel's seq-0 snapshot is an **object** (`{ agentId, messages, truncated, ... }`), so the snapshot was dropped and the channel never seeded. Chat deltas carry **block-level** entities (`{ agentId, messageId, role, block }`), but the store treated them as whole-message entities — every delta failed to parse, tripping the gap detector and triggering a resnapshot storm whose `fetchConversation` merge wiped the in-flight assistant message.
+
+**Status:** fixed ([intent-hq/ios#29](https://github.com/intent-hq/ios/pull/29), 2026-07-20) — `SubscriptionPush.parse` accepts object-shaped chat snapshots (messages page + activity-flag meta), `ConversationStore` reduces block-granularity deltas onto the transcript (upsert by `block.id`, `removedIds` self-heal, terminal `streamingComplete` frame), `fetchConversation` merges preserve local in-flight streaming messages, and firehose `agent:stream:*` mutations are gated off while the chat channel is live (legacy fallback unchanged when `chat.subscribe` fails).
 
 ---
 
@@ -381,7 +421,9 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 ## Open Issues
 
-### STAB-141 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
+### STAB-143 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
+
+(Filed as "STAB-141" in monorepo PR #318; renumbered on merge because STAB-141 and STAB-142 were taken by entries that landed on main first.)
 
 A failed workspace create from the home-page initializer permanently poisons retries: every subsequent create attempt fails with `UNIQUE constraint failed: agent_session.id`, and each failed click leaves an orphaned workspace behind.
 
