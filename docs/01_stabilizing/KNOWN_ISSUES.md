@@ -307,11 +307,11 @@ E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crate
 
 **Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during Wave-1-era verification; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
 
-**Root cause:** Unknown; suspected resource contention (many daemon processes + node mock agents spawned concurrently by sibling e2e suites) pushing queue-drain/wake event delivery past the test's timeout window. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
+**Root cause:** Resource contention, not a delivery bug. The test's two event loops were the only call sites in the file using a 5s per-event silence window with panic-on-timeout (siblings use 30s + break-on-silence); under the parallel suite, mock-agent spawn plus the test's own 2000ms first-turn delay routinely exceeds 5s of event silence before the first `stream:end`. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
 
 **Expected:** The test passes reliably under the full parallel suite, or its timing bounds account for contention from sibling e2e suites.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#270](https://github.com/intent-hq/intentd/pull/270), 2026-07-20) — both event loops now use the sibling suites' 30s-per-event `wss_event_opt` deadline with break-on-silence and post-loop asserts carrying stream-end/elapsed diagnostics; 10/10 full-parallel-suite runs green
 
 ---
 
