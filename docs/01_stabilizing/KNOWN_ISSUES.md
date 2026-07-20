@@ -305,7 +305,7 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crates/intentd/tests/e2e_wss_agent_lifecycle.rs`) times out under the full parallel `cargo test` suite but passes in isolation.
 
-**Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during Wave-1-era verification; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
+**Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during initial triage; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
 
 **Root cause:** Resource contention, not a delivery bug. The test's two event loops were the only call sites in the file using a 5s per-event silence window with panic-on-timeout (siblings use 30s + break-on-silence); under the parallel suite, mock-agent spawn plus the test's own 2000ms first-turn delay routinely exceeds 5s of event silence before the first `stream:end`. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
 
