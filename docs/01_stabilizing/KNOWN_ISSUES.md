@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-132 (as of 2026-07-20)
+**Next available ID:** STAB-133 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-132 (2026-07-20, area: intentd agent subscriptions / delegation groups, severity: P1)
+
+Delegation-group settlement on a child's idle-timeout failure dropped all parent subscriptions, losing the child's eventual real completion.
+
+**Repro:** Delegate children with `waitMode: after_all`. Have one child run a long silent operation (e.g. a 30+ minute test suite) so its `session/prompt` turn hits the ACP idle timeout (1800s of silence) and the daemon emits `agent:failed` — while the child's underlying work is still running. Once the group is sealed and every member has a recorded terminal event, the group settles: the parent gets the aggregated wake, and `remove_group_watches` drops every parent watch. Observed: when the failed child was later resumed (e.g. via `sendToTask`) and genuinely completed, its `agent:idle` found no watch, so the parent was never woken and silently lost track of the child.
+
+**Expected:** A failed-not-deleted group member retains a wake path to the parent across settlement, so its late real settlement still wakes the parent exactly once.
+
+**Status:** fixed ([intent-hq/intentd#269](https://github.com/intent-hq/intentd/pull/269), 2026-07-20) — group settlement now converts each failed-not-deleted member's grouped watch into an ungrouped oneShot watch in a single atomic registry pass (`settle_group_watches`) that runs before the aggregated-wake delivery await, closing the race window; the conversion dedupes against any live ungrouped watch for the pair so the late settlement delivers exactly one wake. Regression test drives the full EventBus + delivery-loop path.
+
+---
 
 ### STAB-131 (2026-07-20, area: cloudlands-fe specialist hydration, severity: P1)
 
