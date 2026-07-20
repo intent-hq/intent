@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-146 (as of 2026-07-20)
+**Next available ID:** STAB-147 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
+
+The Claude model list drifted from what the `claude` CLI itself offered: the model picker showed a stale catalog (missing newly released models / retaining retired ones) because the claude-code ACP adapter binary being spawned was an old, unpinned copy rather than one matching the installed CLI.
+
+**Repro:** Update the `claude` CLI to a version whose model catalog changed, then open the model picker for a claude-code agent in cloudlands-fe (or query the model catalog via intentd). Observed: the model list reflected an older adapter's catalog, not what `claude` itself reported — e.g. new models missing from the picker.
+
+**Root cause:** Both intentd and cloudlands-fe resolved the claude-code ACP adapter (`@agentclientprotocol/claude-agent-acp`) through discovery paths that could pick up a stale globally-installed or cached copy, and npx invocations were unpinned — so the adapter version (and thus its model catalog) silently drifted from the installed `claude` CLI. The codex npx fallback had the same unpinned-spawn exposure.
+
+**Expected:** The ACP adapter is spawned at a known pinned version in both repos (bumped together per the paired version-pin rule), so the model catalog is deterministic and matches the CLI; claude-code availability is gated on actual `claude` CLI presence rather than daemon discovery of a possibly-stale adapter.
+
+**Status:** fixed ([intent-hq/intentd#279](https://github.com/intent-hq/intentd/pull/279) + [intent-hq/intentd#282](https://github.com/intent-hq/intentd/pull/282) + [intent-hq/cloudlands-fe#188](https://github.com/intent-hq/cloudlands-fe/pull/188) + [intent-hq/cloudlands-fe#192](https://github.com/intent-hq/cloudlands-fe/pull/192) + [intent-hq/cloudlands-fe#194](https://github.com/intent-hq/cloudlands-fe/pull/194) + [intent-hq/cloudlands-fe#196](https://github.com/intent-hq/cloudlands-fe/pull/196), 2026-07-20) — intentd: claude-code is spawned exclusively via pinned npx `@agentclientprotocol/claude-agent-acp@0.60.0` (#279) and the codex npx fallback is pinned to `@zed-industries/codex-acp@0.16.0` (#282); cloudlands-fe: pi-acp pinned to `0.0.31` (#188), claude-code resolver made npx-only with the same `0.60.0` pin (#192), managed codex-acp runtime bumped to `0.16.0` (#194), and claude-code availability gated on `claude` CLI presence instead of daemon discovery (#196).
+
+---
 
 ### STAB-145 (2026-07-20, area: cloudlands-fe chat edit-and-regenerate + intentd agent runtime, severity: P1)
 
