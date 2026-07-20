@@ -829,16 +829,27 @@ All `pr.*` methods require an active pull request on the workspace; otherwise th
 | pr.listComments | count? | conversation-level comments |
 | pr.postComment | body (req) | service result |
 
-**`pr.*` extensions (new in intentd — additive; do not change the ported count of 9).** Three
-review/CI methods extend the existing `pr.*` namespace; they map onto the `SourceControl` trait
-(`list_reviews` / `check_runs` / `submit_review` — IMPLEMENTATION_SPEC.md §7) and stay
-host-agnostic.
+**`pr.*` extensions (new in intentd — additive; do not change the ported count of 9).** Four
+methods extend the existing `pr.*` namespace. Three review/CI methods map onto the
+`SourceControl` trait (`list_reviews` / `check_runs` / `submit_review` —
+IMPLEMENTATION_SPEC.md §7) and stay host-agnostic. `pr.refresh` forces the same PR
+discovery/refresh the daemon's background sweep runs for one workspace, on demand.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
 | pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas) |
 | pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber?, prUrl?, prStatus?, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
+
+> **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
+> active PR — it exists to establish/repair the link. It runs the shared refresh path
+> (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
+> resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
+> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived, or
+> without a repo) return `outcome: "skipped"` rather than erroring. `prNumber` / `prUrl` /
+> `prStatus` are `null` when no PR is linked after the refresh; `pullRequests` is always an
+> array (possibly empty). An unknown `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
 // → request — submit an approving review on the active PR
