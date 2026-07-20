@@ -63,6 +63,22 @@ Queued agent messages were silently dropped on intentd shutdown — the per-agen
 
 ---
 
+### STAB-143 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
+
+(Filed as "STAB-141" in monorepo PR #318; renumbered on merge because STAB-141 and STAB-142 were taken by entries that landed on main first.)
+
+A failed workspace create from the home-page initializer permanently poisons retries: every subsequent create attempt fails with `UNIQUE constraint failed: agent_session.id`, and each failed click leaves an orphaned workspace behind.
+
+**Repro:** From the home-page initializer (`CompactWorkspaceInitializer`), trigger a `workspace.create` that fails, then retry the create. Observed: every retry fails with an opaque `-32603 Internal error`; `make dev` logs show repeated `WARN intent_services: workspace.create failed ... UNIQUE constraint failed: agent_session.id`. The create button fails forever until sessionStorage is cleared. Each failed attempt also leaves an orphaned workspace (row, worktree, spec note, `workspace:created` event) behind.
+
+**Root cause:** (1) FE — `CompactWorkspaceInitializer.svelte` generates the initial agent ID once via `getOrCreateAgentId()` and caches it in sessionStorage (`compact-workspace-initializer-agent-id`), rotating it only in `clearForm()`, which runs only on the success path; after any failed/partially-observed create, every retry sends the same `initialAgent.agentId`. (2) BE — `workspace.create` forwards the client-supplied `agentId` to `agent_create_op`, which validates only the ID *format*; a duplicate hits the SQLite UNIQUE constraint (1555) → opaque `-32603 internal error` — after the workspace row, worktree, spec note, and `workspace:created` event were already persisted (no rollback).
+
+**Expected:** Retrying a failed create from the home-page initializer succeeds: the FE sends a fresh initial-agent ID per create attempt, and the daemon rejects a duplicate client-supplied `agentId` fast and cleanly (`-32602` naming the ID) before provisioning anything, leaving no partial workspace.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#193](https://github.com/intent-hq/cloudlands-fe/pull/193) + [intent-hq/intentd#281](https://github.com/intent-hq/intentd/pull/281), 2026-07-20) — cloudlands-fe: `CompactWorkspaceInitializer` generates a fresh initial-agent ID per create attempt instead of reusing the sessionStorage-cached one across failed attempts; intentd: `workspace.create` / `agent.create` reject a duplicate client-supplied `agentId` fast with `-32602` naming the duplicate id, before any provisioning, so no partial workspace (row, worktree, spec note, `workspace:created` event) is left behind. Duplicate-id contract documented in `docs/00_initial_porting/PROTOCOL.md` §5.1/§5.5.
+
+---
+
 ### STAB-142 (2026-07-20, area: cloudlands-fe notifications, severity: P1)
 
 Desktop notifications were silently dead: when an agent completed, there was no OS banner, no notification sound, and clicking a banner (if one had appeared) would not navigate to the workspace.
@@ -464,22 +480,6 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
-
-### STAB-143 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
-
-(Filed as "STAB-141" in monorepo PR #318; renumbered on merge because STAB-141 and STAB-142 were taken by entries that landed on main first.)
-
-A failed workspace create from the home-page initializer permanently poisons retries: every subsequent create attempt fails with `UNIQUE constraint failed: agent_session.id`, and each failed click leaves an orphaned workspace behind.
-
-**Repro:** From the home-page initializer (`CompactWorkspaceInitializer`), trigger a `workspace.create` that fails, then retry the create. Observed: every retry fails with an opaque `-32603 Internal error`; `make dev` logs show repeated `WARN intent_services: workspace.create failed ... UNIQUE constraint failed: agent_session.id`. The create button fails forever until sessionStorage is cleared. Each failed attempt also leaves an orphaned workspace (row, worktree, spec note, `workspace:created` event) behind.
-
-**Root cause:** (1) FE — `CompactWorkspaceInitializer.svelte` generates the initial agent ID once via `getOrCreateAgentId()` and caches it in sessionStorage (`compact-workspace-initializer-agent-id`), rotating it only in `clearForm()`, which runs only on the success path; after any failed/partially-observed create, every retry sends the same `initialAgent.agentId`. (2) BE — `workspace.create` forwards the client-supplied `agentId` to `agent_create_op`, which validates only the ID *format*; a duplicate hits the SQLite UNIQUE constraint (1555) → opaque `-32603 internal error` — after the workspace row, worktree, spec note, and `workspace:created` event were already persisted (no rollback).
-
-**Expected:** Retrying a failed create from the home-page initializer succeeds: the FE sends a fresh initial-agent ID per create attempt, and the daemon rejects a duplicate client-supplied `agentId` fast and cleanly (`-32602` naming the ID) before provisioning anything, leaving no partial workspace.
-
-**Status:** open — fix PRs are in flight on cloudlands-fe (fresh agent ID per attempt) and intentd (duplicate-id fail-fast); those PRs will flip this entry to fixed when they land.
-
----
 
 ### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
 
@@ -911,44 +911,44 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ### Transport panic-safety
 
-**Area:** intentd transport  
-**Severity:** P1  
-**Description:** Currently relies on per-connection `tokio::spawn` isolation. Should use `catch_unwind` → `-32603` to guarantee a panicked request handler never brings down the daemon or other connections.  
+**Area:** intentd transport
+**Severity:** P1
+**Description:** Currently relies on per-connection `tokio::spawn` isolation. Should use `catch_unwind` → `-32603` to guarantee a panicked request handler never brings down the daemon or other connections.
 **Status:** open
 
 ### Real auggie e2e in CI
 
-**Area:** intentd CI  
-**Severity:** P2  
-**Description:** A real auggie turn in CI is best-effort/local only (requires auggie + login). The hermetic mock-agent E2E is the CI gate; the generated `--mcp-config` + bridge are auggie-consumable, but CI has no live auggie coverage.  
+**Area:** intentd CI
+**Severity:** P2
+**Description:** A real auggie turn in CI is best-effort/local only (requires auggie + login). The hermetic mock-agent E2E is the CI gate; the generated `--mcp-config` + bridge are auggie-consumable, but CI has no live auggie coverage.
 **Status:** open (best-effort/local only)
 
 ### PR↔workspace matching — branch-only
 
-**Area:** intentd sourcecontrol  
-**Severity:** P2  
-**Description:** PR↔workspace matching is **branch-only** (`head.ref`) vs the reference TS branch-OR-`baseRef` match. This is an accepted deferral from Milestone 4 — Cycle B, but may surface as a papercut if workspaces don't link when expected.  
+**Area:** intentd sourcecontrol
+**Severity:** P2
+**Description:** PR↔workspace matching is **branch-only** (`head.ref`) vs the reference TS branch-OR-`baseRef` match. This is an accepted deferral from Milestone 4 — Cycle B, but may surface as a papercut if workspaces don't link when expected.
 **Status:** open (intentional divergence, may revisit)
 
 ### `pr.*` single-page reads / capability gating
 
-**Area:** intentd sourcecontrol  
-**Severity:** P2  
-**Description:** `pr.*` reads stay single-page (the separately-addressed `github.*` list reads gained real pagination in Milestone 11). Capability gating is deferred — no runtime detection of whether the active PR supports certain operations.  
+**Area:** intentd sourcecontrol
+**Severity:** P2
+**Description:** `pr.*` reads stay single-page (the separately-addressed `github.*` list reads gained real pagination in Milestone 11). Capability gating is deferred — no runtime detection of whether the active PR supports certain operations.
 **Status:** open (intentional deferral)
 
 ### Agent-Id / Linked-Note-Id commit trailers
 
-**Area:** intentd git  
-**Severity:** P2  
-**Description:** Git commits lack `Agent-Id` and `Linked-Note-Id` trailers (no agent context at the UDS layer yet). Reference TS backend added these trailers for audit/provenance.  
+**Area:** intentd git
+**Severity:** P2
+**Description:** Git commits lack `Agent-Id` and `Linked-Note-Id` trailers (no agent context at the UDS layer yet). Reference TS backend added these trailers for audit/provenance.
 **Status:** open (intentional deferral from Milestone 4)
 
 ### REV-2 — Explicit reverse-dispatch target selection
 
-**Area:** intentd transport  
-**Severity:** P2  
-**Description:** REV-1 first-client-sticky reverse dispatch is an interim single-client policy while an explicit target-selection surface (REV-2 / PROTOCOL §16 client identity) is designed. Agent-initiated `browser.exec` currently goes to the first-connected client only.  
+**Area:** intentd transport
+**Severity:** P2
+**Description:** REV-1 first-client-sticky reverse dispatch is an interim single-client policy while an explicit target-selection surface (REV-2 / PROTOCOL §16 client identity) is designed. Agent-initiated `browser.exec` currently goes to the first-connected client only.
 **Status:** open (design in progress)
 
 ---
