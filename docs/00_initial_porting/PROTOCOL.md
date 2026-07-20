@@ -301,11 +301,14 @@ consistent with other workspace terminals.
 daemon minimally creates the agent session (honoring `agentId`/`name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
-A client-supplied `initialAgent.agentId` that already names an existing session fails
-the whole create **fast** with `-32602` naming the duplicate id — the duplicate is
-detected before any provisioning, so no workspace row, worktree, spec seed, or
-`workspace:created` event is persisted (previously this surfaced as an opaque
-`-32603 Internal error` from the store's UNIQUE constraint, after partial provisioning).
+On a fresh (non-replayed) create, a client-supplied `initialAgent.agentId` that already
+names an existing session fails the whole create **fast** with `-32602` naming the
+duplicate id — the duplicate is detected before any provisioning, so no workspace row,
+worktree, spec seed, or `workspace:created` event is persisted (previously this surfaced
+as an opaque `-32603 Internal error` from the store's UNIQUE constraint, after partial
+provisioning). An `idempotencyKey` replay is **not** rejected: the replay short-circuits
+to the stored result before the duplicate check runs, even though the id now names the
+session created by the original call.
 The result's `initialAgent.agentId` is the created session; the agent's turn starts
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result

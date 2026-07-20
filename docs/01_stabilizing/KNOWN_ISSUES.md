@@ -911,44 +911,44 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 ### Transport panic-safety
 
-**Area:** intentd transport
-**Severity:** P1
-**Description:** Currently relies on per-connection `tokio::spawn` isolation. Should use `catch_unwind` → `-32603` to guarantee a panicked request handler never brings down the daemon or other connections.
+**Area:** intentd transport  
+**Severity:** P1  
+**Description:** Currently relies on per-connection `tokio::spawn` isolation. Should use `catch_unwind` → `-32603` to guarantee a panicked request handler never brings down the daemon or other connections.  
 **Status:** open
 
 ### Real auggie e2e in CI
 
-**Area:** intentd CI
-**Severity:** P2
-**Description:** A real auggie turn in CI is best-effort/local only (requires auggie + login). The hermetic mock-agent E2E is the CI gate; the generated `--mcp-config` + bridge are auggie-consumable, but CI has no live auggie coverage.
+**Area:** intentd CI  
+**Severity:** P2  
+**Description:** A real auggie turn in CI is best-effort/local only (requires auggie + login). The hermetic mock-agent E2E is the CI gate; the generated `--mcp-config` + bridge are auggie-consumable, but CI has no live auggie coverage.  
 **Status:** open (best-effort/local only)
 
 ### PR↔workspace matching — branch-only
 
-**Area:** intentd sourcecontrol
-**Severity:** P2
-**Description:** PR↔workspace matching is **branch-only** (`head.ref`) vs the reference TS branch-OR-`baseRef` match. This is an accepted deferral from Milestone 4 — Cycle B, but may surface as a papercut if workspaces don't link when expected.
+**Area:** intentd sourcecontrol  
+**Severity:** P2  
+**Description:** PR↔workspace matching is **branch-only** (`head.ref`) vs the reference TS branch-OR-`baseRef` match. This is an accepted deferral from Milestone 4 — Cycle B, but may surface as a papercut if workspaces don't link when expected.  
 **Status:** open (intentional divergence, may revisit)
 
 ### `pr.*` single-page reads / capability gating
 
-**Area:** intentd sourcecontrol
-**Severity:** P2
-**Description:** `pr.*` reads stay single-page (the separately-addressed `github.*` list reads gained real pagination in Milestone 11). Capability gating is deferred — no runtime detection of whether the active PR supports certain operations.
+**Area:** intentd sourcecontrol  
+**Severity:** P2  
+**Description:** `pr.*` reads stay single-page (the separately-addressed `github.*` list reads gained real pagination in Milestone 11). Capability gating is deferred — no runtime detection of whether the active PR supports certain operations.  
 **Status:** open (intentional deferral)
 
 ### Agent-Id / Linked-Note-Id commit trailers
 
-**Area:** intentd git
-**Severity:** P2
-**Description:** Git commits lack `Agent-Id` and `Linked-Note-Id` trailers (no agent context at the UDS layer yet). Reference TS backend added these trailers for audit/provenance.
+**Area:** intentd git  
+**Severity:** P2  
+**Description:** Git commits lack `Agent-Id` and `Linked-Note-Id` trailers (no agent context at the UDS layer yet). Reference TS backend added these trailers for audit/provenance.  
 **Status:** open (intentional deferral from Milestone 4)
 
 ### REV-2 — Explicit reverse-dispatch target selection
 
-**Area:** intentd transport
-**Severity:** P2
-**Description:** REV-1 first-client-sticky reverse dispatch is an interim single-client policy while an explicit target-selection surface (REV-2 / PROTOCOL §16 client identity) is designed. Agent-initiated `browser.exec` currently goes to the first-connected client only.
+**Area:** intentd transport  
+**Severity:** P2  
+**Description:** REV-1 first-client-sticky reverse dispatch is an interim single-client policy while an explicit target-selection surface (REV-2 / PROTOCOL §16 client identity) is designed. Agent-initiated `browser.exec` currently goes to the first-connected client only.  
 **Status:** open (design in progress)
 
 ---
