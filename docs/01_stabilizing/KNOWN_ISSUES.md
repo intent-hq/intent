@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-143 (as of 2026-07-20)
+**Next available ID:** STAB-144 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -420,6 +420,22 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-143 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
+
+(Filed as "STAB-141" in monorepo PR #318; renumbered on merge because STAB-141 and STAB-142 were taken by entries that landed on main first.)
+
+A failed workspace create from the home-page initializer permanently poisons retries: every subsequent create attempt fails with `UNIQUE constraint failed: agent_session.id`, and each failed click leaves an orphaned workspace behind.
+
+**Repro:** From the home-page initializer (`CompactWorkspaceInitializer`), trigger a `workspace.create` that fails, then retry the create. Observed: every retry fails with an opaque `-32603 Internal error`; `make dev` logs show repeated `WARN intent_services: workspace.create failed ... UNIQUE constraint failed: agent_session.id`. The create button fails forever until sessionStorage is cleared. Each failed attempt also leaves an orphaned workspace (row, worktree, spec note, `workspace:created` event) behind.
+
+**Root cause:** (1) FE — `CompactWorkspaceInitializer.svelte` generates the initial agent ID once via `getOrCreateAgentId()` and caches it in sessionStorage (`compact-workspace-initializer-agent-id`), rotating it only in `clearForm()`, which runs only on the success path; after any failed/partially-observed create, every retry sends the same `initialAgent.agentId`. (2) BE — `workspace.create` forwards the client-supplied `agentId` to `agent_create_op`, which validates only the ID *format*; a duplicate hits the SQLite UNIQUE constraint (1555) → opaque `-32603 internal error` — after the workspace row, worktree, spec note, and `workspace:created` event were already persisted (no rollback).
+
+**Expected:** Retrying a failed create from the home-page initializer succeeds: the FE sends a fresh initial-agent ID per create attempt, and the daemon rejects a duplicate client-supplied `agentId` fast and cleanly (`-32602` naming the ID) before provisioning anything, leaving no partial workspace.
+
+**Status:** open — fix PRs are in flight on cloudlands-fe (fresh agent ID per attempt) and intentd (duplicate-id fail-fast); those PRs will flip this entry to fixed when they land.
+
+---
 
 ### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
 
