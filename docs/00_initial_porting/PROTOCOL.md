@@ -1038,8 +1038,8 @@ non-existent or `bundled` definition → `-32602`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted) |
-| settings.get | path (req) | { path, value, definition } — -32602 if path is unknown |
+| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted; TOML-backed entries carry `origin`) |
+| settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
 | settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }] }; triggers settings:changed |
 | settings.reset | path (req) | { path, value } (restores defaultValue) — -32602 if path is unknown |
 
@@ -1062,6 +1062,22 @@ interface SettingDefinition {
 ```
 
 `changes` entries use the ported `AppSettingChange` shape `{ path, value, reason? }` (`reason` is anoptional free-text audit note). `settings.update` **validates** each change against its definition(type / enum / min / max) and **persists** atomically; an unknown `path` or a value failingvalidation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a`settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive valuesredacted).
+
+**Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
+persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`
+(IMPLEMENTATION_SPEC.md §9.8). For TOML-backed paths, `settings.get` (and each `settings.list`
+entry) carries an additive `origin` field naming the layer the effective value came from:
+`"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
+boot by a startup flag / env var, e.g. `--listen`, `INTENTD_TCP_PORT`). Secrets and the opaque
+machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
+`permissions.rules`, `userRules` / `workspaceRules`, `endUserRules`) have **no** `origin` — they
+never live in config.toml (secrets stay in `secrets.json`, state blobs stay in SQLite).
+`settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
+comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
+re-parse, debounced; invalid content keeps last-good values) and emit the same
+`settings:changed` notification. A key pinned by a startup flag is **read-only over the wire**
+while pinned: `settings.update` / `settings.reset` on it yields `-32602` with a message naming
+the overriding flag ("overridden by startup flag …").
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed. These are the ported, BE-owned settings (group A) plus `intentd`-specific host/daemon settings (group B):
 
@@ -1099,6 +1115,7 @@ interface SettingDefinition {
 { "jsonrpc":"2.0","id":52,"method":"settings.get","params":{ "path":"sourceControl.activeProvider" } }
 // ← response
 { "jsonrpc":"2.0","id":52,"result":{ "path":"sourceControl.activeProvider","value":"github",
+  "origin":"default",
   "definition":{ "path":"sourceControl.activeProvider","label":"Source-control provider",
     "description":"Active forge implementation","category":"sourceControl","type":"enum",
     "enumValues":["github"],"defaultValue":"github" } } }
