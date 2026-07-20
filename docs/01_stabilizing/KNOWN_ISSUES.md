@@ -311,7 +311,7 @@ E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crate
 
 **Expected:** The test passes reliably under the full parallel suite, or its timing bounds account for contention from sibling e2e suites.
 
-**Status:** fixed ([intent-hq/intentd#270](https://github.com/intent-hq/intentd/pull/270), 2026-07-20) — both event loops now use the sibling suites' 30s-per-event `wss_event_opt` deadline with break-on-silence and post-loop asserts carrying stream-end/elapsed diagnostics; 10/10 full-parallel-suite runs green
+**Status:** fixed ([intent-hq/intentd#270](https://github.com/intent-hq/intentd/pull/270), 2026-07-20) — both event loops now use the sibling suites' 30s-per-event `wss_event_opt` deadline with break-on-silence and post-loop asserts carrying stream-end/elapsed diagnostics; 10/10 full-parallel-suite runs green.
 
 ---
 
