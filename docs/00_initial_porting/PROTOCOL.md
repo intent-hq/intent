@@ -846,8 +846,8 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
-> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived, or
-> without a repo) return `outcome: "skipped"` rather than erroring. `prNumber` / `prUrl` /
+> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
+> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring. `prNumber` / `prUrl` /
 > `prStatus` are `null` when no PR is linked after the refresh; `pullRequests` is always an
 > array (possibly empty). An unknown `workspaceId` → `-32602 "Workspace not found"`.
 
