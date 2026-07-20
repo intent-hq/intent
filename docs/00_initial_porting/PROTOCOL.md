@@ -813,7 +813,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace; otherwise the underlyingservice throws → `-32603`.
+All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below).
 
 > Host-agnostic naming. pr.* is the ported wire name from augmentcode/intent and isnot renamed. Conceptually it is host-agnostic — "PR" covers pull request / merge request /change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvidersetting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
@@ -840,16 +840,18 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
 | pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas) |
 | pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR |
-| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber?, prUrl?, prStatus?, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
 
 > **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
 > that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
-> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring. `prNumber` / `prUrl` /
-> `prStatus` are `null` when no PR is linked after the refresh; `pullRequests` is always an
-> array (possibly empty). An unknown `workspaceId` → `-32602 "Workspace not found"`.
+> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring.
+> Unlike the usual omitted-when-absent (`skip_serializing_if`) convention, `prNumber` /
+> `prUrl` / `prStatus` are always present and serialize as literal `null` when no PR is
+> linked after the refresh; `pullRequests` is always an array (possibly empty). An unknown
+> `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
 // → request — submit an approving review on the active PR
