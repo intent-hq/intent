@@ -43,7 +43,7 @@ Model selector and default model resolution failures: delegated agents (implemen
 
 **Expected:** Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). Specialist frontmatter model is parsed and persisted during agent creation. Path-traversal and workspace-path security guards prevent loading specialists from outside allowed directories.
 
-**Status:** fixed ([intent-hq/intentd#261](https://github.com/intent-hq/intentd/pull/261) + [intent-hq/intentd#262](https://github.com/intent-hq/intentd/pull/262), 2026-07-20) — PR #261: added providerDefaults reading in model resolution chain with precedence specialist > workspace-override > type-override/default-model > CLI-default; PR #262: specialist frontmatter model resolved and persisted at agent creation time, added path-traversal and workspace-path security guards for specialist file loading.
+**Status:** fixed ([intent-hq/intentd#261](https://github.com/intent-hq/intentd/pull/261) + [intent-hq/intentd#262](https://github.com/intent-hq/intentd/pull/262), 2026-07-20) — PR #261: added providerDefaults reading in model resolution chain with precedence specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default; PR #262: specialist frontmatter model resolved and persisted at agent creation time, added path-traversal and workspace-path security guards for specialist file loading.
 
 ---
 
