@@ -19,6 +19,18 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
+
+Long in-flight turns are invisible to status/conversation consumers.
+
+**Repro:** Start a turn that runs for a long time without persisting a message (e.g., a 24-minute busy turn doing many tool calls). Poll `agent.getStatus` / read the conversation while it runs. Observed: `lastActivity` stays pinned at the last persisted message, so a long busy turn is indistinguishable from a wedged agent — orchestrators concluded the agent was stuck and spawned duplicate agents for the same task.
+
+**Expected:** Status/conversation consumers can distinguish an actively-working agent from a wedged one (e.g., `lastActivity` or an equivalent liveness signal advances while a turn is in flight).
+
+**Status:** fixed ([intent-hq/intentd#264](https://github.com/intent-hq/intentd/pull/264), 2026-07-20) — Additive turn-liveness fields derived from the existing live-turn slot, gated on the busy claim: `turnInFlight: bool` and `lastStreamActivityAt` (RFC-3339, stamped at turn start and refreshed on every stream event) on `AgentLite` (`agent.get`/`agent.list`), the `agent.getConversation` result, and the `chat.subscribe` seq-0 snapshot flags overlay. A poller can now tell a long-but-alive turn (timestamp advancing) from a wedged agent (timestamp pinned). Caveat documented in PROTOCOL §5.5: the stamp only advances on stream traffic, so combine with `isWaitingOnTool` during long silent tool calls. Unit + UDS + WSS e2e coverage.
+
+---
+
 ### STAB-127 (2026-07-19, area: intentd acp/prompt-injection, severity: P1)
 
 (Planned as "STAB-111" in the injection-mechanism workstream; filed as STAB-127 because the STAB-111 ID was already taken by the dangling-tool_use session-resume issue.)
@@ -298,18 +310,6 @@ E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crate
 **Root cause:** Unknown; suspected resource contention (many daemon processes + node mock agents spawned concurrently by sibling e2e suites) pushing queue-drain/wake event delivery past the test's timeout window. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
 
 **Expected:** The test passes reliably under the full parallel suite, or its timing bounds account for contention from sibling e2e suites.
-
-**Status:** open
-
----
-
-### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
-
-Long in-flight turns are invisible to status/conversation consumers.
-
-**Repro:** Start a turn that runs for a long time without persisting a message (e.g., a 24-minute busy turn doing many tool calls). Poll `agent.getStatus` / read the conversation while it runs. Observed: `lastActivity` stays pinned at the last persisted message, so a long busy turn is indistinguishable from a wedged agent — orchestrators concluded the agent was stuck and spawned duplicate agents for the same task.
-
-**Expected:** Status/conversation consumers can distinguish an actively-working agent from a wedged one (e.g., `lastActivity` or an equivalent liveness signal advances while a turn is in flight).
 
 **Status:** open
 
