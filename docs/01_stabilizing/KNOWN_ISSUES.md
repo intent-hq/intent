@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-145 (as of 2026-07-20)
+**Next available ID:** STAB-146 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-145 (2026-07-20, area: cloudlands-fe chat edit-and-regenerate + intentd agent runtime, severity: P1)
+
+Editing a past user message in the chat did nothing — the edit UI dispatched `agentSessionEditAndRegenerateRequested`, but that event had been orphaned since saga-removal commit `95d908a2` (nothing listened for it anymore), and no daemon RPC existed to truncate the transcript and reset the ACP session anyway.
+
+(Planned as "STAB-141" in the shipping task; renumbered on merge because STAB-141 through STAB-144 were taken by entries that landed on main first.)
+
+**Repro:** In a chat with prior turns, hover a past user message, click Edit, change the text, and submit. Observed: nothing happens — no truncation, no regeneration, no error; the event fires into the void.
+
+**Expected:** The transcript is truncated to just before the edited message, the agent's ACP session is reset so the provider does not retain the truncated turns in context, and the edited content is sent as a fresh user message that regenerates the conversation from that point.
+
+**Status:** fixed ([intent-hq/intentd#283](https://github.com/intent-hq/intentd/pull/283) + [intent-hq/cloudlands-fe#197](https://github.com/intent-hq/cloudlands-fe/pull/197), 2026-07-20) — intentd: new `agent.editAndRegenerate` RPC orchestrates the whole flow daemon-side (validate the target is an existing user message, stop any in-flight turn, optional model switch, truncate via the replaceMessages machinery with an `agent:updated { truncatedCount, remainingCount }` event, force a fresh ACP `session/new` that replays the kept history as `<supervisor>` XML, then regenerate through the normal send path); cloudlands-fe: the edit flow calls the new RPC directly (replacing the orphaned event) behind a confirm gate warning that subsequent messages will be discarded. Protocol shape documented in `docs/00_initial_porting/PROTOCOL.md` §5.5.
+
+---
 
 ### STAB-144 (2026-07-20, area: intentd agent queue / interrupted-agent resume, severity: P1)
 
