@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-139 (as of 2026-07-20)
+**Next available ID:** STAB-140 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-139 (2026-07-20, area: ios chat streaming, severity: P1)
+
+iOS chat streaming was broken: sending a message showed the thinking indicator but no chunks ever streamed in, and re-entering a chat mid-turn showed only the user message with no thinking indicator. The full response only appeared after the turn ended.
+
+**Repro:** Send a message to an agent from the iOS app while connected to intentd. Observed: no streamed content until the turn completes. Also: leave and re-enter the conversation mid-turn — no partial content or thinking indicator.
+
+**Root cause:** Wire-shape mismatch per PROTOCOL §7.1. `SubscriptionPush.parse` only accepted **array** snapshots, but the chat channel's seq-0 snapshot is an **object** (`{ agentId, messages, truncated, ... }`), so the snapshot was dropped and the channel never seeded. Chat deltas carry **block-level** entities (`{ agentId, messageId, role, block }`), but the store treated them as whole-message entities — every delta failed to parse, tripping the gap detector and triggering a resnapshot storm whose `fetchConversation` merge wiped the in-flight assistant message.
+
+**Status:** fixed ([intent-hq/ios#29](https://github.com/intent-hq/ios/pull/29), 2026-07-20) — `SubscriptionPush.parse` accepts object-shaped chat snapshots (messages page + activity-flag meta), `ConversationStore` reduces block-granularity deltas onto the transcript (upsert by `block.id`, `removedIds` self-heal, terminal `streamingComplete` frame), `fetchConversation` merges preserve local in-flight streaming messages, and firehose `agent:stream:*` mutations are gated off while the chat channel is live (legacy fallback unchanged when `chat.subscribe` fails).
+
+---
 
 ### STAB-138 (2026-07-20, area: PR sync (intentd + cloudlands-fe), severity: P1)
 
