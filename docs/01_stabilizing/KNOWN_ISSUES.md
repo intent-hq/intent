@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-124 (as of 2026-07-19)
+**Next available ID:** STAB-126 (as of 2026-07-19)
 
 ## Intake Convention
 
@@ -154,7 +154,6 @@ Opening an agent while intentd is slow to return the transcript briefly rendered
 **Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
 
 **Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
->>>>>>> origin/main
 
 ---
 
@@ -259,6 +258,32 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
+
+Long in-flight turns are invisible to status/conversation consumers.
+
+**Repro:** Start a turn that runs for a long time without persisting a message (e.g., a 24-minute busy turn doing many tool calls). Poll `agent.getStatus` / read the conversation while it runs. Observed: `lastActivity` stays pinned at the last persisted message, so a long busy turn is indistinguishable from a wedged agent — orchestrators concluded the agent was stuck and spawned duplicate agents for the same task.
+
+**Expected:** Status/conversation consumers can distinguish an actively-working agent from a wedged one (e.g., `lastActivity` or an equivalent liveness signal advances while a turn is in flight).
+
+**Status:** open
+
+---
+
+### STAB-124 (2026-07-19, area: intentd interrupt/abort persistence, severity: P1)
+
+Interrupt mid-tool-call persists anonymous tool_use blocks (`name: ""`) that break conversation loading.
+
+**Repro:** Send `agent.sendMessage` with `priority: "interrupt"` while an agent is mid-tool-call. Observed: the preempted assistant message is persisted with a leading `tool_use` block having `name: ""`, `input: {}`, `metadata.status: "error"`, followed by a `tool_result` containing "Process error: The operation was aborted". Conversations whose assistant message starts with such an anonymous errored tool_use fail to load in the FE.
+
+**Evidence:** Observed on agent-695dcf49 (workspace happened-check) seq 2; a DB scan found the same `"name":""` pattern in 10+ agents across workspaces (e.g. agent-9cbcb5d7 seq 11/14, agent-4b81126c seq 6/12).
+
+**Expected:** The tool name is known at tool-call start and must not be lost when the turn is aborted: the interrupted turn persists the real tool name, or the anonymous block is dropped/sanitized consistently with the STAB-111 dangling-tool_use policy ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250)). Existing conversations containing the malformed pattern load without error.
+
+**Status:** open
+
+---
 
 ### STAB-121 (2026-07-19, area: intentd CI / coverage-all test, severity: P2)
 
