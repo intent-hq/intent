@@ -1508,3 +1508,13 @@ Agent commits do not appear in the sidebar Changes panel in a brand-new workspac
 **Expected:** Agent commits (and git pull / changes:tracked events) should trigger the Changes panel to refresh within ~2 seconds, without requiring a workspace switch.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#82](https://github.com/intent-hq/cloudlands-fe/pull/82), 2026-07-16) — frontend firehose daemon event bridge now dispatches per-workspace debounced (1s) `changes/refreshRequested` on `git:commit`, `git:pull`, and `changes:tracked` events
+
+### STAB-130 (2026-07-20, area: intentd e2e tests / agent lifecycle, severity: P2)
+
+Pre-existing flaky test: `e2e_wss_agent_lifecycle` fails intermittently with a queue-drain race.
+
+**Repro:** Run `cargo test` in `packages/intentd` under load (e.g. alongside other test binaries) — `e2e_wss_agent_lifecycle` intermittently fails on a queued-message drain assertion. It is intermittent even in isolation, though it usually passes when run alone (`cargo test --test e2e_wss_agent_lifecycle`). The flake pre-dates the settings→TOML migration (fails identically at the pre-migration HEAD).
+
+**Expected:** The lifecycle e2e should deterministically wait for queue-drain events (bounded wait loops filtered by agent ID/event type, as in the STAB-34/STAB-36 fix pattern) instead of racing async event delivery.
+
+**Status:** open
