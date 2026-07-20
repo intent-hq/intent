@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-144 (as of 2026-07-20)
+**Next available ID:** STAB-145 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,22 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-144 (2026-07-20, area: intentd agent queue / interrupted-agent resume, severity: P1)
+
+Queued agent messages were silently dropped on intentd shutdown — the per-agent send queue lived only in memory, so any daemon restart (graceful or crash) lost everything the user had queued while an agent was working.
+
+(Planned as "STAB-142" in the shipping task; renumbered on merge because STAB-142 and STAB-143 were taken by entries that landed on main first.)
+
+**Repro:** Queue one or more messages on a busy agent (`agent.queueMessage`), then restart or kill intentd. After restart, resume the interrupted agent via `agent.resolveInterrupted { resume }`. Observed: the continuation message was delivered but `agent.getQueue` returned an empty queue — every queued message was gone.
+
+**Root cause:** `Services.agent_queues` was a purely in-memory map with no persistence; nothing snapshotted it to SQLite on mutation or rehydrated it at boot.
+
+**Expected:** Queued messages survive daemon restarts. On resume, the continuation streams first, then the preserved queue drains FIFO in original order after that turn completes. Abandoning leaves the preserved queue intact and inert.
+
+**Status:** fixed ([intent-hq/intentd#284](https://github.com/intent-hq/intentd/pull/284), 2026-07-20) — new `agent_queue` SQLite table (additive migration 0046) with write-through persistence on every queue mutation (serialized per-daemon so an older snapshot can never overwrite a newer one) and startup rehydration before RPCs are served; rehydration never auto-starts a turn and restores mid-edit entries as ready-to-send. Covered by store/services unit tests plus 3 real-SIGKILL WSS e2e tests locking in the resume ordering contract.
+
+---
 
 ### STAB-142 (2026-07-20, area: cloudlands-fe notifications, severity: P1)
 
