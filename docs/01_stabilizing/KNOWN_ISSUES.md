@@ -29,7 +29,7 @@ Every release was blocked: the Release Beta workflow's "Generate release notes" 
 
 **Expected:** Release-notes generation succeeds even though the fe HEAD includes the unpushed version-bump commit, and the bump commit does not pollute the notes.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20) — new `Capture fe SHA for release notes` step records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds, the bump commit is excluded from the notes by construction, and `release-manifest.json` is still emitted with a resolvable `feSha` (`intentdSha` base resolution untouched).
+**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20; follow-up [intent-hq/cloudlands-fe#182](https://github.com/intent-hq/cloudlands-fe/pull/182), 2026-07-20) — #180 added a `Capture fe SHA for release notes` step that records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds and the bump commit is excluded from the notes by construction. A second 404 remained (run [29744986202](https://github.com/intent-hq/cloudlands-fe/actions/runs/29744986202)): the step used `INTENTD_READ_PAT` — scoped to `intent-hq/intentd` only — as the single token for both repos, so the cloudlands-fe compare still 404'd. #182 gives the script per-repo tokens (`FE_TOKEN`/`INTENTD_TOKEN`, each falling back to `GITHUB_TOKEN`); the workflow passes the default `github.token` for fe and `INTENTD_READ_PAT` for intentd.
 
 ---
 
