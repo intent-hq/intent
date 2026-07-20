@@ -159,20 +159,6 @@ iOS app crashed when parsing `agent.getSubscriptions` responses due to hard-code
 
 ---
 
-### STAB-115 (2026-07-19, area: intentd agent runtime actorIds, severity: P2)
-
-Agent creation failed with `missingActorIds` error for agent-created notes, blocking multi-agent coordination and delegation flows. Affected notes: task notes, linked notes, agent-authored spec updates.
-
-**Repro:** (A) Coordinator delegates a task → child agent creates a task note → intentd rejects the note insertion with "missingActorIds for note X". (B) Agent calls `create_agent` with `createLinkedNote: true` → daemon rejects the linked note with "missingActorIds".
-
-**Root cause:** `note_insert_op` computed `actorIds` from the note's `primitiveFragments` (code refs, patches, agent actions). Agent-created notes (task notes, linked notes) had no such fragments at creation time, so `actorIds` was empty. The `notes` table migration (0024) added `actorIds TEXT NOT NULL DEFAULT '{}'`, but the CHECK constraint rejected empty JSON arrays, breaking zero-fragment note creation.
-
-**Expected:** Notes with no primitives (yet) insert successfully with `actorIds = []`. The CHECK constraint accepts empty arrays. Primitives added later update `actorIds` via the existing `note_primitive_add_op` path.
-
-**Status:** fixed (PR link TBD, 2026-07-19) — Migration 0024 amended to allow empty `actorIds` arrays (`CHECK(json_array_length(actorIds) >= 0)`). Retested both zero-fragment and multi-fragment note creation paths; all green. Note: Previously cited intent-hq/intentd#256, but that PR is the zero-output interrupt requeue fix; the correct actorIds fix PR is being verified.
-
----
-
 ### STAB-114 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
 
 SQLite pool contention under heavy concurrent write load caused reads to block for multiple seconds and occasional `database is locked` errors.
