@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-126 (as of 2026-07-19)
+**Next available ID:** STAB-127 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -30,6 +30,20 @@ Interrupt mid-tool-call persists anonymous tool_use blocks (`name: ""`) that bre
 **Expected:** The tool name is known at tool-call start and must not be lost when the turn is aborted: the interrupted turn persists the real tool name, or the anonymous block is dropped/sanitized consistently with the STAB-111 dangling-tool_use policy ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250)). Existing conversations containing the malformed pattern load without error.
 
 **Status:** fixed ([intent-hq/intentd#260](https://github.com/intent-hq/intentd/pull/260), 2026-07-20) — Three-layer fix: (1) `AgentManager::interrupt()` drains buffered stale notifications after `session/cancel` (the cancelled child's title-less `tool_call_update` abort echoes no longer leak into the next turn's transcript); (2) `Transcript::record_tool` drops first-sight tool updates whose derived name is empty instead of fabricating an anonymous block; (3) `agent.getConversation` strips anonymous tool_use/tool_result pairs on read (non-destructive), so rows persisted by pre-fix daemons load cleanly — also covers the `chat.subscribe` snapshot. Regression tests at all three layers (WSS e2e with new `parkMidToolCall` mock behavior, Transcript unit test, read-path test).
+
+---
+
+### STAB-126 (2026-07-19, area: intentd agent manager / priority interrupt zero-output requeue, severity: P1)
+
+When `agent.sendMessage` with `priority: "interrupt"` preempts an in-flight turn before ANY assistant output is produced, the preempted user message was silently lost — it existed in the transcript with no reply and was never requeued for processing after the interrupt completed.
+
+**Repro:** Send a user message to an agent that parks before streaming any chunks (e.g., mock ACP provider with `parkBeforeFirstChunk: true`). Before any assistant content is emitted, send an interrupt with `priority: "interrupt"`. Observed: the interrupt processed successfully, but the original user message was dropped — it remained in the transcript as an unanswered user message with no assistant response, and it never re-appeared in the queue for processing after the interrupt completed.
+
+**Root cause:** The interrupt codepath (`interrupt_send_message`) detected cancellable turns (handle + `acp_session_id` present), called `interrupt()` to cancel the ACP session, and immediately spawned the interrupt turn. For zero-output turns (parked before streaming any chunks), the preempted user message was neither persisted as completed (no assistant row exists) nor requeued — it was silently abandoned.
+
+**Expected:** When an interrupt preempts a turn before any output, the preempted user message is requeued at the front of the queue (with `persisted: true` to skip duplicate transcript append, `requeuedAfterFailure: false` so the FE does not show a failure marker, and original attachments preserved via `image_blocks`/`file_blocks` extraction from transcript content). The queue-updated event is published so clients reflect the requeued state.
+
+**Status:** fixed ([intent-hq/intentd#256](https://github.com/intent-hq/intentd/pull/256), 2026-07-19) — `interrupt_send_message` now checks `live_turn().blocks.is_empty()` to detect zero-output turns before calling `interrupt()`. If zero output, it fetches the last 10 transcript messages (bounded work), extracts the last user message with attachments, checks for any non-user messages after it (avoids re-running tool calls), and requeues the message at the front with `persisted: true`, `requeued_after_failure: false`. Regression tests `stab_114_interrupt_zero_output_requeues_message_over_wss` (zero-output path) and `stab_114_interrupt_after_streaming_no_requeue_over_wss` (inverse case) verify wire behavior.
 
 ---
 
@@ -139,7 +153,7 @@ Agent creation failed with `missingActorIds` error for agent-created notes, bloc
 
 **Expected:** Notes with no primitives (yet) insert successfully with `actorIds = []`. The CHECK constraint accepts empty arrays. Primitives added later update `actorIds` via the existing `note_primitive_add_op` path.
 
-**Status:** fixed ([intent-hq/intentd#256](https://github.com/intent-hq/intentd/pull/256), 2026-07-19) — Migration 0024 amended to allow empty `actorIds` arrays (`CHECK(json_array_length(actorIds) >= 0)`). Retested both zero-fragment and multi-fragment note creation paths; all green.
+**Status:** fixed (PR link TBD, 2026-07-19) — Migration 0024 amended to allow empty `actorIds` arrays (`CHECK(json_array_length(actorIds) >= 0)`). Retested both zero-fragment and multi-fragment note creation paths; all green. Note: Previously cited intent-hq/intentd#256, but that PR is the zero-output interrupt requeue fix; the correct actorIds fix PR is being verified.
 
 ---
 
