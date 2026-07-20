@@ -19,6 +19,20 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-124 (2026-07-19, area: intentd interrupt/abort persistence, severity: P1)
+
+Interrupt mid-tool-call persists anonymous tool_use blocks (`name: ""`) that break conversation loading.
+
+**Repro:** Send `agent.sendMessage` with `priority: "interrupt"` while an agent is mid-tool-call. Observed: the preempted assistant message is persisted with a leading `tool_use` block having `name: ""`, `input: {}`, `metadata.status: "error"`, followed by a `tool_result` containing "Process error: The operation was aborted". Conversations whose assistant message starts with such an anonymous errored tool_use fail to load in the FE.
+
+**Evidence:** Observed on agent-695dcf49 (workspace happened-check) seq 2; a DB scan found the same `"name":""` pattern in 10+ agents across workspaces (e.g. agent-9cbcb5d7 seq 11/14, agent-4b81126c seq 6/12).
+
+**Expected:** The tool name is known at tool-call start and must not be lost when the turn is aborted: the interrupted turn persists the real tool name, or the anonymous block is dropped/sanitized consistently with the STAB-111 dangling-tool_use policy ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250)). Existing conversations containing the malformed pattern load without error.
+
+**Status:** fixed ([intent-hq/intentd#260](https://github.com/intent-hq/intentd/pull/260), 2026-07-20) — Three-layer fix: (1) `AgentManager::interrupt()` drains buffered stale notifications after `session/cancel` (the cancelled child's title-less `tool_call_update` abort echoes no longer leak into the next turn's transcript); (2) `Transcript::record_tool` drops first-sight tool updates whose derived name is empty instead of fabricating an anonymous block; (3) `agent.getConversation` strips anonymous tool_use/tool_result pairs on read (non-destructive), so rows persisted by pre-fix daemons load cleanly — also covers the `chat.subscribe` snapshot. Regression tests at all three layers (WSS e2e with new `parkMidToolCall` mock behavior, Transcript unit test, read-path test).
+
+---
+
 ### STAB-122 (2026-07-19, area: cloudlands-fe auto-update, severity: P1)
 
 Packaged 2.0.6 app cannot download or install updates: the Install button is a no-op, downloads stall at "Preparing download…", and clicking the "Update available" toast does nothing.
@@ -266,20 +280,6 @@ Long in-flight turns are invisible to status/conversation consumers.
 **Repro:** Start a turn that runs for a long time without persisting a message (e.g., a 24-minute busy turn doing many tool calls). Poll `agent.getStatus` / read the conversation while it runs. Observed: `lastActivity` stays pinned at the last persisted message, so a long busy turn is indistinguishable from a wedged agent — orchestrators concluded the agent was stuck and spawned duplicate agents for the same task.
 
 **Expected:** Status/conversation consumers can distinguish an actively-working agent from a wedged one (e.g., `lastActivity` or an equivalent liveness signal advances while a turn is in flight).
-
-**Status:** open
-
----
-
-### STAB-124 (2026-07-19, area: intentd interrupt/abort persistence, severity: P1)
-
-Interrupt mid-tool-call persists anonymous tool_use blocks (`name: ""`) that break conversation loading.
-
-**Repro:** Send `agent.sendMessage` with `priority: "interrupt"` while an agent is mid-tool-call. Observed: the preempted assistant message is persisted with a leading `tool_use` block having `name: ""`, `input: {}`, `metadata.status: "error"`, followed by a `tool_result` containing "Process error: The operation was aborted". Conversations whose assistant message starts with such an anonymous errored tool_use fail to load in the FE.
-
-**Evidence:** Observed on agent-695dcf49 (workspace happened-check) seq 2; a DB scan found the same `"name":""` pattern in 10+ agents across workspaces (e.g. agent-9cbcb5d7 seq 11/14, agent-4b81126c seq 6/12).
-
-**Expected:** The tool name is known at tool-call start and must not be lost when the turn is aborted: the interrupted turn persists the real tool name, or the anonymous block is dropped/sanitized consistently with the STAB-111 dangling-tool_use policy ([intent-hq/intentd#250](https://github.com/intent-hq/intentd/pull/250)). Existing conversations containing the malformed pattern load without error.
 
 **Status:** open
 
