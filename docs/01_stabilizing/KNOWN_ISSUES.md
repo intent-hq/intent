@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-129 (as of 2026-07-20)
+**Next available ID:** STAB-132 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,48 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-131 (2026-07-20, area: cloudlands-fe specialist hydration, severity: P1)
+
+Specialist refetch corruption: refetching specialists during file-watching startup corrupted bundled specialist state in memory, causing new specialist-delegated agents to fail to spawn with "specialist not found" errors even though the bundled specialist files existed. Discovered during STAB-117 dogfooding.
+
+**Repro:** With file-watching enabled (default in dev mode), start the daemon and immediately delegate a task to a specialist (implementor/verifier). Observed: the agent spawn failed with "specialist not found" or similar error, even though the bundled specialist markdown files were present in the resources directory. The issue occurred because the file-watcher startup sequence refetched specialists from disk, and user-created specialists (even empty ones) shadowed bundled specialists, resulting in incomplete specialist metadata (missing model, tool restrictions, etc.).
+
+**Root cause:** The specialist refetch logic (`refetchAndDispatch` in `specialists-mutation-service.ts`) did not preserve bundled specialist state when user files shadowed them. During startup, the file-watcher triggered a refetch that replaced bundled specialists with user specialists, losing critical metadata (default model, tool restrictions, etc.) from the bundled files. New agents delegated to these specialists failed to spawn because the specialist metadata was incomplete.
+
+**Expected:** Refetching specialists preserves bundled specialist data even when user files shadow them. Bundled specialists remain fully functional with their default models and tool restrictions intact.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#174](https://github.com/intent-hq/cloudlands-fe/pull/174), 2026-07-20) — Modified specialist refetch logic to preserve bundled specialist metadata when shadowed by user files. Added regression test verifying bundled specialists remain functional after refetch.
+
+---
+
+### STAB-130 (2026-07-20, area: intentd agent runtime + model resolution, severity: P1)
+
+Model selector and default model resolution failures: delegated agents (implementor/verifier) created without an explicit model ignored settings-configured defaults and fell through to the CLI's own default. Additionally, specialist frontmatter model was not resolved or persisted at agent creation time, and path-traversal/workspace-path security guards were missing. Follow-up to STAB-117.
+
+**Repro:** Delegate a task to an implementor or verifier without specifying a model. Observed: the agent used the CLI's default model instead of the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides). Specialist frontmatter `model:` field was not read during delegation, so specialist-specific model preferences were ignored.
+
+**Root cause:** Three bugs: (A) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` were defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignored the settings-configured default entirely and fell through to the CLI's own default. (B) Specialist frontmatter model was not parsed or resolved at agent creation time - it was only read during spawn, so the persisted `session.model` remained null even when the specialist defined a default model. (C) No path-traversal or workspace-path security guards on specialist file loading, allowing potential security issues.
+
+**Expected:** Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). Specialist frontmatter model is parsed and persisted during agent creation. Path-traversal and workspace-path security guards prevent loading specialists from outside allowed directories.
+
+**Status:** fixed ([intent-hq/intentd#261](https://github.com/intent-hq/intentd/pull/261) + [intent-hq/intentd#262](https://github.com/intent-hq/intentd/pull/262), 2026-07-20) — PR #261: added providerDefaults reading in model resolution chain with precedence specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default; PR #262: specialist frontmatter model resolved and persisted at agent creation time, added path-traversal and workspace-path security guards for specialist file loading.
+
+---
+
+### STAB-129 (2026-07-20, area: cloudlands-fe settings hydration / background agents, severity: P1)
+
+Background agent default model settings were not persisted or hydrated: changes to `backgroundAgents.defaultModel` and `backgroundAgents.typeOverrides` in the Settings UI were not saved to the daemon, and the UI did not hydrate these values on mount, always showing empty/default state even when the daemon had values configured.
+
+**Repro:** Open Settings → Background Agents, change the default model or type-specific model overrides, close settings. Reopen Settings → Background Agents. Observed: the UI showed the default/empty state instead of the previously configured values. The daemon had the values (verified via settings.get RPC), but the FE never persisted changes or hydrated on mount.
+
+**Root cause:** The Settings UI component for background agent models did not call the settings.update RPC when values changed, and did not call settings.get on mount to hydrate existing values from the daemon. The UI state was purely local and never synchronized with the daemon's settings store.
+
+**Expected:** Changes to background agent default model and type overrides are persisted to the daemon via settings.update. The UI hydrates existing values from the daemon on mount via settings.get, so users see their previously configured values.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#175](https://github.com/intent-hq/cloudlands-fe/pull/175), 2026-07-20) — Added settings.update calls on value change and settings.get call on mount to persist and hydrate background agent model settings. All settings changes now persist across app restarts.
+
+---
 
 ### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
 
@@ -182,48 +224,6 @@ SQLite pool contention under heavy concurrent write load caused reads to block f
 **Expected:** Concurrent writes do not starve reads. A lightweight read RPC (`workspace.list`) issued mid-heavy-write-load responds within a small bound (< 2s). No `database is locked` errors surface to clients.
 
 **Status:** fixed ([intent-hq/intentd#259](https://github.com/intent-hq/intentd/pull/259), 2026-07-19) — Pool split into single-writer pool (size 1) and read pool (size 16), routing all mutations to the write pool and all reads to the read pool. Added periodic WAL checkpointing (every 60s) to prevent unbounded WAL growth. Batched event-log writes behind a dedicated writer task in the event bus (flushes every 20ms or 64 events). Made `agent:stream:chunk` events transient (broadcast-only, never persisted) to reduce write pressure. Stress e2e test `concurrent_writes_do_not_starve_reads` asserts 30 concurrent note writes + mid-load read < 2s.
-
----
-
-### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
-
-Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
-
-**Repro:** Open an agent conversation while the backend is slow to respond to the transcript fetch (e.g., during high load, slow disk I/O, or initial cold-start transcript hydration). Observed: the chat panel immediately rendered the specialist welcome page ("I'm ready to help..." / empty state) for a brief moment until the transcript loaded, then replaced it with the actual conversation history.
-
-**Root cause:** `ChatPanel.svelte` gated the welcome state only on `session exists && messages.length === 0`, but transcript hydration ran asynchronously. During the hydration window, the session existed (agent record loaded) but messages were still empty (transcript fetch in flight), so the component incorrectly rendered the welcome page. The welcome page is semantically meant only for never-used sessions (`backendSessionId === null`), not for existing conversations whose transcript is still loading.
-
-**Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
-
-**Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
-
----
-
-### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
-
-Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
-
-**Repro:** Observed: picker showed "Claude Fable 5" but the agent replied as Claude Sonnet 4.5. Delegated agents (implementor/verifier) created without an explicit model ignored the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides) and fell through to the CLI's own default.
-
-**Root cause:** Three compounding bugs: (A) `agent.setModel` only persisted `session.model`. The model is applied only at spawn time (`ensure_started` → `resolve_spawn` → `--model`). When the agent's child process is alive, `ensure_started` short-circuits and returns the existing `acpSessionId`, so the running provider keeps its spawn-time model indefinitely. (B) For agents created without an explicit model (e.g., delegated verifier/implementor agents), `session.model` is null and intentd spawns the CLI without `--model` (CLI's own default applies). The FE footer picker falls back to `hydratedInputModel ?? agentModel` where `agentModel` defaults to the FE constant `DEFAULT_AGENT_MODEL`, displaying a model the agent is not actually using. (C) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` are defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignore the settings-configured default entirely and fall through to the CLI's own default.
-
-**Expected:** Changing the model on an agent with a live provider process takes effect on that agent's next turn. Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). The footer picker never displays a concrete model name for a session whose model is null; it shows the default-model option instead.
-
-**Status:** fixed ([intent-hq/intentd#257](https://github.com/intent-hq/intentd/pull/257) + [intent-hq/cloudlands-fe#160](https://github.com/intent-hq/cloudlands-fe/pull/160), 2026-07-19) — intentd: respawn-on-setModel + creation-time settings-default resolution, 4 unit tests + WSS e2e test; cloudlands-fe: call-site fallbacks removed, AgentSession.model nullable end-to-end (type + Zod schema + stream-lifecycle wire coercion), all 7 review threads resolved.
-
----
-
-### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
-
-iOS agent footer was missing for ungrouped completion watches (immediate-mode/oneShot subscriptions) — navigating to an agent conversation that had active subscriptions showed the agent footer in cloudlands-fe but not in the iOS app.
-
-**Repro:** Navigate to an agent conversation in the iOS app where the agent ended its turn with an immediate-mode subscription (e.g., after delegating a task with `waitMode: "immediate"`). Observed: the iOS conversation view showed no agent footer (no "Waiting for..." indicator, no watched agent list), but the same conversation in cloudlands-fe displayed the footer with the watched agent. Some workspaces showed the footer on iOS (when delegation groups were present), but conversations with only ungrouped subscriptions never did.
-
-**Root cause:** ConversationStore.swift `fetchSubscriptions` (lines 1032-1035) only read `sub["filter"]["actorIds"]`, which intentd no longer sends. The protocol's actual wire shape (per `packages/intentd/crates/intent-services/src/agent_ops.rs:2715`) sends `actorIds` at the top level of each subscription object. iOS never extracted watched agent IDs from immediate-mode subscriptions, so `watchedAgentIds` stayed empty and `isWaitingForAgents` stayed false.
-
-**Expected:** iOS derives watched agent IDs from top-level `actorIds` (union with `delegationGroups[].expectedAgentIds`), so the footer appears for immediate-mode/oneShot watches just as it does in cloudlands-fe.
-
-**Status:** fixed ([intent-hq/ios#24](https://github.com/intent-hq/ios/pull/24), 2026-07-19) — ConversationStore.swift now reads top-level `actorIds` first, with a fallback to `filter.actorIds` for backward compatibility. Added 3 regression tests: `parsesTopLevelActorIdsFromSubscriptions`, `fallsBackToFilterActorIdsForLegacyFormat`, `combinesActorIdsFromSubscriptionsAndDelegationGroups`.
 
 ---
 
