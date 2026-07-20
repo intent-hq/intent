@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-135 (as of 2026-07-20)
+**Next available ID:** STAB-137 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,34 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-136 (2026-07-20, area: ios release build / Xcode Cloud, severity: P1)
+
+Xcode Cloud "Archive - iOS" (Release) builds failed: swift-frontend 6.3.3 crashed with SIGSEGV in the EarlyPerfInliner pass while compiling the `deinit` of `DeltaReconciler<T>`. Debug builds were unaffected.
+
+**Repro:** Run the Xcode Cloud "Archive - iOS" workflow (or any Release-configuration build of the iOS app). Observed: compilation fails with swift-frontend 6.3.3 SIGSEGV in the EarlyPerfInliner optimization pass on the `DeltaReconciler<T>` deinit. Debug builds compile fine, so the crash only surfaces on Release/Archive.
+
+**Root cause:** Swift 6.3.3 toolchain bug — the EarlyPerfInliner pass crashes while inlining the deinit of the generic `DeltaReconciler<T>` class under Release optimization.
+
+**Expected:** Release/Archive builds compile green on Xcode Cloud.
+
+**Status:** fixed ([intent-hq/ios#28](https://github.com/intent-hq/ios/pull/28), 2026-07-20) — added an explicit `@_optimize(none) deinit {}` to `DeltaReconciler<T>` to sidestep the inliner crash; no behavior change (261 tests pass, Release build green). Note: the workaround should be revisited (and removed if possible) after the next toolchain bump past 6.3.3.
+
+---
+
+### STAB-135 (2026-07-20, area: ios workspace.create / intentd worktree provisioning, severity: P1)
+
+Creating a workspace from the iOS app failed with an opaque "Internal error", and the daemon logged nothing about the failure.
+
+**Repro:** In the iOS app, create a workspace and pick the repo's default branch (e.g. `main`) in the "Select Branch" step. Observed: the `workspace.create` call fails with `-32603 Internal error`, shown verbatim in the iOS error alert; the daemon logs no server-side trace of the failure.
+
+**Root cause:** `CreateWorkspaceView.swift` (`createWorkspace()`) sent the picked branch as `branch` — the workspace's *own* branch — instead of `baseRef` (the branch to start from), unlike the desktop FE which sends `baseRef` and lets the daemon auto-generate the workspace branch. The daemon's `provision_worktree` reused the existing local branch of the same name, and `git worktree add` then failed because that branch (e.g. `main`) was already checked out in the main repository — mapped to `-32603 Internal error`. Secondary gaps: (a) selecting a remote branch would create a bogus local branch named e.g. `origin/main`; (b) the daemon logged nothing when `workspace.create` failed; (c) the already-checked-out case surfaced as an opaque internal error rather than an actionable message.
+
+**Expected:** Creating a workspace from iOS sends the branch selection as `baseRef` (normalized for remote branches) and succeeds. The daemon returns `-32602 InvalidParams` with a message naming the branch when a caller explicitly requests an already-checked-out `branch`, and logs `workspace.create` failures at WARN.
+
+**Status:** fixed ([intent-hq/ios#27](https://github.com/intent-hq/ios/pull/27) + [intent-hq/intentd#272](https://github.com/intent-hq/intentd/pull/272), 2026-07-20) — iOS: sends the selection as `baseRef` with remote-branch normalization, plus a stateful `idempotencyKey` and specialist-model defaulting; intentd: `map_worktree_add_err` surfaces branch-already-checked-out as `-32602 InvalidParams` naming the branch, WARN logging on `workspace.create` failures, regression unit test + WSS e2e.
+
+---
 
 ### STAB-132 (2026-07-20, area: intentd agent subscriptions / delegation groups, severity: P1)
 
