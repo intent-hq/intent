@@ -321,11 +321,11 @@ The `burst_above_threshold_collapses_to_directory_summaries` test in the coverag
 
 **Repro:** In `packages/intentd`, run `cargo test --workspace` or `make test`, or observe the coverage-all CI job on main. The test `burst_above_threshold_collapses_to_directory_summaries` fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
 
-**Root cause:** Unknown. The test validates event batching/collapsing logic under high-volume file-change scenarios. Intermittent failures suggest a race condition or non-deterministic event emission pattern that occasionally produces more events than the collapse threshold.
+**Root cause:** Product defect in the file-watcher debounce loop, not the test. `tokio::select!` ingests one raw notify event per iteration, so slow event publishes (e.g. SQLite INSERTs under coverage instrumentation, ~24 ms each) starve ingestion and spread per-path debounce deadlines; the burst decision in `flush_due` only counted paths due at a single flush instant, so a 150-file churn came due across many small flushes that never crossed the collapse threshold and was emitted as individual events.
 
 **Expected:** The test passes reliably on all runs, or the event count assertions are made more lenient to account for legitimate variance in event emission patterns.
 
-**Status:** open
+**Status:** fixed ([intentd#266](https://github.com/intent-hq/intentd/pull/266), 2026-07-20). Batch-drains the raw channel before each flush, bases the burst decision on the whole pending backlog, and adds a bounded 1 s burst cooldown so trailing waves of the same churn collapse too. Verified with deterministic `flush_due` regression tests plus 15 consecutive coverage-instrumented full-suite runs green.
 
 ---
 
