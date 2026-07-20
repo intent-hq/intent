@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-139 (as of 2026-07-20)
+**Next available ID:** STAB-140 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -366,6 +366,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
+
+Creating a workspace silently reuses the previous create's repository, and the workspace-initializer persistence layer can clobber its own daemon-persisted state before hydration completes.
+
+**Repro:** Create a workspace from repo X, return to the New Workspace initializer, and create another workspace without explicitly re-picking a repository. Observed while dogfooding: workspace `json-config-2` ("Fix submodule config regression") was silently bound to `panghy/whatsapp-mcp-server` (carried over from a create two minutes earlier) instead of the intended `intent-hq/monorepo` — the daemon faithfully provisioned the `repositoryPath` the FE sent. For the persistence half: select repos repeatedly, then inspect the persisted `workspaceInitializer.state` bag — it held `lastSelectedRepo: null`, `recentRepos: []`, `compactFormState.repoPath: ""` despite many explicit selections.
+
+**Root cause:** (1) Carry-over — `CompactWorkspaceInitializer.svelte` keeps `repoPath` sticky across creations (in-memory, plus restore of persisted `compactFormState` when `!repoPath`), so the next create silently inherits the previous repo and nothing in the create flow makes the target repo conspicuous. (2) Persistence race — `workspace-initializer-persistence-service.ts` fires `hydrateOnce()` lazily and unawaited, while `persistStateBag()` writes the **whole** Redux bag on every persisted action; any persist-triggering dispatch that lands before hydration resolves overwrites previously-saved fields with defaults (observed: `lastSelectedRepo` null, `recentRepos` [], `compactFormState.repoPath` ""), so the STAB-104/106 most-recent-repo restore never has data to restore.
+
+**Expected:** Pre-hydration persists cannot erase `lastSelectedRepo`/`recentRepos`/`compactFormState` from the daemon bag, and creating a workspace does not silently bind to a stale repository from the previous create.
+
+**Status:** open — the persistence-race fix is in flight in cloudlands-fe (PR link to follow when it lands).
+
+---
 
 ### STAB-128 (2026-07-20, area: intentd/tests (WSS e2e), severity: P2)
 
