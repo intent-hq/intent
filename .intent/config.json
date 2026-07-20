@@ -1,5 +1,5 @@
 {
-  "setupScript": "#!/bin/bash\n# Generic setup script\n# Available variables: $MAIN_CHECKOUT, $WORKTREE_PATH, $BRANCH_NAME, $SOURCE_BRANCH\n\n# Copy environment and config files\nfor file in .env .env.local .envrc .tool-versions; do\n  if [ -f \"$MAIN_CHECKOUT/$file\" ]; then\n    cp \"$MAIN_CHECKOUT/$file\" \"./$file\"\n    echo \"Copied $file\"\n  fi\ndone\n\necho \"Config files copied\"",
+  "setupScript": "#!/bin/bash\n# Generic setup script\n# Available variables: $MAIN_CHECKOUT, $WORKTREE_PATH, $BRANCH_NAME, $SOURCE_BRANCH\n\n# Copy environment and config files\nfor file in .env .env.local .envrc .tool-versions; do\n  if [ -f \"$MAIN_CHECKOUT/$file\" ]; then\n    cp \"$MAIN_CHECKOUT/$file\" \"./$file\"\n    echo \"Copied $file\"\n  fi\ndone\n\necho \"Config files copied\"\n\n# Initialize git submodules\necho \"Initializing git submodules...\"\ngit submodule update --init --recursive\necho \"Git submodules initialized\"",
   "scripts": [
     {
       "name": "all",

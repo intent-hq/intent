@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-129 (as of 2026-07-20)
+**Next available ID:** STAB-138 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,102 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-137 (2026-07-20, area: release CI / cloudlands-fe release workflow, severity: P1)
+
+Every release was blocked: the Release Beta workflow's "Generate release notes" step failed with `GitHub API error: 404 Not Found`, aborting the run before any artifacts were published.
+
+**Repro:** Dispatch the Release Beta workflow (observed on the v2.0.8 attempt, run [29742814752](https://github.com/intent-hq/cloudlands-fe/actions/runs/29742814752)). Observed: `scripts/generate-release-notes.mjs` fails fetching cloudlands-fe commits (`v2.0.7...b6691d92...` → 404) and the release aborts.
+
+**Root cause:** The "Generate release notes" step ran `FE_HEAD_SHA=$(git rev-parse HEAD)` *after* the "Commit version bump and create tag" step had created a local, never-pushed version-bump commit. The script's `fetchCommits` uses the GitHub compare API, which cannot see the unpushed SHA and returns 404. The intentd side was unaffected (both base and head are remote SHAs).
+
+**Expected:** Release-notes generation succeeds even though the fe HEAD includes the unpushed version-bump commit, and the bump commit does not pollute the notes.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20) — new `Capture fe SHA for release notes` step records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds, the bump commit is excluded from the notes by construction, and `release-manifest.json` is still emitted with a resolvable `feSha` (`intentdSha` base resolution untouched).
+
+---
+
+### STAB-136 (2026-07-20, area: ios release build / Xcode Cloud, severity: P1)
+
+Xcode Cloud "Archive - iOS" (Release) builds failed: swift-frontend 6.3.3 crashed with SIGSEGV in the EarlyPerfInliner pass while compiling the `deinit` of `DeltaReconciler<T>`. Debug builds were unaffected.
+
+**Repro:** Run the Xcode Cloud "Archive - iOS" workflow (or any Release-configuration build of the iOS app). Observed: compilation fails with swift-frontend 6.3.3 SIGSEGV in the EarlyPerfInliner optimization pass on the `DeltaReconciler<T>` deinit. Debug builds compile fine, so the crash only surfaces on Release/Archive.
+
+**Root cause:** Swift 6.3.3 toolchain bug — the EarlyPerfInliner pass crashes while inlining the deinit of the generic `DeltaReconciler<T>` class under Release optimization.
+
+**Expected:** Release/Archive builds compile green on Xcode Cloud.
+
+**Status:** fixed ([intent-hq/ios#28](https://github.com/intent-hq/ios/pull/28), 2026-07-20) — added an explicit `@_optimize(none) deinit {}` to `DeltaReconciler<T>` to sidestep the inliner crash; no behavior change (261 tests pass, Release build green). Note: the workaround should be revisited (and removed if possible) after the next toolchain bump past 6.3.3.
+
+---
+
+### STAB-135 (2026-07-20, area: ios workspace.create / intentd worktree provisioning, severity: P1)
+
+Creating a workspace from the iOS app failed with an opaque "Internal error", and the daemon logged nothing about the failure.
+
+**Repro:** In the iOS app, create a workspace and pick the repo's default branch (e.g. `main`) in the "Select Branch" step. Observed: the `workspace.create` call fails with `-32603 Internal error`, shown verbatim in the iOS error alert; the daemon logs no server-side trace of the failure.
+
+**Root cause:** `CreateWorkspaceView.swift` (`createWorkspace()`) sent the picked branch as `branch` — the workspace's *own* branch — instead of `baseRef` (the branch to start from), unlike the desktop FE which sends `baseRef` and lets the daemon auto-generate the workspace branch. The daemon's `provision_worktree` reused the existing local branch of the same name, and `git worktree add` then failed because that branch (e.g. `main`) was already checked out in the main repository — mapped to `-32603 Internal error`. Secondary gaps: (a) selecting a remote branch would create a bogus local branch named e.g. `origin/main`; (b) the daemon logged nothing when `workspace.create` failed; (c) the already-checked-out case surfaced as an opaque internal error rather than an actionable message.
+
+**Expected:** Creating a workspace from iOS sends the branch selection as `baseRef` (normalized for remote branches) and succeeds. The daemon returns `-32602 InvalidParams` with a message naming the branch when a caller explicitly requests an already-checked-out `branch`, and logs `workspace.create` failures at WARN.
+
+**Status:** fixed ([intent-hq/ios#27](https://github.com/intent-hq/ios/pull/27) + [intent-hq/intentd#272](https://github.com/intent-hq/intentd/pull/272), 2026-07-20) — iOS: sends the selection as `baseRef` with remote-branch normalization, plus a stateful `idempotencyKey` and specialist-model defaulting; intentd: `map_worktree_add_err` surfaces branch-already-checked-out as `-32602 InvalidParams` naming the branch, WARN logging on `workspace.create` failures, regression unit test + WSS e2e.
+
+---
+
+### STAB-132 (2026-07-20, area: intentd agent subscriptions / delegation groups, severity: P1)
+
+Delegation-group settlement on a child's idle-timeout failure dropped all parent subscriptions, losing the child's eventual real completion.
+
+**Repro:** Delegate children with `waitMode: after_all`. Have one child run a long silent operation (e.g. a 30+ minute test suite) so its `session/prompt` turn hits the ACP idle timeout (1800s of silence) and the daemon emits `agent:failed` — while the child's underlying work is still running. Once the group is sealed and every member has a recorded terminal event, the group settles: the parent gets the aggregated wake, and `remove_group_watches` drops every parent watch. Observed: when the failed child was later resumed (e.g. via `sendToTask`) and genuinely completed, its `agent:idle` found no watch, so the parent was never woken and silently lost track of the child.
+
+**Expected:** A failed-not-deleted group member retains a wake path to the parent across settlement, so its late real settlement still wakes the parent exactly once.
+
+**Status:** fixed ([intent-hq/intentd#269](https://github.com/intent-hq/intentd/pull/269), 2026-07-20) — group settlement now converts each failed-not-deleted member's grouped watch into an ungrouped oneShot watch in a single atomic registry pass (`settle_group_watches`) that runs before the aggregated-wake delivery await, closing the race window; the conversion dedupes against any live ungrouped watch for the pair so the late settlement delivers exactly one wake. Regression test drives the full EventBus + delivery-loop path.
+
+---
+
+### STAB-131 (2026-07-20, area: cloudlands-fe specialist hydration, severity: P1)
+
+Specialist refetch corruption: refetching specialists during file-watching startup corrupted bundled specialist state in memory, causing new specialist-delegated agents to fail to spawn with "specialist not found" errors even though the bundled specialist files existed. Discovered during STAB-117 dogfooding.
+
+**Repro:** With file-watching enabled (default in dev mode), start the daemon and immediately delegate a task to a specialist (implementor/verifier). Observed: the agent spawn failed with "specialist not found" or similar error, even though the bundled specialist markdown files were present in the resources directory. The issue occurred because the file-watcher startup sequence refetched specialists from disk, and user-created specialists (even empty ones) shadowed bundled specialists, resulting in incomplete specialist metadata (missing model, tool restrictions, etc.).
+
+**Root cause:** The specialist refetch logic (`refetchAndDispatch` in `specialists-mutation-service.ts`) did not preserve bundled specialist state when user files shadowed them. During startup, the file-watcher triggered a refetch that replaced bundled specialists with user specialists, losing critical metadata (default model, tool restrictions, etc.) from the bundled files. New agents delegated to these specialists failed to spawn because the specialist metadata was incomplete.
+
+**Expected:** Refetching specialists preserves bundled specialist data even when user files shadow them. Bundled specialists remain fully functional with their default models and tool restrictions intact.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#174](https://github.com/intent-hq/cloudlands-fe/pull/174), 2026-07-20) — Modified specialist refetch logic to preserve bundled specialist metadata when shadowed by user files. Added regression test verifying bundled specialists remain functional after refetch.
+
+---
+
+### STAB-130 (2026-07-20, area: intentd agent runtime + model resolution, severity: P1)
+
+Model selector and default model resolution failures: delegated agents (implementor/verifier) created without an explicit model ignored settings-configured defaults and fell through to the CLI's own default. Additionally, specialist frontmatter model was not resolved or persisted at agent creation time, and path-traversal/workspace-path security guards were missing. Follow-up to STAB-117.
+
+**Repro:** Delegate a task to an implementor or verifier without specifying a model. Observed: the agent used the CLI's default model instead of the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides). Specialist frontmatter `model:` field was not read during delegation, so specialist-specific model preferences were ignored.
+
+**Root cause:** Three bugs: (A) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` were defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignored the settings-configured default entirely and fell through to the CLI's own default. (B) Specialist frontmatter model was not parsed or resolved at agent creation time - it was only read during spawn, so the persisted `session.model` remained null even when the specialist defined a default model. (C) No path-traversal or workspace-path security guards on specialist file loading, allowing potential security issues.
+
+**Expected:** Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). Specialist frontmatter model is parsed and persisted during agent creation. Path-traversal and workspace-path security guards prevent loading specialists from outside allowed directories.
+
+**Status:** fixed ([intent-hq/intentd#261](https://github.com/intent-hq/intentd/pull/261) + [intent-hq/intentd#262](https://github.com/intent-hq/intentd/pull/262), 2026-07-20) — PR #261: added providerDefaults reading in model resolution chain with precedence specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default; PR #262: specialist frontmatter model resolved and persisted at agent creation time, added path-traversal and workspace-path security guards for specialist file loading.
+
+---
+
+### STAB-129 (2026-07-20, area: cloudlands-fe settings hydration / background agents, severity: P1)
+
+Background agent default model settings were not persisted or hydrated: changes to `backgroundAgents.defaultModel` and `backgroundAgents.typeOverrides` in the Settings UI were not saved to the daemon, and the UI did not hydrate these values on mount, always showing empty/default state even when the daemon had values configured.
+
+**Repro:** Open Settings → Background Agents, change the default model or type-specific model overrides, close settings. Reopen Settings → Background Agents. Observed: the UI showed the default/empty state instead of the previously configured values. The daemon had the values (verified via settings.get RPC), but the FE never persisted changes or hydrated on mount.
+
+**Root cause:** The Settings UI component for background agent models did not call the settings.update RPC when values changed, and did not call settings.get on mount to hydrate existing values from the daemon. The UI state was purely local and never synchronized with the daemon's settings store.
+
+**Expected:** Changes to background agent default model and type overrides are persisted to the daemon via settings.update. The UI hydrates existing values from the daemon on mount via settings.get, so users see their previously configured values.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#175](https://github.com/intent-hq/cloudlands-fe/pull/175), 2026-07-20) — Added settings.update calls on value change and settings.get call on mount to persist and hydrate background agent model settings. All settings changes now persist across app restarts.
+
+---
 
 ### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
 
@@ -171,7 +267,7 @@ iOS app crashed when parsing `agent.getSubscriptions` responses due to hard-code
 
 ---
 
-### STAB-114 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
+### STAB-133 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
 
 SQLite pool contention under heavy concurrent write load caused reads to block for multiple seconds and occasional `database is locked` errors.
 
@@ -182,48 +278,6 @@ SQLite pool contention under heavy concurrent write load caused reads to block f
 **Expected:** Concurrent writes do not starve reads. A lightweight read RPC (`workspace.list`) issued mid-heavy-write-load responds within a small bound (< 2s). No `database is locked` errors surface to clients.
 
 **Status:** fixed ([intent-hq/intentd#259](https://github.com/intent-hq/intentd/pull/259), 2026-07-19) — Pool split into single-writer pool (size 1) and read pool (size 16), routing all mutations to the write pool and all reads to the read pool. Added periodic WAL checkpointing (every 60s) to prevent unbounded WAL growth. Batched event-log writes behind a dedicated writer task in the event bus (flushes every 20ms or 64 events). Made `agent:stream:chunk` events transient (broadcast-only, never persisted) to reduce write pressure. Stress e2e test `concurrent_writes_do_not_starve_reads` asserts 30 concurrent note writes + mid-load read < 2s.
-
----
-
-### STAB-118 (2026-07-19, area: cloudlands-fe chat transcript loading state, severity: P2)
-
-Opening an agent while intentd is slow to return the transcript briefly rendered the generic specialist welcome page (RegularAgentWelcome/ChiefChatEmptyState) instead of the loading skeleton, creating a jarring flash of incorrect content.
-
-**Repro:** Open an agent conversation while the backend is slow to respond to the transcript fetch (e.g., during high load, slow disk I/O, or initial cold-start transcript hydration). Observed: the chat panel immediately rendered the specialist welcome page ("I'm ready to help..." / empty state) for a brief moment until the transcript loaded, then replaced it with the actual conversation history.
-
-**Root cause:** `ChatPanel.svelte` gated the welcome state only on `session exists && messages.length === 0`, but transcript hydration ran asynchronously. During the hydration window, the session existed (agent record loaded) but messages were still empty (transcript fetch in flight), so the component incorrectly rendered the welcome page. The welcome page is semantically meant only for never-used sessions (`backendSessionId === null`), not for existing conversations whose transcript is still loading.
-
-**Expected:** Skeleton loader displayed until transcript hydration completes or fails. Welcome page shown only for agents with `backendSessionId === null` (never started). If hydration of an existing conversation fails, skeleton is retained (not replaced with welcome).
-
-**Status:** fixed ([intent-hq/cloudlands-fe#165](https://github.com/intent-hq/cloudlands-fe/pull/165), 2026-07-19) — `ChatPanel.svelte` now gates welcome rendering on `backendSessionId === null` (never-used session), and displays the loading skeleton during transcript hydration (new `isTranscriptLoading` selector) for existing conversations. Failed hydration of existing sessions retains the skeleton rather than showing welcome.
-
----
-
-### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
-
-Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
-
-**Repro:** Observed: picker showed "Claude Fable 5" but the agent replied as Claude Sonnet 4.5. Delegated agents (implementor/verifier) created without an explicit model ignored the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides) and fell through to the CLI's own default.
-
-**Root cause:** Three compounding bugs: (A) `agent.setModel` only persisted `session.model`. The model is applied only at spawn time (`ensure_started` → `resolve_spawn` → `--model`). When the agent's child process is alive, `ensure_started` short-circuits and returns the existing `acpSessionId`, so the running provider keeps its spawn-time model indefinitely. (B) For agents created without an explicit model (e.g., delegated verifier/implementor agents), `session.model` is null and intentd spawns the CLI without `--model` (CLI's own default applies). The FE footer picker falls back to `hydratedInputModel ?? agentModel` where `agentModel` defaults to the FE constant `DEFAULT_AGENT_MODEL`, displaying a model the agent is not actually using. (C) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` are defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignore the settings-configured default entirely and fall through to the CLI's own default.
-
-**Expected:** Changing the model on an agent with a live provider process takes effect on that agent's next turn. Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). The footer picker never displays a concrete model name for a session whose model is null; it shows the default-model option instead.
-
-**Status:** fixed ([intent-hq/intentd#257](https://github.com/intent-hq/intentd/pull/257) + [intent-hq/cloudlands-fe#160](https://github.com/intent-hq/cloudlands-fe/pull/160), 2026-07-19) — intentd: respawn-on-setModel + creation-time settings-default resolution, 4 unit tests + WSS e2e test; cloudlands-fe: call-site fallbacks removed, AgentSession.model nullable end-to-end (type + Zod schema + stream-lifecycle wire coercion), all 7 review threads resolved.
-
----
-
-### STAB-116 (2026-07-19, area: ios agent footer / getSubscriptions parsing, severity: P1)
-
-iOS agent footer was missing for ungrouped completion watches (immediate-mode/oneShot subscriptions) — navigating to an agent conversation that had active subscriptions showed the agent footer in cloudlands-fe but not in the iOS app.
-
-**Repro:** Navigate to an agent conversation in the iOS app where the agent ended its turn with an immediate-mode subscription (e.g., after delegating a task with `waitMode: "immediate"`). Observed: the iOS conversation view showed no agent footer (no "Waiting for..." indicator, no watched agent list), but the same conversation in cloudlands-fe displayed the footer with the watched agent. Some workspaces showed the footer on iOS (when delegation groups were present), but conversations with only ungrouped subscriptions never did.
-
-**Root cause:** ConversationStore.swift `fetchSubscriptions` (lines 1032-1035) only read `sub["filter"]["actorIds"]`, which intentd no longer sends. The protocol's actual wire shape (per `packages/intentd/crates/intent-services/src/agent_ops.rs:2715`) sends `actorIds` at the top level of each subscription object. iOS never extracted watched agent IDs from immediate-mode subscriptions, so `watchedAgentIds` stayed empty and `isWaitingForAgents` stayed false.
-
-**Expected:** iOS derives watched agent IDs from top-level `actorIds` (union with `delegationGroups[].expectedAgentIds`), so the footer appears for immediate-mode/oneShot watches just as it does in cloudlands-fe.
-
-**Status:** fixed ([intent-hq/ios#24](https://github.com/intent-hq/ios/pull/24), 2026-07-19) — ConversationStore.swift now reads top-level `actorIds` first, with a fallback to `filter.actorIds` for backward compatibility. Added 3 regression tests: `parsesTopLevelActorIdsFromSubscriptions`, `fallsBackToFilterActorIdsForLegacyFormat`, `combinesActorIdsFromSubscriptionsAndDelegationGroups`.
 
 ---
 
@@ -305,13 +359,13 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crates/intentd/tests/e2e_wss_agent_lifecycle.rs`) times out under the full parallel `cargo test` suite but passes in isolation.
 
-**Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during Wave-1-era verification; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
+**Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during initial triage; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
 
-**Root cause:** Unknown; suspected resource contention (many daemon processes + node mock agents spawned concurrently by sibling e2e suites) pushing queue-drain/wake event delivery past the test's timeout window. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
+**Root cause:** Resource contention, not a delivery bug. The test's two event loops were the only call sites in the file using a 5s per-event silence window with panic-on-timeout (siblings use 30s + break-on-silence); under the parallel suite, mock-agent spawn plus the test's own 2000ms first-turn delay routinely exceeds 5s of event silence before the first `stream:end`. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
 
 **Expected:** The test passes reliably under the full parallel suite, or its timing bounds account for contention from sibling e2e suites.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#270](https://github.com/intent-hq/intentd/pull/270), 2026-07-20) — both event loops now use the sibling suites' 30s-per-event `wss_event_opt` deadline with break-on-silence and post-loop asserts carrying stream-end/elapsed diagnostics; 10/10 full-parallel-suite runs green.
 
 ---
 
@@ -321,11 +375,11 @@ The `burst_above_threshold_collapses_to_directory_summaries` test in the coverag
 
 **Repro:** In `packages/intentd`, run `cargo test --workspace` or `make test`, or observe the coverage-all CI job on main. The test `burst_above_threshold_collapses_to_directory_summaries` fails approximately 1-2 out of 5 runs with an assertion error: expected fewer than 80 events, got 98 (or similar counts exceeding the threshold).
 
-**Root cause:** Unknown. The test validates event batching/collapsing logic under high-volume file-change scenarios. Intermittent failures suggest a race condition or non-deterministic event emission pattern that occasionally produces more events than the collapse threshold.
+**Root cause:** Product defect in the file-watcher debounce loop, not the test. `tokio::select!` ingests one raw notify event per iteration, so slow event publishes (e.g. SQLite INSERTs under coverage instrumentation, ~24 ms each) starve ingestion and spread per-path debounce deadlines; the burst decision in `flush_due` only counted paths due at a single flush instant, so a 150-file churn came due across many small flushes that never crossed the collapse threshold and was emitted as individual events.
 
 **Expected:** The test passes reliably on all runs, or the event count assertions are made more lenient to account for legitimate variance in event emission patterns.
 
-**Status:** open
+**Status:** fixed ([intentd#266](https://github.com/intent-hq/intentd/pull/266), 2026-07-20). Batch-drains the raw channel before each flush, bases the burst decision on the whole pending backlog, and adds a bounded 1 s burst cooldown so trailing waves of the same churn collapse too. Verified with deterministic `flush_due` regression tests plus 15 consecutive coverage-instrumented full-suite runs green.
 
 ---
 
@@ -843,7 +897,7 @@ Re-entering a streaming conversation shows no deltas until the next tool call (o
 
 **Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
 
-### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+### STAB-134 (2026-07-17, area: cloudlands-fe, severity: P1)
 
 Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
 
