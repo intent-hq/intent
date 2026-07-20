@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-140 (as of 2026-07-20)
+**Next available ID:** STAB-141 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-140 (2026-07-20, area: intentd agent transcript persistence, severity: P1)
+
+Image/file attachments on user messages were not persisted to transcript rows, so the new-workspace initial message (and any reloaded conversation) showed no image in the conversation view even though the agent received it.
+
+**Repro:** Create a new workspace with an initial prompt that includes an image attachment (or call `agent.sendMessage` with `imageBlocks`/`fileBlocks`), then reload the conversation view (`agent.getConversation` / app restart). Observed: the persisted user row carried only the text block — the attachment was gone — even though the live turn delivered the image to the agent via the queue/ACP prompt path.
+
+**Root cause:** Every user-row persist path (`AgentManager::send_message` / `force_message`, the queue-drain `persist_user`, and the store-only fallbacks `agent_send_message_op` / `agent_force_message_op` used by `workspace.create`'s initial agent) built the transcript row from a single text block, dropping FE-supplied `imageBlocks` / `fileBlocks`. Attachments only survived in the live view because the outbound ACP prompt carried them; nothing persisted them to `agent_message` rows.
+
+**Expected:** User transcript rows persist image/file content blocks alongside the text block, so reloaded conversations (including the new-workspace initial message) render attachments.
+
+**Status:** fixed ([intent-hq/intentd#276](https://github.com/intent-hq/intentd/pull/276), 2026-07-20) — a shared `user_message_blocks` helper now builds the persisted block array (one `text` block followed by `image` blocks and `file` blocks, malformed entries skipped) and all user-row persist paths use it (send/force/interrupt, queue drain via the blocks captured on the `QueuedMessage`, and the store-only fallbacks); requeue paths marked `persisted: true` still skip `persist_user`, so retries never duplicate attachment blocks. Covered by unit tests plus WSS e2e regressions for `agent.sendMessage` and the `workspace.create` initial-agent path. Note: PR #276 references this issue as "STAB-133" — that ID was reserved from a stale tracker copy and already belongs to the intent-store pool-contention entry, so it is filed here as STAB-140.
+
+---
 
 ### STAB-138 (2026-07-20, area: PR sync (intentd + cloudlands-fe), severity: P1)
 
