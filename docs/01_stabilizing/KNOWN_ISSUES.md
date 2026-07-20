@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-133 (as of 2026-07-20)
+**Next available ID:** STAB-135 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -225,7 +225,7 @@ iOS app crashed when parsing `agent.getSubscriptions` responses due to hard-code
 
 ---
 
-### STAB-114 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
+### STAB-133 (2026-07-19, area: intentd intent-store pool / event log, severity: P1)
 
 SQLite pool contention under heavy concurrent write load caused reads to block for multiple seconds and occasional `database is locked` errors.
 
@@ -855,7 +855,7 @@ Re-entering a streaming conversation shows no deltas until the next tool call (o
 
 **Status:** fixed ([intent-hq/cloudlands-fe#132](https://github.com/intent-hq/cloudlands-fe/pull/132), 2026-07-17) — `chat-read-service.ts` now merges `chat.subscribeSnapshot` in-flight message into `getConversation` hydration; `daemon-events-bridge.ts` seeds stream accumulator from snapshot (`seedStreamFromSnapshot`) so regression guard passes after app restart mid-turn
 
-### STAB-86 (2026-07-17, area: cloudlands-fe, severity: P1)
+### STAB-134 (2026-07-17, area: cloudlands-fe, severity: P1)
 
 Interrupt-send (⌘Enter while agent is mid-turn) stalls the session: stuck in "Thinking", message never appears, renderer state wedged.
 
