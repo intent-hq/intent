@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-137 (as of 2026-07-20)
+**Next available ID:** STAB-138 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-137 (2026-07-20, area: release CI / cloudlands-fe release workflow, severity: P1)
+
+Every release was blocked: the Release Beta workflow's "Generate release notes" step failed with `GitHub API error: 404 Not Found`, aborting the run before any artifacts were published.
+
+**Repro:** Dispatch the Release Beta workflow (observed on the v2.0.8 attempt, run [29742814752](https://github.com/intent-hq/cloudlands-fe/actions/runs/29742814752)). Observed: `scripts/generate-release-notes.mjs` fails fetching cloudlands-fe commits (`v2.0.7...b6691d92...` → 404) and the release aborts.
+
+**Root cause:** The "Generate release notes" step ran `FE_HEAD_SHA=$(git rev-parse HEAD)` *after* the "Commit version bump and create tag" step had created a local, never-pushed version-bump commit. The script's `fetchCommits` uses the GitHub compare API, which cannot see the unpushed SHA and returns 404. The intentd side was unaffected (both base and head are remote SHAs).
+
+**Expected:** Release-notes generation succeeds even though the fe HEAD includes the unpushed version-bump commit, and the bump commit does not pollute the notes.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20) — new `Capture fe SHA for release notes` step records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds, the bump commit is excluded from the notes by construction, and `release-manifest.json` is still emitted with a resolvable `feSha` (`intentdSha` base resolution untouched).
+
+---
 
 ### STAB-136 (2026-07-20, area: ios release build / Xcode Cloud, severity: P1)
 
