@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-142 (as of 2026-07-20)
+**Next available ID:** STAB-143 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-142 (2026-07-20, area: cloudlands-fe notifications, severity: P1)
+
+Desktop notifications were silently dead: when an agent completed, there was no OS banner, no notification sound, and clicking a banner (if one had appeared) would not navigate to the workspace.
+
+**Repro:** Enable notifications in settings, let an agent run to completion with the app focused or backgrounded. Observed: no OS banner, no sound, and no click navigation in either case.
+
+**Root cause:** Both saga handlers were deleted without re-homing the behavior — `2931d014` removed the main-process `agent:idle` trigger (the code that subscribed to daemon `agent:idle` events and produced the OS banner) along with the saga runtime, and `95d908a2` removed the renderer `ui-notifications-saga` (the `notification:show` → sound and `notification:navigate` → workspace-navigation handlers). Same lost-saga-handler pattern as STAB-75/76/83.
+
+**Expected:** On agent completion, an OS banner is shown (gated by `soundOnlyWhenUnfocused`: ON suppresses the banner while a workspace window is focused, OFF shows it even while focused), the notification sound plays per the renderer sound gate, and clicking the banner navigates to the workspace.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#195](https://github.com/intent-hq/cloudlands-fe/pull/195), 2026-07-20) — main process: `NotificationService` owns a long-lived `events.subscribe` for `agent:idle` (re-issued on reconnect, prefs read fresh per event, `agent.list` enrichment/suppression); renderer: new `notification-ipc-service` middleware re-homes the sound and click-navigation handlers.
+
+---
 
 ### STAB-141 (2026-07-20, area: cloudlands-fe Settings / provider-settings persistence, severity: P1)
 
