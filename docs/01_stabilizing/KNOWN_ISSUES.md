@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-127 (as of 2026-07-20)
+**Next available ID:** STAB-129 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,22 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-127 (2026-07-19, area: intentd acp/prompt-injection, severity: P1)
+
+(Planned as "STAB-111" in the injection-mechanism workstream; filed as STAB-127 because the STAB-111 ID was already taken by the dangling-tool_use session-resume issue.)
+
+Assembled system prompt silently dropped for providers with no native system-prompt mechanism (`cortex`, `mock`): the daemon-side `assemble_system_prompt` output (behavior prompt + `<specialist_role>`) was persisted on the agent session but never delivered to the provider, so specialist agents ran with no role/behavior instructions at all.
+
+**Repro:** Create a specialist agent (e.g. `specialistId: "implementor"`) on the cortex or mock provider and drive a turn. Observed: the outbound `session/prompt` contains only the per-turn role reminder and user content — the assembled system prompt (including the `<specialist_role>` section) never reaches the provider by any mechanism (no rules-file flag, no `_meta`, no env config, no prompt prepend).
+
+**Root cause:** The `InjectionMechanism` registry ([intent-hq/intentd#253](https://github.com/intent-hq/intentd/pull/253)) tags `cortex` and `mock` as `FirstTurnPrepend`, but no code consumed that variant — the fallback delivery path was never implemented, so those providers' assembled prompts were dropped on the floor.
+
+**Expected:** For `FirstTurnPrepend` providers, the assembled system prompt is prepended `<system>`-wrapped to the FIRST prompt of each fresh ACP session (before context/naming/reminder/user content), re-fires after session recreation, never repeats within a session, and is never double-injected for providers with a native mechanism.
+
+**Status:** fixed ([intent-hq/intentd#263](https://github.com/intent-hq/intentd/pull/263), 2026-07-20) — `AgentManager` arms a per-agent prepend flag in `start_session` on fresh sessions (`session/new` brand-new or recreate; never `session/load` resume) for `FirstTurnPrepend` providers and consumes it in `build_turn_prompt` as the outermost `<system>` block. Transient store errors keep the flag armed for retry. Covered by unit tests (fire-once, recreate re-fire, native-mechanism no-arm, blank-prompt skip, ordering) and a WSS e2e (`e2e_wss_system_prompt_fallback.rs`) asserting the exact prompt text received by the mock provider on turns 1 and 2 via the new `MOCK_AGENT_PROMPT_LOG` fixture seam.
+
+---
 
 ### STAB-124 (2026-07-19, area: intentd interrupt/abort persistence, severity: P1)
 
@@ -286,6 +302,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-128 (2026-07-20, area: intentd/tests (WSS e2e), severity: P2)
+
+E2e test `agent_message_event_emitted_for_queue_drain_and_wake_over_wss` (`crates/intentd/tests/e2e_wss_agent_lifecycle.rs`) times out under the full parallel `cargo test` suite but passes in isolation.
+
+**Repro:** In `packages/intentd`, run the full `cargo test` (parallel, all targets): the test fails with a timeout (2/2 repro during Wave-1-era verification; also reproduced 2026-07-20). Run it in isolation — `cargo test --test e2e_wss_agent_lifecycle agent_message_event_emitted_for_queue_drain_and_wake_over_wss` — and it passes reliably (3/3, plus 2026-07-20 confirmation).
+
+**Root cause:** Unknown; suspected resource contention (many daemon processes + node mock agents spawned concurrently by sibling e2e suites) pushing queue-drain/wake event delivery past the test's timeout window. Introduced by [intent-hq/intentd#234](https://github.com/intent-hq/intentd/pull/234).
+
+**Expected:** The test passes reliably under the full parallel suite, or its timing bounds account for contention from sibling e2e suites.
+
+**Status:** open
+
+---
 
 ### STAB-125 (2026-07-19, area: intentd agent status wire, severity: P2)
 
