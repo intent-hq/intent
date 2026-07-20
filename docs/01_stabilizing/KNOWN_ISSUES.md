@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-138 (as of 2026-07-20)
+**Next available ID:** STAB-139 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-138 (2026-07-20, area: PR sync (intentd + cloudlands-fe), severity: P1)
+
+A workspace with an older merged PR linked on its branch never surfaced a newer open PR on the same branch — neither in the background sweep nor via the Changes-panel refresh button.
+
+**Repro:** Have a workspace whose branch X has an older, already-merged PR linked as the active PR, then open a newer PR (#300) on the same branch X. Observed: the daemon never relinks to the newer open PR (a merged PR whose head ref still matches the branch stays linked forever, so discovery never runs), never populates `pull_requests`, and the Changes-panel refresh only re-read the already-linked PR (`pr.status`) — so the new PR (#300) never appeared, even after the 60s background sweep.
+
+**Expected:** The daemon relinks to the newest open PR on the branch after the linked PR is merged/closed, maintains a daemon-owned `pull_requests` list (merged history + open PRs), and the Changes-panel refresh triggers on-demand daemon-side discovery (`pr.refresh`) so the new PR appears within one refresh action.
+
+**Status:** fixed ([intent-hq/intentd#267](https://github.com/intent-hq/intentd/pull/267) + [intent-hq/intentd#273](https://github.com/intent-hq/intentd/pull/273) + [intent-hq/cloudlands-fe#181](https://github.com/intent-hq/cloudlands-fe/pull/181), 2026-07-20) — intentd: relink after merge/close and daemon-owned `pull_requests` upserts on all link/refresh paths (#267), plus a `pr.refresh` RPC for on-demand discovery (#273); cloudlands-fe: refresh button calls `pr.refresh` and `pr:linked`/`pr:updated` event handling folds `pullRequests` (#181).
+
+---
 
 ### STAB-137 (2026-07-20, area: release CI / cloudlands-fe release workflow, severity: P1)
 
