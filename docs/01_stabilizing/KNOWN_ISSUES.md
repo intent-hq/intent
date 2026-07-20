@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-118 (as of 2026-07-19)
+**Next available ID:** STAB-119 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -19,17 +19,31 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-117 (2026-07-19, area: intentd agent runtime + cloudlands-fe model picker, severity: P1)
+### STAB-117 (2026-07-20, area: cloudlands-fe specialist hydration, severity: P1)
 
-Model selector inconsistency: picker showed Claude Fable 5 while the request actually went to Claude Sonnet 4.5; delegated agents ignored settings default models.
+Specialist refetch corruption: refetching specialists during file-watching startup corrupted bundled specialist state in memory, causing new specialist-delegated agents to fail spawn with "specialist not found" errors even though the bundled specialist files existed.
 
-**Repro:** Observed: picker showed "Claude Fable 5" but the agent replied as Claude Sonnet 4.5. Delegated agents (implementor/verifier) created without an explicit model ignored the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides) and fell through to the CLI's own default.
+**Repro:** With file-watching enabled (default in dev mode), start the daemon and immediately delegate a task to a specialist (implementor/verifier). Observed: the agent spawn failed with "specialist not found" or similar error, even though the bundled specialist markdown files were present in the resources directory. The issue occurred because the file-watcher startup sequence refetched specialists from disk, and user-created specialists (even empty ones) shadowed bundled specialists, resulting in incomplete specialist metadata (missing model, tool restrictions, etc.).
 
-**Root cause:** Three compounding bugs: (A) `agent.setModel` only persisted `session.model`. The model is applied only at spawn time (`ensure_started` → `resolve_spawn` → `--model`). When the agent's child process is alive, `ensure_started` short-circuits and returns the existing `acpSessionId`, so the running provider keeps its spawn-time model indefinitely. (B) For agents created without an explicit model (e.g., delegated verifier/implementor agents), `session.model` is null and intentd spawns the CLI without `--model` (CLI's own default applies). The FE footer picker falls back to `hydratedInputModel ?? agentModel` where `agentModel` defaults to the FE constant `DEFAULT_AGENT_MODEL`, displaying a model the agent is not actually using. (C) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` are defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignore the settings-configured default entirely and fall through to the CLI's own default.
+**Root cause:** The specialist refetch logic (`specialists::load_all_specialists`) did not preserve bundled specialist state when user files shadowed them. During startup, the file-watcher triggered a refetch that replaced bundled specialists with user specialists, losing critical metadata (default model, tool restrictions, etc.) from the bundled files. New agents delegated to these specialists failed to spawn because the specialist metadata was incomplete.
 
-**Expected:** Changing the model on an agent with a live provider process takes effect on that agent's next turn. Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). The footer picker never displays a concrete model name for a session whose model is null; it shows the default-model option instead.
+**Expected:** Refetching specialists preserves bundled specialist data even when user files shadow them. Bundled specialists remain fully functional with their default models and tool restrictions intact.
 
-**Status:** fixed ([intent-hq/intentd#257](https://github.com/intent-hq/intentd/pull/257) + [intent-hq/cloudlands-fe#160](https://github.com/intent-hq/cloudlands-fe/pull/160), 2026-07-19) — intentd: respawn-on-setModel + creation-time settings-default resolution, 4 unit tests + WSS e2e test; cloudlands-fe: call-site fallbacks removed, AgentSession.model nullable end-to-end (type + Zod schema + stream-lifecycle wire coercion), all 7 review threads resolved.
+**Status:** fixed ([intent-hq/cloudlands-fe#174](https://github.com/intent-hq/cloudlands-fe/pull/174), 2026-07-20) — Modified specialist refetch logic to preserve bundled specialist metadata when shadowed by user files. Added regression test verifying bundled specialists remain functional after refetch.
+
+---
+
+### STAB-118 (2026-07-20, area: cloudlands-fe settings hydration / background agents, severity: P1)
+
+Background agent default model settings were not persisted or hydrated: changes to `backgroundAgents.defaultModel` and `backgroundAgents.typeOverrides` in the Settings UI were not saved to the daemon, and the UI did not hydrate these values on mount, always showing empty/default state even when the daemon had values configured.
+
+**Repro:** Open Settings → Background Agents, change the default model or type-specific model overrides, close settings. Reopen Settings → Background Agents. Observed: the UI showed the default/empty state instead of the previously configured values. The daemon had the values (verified via settings.get RPC), but the FE never persisted changes or hydrated on mount.
+
+**Root cause:** The Settings UI component for background agent models did not call the settings.update RPC when values changed, and did not call settings.get on mount to hydrate existing values from the daemon. The UI state was purely local and never synchronized with the daemon's settings store.
+
+**Expected:** Changes to background agent default model and type overrides are persisted to the daemon via settings.update. The UI hydrates existing values from the daemon on mount via settings.get, so users see their previously configured values.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#175](https://github.com/intent-hq/cloudlands-fe/pull/175), 2026-07-20) — Added settings.update calls on value change and settings.get call on mount to persist and hydrate background agent model settings. All settings changes now persist across app restarts.
 
 ---
 
@@ -61,17 +75,17 @@ After previously using a repo, opening the New Workspace modal (Cmd+N or sidebar
 
 ---
 
-### STAB-115 (2026-07-19, area: cloudlands-fe terminal footer / scripts hydration, severity: P2)
+### STAB-115 (2026-07-20, area: intentd agent runtime + model resolution, severity: P1)
 
-Switching workspaces briefly flashed "Detect Scripts" in the terminal footer before the detected script count appeared, creating a jarring UX and implying no scripts were detected when they were.
+Model selector and default model resolution failures: delegated agents (implementor/verifier) created without an explicit model ignored settings-configured defaults and fell through to the CLI's own default. Additionally, specialist frontmatter model was not resolved or persisted at agent creation time, and path-traversal/workspace-path security guards were missing.
 
-**Repro:** With script detection enabled, switch to a different workspace that has detected scripts (e.g., via the workspace switcher or by opening a new workspace from the Home screen). Observed: the terminal footer button briefly flashed "Detect Scripts" text for 100-500ms before updating to show "Scripts (N)" with the detected count, even though the workspace had N>0 scripts already detected and persisted.
+**Repro:** Delegate a task to an implementor or verifier without specifying a model. Observed: the agent used the CLI's default model instead of the settings-configured default (model.default, model.workspaceOverrides, backgroundAgents.defaultModel, backgroundAgents.typeOverrides). Specialist frontmatter `model:` field was not read during delegation, so specialist-specific model preferences were ignored.
 
-**Root cause:** The "Detect Scripts" button visibility was gated only on `scriptEntries.length === 0` (checking whether any scripts exist in the store), without checking whether the scripts slice had finished hydrating for the newly-selected workspace. On workspace switch, the scripts slice starts with `initialized: false` and an empty `scriptEntries` array until the `workspaceMounted` fan-out's `scripts.list` RPC resolves. During this initialization window, the button showed "Detect Scripts" (the empty-state CTA) instead of waiting for hydration to complete.
+**Root cause:** Two bugs: (A) The settings keys `model.default`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`, and `backgroundAgents.typeOverrides` were defined in the settings schema but never read by `agent_create_op` / `agent_delegate_op` / `resolve_spawn`. Delegated agents created without an explicit model ignored the settings-configured default entirely and fell through to the CLI's own default. (B) Specialist frontmatter model was not parsed or resolved at agent creation time - it was only read during spawn, so the persisted `session.model` remained null even when the specialist defined a default model. (C) No path-traversal or workspace-path security guards on specialist file loading, allowing potential security issues.
 
-**Expected:** The "Detect Scripts" button should only appear when the scripts slice is initialized AND the workspace has zero detected scripts. During initial hydration (scripts not yet loaded), the button should not render at all or should show a loading skeleton.
+**Expected:** Agents created without an explicit model get the settings-configured default resolved and persisted to `session.model` at creation time (specialist frontmatter model > model.workspaceOverrides > backgroundAgents.typeOverrides/defaultModel > model.default > CLI default). Specialist frontmatter model is parsed and persisted during agent creation. Path-traversal and workspace-path security guards prevent loading specialists from outside allowed directories.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#162](https://github.com/intent-hq/cloudlands-fe/pull/162), 2026-07-19) — Gated button visibility on `initialized && scriptEntries.length === 0` in `TerminalFooter.svelte`, ensuring the button only appears after scripts have been loaded and confirmed empty. Scripts slice already tracked `initialized` state from the seeder.
+**Status:** fixed ([intent-hq/intentd#261](https://github.com/intent-hq/intentd/pull/261) + [intent-hq/intentd#262](https://github.com/intent-hq/intentd/pull/262), 2026-07-20) — PR #261: added providerDefaults reading in model resolution chain with precedence specialist > workspace-override > type-override/default-model > CLI-default; PR #262: specialist frontmatter model resolved and persisted at agent creation time, added path-traversal and workspace-path security guards for specialist file loading.
 
 ---
 
