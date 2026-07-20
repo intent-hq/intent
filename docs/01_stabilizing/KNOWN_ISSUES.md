@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-138 (as of 2026-07-20)
+**Next available ID:** STAB-142 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -19,6 +19,46 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-141 (2026-07-20, area: cloudlands-fe Settings / provider-settings persistence, severity: P1)
+
+The additional-agent enable toggle (e.g. OpenCode) in Settings was not persisted: it flipped back to its previous state after a reload.
+
+**Repro:** Open Settings → Agents and enable OpenCode (or disable an enabled additional provider), then reload the app (cmd+R). Observed: the toggle reverts to its pre-toggle state.
+
+**Root cause:** The provider-settings-persistence middleware only observed `setActiveProvider`; nothing wrote `providers.enabled` to the daemon, so the local toggle change was reverted by settings hydration on the next boot.
+
+**Expected:** Toggling an additional provider's enabled state persists `providers.enabled` to the daemon and survives reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#186](https://github.com/intent-hq/cloudlands-fe/pull/186), 2026-07-20) — provider-settings-persistence middleware now also observes the enabled-providers toggle and persists `providers.enabled` to the daemon.
+
+---
+
+### STAB-140 (2026-07-20, area: intentd agent transcript persistence, severity: P1)
+
+Image/file attachments on user messages were not persisted to transcript rows, so the new-workspace initial message (and any reloaded conversation) showed no image in the conversation view even though the agent received it.
+
+**Repro:** Create a new workspace with an initial prompt that includes an image attachment (or call `agent.sendMessage` with `imageBlocks`/`fileBlocks`), then reload the conversation view (`agent.getConversation` / app restart). Observed: the persisted user row carried only the text block — the attachment was gone — even though the live turn delivered the image to the agent via the queue/ACP prompt path.
+
+**Root cause:** Every user-row persist path (`AgentManager::send_message` / `force_message`, the queue-drain `persist_user`, and the store-only fallbacks `agent_send_message_op` / `agent_force_message_op` used by `workspace.create`'s initial agent) built the transcript row from a single text block, dropping FE-supplied `imageBlocks` / `fileBlocks`. Attachments only survived in the live view because the outbound ACP prompt carried them; nothing persisted them to `agent_message` rows.
+
+**Expected:** User transcript rows persist image/file content blocks alongside the text block, so reloaded conversations (including the new-workspace initial message) render attachments.
+
+**Status:** fixed ([intent-hq/intentd#276](https://github.com/intent-hq/intentd/pull/276), 2026-07-20) — a shared `user_message_blocks` helper now builds the persisted block array (one `text` block followed by `image` blocks and `file` blocks, malformed entries skipped) and all user-row persist paths use it (send/force/interrupt, queue drain via the blocks captured on the `QueuedMessage`, and the store-only fallbacks); requeue paths marked `persisted: true` still skip `persist_user`, so retries never duplicate attachment blocks. Covered by unit tests plus WSS e2e regressions for `agent.sendMessage` and the `workspace.create` initial-agent path. Note: PR #276 references this issue as "STAB-133" — that ID was reserved from a stale tracker copy and already belongs to the intent-store pool-contention entry, so it is filed here as STAB-140.
+
+---
+
+### STAB-138 (2026-07-20, area: PR sync (intentd + cloudlands-fe), severity: P1)
+
+A workspace with an older merged PR linked on its branch never surfaced a newer open PR on the same branch — neither in the background sweep nor via the Changes-panel refresh button.
+
+**Repro:** Have a workspace whose branch X has an older, already-merged PR linked as the active PR, then open a newer PR (#300) on the same branch X. Observed: the daemon never relinks to the newer open PR (a merged PR whose head ref still matches the branch stays linked forever, so discovery never runs), never populates `pull_requests`, and the Changes-panel refresh only re-read the already-linked PR (`pr.status`) — so the new PR (#300) never appeared, even after the 60s background sweep.
+
+**Expected:** The daemon relinks to the newest open PR on the branch after the linked PR is merged/closed, maintains a daemon-owned `pull_requests` list (merged history + open PRs), and the Changes-panel refresh triggers on-demand daemon-side discovery (`pr.refresh`) so the new PR appears within one refresh action.
+
+**Status:** fixed ([intent-hq/intentd#267](https://github.com/intent-hq/intentd/pull/267) + [intent-hq/intentd#273](https://github.com/intent-hq/intentd/pull/273) + [intent-hq/cloudlands-fe#181](https://github.com/intent-hq/cloudlands-fe/pull/181), 2026-07-20) — intentd: relink after merge/close and daemon-owned `pull_requests` upserts on all link/refresh paths (#267), plus a `pr.refresh` RPC for on-demand discovery (#273); cloudlands-fe: refresh button calls `pr.refresh` and `pr:linked`/`pr:updated` event handling folds `pullRequests` (#181).
+
+---
+
 ### STAB-137 (2026-07-20, area: release CI / cloudlands-fe release workflow, severity: P1)
 
 Every release was blocked: the Release Beta workflow's "Generate release notes" step failed with `GitHub API error: 404 Not Found`, aborting the run before any artifacts were published.
@@ -29,7 +69,7 @@ Every release was blocked: the Release Beta workflow's "Generate release notes" 
 
 **Expected:** Release-notes generation succeeds even though the fe HEAD includes the unpushed version-bump commit, and the bump commit does not pollute the notes.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20) — new `Capture fe SHA for release notes` step records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds, the bump commit is excluded from the notes by construction, and `release-manifest.json` is still emitted with a resolvable `feSha` (`intentdSha` base resolution untouched).
+**Status:** fixed ([intent-hq/cloudlands-fe#180](https://github.com/intent-hq/cloudlands-fe/pull/180), 2026-07-20; follow-up [intent-hq/cloudlands-fe#182](https://github.com/intent-hq/cloudlands-fe/pull/182), 2026-07-20) — #180 added a `Capture fe SHA for release notes` step that records the checked-out `main` HEAD immediately after checkout (before the bump commit exists) and passes it as `--fe-head`; the SHA exists on origin so the compare API succeeds and the bump commit is excluded from the notes by construction. A second 404 remained (run [29744986202](https://github.com/intent-hq/cloudlands-fe/actions/runs/29744986202)): the step used `INTENTD_READ_PAT` — scoped to `intent-hq/intentd` only — as the single token for both repos, so the cloudlands-fe compare still 404'd. #182 gives the script per-repo tokens (`FE_TOKEN`/`INTENTD_TOKEN`, each falling back to `GITHUB_TOKEN`); the workflow passes the default `github.token` for fe and `INTENTD_READ_PAT` for intentd. A third failure followed (run [29748320898](https://github.com/intent-hq/cloudlands-fe/actions/runs/29748320898)): the `Push intentd tag` step died with `fatal: could not read Username for 'https://github.com': Device not configured` because it configured `http.<url>.extraheader` as `AUTHORIZATION: Bearer <PAT>` — github.com's git-over-HTTPS endpoint rejects Bearer extraheaders (`remote: invalid credentials`), so git fell back to an interactive username prompt. [intent-hq/cloudlands-fe#183](https://github.com/intent-hq/cloudlands-fe/pull/183) (2026-07-20) builds the header as `basic base64(x-access-token:PAT)` (the format `actions/checkout` persists), masks the derived value, removes the read-only header persisted by the intentd checkout, and scopes the credential to the single push via `git -c` so it never persists on disk.
 
 ---
 
@@ -354,6 +394,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
+
+Creating a workspace silently reuses the previous create's repository, and the workspace-initializer persistence layer can clobber its own daemon-persisted state before hydration completes.
+
+**Repro:** Create a workspace from repo X, return to the New Workspace initializer, and create another workspace without explicitly re-picking a repository. Observed while dogfooding: workspace `json-config-2` ("Fix submodule config regression") was silently bound to `panghy/whatsapp-mcp-server` (carried over from a create two minutes earlier) instead of the intended `intent-hq/monorepo` — the daemon faithfully provisioned the `repositoryPath` the FE sent. For the persistence half: select repos repeatedly, then inspect the persisted `workspaceInitializer.state` bag — it held `lastSelectedRepo: null`, `recentRepos: []`, `compactFormState.repoPath: ""` despite many explicit selections.
+
+**Root cause:** (1) Carry-over — `CompactWorkspaceInitializer.svelte` keeps `repoPath` sticky across creations (in-memory, plus restore of persisted `compactFormState` when `!repoPath`), so the next create silently inherits the previous repo and nothing in the create flow makes the target repo conspicuous. (2) Persistence race — `workspace-initializer-persistence-service.ts` fires `hydrateOnce()` lazily and unawaited, while `persistStateBag()` writes the **whole** Redux bag on every persisted action; any persist-triggering dispatch that lands before hydration resolves overwrites previously-saved fields with defaults (observed: `lastSelectedRepo` null, `recentRepos` [], `compactFormState.repoPath` ""), so the STAB-104/106 most-recent-repo restore never has data to restore.
+
+**Expected:** Pre-hydration persists cannot erase `lastSelectedRepo`/`recentRepos`/`compactFormState` from the daemon bag, and creating a workspace does not silently bind to a stale repository from the previous create.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#184](https://github.com/intent-hq/cloudlands-fe/pull/184), 2026-07-20) — persists that fire while hydration is in flight are now queued and flushed once after `hydrateOnce()` settles, when Redux state reflects the merged daemon values, so pre-hydration dispatches can no longer clobber the daemon-persisted `workspaceInitializer.state`; with the saved `lastSelectedRepo`/`recentRepos`/`compactFormState` intact, the STAB-104/106 most-recent-repo restore has data again. Regression-tested (no daemon write while hydration is pending; the post-hydration flush retains previously persisted values). The sticky most-recent-repo default itself is retained by design (per STAB-104/106). Submodule bump: [intent-hq/monorepo#315](https://github.com/intent-hq/monorepo/pull/315).
+
+---
 
 ### STAB-128 (2026-07-20, area: intentd/tests (WSS e2e), severity: P2)
 

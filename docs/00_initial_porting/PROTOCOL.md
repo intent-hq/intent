@@ -657,10 +657,10 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.sendToTask | taskNoteId (req), message (req), priority? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist |
 | agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? } — `priority: "interrupt"` preempts an in-flight turn instead of queueing: the current turn is cancelled keep-alive (`session/cancel` + one terminal `agent:stream:end`; the agent process is never killed) and the message streams immediately as a fresh turn on the same session (`queued: false`); the pending queue is preserved and drains afterwards. On an idle agent, interrupt priority falls through to the normal send path. **Duplicate delivery** of the SAME interrupt (same client-supplied `messageId`) preempts exactly once: the duplicate is acknowledged idempotently as `{ success: true, queued: false, messageId, deduplicated: true }` — no second preemption, message NOT double-persisted (dedup keys on `messageId`; omit it and duplicates are indistinguishable from new sends). **During turn startup** (busy slot claimed but no cancellable turn live yet — spawn/`session/new` in flight) the preemption is skipped and the message queues keep-alive behind the starting turn (`queued: true`); the agent is never killed and never fails. **Per-turn prompt-assembly hints (Fidelity B).** `stdinContext` is prepended verbatim to the outbound prompt as a `Context:\n<stdin>\n\n---\n\n` block (reference-parity `acp-provider.ts`); when absent, one is synthesised from `contextReferences` (port of `agent-backend-handler.service.ts`’s builder — first-non-empty wins across `content` / `selectedText` / `taskText` / `codeChunk`, with per-`type` framing for `selection` / `task` / `code_chunk` / `file` / `linear-issue` / `github-issue` / `sentry-issue` / `terminal`; unknown types fall through to the raw content). `noteIds` are resolved to workspace-asset image content blocks: each note's markdown is scanned for `workspace-asset://<workspaceId>/<assetId>` URLs in the current workspace, the referenced bytes are appended as ACP `image` blocks, and a single system text notice is added noting how many images were inlined. `messageMetadata` is opaque JSON persisted on the user message row (new `agent_message.metadata` column) and echoed on read — used by clients (e.g. `{ source: "system" }`) to distinguish daemon-initiated turns; the daemon never inspects its shape. **Daemon-ignored fields (FE-forwarded, unwired daemon-side; documented so callers know the wire shape stays stable when the daemon widens).** The FE-side app-ID trio (`userAppMessageId` / `assistantMessageId` / `assistantAppMessageId`) is accepted by the router but not consumed: the transcript is keyed on the server-minted UUIDv7 `id` and any client-side identity round-trips via `messageMetadata`. Per-turn `model` override is likewise accepted but **not extracted** by the daemon router today; the session-level model set at `agent.create` / `agent.setModel` remains authoritative (deferred pending an ACP-provider-side change to switch model mid-session). |
 | agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks?, noteIds?, stdinContext?, contextReferences?, messageMetadata? | service result (stops current stream first) — same per-turn hint semantics as `agent.sendMessage` (Fidelity B): `stdinContext` / `contextReferences` build the `Context:` block, `noteIds` inlines workspace-asset images with a system notice, and `messageMetadata` persists on the user message row |
-| agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks? } |
+| agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks?, messageMetadata? } — `messageMetadata` is only present when the entry was enqueued with per-message metadata (e.g. an internal wake's `event_notification` payload captured while the agent was busy); user-typed `agent.queueMessage` entries never carry it. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req) | { success, queuedMessage } (QueuedMessage shape as above) |
 | agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
-| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks? } |
+| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks?, messageMetadata? } (shape as `agent.queueMessage`) |
 | agent.stop | agentId (req) | { success: true } |
 | agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result — emits `agent:updated` |
 | agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
@@ -813,7 +813,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace; otherwise the underlyingservice throws → `-32603`.
+All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below).
 
 > Host-agnostic naming. pr.* is the ported wire name from augmentcode/intent and isnot renamed. Conceptually it is host-agnostic — "PR" covers pull request / merge request /change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvidersetting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
@@ -829,16 +829,29 @@ All `pr.*` methods require an active pull request on the workspace; otherwise th
 | pr.listComments | count? | conversation-level comments |
 | pr.postComment | body (req) | service result |
 
-**`pr.*` extensions (new in intentd — additive; do not change the ported count of 9).** Three
-review/CI methods extend the existing `pr.*` namespace; they map onto the `SourceControl` trait
-(`list_reviews` / `check_runs` / `submit_review` — IMPLEMENTATION_SPEC.md §7) and stay
-host-agnostic.
+**`pr.*` extensions (new in intentd — additive; do not change the ported count of 9).** Four
+methods extend the existing `pr.*` namespace. Three review/CI methods map onto the
+`SourceControl` trait (`list_reviews` / `check_runs` / `submit_review` —
+IMPLEMENTATION_SPEC.md §7) and stay host-agnostic. `pr.refresh` forces the same PR
+discovery/refresh the daemon's background sweep runs for one workspace, on demand.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
 | pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas) |
 | pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
+
+> **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
+> active PR — it exists to establish/repair the link. It runs the shared refresh path
+> (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
+> resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
+> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
+> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring.
+> Unlike the usual omitted-when-absent (`skip_serializing_if`) convention, `prNumber` /
+> `prUrl` / `prStatus` are always present and serialize as literal `null` when no PR is
+> linked after the refresh; `pullRequests` is always an array (possibly empty). An unknown
+> `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
 // → request — submit an approving review on the active PR
@@ -2980,7 +2993,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task under a per-repository lock. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
-| pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest }`, `pr:unlinked` → `{ workspaceId }`. |
+| pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest, pullRequests }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest, pullRequests }`, `pr:unlinked` → `{ workspaceId }`. `pullRequests` is the daemon-owned `PullRequestInfo[]` list (every refreshed/discovered/created PR upserted by number, merged/closed PRs retained) so clients can render the full per-branch PR list without a refetch; it is always an array on the wire (`[]` when empty, never `null`). |
 | agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
 | skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace. The daemon watches the 5 scan roots (user p1-3 + project p4-5) via `notify` watchers; when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the set actually changed. User-tier changes (p1-3) affect all workspaces; project-tier changes (p4-5) are workspace-scoped. data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.34) to refresh the skill roster. New in intentd — not part of the ported reference taxonomy. |
