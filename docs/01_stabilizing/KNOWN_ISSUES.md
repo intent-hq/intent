@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-141 (as of 2026-07-20)
+**Next available ID:** STAB-142 (as of 2026-07-20)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-141 (2026-07-20, area: cloudlands-fe Settings / provider-settings persistence, severity: P1)
+
+The additional-agent enable toggle (e.g. OpenCode) in Settings was not persisted: it flipped back to its previous state after a reload.
+
+**Repro:** Open Settings → Agents and enable OpenCode (or disable an enabled additional provider), then reload the app (cmd+R). Observed: the toggle reverts to its pre-toggle state.
+
+**Root cause:** The provider-settings-persistence middleware only observed `setActiveProvider`; nothing wrote `providers.enabled` to the daemon, so the local toggle change was reverted by settings hydration on the next boot.
+
+**Expected:** Toggling an additional provider's enabled state persists `providers.enabled` to the daemon and survives reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#186](https://github.com/intent-hq/cloudlands-fe/pull/186), 2026-07-20) — provider-settings-persistence middleware now also observes the enabled-providers toggle and persists `providers.enabled` to the daemon.
+
+---
 
 ### STAB-140 (2026-07-20, area: intentd agent transcript persistence, severity: P1)
 
