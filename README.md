@@ -1,12 +1,9 @@
-# Cloudlands Monorepo
+# Intent Monorepo
 
-Internal engineering monorepo for **Cloudlands**, an agentic coding platform. This repo ties
-the Cloudlands components together via git submodules and provides unified docs, tooling, and
+Monorepo for **Intent**, an agentic coding platform. This repo ties
+the Intent components together via git submodules and provides unified docs, tooling, and
 CI/CD. It mounts the **Rust backend daemon (`intentd`)**, the **Electron + SvelteKit
 desktop frontend (`cloudlands-fe`)**, and the **SwiftUI iOS companion app (`ios`)** as submodules.
-
-> ⚠️ Private Repository — This repo is internal to the Cloudlands engineering team. The
-> component repositories it references are also private. See Related Repositories for links.
 
 ## Architecture Overview
 
@@ -72,11 +69,11 @@ monorepo/
 
 ## Submodules
 
-| Path                     | Repository                                                                    | Visibility |
-| ------------------------ | ----------------------------------------------------------------------------- | ---------- |
-| `packages/intentd`       | [intent-hq/intentd](https://github.com/intent-hq/intentd)                     | Private    |
-| `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe)         | Private    |
-| `packages/ios`           | [intent-hq/ios](https://github.com/intent-hq/ios)                             | Private    |
+| Path                     | Repository                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------- |
+| `packages/intentd`       | [intent-hq/intentd](https://github.com/intent-hq/intentd)                     |
+| `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe)         |
+| `packages/ios`           | [intent-hq/ios](https://github.com/intent-hq/ios)                             |
 
 ## Getting Started
 
@@ -154,6 +151,6 @@ Conventions:
 
 | Repository | Description |
 | --- | --- |
-| [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon (private) — JSON-RPC over UDS, mounted at `packages/intentd`. |
-| [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop frontend (private) — mounted at `packages/cloudlands-fe`. |
-| [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app (private) — mounted at `packages/ios`. |
+| [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon — JSON-RPC over UDS, mounted at `packages/intentd`. |
+| [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop frontend — mounted at `packages/cloudlands-fe`. |
+| [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app — mounted at `packages/ios`. |

@@ -1,4 +1,4 @@
-# Cloudlands Monorepo Makefile
+# Intent Monorepo Makefile
 #
 # Three postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,

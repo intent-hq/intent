@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-148 (as of 2026-07-21)
+**Next available ID:** STAB-149 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-148 (2026-07-21, area: intentd CI / e2e coverage jobs, severity: P1)
+
+Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed deterministically with `daemon did not start` panics at exactly the 10-second daemon-startup budget, blocking all PR merges (the `coverage-e2e` check is required with no admin bypass).
+
+**Repro:** Any push to main or any PR triggered the coverage jobs; e2e tests panicked at ~10.2–11.0s in `await_uds`-style startup waits (e.g. `e2e_config_precedence`, `e2e_transport`, `e2e_wss_agent_lifecycle`; the specific suites varied per run). The same tests pass locally in ~0.2s uninstrumented.
+
+**Root cause:** The coverage-instrumented `intentd` binary's startup latency crept past the hardcoded 10s budget on the oversubscribed 4-vCPU runners (`NEXTEST_TEST_THREADS: 8`). The coverage scripts export `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`, but only one suite (`e2e_wss_agent_rehydration`) honored it — every other suite hardcoded its startup wait.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up: hoist a shared multiplier-aware `test_timeout()` helper into `tests/common/` so budgets are centrally tunable.
 
 ### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
 
@@ -983,7 +993,7 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 Home-screen repo selector does not default to the most recent repository; workspace-initializer persistence never re-homed after saga removal.
 
-**Repro:** Before the fix: Open the Cloudlands home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
+**Repro:** Before the fix: Open the Intent home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
 
 **Root cause:** The workspace-initializer component (`WorkspaceInitializer.svelte`) previously persisted its form state (selected repo, branch, prompt text) via a Redux-observable saga (`workspace-initializer-saga.ts`). The saga subscribed to form-state actions and wrote to an electron-store `workspace-initializer` bag. Commit 95d908a2 ("refactor: remove redux-observable") deleted the saga file and all persistence logic, but the component continued to read from the now-static electron-store entry. New form interactions (repo selection, branch typing, prompt edits) updated local component state and Redux store state but never persisted, so the electron-store bag stayed frozen at its last pre-saga-removal value. On app restart, the component rehydrated from the stale electron-store entry, discarding all session state. The repo selector defaulted to no selection (or the stale repo) instead of the most recent repository.
 
