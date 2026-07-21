@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-152 (as of 2026-07-21)
+**Next available ID:** STAB-153 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-152 (2026-07-21, area: cloudlands-fe daemon-events-bridge / workspace-tasks staleness, severity: P2)
+
+The workspace sidebar's task-completion indicator went stale: a workspace whose stats showed all tasks complete kept its "Complete" checkmark even after new (incomplete) task notes were added, until a task status changed or the app reloaded.
+
+**Repro:** Complete all tasks in a workspace (the sidebar checkmark shows "Complete"), then have the coordinator add new task notes to that workspace. Observed: the checkmark incorrectly stays "Complete" until some task's status changes or the app is reloaded.
+
+**Root cause:** Task notes are plain notes — task state lives in note metadata — so `note:created` / `note:updated` / `note:deleted` events can change the BE-owned `task.list` stats rollup without any `task:status-changed` edge. The daemon-events bridge only refetched workspace tasks on `task:status-changed`, so `note:*` events never invalidated the cached stats.
+
+**Expected:** The workspace-tasks stats are refetched on `note:*` events (debounced per workspace), so the sidebar indicator reflects the current BE rollup without requiring a status change or reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#209](https://github.com/intent-hq/cloudlands-fe/pull/209), 2026-07-21) — the daemon-events bridge triggers a debounced (~1s per workspace, mirroring the changes-refresh pattern) `loadWorkspaceTasksRequested` refetch on `note:*` events, gated on the workspace-tasks slice already being initialized (at schedule time and re-checked at fire time) so tasks are never eagerly loaded for workspaces nobody has viewed. Covered by unit tests for the refetch, the uninitialized gate, burst coalescing, and the cleared-during-debounce case.
+
+---
 
 ### STAB-151 (2026-07-21, area: cloudlands-fe chat edit-and-regenerate UI, severity: P1)
 
