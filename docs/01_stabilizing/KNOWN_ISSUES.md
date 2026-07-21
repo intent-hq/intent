@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-143 (as of 2026-07-20)
+**Next available ID:** STAB-144 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-143 (2026-07-21, area: ios chat streaming, severity: P1)
+
+iOS chat streaming still failed after STAB-139: entering a chat with an active turn showed "thinking" with intermittent chunk flicker, the transcript was repeatedly wiped back to "thinking", and re-entering only showed the latest state.
+
+**Repro:** Start an agent turn, then enter (or re-enter) the conversation on iOS mid-turn. Observed: thinking indicator with flickering chunks that get wiped, instead of a stable streaming transcript.
+
+**Root cause:** MainActor routing race. The daemon's wire order is correct (`chat.subscribe` response before the seq-0 snapshot push), but on iOS the response frame resumes the request continuation and `subscribeLiveChat` only registers its subscription handler one or more MainActor hops later. The seq-0 snapshot push often landed in that window, hit the unrouted-push path in `ConnectionManager.handleTextMessage`, and was dropped. With the snapshot lost, `chatSeeded` stayed false, so the first delta looked like a gap and triggered `resnapshotChat()` — whose re-subscribe re-ran the same race, producing a resnapshot storm that repeatedly wiped the transcript.
+
+**Status:** fixed ([intent-hq/ios#30](https://github.com/intent-hq/ios/pull/30), 2026-07-21) — `ConnectionManager` buffers unrouted `subscription.push` frames (64-frame cap, 30s TTL) and replays them in arrival order when a handler registers (removed before delivery, so exactly-once); unregister drops buffered frames and tombstones the id so dead-subscription stragglers are not buffered (a fresh seq-0 snapshot revives a tombstoned id to handle daemon-restart id reuse); `ConversationStore` ignores stale deltas (`seq < chatExpectedSeq`) and stale snapshot re-delivery that would rewind the transcript, instead of treating them as gaps. 10 regression tests; full IntentTests suite (288 tests) passes.
+
+---
 
 ### STAB-142 (2026-07-20, area: cloudlands-fe notifications, severity: P1)
 
