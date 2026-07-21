@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-154 (as of 2026-07-21)
+**Next available ID:** STAB-160 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,54 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-159 (2026-07-21, area: ios navigation, severity: P1)
+
+On iPad, the "< Agents" back button in the conversation toolbar did nothing after the app auto-restored the last-open agent on launch — tapping it left the conversation on screen, with no way back to the agent list without force-quitting.
+
+**Repro:** On iPad, open an agent conversation, background/kill the app, and relaunch so the app auto-restores the agent. Tap "< Agents" in the toolbar. Observed: nothing happens; the conversation stays on screen.
+
+**Root cause:** `RootView.syncNavigationState()` performed a programmatic navigation tear-down that fired the user-back handler, desyncing `currentScreen` from the actually-visible view — subsequent back taps mutated state that no longer matched the navigation stack.
+
+**Status:** fixed ([intent-hq/ios#33](https://github.com/intent-hq/ios/pull/33), 2026-07-21) — programmatic navigation changes no longer trigger the user-back handler, so `currentScreen` stays in sync with the visible view after auto-restore and the back button navigates to the agent list as expected.
+
+---
+
+### STAB-158 (2026-07-21, area: ios chat streaming, severity: P2)
+
+While an agent turn streamed in the iOS app, tool call rows rendered as the generic spanner fallback ("🔧" + cleaned tool name, no subject) instead of the proper classified title (e.g. "📄 Read foo.rs"). Swiping out of the conversation and back in re-rendered them correctly.
+
+**Repro:** On iOS, watch a conversation while an agent turn is streaming and the agent makes tool calls. Observed: mid-turn tool rows show the generic "🔧" fallback; after leaving and re-entering the conversation (hydration via `agent.getConversation`), the same rows show the classified icon + verb + subject.
+
+**Root cause:** Live `tool_use` block deltas frequently carry empty `input` (`{}`) with only `input._acpTitle` populated (the daemon coerces auggie's `raw_input: null` to `{}` + `_acpTitle`, PROTOCOL §7.1). The iOS `ToolCallView` classifier needed input values for most branches and lacked the `_acpTitle` fallback the desktop FE classifier uses, so it fell through to the generic spanner.
+
+**Status:** fixed ([intent-hq/ios#32](https://github.com/intent-hq/ios/pull/32), 2026-07-21) — the iOS tool classifier now falls back to `input._acpTitle` when raw input is missing, matching the desktop behavior, so mid-turn tool rows render their proper titles while streaming.
+
+---
+
+### STAB-155 (2026-07-21, area: cloudlands-fe state persistence, severity: P2)
+
+`workspaceInitializer.state` persistence failed from boot with `DataCloneError`: every persist attempt logged "object could not be cloned" and nothing was saved, so initializer state (recent repos, form state) silently stopped surviving restarts.
+
+**Repro:** Launch cloudlands-fe and open the New Workspace initializer (any interaction that dispatches `setCompactWorkspaceInitializerFormState`). Observed: `settings.update` threw `DataCloneError: object could not be cloned` on every persist of the `workspaceInitializer.state` bag, from boot onward.
+
+**Root cause:** Svelte 5 `$state` proxies (the `remoteSetup`/scope form state in `CompactWorkspaceInitializer.svelte`) were dispatched as-is into the Redux bag. The persistence service then sent the whole bag over Electron IPC via `settings.update`, whose structured clone cannot serialize reactive proxies.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — the `$state`-dispatching sites (`CompactWorkspaceInitializer.svelte`, `RepoSelector.svelte`, `RemoteSetupSelector.svelte`) wrap the value in `$state.snapshot()` so no proxies enter the store, and the persistence service gained a non-throwing safety net that verifies the outgoing bag is structured-cloneable, falls back to a plain-JSON round-trip (warning once with the clone error), and skips the write entirely when even that fails. Regression tests: a proxied `remoteSetup` still persists as plain JSON with the exact PROTOCOL §5.12 wire request; an unsanitizable bag skips the persist without throwing.
+
+---
+
+### STAB-154 (2026-07-21, area: cloudlands-fe workspace operations, severity: P1)
+
+Deleting a workspace and then quitting (or reloading) the app within the 15-second undo window silently lost the delete — the workspace reappeared on the next launch.
+
+**Repro:** Delete a workspace in cloudlands-fe, then quit or reload the app before the 15s undo window elapses. Relaunch. Observed: the "deleted" workspace is back — the daemon never received `workspace.delete`.
+
+**Root cause:** The soft-hide-then-commit delete flow deferred the `workspace.delete` wire commit behind the undo window's `setTimeout`, which dies with the renderer. Nothing flushed pending deletions on unload, so quitting inside the window dropped the commit entirely.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — pending deletions are tracked in a module-level registry (mirroring the agent soft-hide-then-commit pattern) and flushed on `beforeunload`/`pagehide`, initiating the wire request synchronously before teardown; undo removes the registry entry so a flush never deletes an undone workspace, commit bails when its registry entry is already gone (no double-send), and Undo stays inert after a flush already committed. Regression tests cover flush-on-unload, undo-cancels-flush, no-double-commit, and inert-Undo-after-flush.
+
+---
 
 ### STAB-153 (2026-07-21, area: cloudlands-fe desktop notifications / main-process lifecycle, severity: P1)
 
@@ -558,6 +606,34 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
+
+The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
+
+**Repro:** Create a workspace with provider opencode via `make dev`. Observed: the workspace title is never set on the first turn, and no workspace tools appear in the agent's tool stream.
+
+**Root cause:** In `intent-services/src/agent_manager.rs`, the generated MCP config pointing at the bridge subcommand is written only when `opts.provider.supports_mcp_config` is true (auggie-only), and every `session/new` / `session/load` passes an empty `mcpServers` list. The per-provider translators in `intent-acp/src/mcp_config.rs` (`to_opencode_mcp_config`, `to_codex_mcp_overrides`, `to_claude_mcp_json`, `to_acp_mcp_servers`) exist and are tested but are never called from any production path.
+
+**Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
+
+**Status:** open — opencode portion fixed ([intent-hq/intentd#306](https://github.com/intent-hq/intentd/pull/306), 2026-07-21): at spawn, for EnvConfig-injection providers (opencode), the normalized MCP server set (workspace bridge + user servers) is translated via `to_opencode_mcp_config` and merged into `OPENCODE_CONFIG_CONTENT` as an `mcp` block alongside `permission`/`model`/`instructions`; the bridge entry points at the same `mcp-bridge --connect <addr>` endpoint the auggie path uses. claude-code, codex, and droid remain unwired. (Note: monorepo PR [#353](https://github.com/intent-hq/monorepo/pull/353) cited intent-hq/intentd#295 for this wiring — #295 is the Grok Build provider PR; the correct reference is intent-hq/intentd#306.)
+
+---
+
+### STAB-157 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
+
+Opencode tool calls render in the FE chat as generic `other` entries (wrench icons) with raw prose/pattern titles — e.g. a literal grep regex or file path — instead of real tool names and kinds.
+
+**Repro:** Run any opencode turn that greps or reads files. Observed: tool calls in the chat show wrench icons and literal regex/path titles rather than named tools.
+
+**Root cause:** `derive_tool_name` / `derive_tool_name_from_input` in `intent-acp/src/session.rs` expect `name: description`-style titles or known `raw_input` shapes. Opencode emits raw prose/pattern/path titles that bypass both heuristics, so `toolName` falls through verbatim and `tool_kind` maps to `other`.
+
+**Expected:** Opencode's title shapes are recognized so tool calls carry real tool names/kinds and the FE renders proper icons and titles.
+
+**Status:** fixed ([intent-hq/intentd#294](https://github.com/intent-hq/intentd/pull/294), 2026-07-21) — `derive_tool_name` now strips opencode's leading `workspace-mcp_` MCP prefix (mirror of auggie's trailing suffix), recognizes opencode's camelCase `rawInput` shapes captured from real 1.18.3 ACP traffic (`filePath`+`oldString`/`newString` → `edit`, `filePath`+`content` → `write`, `filePath` → `read`, string `command`+`cwd` → `bash`, `url` → `web-fetch`), and normalizes the bare `webfetch` title to `web-fetch`; with real names derived, `tool_kind_word` emits proper FE kinds (`file`/`terminal`/`search`/`note`) instead of `other`. Guards keep auggie (`launch-process` carries `wait`/`max_wait_seconds`) and codex (array `command`) derivation unchanged, regression-tested.
+
+---
 
 ### STAB-147 (2026-07-20, area: intentd test harness / workspace provisioning, severity: P2)
 
