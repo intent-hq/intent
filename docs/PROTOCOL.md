@@ -13,7 +13,7 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 4. [Message Envelope (JSON-RPC 2.0)](#4-message-envelope-json-rpc-20)
 5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
 6. [Method Catalog](#6-method-catalog)
-   - 6.1 [Router Methods](#61-router-methods-261-total)
+   - 6.1 [Router Methods](#61-router-methods-262-total)
    - 6.2 [Fast-Path Methods](#62-fast-path-methods-29-total)
    - 6.3 [Method Aliases](#63-method-aliases-2-total)
    - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
@@ -219,24 +219,24 @@ Returns commit history with attribution and workspace boundary information.
 
 ## 6. Method Catalog
 
-The API exposes **292 dispatchable method names** across the following categories:
+The API exposes **293 dispatchable method names** across the following categories:
 
-- **Router methods:** 261 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 262 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 29 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 292 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 293 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
 
-**Total:** 292 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 293 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields `-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires `workspaceId` (see §4.6) and may return `-32603 Internal error` if the underlying service throws.
 
-### 6.1 Router Methods (261 total)
+### 6.1 Router Methods (262 total)
 
-The following 261 methods are routed through the main dispatch match in `router.rs`.
+The following 262 methods are routed through the main dispatch match in `router.rs`.
 
 #### `agent.*` (38 methods)
 
@@ -262,9 +262,9 @@ file.delete, file.exists, file.list, file.mkdir, file.read, file.rename, file.st
 
 git.agentCommit, git.branchDiff, git.branchStatus, git.changes, git.checkMergeConflicts, git.checkoutBranch, git.clone, git.commit, git.commitDetails, git.commits, git.createBranch, git.diffs, git.discard, git.fetch, git.getBranches, git.getConfig, git.getRemoteUrl, git.numstat, git.pull, git.push, git.removeLockFile, git.renameBranch, git.showFile, git.stage, git.stageHunk, git.status, git.unstage, git.unstageHunk
 
-#### `github.*` (21 methods)
+#### `github.*` (22 methods)
 
-github.authStatus, github.branches.list, github.connect, github.getReviewThreads, github.getUser, github.issues.list, github.issues.search, github.listReviewComments, github.pulls.create, github.pulls.get, github.pulls.list, github.pulls.merge, github.pulls.search, github.pulls.updateBranch, github.replyReviewComment, github.repos.get, github.repos.list, github.repos.search, github.resolveThread, github.revoke, github.unresolveThread
+github.authStatus, github.branches.list, github.cancelAuth, github.connect, github.getReviewThreads, github.getUser, github.issues.list, github.issues.search, github.listReviewComments, github.pulls.create, github.pulls.get, github.pulls.list, github.pulls.merge, github.pulls.search, github.pulls.updateBranch, github.replyReviewComment, github.repos.get, github.repos.list, github.repos.search, github.resolveThread, github.revoke, github.unresolveThread
 
 #### `linear.*` (11 methods)
 
@@ -665,6 +665,7 @@ Event types follow the pattern `<category>:<action>`. Common categories:
 - **`mcp:*`** — MCP server status changes (status-changed, etc.)
 - **`spec:*`** — spec note events
 - **`goal:*`** — goal tracking events
+- **`github:*`** — GitHub auth surface: `github:auth-changed` carries `data = { status: "authorized" | "expired" | "denied" | "error" | "revoked" }` on device-flow terminal transitions and `github.revoke`; global (empty `workspaceId`), never carries a token or code
 
 ---
 
@@ -686,7 +687,7 @@ The daemon uses the following JSON-RPC 2.0 error codes:
 
 ## Summary
 
-**Protocol v2.0** exposes **292 dispatchable method names** (261 router methods + 29 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 292 dispatchable names AND are also issued daemon→client on remote connections.
+**Protocol v2.0** exposes **293 dispatchable method names** (262 router methods + 29 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 293 dispatchable names AND are also issued daemon→client on remote connections.
 
 The method surface is frozen and enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift causes CI failure with the instruction to update the catalog, this document, and bump the protocol version.
 
