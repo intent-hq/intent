@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-166 (as of 2026-07-21)
+**Next available ID:** STAB-167 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-166 (2026-07-21, area: intentd agent runtime / process cap, severity: P1)
+
+The smooth RAM-based agent process cap raise to 56 ([intent-hq/intentd#296](https://github.com/intent-hq/intentd/pull/296)) caused excessive machine load while dogfooding: with the higher cap, enough concurrent agent processes ran to saturate the machine.
+
+**Repro:** Dogfood intentd + cloudlands-fe with many delegated agents on a build containing #296. Observed: the effective process cap scaled up to 56 and the machine became heavily loaded/unresponsive under concurrent agent activity.
+
+**Status:** fixed ([intent-hq/intentd#322](https://github.com/intent-hq/intentd/pull/322), 2026-07-21) — the RAM-based cap raise is reverted. The read-pool raise ([intent-hq/intentd#304](https://github.com/intent-hq/intentd/pull/304)) was intentionally kept.
+
+---
 
 ### STAB-165 (2026-07-21, area: intentd / intent-services (workspace.list, workspace.get), severity: P1)
 
