@@ -291,7 +291,7 @@ field is retired from all write paths (kept for wire compat and legacy read-only
 fallback only). After the config write, if an effective setup script exists (non-empty,
 resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
 daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
-the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+`/bin/sh` with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
 (the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
 (baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
 surfaced. Script output is streamed to a workspace terminal named **"Setup Script"**
@@ -905,7 +905,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **NOT PORTING (won't-port-v1)**: no router arm; see the `browser.docs — NOT PORTING (v1)` block below |
-| terminal.list | workspaceId (req) | { terminals: [{ id, name, cwd, isExecutingCommand }] } — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
+| terminal.list | workspaceId (req) | bare array `[{ id, name, cwd, isExecutingCommand }]` — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -1892,7 +1892,7 @@ read-only fallback only). `detectProjectType` inspects manifest files to classif
 **Setup script execution:** When a workspace is created (`workspace.create`) and an effective
 setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
 fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
-provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
+provisioning in the worktree directory via `/bin/sh` with env vars `MAIN_CHECKOUT`
 (repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
 branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
 errors are logged and surfaced. Script output is streamed to a workspace terminal named
