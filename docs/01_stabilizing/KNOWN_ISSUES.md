@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-150 (as of 2026-07-21)
+**Next available ID:** STAB-166 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,196 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-165 (2026-07-21, area: intentd / intent-services (workspace.list, workspace.get), severity: P1)
+
+`workspace.list` times out on large worktrees or many workspaces.
+
+**Repro:** With several large repos or many workspaces, FE polls `workspace.list` and hits "JSON-RPC request timed out: workspace.list" — the call ran synchronous git diffs (`head_diff_rollup`) and live CoW filesystem probes per workspace inline on the async runtime.
+
+**Status:** fixed ([intent-hq/intentd#314](https://github.com/intent-hq/intentd/pull/314), 2026-07-21) — enrichment offloaded to the blocking pool, parallelized with bounded concurrency, cached (5s TTL for diffs, per-pair lifetime for CoW), and time-budgeted (1.5s/aggregate) so the call degrades to stale/omitted aggregates instead of blocking.
+
+---
+
+### STAB-164 (2026-07-21, area: intentd agent subscriptions / delegation groups, severity: P1)
+
+A parent that delegated multiple children with `waitMode: "after_all"` received no wake when a child failed mid-group — the failed child sat parked in Error while the parent stayed silent until every remaining member settled (observed 40-minute silent gaps in production).
+
+**Repro:** (a) Delegate ≥2 children with `waitMode: "after_all"`; one child hits the 1800s session/prompt idle timeout → `agent:failed`. Observed: the parent receives NO wake until every remaining group member settles, while the failed child is parked in Error awaiting coordinator intervention (STAB-52 gate — never auto-redriven). (b) Secondary: the aggregated settlement wake reported `completionStatus: completed` even when a member failed (`partial` was only used for deletions). (c) Related: `agent.sendMessage` with `priority: "interrupt"` emitted the STAB-28 synthetic `agent:idle` before the follow-up message queued, delivering a spurious "child settled" completion wake to subscribed parents.
+
+**Status:** fixed ([intent-hq/intentd#312](https://github.com/intent-hq/intentd/pull/312), [intent-hq/intentd#317](https://github.com/intent-hq/intentd/pull/317), 2026-07-21) — #312 adds an immediate grouped-failure wake (dedup-guarded) and reports the group wake status as `partial` when any member failed or was deleted; #317 makes `interrupt_send_message` suppress the synthetic idle emit (plain interrupt / `agent.stop` unchanged).
+
+---
+
+### STAB-163 (2026-07-21, area: intentd agent runtime / direct-send events + cloudlands-fe chat edit flow, severity: P1)
+
+After editing a past user message (STAB-145's `agent.editAndRegenerate` flow), the edited message vanished from the chat until a full reload (cmd+r) — the transcript showed the prior turns and the streaming assistant reply, but not the edited user message itself.
+
+**Repro:** In a chat with prior turns, edit a past user message and submit. Observed: the transcript truncates and the regenerated assistant reply streams, but the edited user message is missing until cmd+r rehydrates the transcript.
+
+**Root cause:** two PROTOCOL.md §5.5 divergences in the direct-send branch of `AgentManager::send_message` (which `edit_and_regenerate` routes through): (1) it published no `agent:message` event for the persisted user row — only the queue-drain and wake-delivery paths emitted — so the FE bridge's convergence (unknown user `messageId` → transcript refetch) never fired after the edit truncated the local transcript; (2) the RPC result `messageId` was minted independently of the store row id (the store minted its own UUIDv7 and the caller's id was discarded), so the result id named a row that did not exist.
+
+**Status:** fixed ([intent-hq/intentd#316](https://github.com/intent-hq/intentd/pull/316), 2026-07-21) — the direct-send branch now persists the user row under the client-supplied `messageId` (or the minted `user-msg-{uuid}` default) so the result `messageId` IS the persisted row id, publishes `agent:message` (role=user) with that id, and validates client-supplied id length (≤ 256 bytes, `-32602`) before any state change. No FE change (wire divergence fixed at the diverging side per PROTOCOL.md). Covered by 3 new agent-manager unit tests plus extended WSS e2e assertions on the direct-send and editAndRegenerate flows.
+
+---
+
+### STAB-162 (2026-07-21, area: iOS chat streaming, severity: P2)
+
+Live tool calls still rendered as bare spanners after STAB-158: every tool call arriving over the live `chat.subscribe` delta path rendered as a spanner row with no title at all and stayed that way for the rest of the turn; leaving and re-entering the conversation (hydration via `agent.getConversation`) rendered the same rows correctly, and desktop was unaffected.
+
+**Repro:** On iOS (build containing the STAB-158 fix, ios `c3c27a4`), enter a conversation and watch an agent turn stream tool calls. Observed: each live tool call shows a bare spanner with no title text, and later updates for that call do not repair it; re-entering the conversation fixes existing rows but new live ones degrade again.
+
+**Root cause:** Sparse `tool_call_update` progress ticks over `chat.subscribe` carry default/empty fields (`name: ''`, `input: {}`, `toolKind: 'other'`). The iOS `ConversationStore` upserted these ticks as full block replacements, clobbering the previously titled `tool_use` block — and each subsequent sparse tick re-clobbered it, so the row never recovered. The desktop bridge merges such updates instead of replacing, which is why it was unaffected; the hydration path rebuilds blocks from full snapshots, which is why re-entry fixed the rows.
+
+**Expected:** Sparse progress ticks must not erase previously known tool name/input; live tool rows keep their classified titles for the whole turn, matching desktop behavior.
+
+**Status:** fixed ([intent-hq/ios#34](https://github.com/intent-hq/ios/pull/34), 2026-07-21) — `ConversationStore` now merges empty-name `tool_call_update` ticks onto the prior block (desktop bridge parity), preserving name/input/title. Regression test added (fails without the fix); full suite green (304 tests).
+
+---
+
+### STAB-161 (2026-07-21, area: cloudlands-fe desktop notifications / event subscription scope, severity: P1)
+
+`agent:idle` desktop notifications only fired for workspaces currently open in a window: the `NotificationService` was instantiated per open workspace (STAB-153's `syncNotificationServices(openWorkspaceIds)` reconciliation) and each instance subscribed with a `workspaceId` filter, so agents completing in closed/background workspaces never produced an OS banner — precisely the case where a notification matters most.
+
+**Repro:** Delegate an agent in workspace A, close its window (or never open one), let the agent run to completion. Observed: no OS notification banner when the agent goes idle.
+
+**Root cause:** STAB-153's fix scoped the subscription lifecycle to open workspaces. PROTOCOL.md §6.1 supports omitting `workspaceId` on `events.subscribe` to receive matching events across all workspaces, but the per-workspace service design couldn't use it.
+
+**Expected:** One app-lifetime notification service subscribes globally (`events.subscribe { eventTypes: ['agent:idle'] }`, no `workspaceId`) and routes each event by its `workspaceId`: per-workspace prefs/suppression/focus-gating are applied per event; when the workspace has no open window, the notification falls back to the focused (or any) window for sound delivery and navigates that window to the workspace on click.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#220](https://github.com/intent-hq/cloudlands-fe/pull/220), 2026-07-21) — replaced the per-open-workspace service instances with a single boot-time global `NotificationService` (started once from `main/index.ts`), removed `syncNotificationServices`/`disposeNotificationService`, retained STAB-153's reconnect/initial-connect resubscribe hardening (plus releasing a superseded subscription id on concurrent same-epoch subscribes), and added sound + click-navigation fallbacks for workspaces without an open window, with unit tests for the wire shape, routing, and both fallbacks.
+
+---
+
+### STAB-160 (2026-07-21, area: cloudlands-fe CI / lint, severity: P1)
+
+cloudlands-fe main's CI went red: the required "Lint & Static Checks" job failed on every PR with an `intent/no-component-async-data-fetch` violation in `CommitNode.svelte`, blocking all merges (observed while landing the Grok provider UI PR, whose branch was green except for this pre-existing main breakage).
+
+**Repro:** Open any PR against cloudlands-fe main after [intent-hq/cloudlands-fe#214](https://github.com/intent-hq/cloudlands-fe/pull/214) merged. Observed: "Lint & Static Checks" fails with `intent/no-component-async-data-fetch` on the `$effect`-driven lazy `git.commitDetails` fetch added to `src/lib/components/file-tracking/accept-changes/CommitNode.svelte`, regardless of the PR's own changes.
+
+**Root cause:** PR #214 (lazy-load commit files via `git.commitDetails`) introduced a component-level async data fetch that violates the repo's `intent/no-component-async-data-fetch` lint rule; the PR predated the rule being enforced on that path, so the violation landed directly on main and every subsequent PR inherited the red required check.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#216](https://github.com/intent-hq/cloudlands-fe/pull/216), 2026-07-21) — the CommitNode lazy detail fetch is an intentional interaction-gated fetch (expand-on-click), so the rule is suppressed with a scoped eslint-disable at that site; Lint & Static Checks is green on main again and blocked PRs (e.g. the Grok provider UI PR [#217](https://github.com/intent-hq/cloudlands-fe/pull/217)) rebased and merged.
+
+---
+
+### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
+
+The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
+
+**Repro:** Create a workspace with provider opencode via `make dev`. Observed: the workspace title is never set on the first turn, and no workspace tools appear in the agent's tool stream.
+
+**Root cause:** In `intent-services/src/agent_manager.rs`, the generated MCP config pointing at the bridge subcommand is written only when `opts.provider.supports_mcp_config` is true (auggie-only), and every `session/new` / `session/load` passes an empty `mcpServers` list. The per-provider translators in `intent-acp/src/mcp_config.rs` (`to_opencode_mcp_config`, `to_codex_mcp_overrides`, `to_claude_mcp_json`, `to_acp_mcp_servers`) exist and are tested but are never called from any production path.
+
+**Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
+
+**Status:** fixed — opencode portion fixed ([intent-hq/intentd#306](https://github.com/intent-hq/intentd/pull/306), 2026-07-21): at spawn, for EnvConfig-injection providers (opencode), the normalized MCP server set (workspace bridge + user servers) is translated via `to_opencode_mcp_config` and merged into `OPENCODE_CONFIG_CONTENT` as an `mcp` block alongside `permission`/`model`/`instructions`; the bridge entry points at the same `mcp-bridge --connect <addr>` endpoint the auggie path uses. (Note: monorepo PR [#353](https://github.com/intent-hq/monorepo/pull/353) cited intent-hq/intentd#295 for this wiring — #295 is the Grok Build provider PR; the correct reference is intent-hq/intentd#306.) claude-code/codex/droid portion fixed ([intent-hq/intentd#309](https://github.com/intent-hq/intentd/pull/309), 2026-07-21): these providers consume MCP servers from the ACP session setup, so a new `supports_session_mcp_servers` provider flag makes `create_agent` build the typed server list (`to_acp_session_mcp_servers`) and `start_session` carry it in the `session/new` / `session/load` `mcpServers` field (all three session-open branches), pointing at the same bridge endpoint; http/sse entries are gated on the agent's advertised `mcpCapabilities` from `initialize`. Verified by a WSS e2e (`mock_agent_full_turn_over_wss_with_session_mcp_servers`) in which the mock agent reaches the bridge solely via the session-delivered entry. All five ACP providers (auggie, opencode, claude-code, codex, droid) now receive workspace tools.
+
+---
+
+### STAB-159 (2026-07-21, area: ios navigation, severity: P1)
+
+On iPad, the "< Agents" back button in the conversation toolbar did nothing after the app auto-restored the last-open agent on launch — tapping it left the conversation on screen, with no way back to the agent list without force-quitting.
+
+**Repro:** On iPad, open an agent conversation, background/kill the app, and relaunch so the app auto-restores the agent. Tap "< Agents" in the toolbar. Observed: nothing happens; the conversation stays on screen.
+
+**Root cause:** `RootView.syncNavigationState()` performed a programmatic navigation tear-down that fired the user-back handler, desyncing `currentScreen` from the actually-visible view — subsequent back taps mutated state that no longer matched the navigation stack.
+
+**Status:** fixed ([intent-hq/ios#33](https://github.com/intent-hq/ios/pull/33), 2026-07-21) — programmatic navigation changes no longer trigger the user-back handler, so `currentScreen` stays in sync with the visible view after auto-restore and the back button navigates to the agent list as expected.
+
+---
+
+### STAB-158 (2026-07-21, area: ios chat streaming, severity: P2)
+
+While an agent turn streamed in the iOS app, tool call rows rendered as the generic spanner fallback ("🔧" + cleaned tool name, no subject) instead of the proper classified title (e.g. "📄 Read foo.rs"). Swiping out of the conversation and back in re-rendered them correctly.
+
+**Repro:** On iOS, watch a conversation while an agent turn is streaming and the agent makes tool calls. Observed: mid-turn tool rows show the generic "🔧" fallback; after leaving and re-entering the conversation (hydration via `agent.getConversation`), the same rows show the classified icon + verb + subject.
+
+**Root cause:** Live `tool_use` block deltas frequently carry empty `input` (`{}`) with only `input._acpTitle` populated (the daemon coerces auggie's `raw_input: null` to `{}` + `_acpTitle`, PROTOCOL §7.1). The iOS `ToolCallView` classifier needed input values for most branches and lacked the `_acpTitle` fallback the desktop FE classifier uses, so it fell through to the generic spanner.
+
+**Status:** fixed ([intent-hq/ios#32](https://github.com/intent-hq/ios/pull/32), 2026-07-21) — the iOS tool classifier now falls back to `input._acpTitle` when raw input is missing, matching the desktop behavior, so mid-turn tool rows render their proper titles while streaming. This fix turned out to be partial: sparse live progress ticks still clobbered the titled blocks in `ConversationStore`, filed and fixed as STAB-162 ([intent-hq/ios#34](https://github.com/intent-hq/ios/pull/34)).
+
+---
+
+### STAB-155 (2026-07-21, area: cloudlands-fe state persistence, severity: P2)
+
+`workspaceInitializer.state` persistence failed from boot with `DataCloneError`: every persist attempt logged "object could not be cloned" and nothing was saved, so initializer state (recent repos, form state) silently stopped surviving restarts.
+
+**Repro:** Launch cloudlands-fe and open the New Workspace initializer (any interaction that dispatches `setCompactWorkspaceInitializerFormState`). Observed: `settings.update` threw `DataCloneError: object could not be cloned` on every persist of the `workspaceInitializer.state` bag, from boot onward.
+
+**Root cause:** Svelte 5 `$state` proxies (the `remoteSetup`/scope form state in `CompactWorkspaceInitializer.svelte`) were dispatched as-is into the Redux bag. The persistence service then sent the whole bag over Electron IPC via `settings.update`, whose structured clone cannot serialize reactive proxies.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — the `$state`-dispatching sites (`CompactWorkspaceInitializer.svelte`, `RepoSelector.svelte`, `RemoteSetupSelector.svelte`) wrap the value in `$state.snapshot()` so no proxies enter the store, and the persistence service gained a non-throwing safety net that verifies the outgoing bag is structured-cloneable, falls back to a plain-JSON round-trip (warning once with the clone error), and skips the write entirely when even that fails. Regression tests: a proxied `remoteSetup` still persists as plain JSON with the exact PROTOCOL §5.12 wire request; an unsanitizable bag skips the persist without throwing.
+
+---
+
+### STAB-154 (2026-07-21, area: cloudlands-fe workspace operations, severity: P1)
+
+Deleting a workspace and then quitting (or reloading) the app within the 15-second undo window silently lost the delete — the workspace reappeared on the next launch.
+
+**Repro:** Delete a workspace in cloudlands-fe, then quit or reload the app before the 15s undo window elapses. Relaunch. Observed: the "deleted" workspace is back — the daemon never received `workspace.delete`.
+
+**Root cause:** The soft-hide-then-commit delete flow deferred the `workspace.delete` wire commit behind the undo window's `setTimeout`, which dies with the renderer. Nothing flushed pending deletions on unload, so quitting inside the window dropped the commit entirely.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — pending deletions are tracked in a module-level registry (mirroring the agent soft-hide-then-commit pattern) and flushed on `beforeunload`/`pagehide`, initiating the wire request synchronously before teardown; undo removes the registry entry so a flush never deletes an undone workspace, commit bails when its registry entry is already gone (no double-send), and Undo stays inert after a flush already committed. Regression tests cover flush-on-unload, undo-cancels-flush, no-double-commit, and inert-Undo-after-flush.
+
+---
+
+### STAB-153 (2026-07-21, area: cloudlands-fe desktop notifications / main-process lifecycle, severity: P1)
+
+Desktop notifications for `agent:idle` events never fired: the `NotificationService` lifecycle was homed on the legacy `workspace:open` IPC path, which is dead under the mock-router architecture, so `events.subscribe` was never issued and no OS banners appeared.
+
+**Repro:** Open a workspace, let an agent run to completion (agent goes idle) while the app is unfocused. Observed: no OS notification banner is shown, ever.
+
+**Root cause:** Two gaps. (1) The renderer's `window:set-in-workspace` / `window:set-open-workspace-tabs` invokes were swallowed by the mock router and never reached the main process, so the main process had no view of open workspaces. (2) Even with state flowing, notification-service startup was still keyed to the dead `workspace:open` trigger, and the initial `events.subscribe` could race the daemon client's first connect and fail permanently.
+
+**Expected:** Notification services are reconciled with the set of open workspaces from `window-workspace-state-changed` (including on window close), and a failed initial subscribe retries on the next `status → connected` transition.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#210](https://github.com/intent-hq/cloudlands-fe/pull/210), 2026-07-21) — added a renderer window-state bridge seeder forwarding the two window-state invokes to the real preload bridge, re-homed notification lifecycle onto `syncNotificationServices(openWorkspaceIds)` driven by `window-workspace-state-changed` (now also emitted on window close so services for workspaces no longer open anywhere are torn down), and added an initial-connect `events.subscribe` retry armed on the backend client `status` event. Note: the PR title/commit references STAB-152, which was concurrently assigned to the workspace-tasks staleness entry below; this issue is tracked as STAB-153.
+
+---
+
+### STAB-152 (2026-07-21, area: cloudlands-fe daemon-events-bridge / workspace-tasks staleness, severity: P2)
+
+The workspace sidebar's task-completion indicator went stale: a workspace whose stats showed all tasks complete kept its "Complete" checkmark even after new (incomplete) task notes were added, until a task status changed or the app reloaded.
+
+**Repro:** Complete all tasks in a workspace (the sidebar checkmark shows "Complete"), then have the coordinator add new task notes to that workspace. Observed: the checkmark incorrectly stays "Complete" until some task's status changes or the app is reloaded.
+
+**Root cause:** Task notes are plain notes — task state lives in note metadata — so `note:created` / `note:updated` / `note:deleted` events can change the BE-owned `task.list` stats rollup without any `task:status-changed` edge. The daemon-events bridge only refetched workspace tasks on `task:status-changed`, so `note:*` events never invalidated the cached stats.
+
+**Expected:** The workspace-tasks stats are refetched on `note:*` events (debounced per workspace), so the sidebar indicator reflects the current BE rollup without requiring a status change or reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#209](https://github.com/intent-hq/cloudlands-fe/pull/209), 2026-07-21) — the daemon-events bridge triggers a debounced (~1s per workspace, mirroring the changes-refresh pattern) `loadWorkspaceTasksRequested` refetch on `note:*` events, gated on the workspace-tasks slice already being initialized (at schedule time and re-checked at fire time) so tasks are never eagerly loaded for workspaces nobody has viewed. Covered by unit tests for the refetch, the uninitialized gate, burst coalescing, and the cleared-during-debounce case.
+
+---
+
+### STAB-151 (2026-07-21, area: cloudlands-fe chat edit-and-regenerate UI, severity: P1)
+
+The edit-and-regenerate confirmation dialog (shipped in cloudlands-fe #197 / STAB-145) rendered clipped inside the message edit textbox: no backdrop, warning text cut off left and right, and the "Edit & regenerate" / "Cancel" action buttons not visible at all — making the destructive-truncation confirmation impossible to operate from the UI.
+
+**Repro:** In a chat with prior turns, click a past user message to enter edit mode, change the text, and submit. Observed: the confirmation appears as a clipped strip inside the edit textbox bounds with no backdrop and no visible buttons.
+
+**Root cause:** `EditRegenerateConfirmDialog` (via `BulkActionConfirmDialog`) rendered its `fixed inset-0` overlay inline in `ChatMessage`'s DOM, where ancestor overflow/transform stacking contexts turn the fixed-position overlay into a clipped, locally-positioned box.
+
+**Expected:** The confirmation renders as a full-screen centered overlay modal above all stacking contexts, with both buttons visible and Escape/backdrop-click cancelling back to edit mode with the draft intact.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#206](https://github.com/intent-hq/cloudlands-fe/pull/206), 2026-07-21) — the dialog is now portaled to `document.body` via the app-standard `Portal` (same pattern as `DeleteWarningDialog`); `BulkActionConfirmDialog` additionally defers its focus-on-open a microtask so focus lands on the dialog after the Portal relocation (moving a focused node drops focus to `<body>`, which broke Escape). Confirm/cancel semantics unchanged; tests cover portal placement, visible buttons, focus-on-open, and Escape/backdrop cancel.
+
+---
+
+### STAB-150 (2026-07-21, area: cloudlands-fe provider availability / Settings, severity: P1)
+
+Codex was shown as not installed in Settings even though the real `codex` CLI was on PATH, because provider availability keyed off the `codex-acp` adapter binary instead of the CLI itself.
+
+**Repro:** Have the real `codex` CLI installed and on PATH, but no locally-installed `codex-acp` adapter binary. Open Settings → Agents. Observed: Codex is reported as not installed/unavailable, even though claude-code (which gates on the `claude` CLI) is reported correctly in the equivalent situation.
+
+**Root cause:** The provider status bridge seeder (`provider-status-bridge-seeder.ts`) treated the `codex-acp` adapter binary as the availability signal for codex (`PROVIDER_BINARIES.codex` was `codex-acp`), so availability, auth probing, and `providers:get-paths` all keyed off the adapter rather than the real CLI.
+
+**Expected:** Codex availability gates on the real `codex` CLI (mirroring how claude-code gates on the `claude` CLI); the adapter is probed only to attach a missing-adapter warning when neither a local `codex-acp` binary nor `npx` (the pinned adapter fallback runner) resolves.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#205](https://github.com/intent-hq/cloudlands-fe/pull/205), 2026-07-21) — `PROVIDER_BINARIES.codex` is now the real `codex` CLI; `providers:get-availability` / `providers:check-single` key availability and auth off the CLI, with `codex-acp`/`npx` probed only for a `CODEX_ADAPTER_MISSING_WARNING` ride-along warning (failed probes treated as unknowns, not confirmed absences); `providers:get-paths` resolves the real CLI path.
+
+---
 
 ### STAB-149 (2026-07-21, area: ios chat streaming, severity: P1)
 
@@ -39,7 +229,7 @@ Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed determinis
 
 **Root cause:** The coverage-instrumented `intentd` binary's startup latency crept past the hardcoded 10s budget on the oversubscribed 4-vCPU runners (`NEXTEST_TEST_THREADS: 8`). The coverage scripts export `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`, but only one suite (`e2e_wss_agent_rehydration`) honored it — every other suite hardcoded its startup wait.
 
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up: hoist a shared multiplier-aware `test_timeout()` helper into `tests/common/` so budgets are centrally tunable.
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up landed (https://github.com/intent-hq/intentd/pull/291, 2026-07-21): shared multiplier-aware `test_timeout()` / `daemon_startup_timeout()` helpers hoisted into `tests/common/`; all 41 suites now honor `INTENTD_TEST_TIMEOUT_MULTIPLIER`.
 
 ### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
 
@@ -502,6 +692,20 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-157 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
+
+Opencode tool calls render in the FE chat as generic `other` entries (wrench icons) with raw prose/pattern titles — e.g. a literal grep regex or file path — instead of real tool names and kinds.
+
+**Repro:** Run any opencode turn that greps or reads files. Observed: tool calls in the chat show wrench icons and literal regex/path titles rather than named tools.
+
+**Root cause:** `derive_tool_name` / `derive_tool_name_from_input` in `intent-acp/src/session.rs` expect `name: description`-style titles or known `raw_input` shapes. Opencode emits raw prose/pattern/path titles that bypass both heuristics, so `toolName` falls through verbatim and `tool_kind` maps to `other`.
+
+**Expected:** Opencode's title shapes are recognized so tool calls carry real tool names/kinds and the FE renders proper icons and titles.
+
+**Status:** fixed ([intent-hq/intentd#294](https://github.com/intent-hq/intentd/pull/294), 2026-07-21) — `derive_tool_name` now strips opencode's leading `workspace-mcp_` MCP prefix (mirror of auggie's trailing suffix), recognizes opencode's camelCase `rawInput` shapes captured from real 1.18.3 ACP traffic (`filePath`+`oldString`/`newString` → `edit`, `filePath`+`content` → `write`, `filePath` → `read`, string `command`+`cwd` → `bash`, `url` → `web-fetch`), and normalizes the bare `webfetch` title to `web-fetch`; with real names derived, `tool_kind_word` emits proper FE kinds (`file`/`terminal`/`search`/`note`) instead of `other`. Guards keep auggie (`launch-process` carries `wait`/`max_wait_seconds`) and codex (array `command`) derivation unchanged, regression-tested.
+
+---
 
 ### STAB-147 (2026-07-20, area: intentd test harness / workspace provisioning, severity: P2)
 
