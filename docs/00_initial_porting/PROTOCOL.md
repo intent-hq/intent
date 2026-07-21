@@ -204,7 +204,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected `-32602` (see notes) | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: { agentId } } — daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup (`remove_dir_all`) runs in a background task under a per-repository lock |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
@@ -301,8 +301,8 @@ consistent with other workspace terminals.
 daemon minimally creates the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
-The agent's id is **server-assigned**: the daemon always mints a fresh `agent-{uuid}`,
-and a request carrying `initialAgent.agentId` is rejected with `-32602`
+The agent's id is **server-assigned**: whenever a session is created the daemon mints a
+fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected with `-32602`
 ("agent IDs are server-assigned and the field must be omitted") **before any side
 effect** — no workspace row, worktree, spec seed, or `workspace:created` event is
 persisted.
