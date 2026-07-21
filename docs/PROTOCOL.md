@@ -19,6 +19,7 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
    - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
    - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
    - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
+   - 6.7 [`models.list` Per-Provider Catalog](#67-modelslist-per-provider-catalog-v20-additions)
 7. [Events & Subscriptions](#7-events--subscriptions)
 8. [Error Codes](#8-error-codes)
 
@@ -470,6 +471,41 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 - `INFO`: `--resume-all: auto-resume sweep complete` (with `resumed`, `failed` counts)
 
 After the sweep completes, `agent.listInterrupted` returns an empty list.
+
+### 6.7 `models.list` Per-Provider Catalog (v2.0 additions)
+
+`models.list` (porting-era §5.30) gains two **optional** parameters. With both omitted the method is byte-for-byte backward compatible: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog) with its 5-minute in-memory success cache, returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId`.
+
+**Request:**
+
+```jsonc
+{
+  "providerId": "auggie",  // optional — per-provider catalog via the generic cache
+  "forceRefresh": false    // optional, default false — skip the cache read, await a fresh probe
+}
+```
+
+**Response (with `providerId`):**
+
+```jsonc
+{
+  "providerId": "auggie",
+  "models": [ /* ModelInfo rows */ ],
+  "source": "auggie",          // the provider id, or "static" on fallback
+  "stale": true,               // optional — present only when serving last-good after a failed probe
+  "warning": "..."             // optional — human-readable reason for fallback/stale/empty data
+}
+```
+
+**Semantics:**
+
+- **Generic per-provider cache.** Requests with a `providerId` go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. an adapter version pin such as `CLAUDE_AGENT_ACP_VERSION`); a pin bump invalidates cached entries automatically.
+- **`forceRefresh: true`** skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
+- **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
+- **Registered sources:** `auggie` (CLI discovery, as above) and `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`). The registry is designed for further providers to be added.
+- **Unknown/unregistered `providerId`** degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
+- **Legacy path with `forceRefresh`.** Without `providerId`, `forceRefresh: true` skips the legacy in-memory cache read and awaits a fresh auggie probe; on probe failure it serves the last-good cached list labeled `stale: true` + `warning` (same contract as the per-provider path), falling back to the static catalog only when no last-good list exists. The response keeps the legacy shape (no `providerId` field). Note the legacy in-memory cache and the persisted per-provider cache are separate; `providerId: "auggie"` and the no-`providerId` path may diverge within a TTL window.
+- **Errors:** `-32603` only on internal failure; probe/CLI failures degrade as described above.
 
 ---
 
