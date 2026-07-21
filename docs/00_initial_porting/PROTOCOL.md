@@ -800,7 +800,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). After a successful pull, if `.gitmodules` exists, runs `git submodule update --init --recursive` (bounded 100s timeout) to sync submodule worktrees to updated gitlinks. Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems, submodule sync timeout/failures) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
-| git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
+| git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty. **Metadata-only**: each `CommitSummary` is `{ hash, sha, author, email, date, message, agentId?, linkedNoteId? }` — `hash` is the canonical full commit hash (pass it as `git.commitDetails` `commitHash`), `sha` is its 7-char abbreviation for display, and `email` carries the same value `git.commitDetails` returns as `authorEmail` (both fields kept for legacy-client parity). The walk skips per-commit tree diffs, so `files` is omitted; fetch per-file data on demand via `git.commitDetails` |
 | git.commitDetails | workspaceId (req), commitHash (req) | { commitHash, author, authorEmail, date, message, files: string[], fileDetails: [{ path, additions, deletions }] } — metadata + per-file line stats for one commit (diff vs first parent; a root commit diffs against the empty tree). `commitHash` accepts anything revparse-able. `files` mirrors `fileDetails[].path` for callers that only want names. Unknown/remote/non-repo workspaces and unresolvable hashes degrade to the same shape with empty strings/arrays (echoing `commitHash`), never a JSON-RPC error; missing `commitHash` → `-32602`. This is the on-demand per-file read behind metadata-only commit lists (see CommitWithAttribution, §5.18) |
 | git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
 | git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
@@ -1619,12 +1619,12 @@ from the new FE), so `execute` rejects `action:"export"`. A step that fails sets
 - **CommitWithAttribution** — a local commit carrying agent provenance:
   `{ hash, message, author, date, filesChanged?, isPushed, files?: [{ path, additions?,
   deletions?, status? }], agentId?, linkedNoteId? }`. `files` and `filesChanged` are
-  emitted only when the producing walk computed per-commit tree diffs:
-  `file-tracking.loadCommits` (§5.19) includes them; `accept-changes.getStatus`
-  `localCommits` entries are **metadata-only** (both fields omitted — the walk skips
+  emitted only when the producing walk computed per-commit tree diffs. All current
+  producers are **metadata-only** (both fields omitted — the list walks skip
   per-commit diffs for performance; clients fetch per-file data on demand via
-  `git.commitDetails`, §5.6). The `changes:git-status` event (§6.5) carries the same
-  reduced `WorkspaceGitStatus`.
+  `git.commitDetails` (§5.6)): `accept-changes.getStatus` `localCommits` and
+  `file-tracking.loadCommits` (§5.19). The `changes:git-status` event (§6.5) carries
+  the same reduced `WorkspaceGitStatus`.
 - **TrackedChange** — one file's audit record through the git stages (see §5.19):
   `{ id, file, relativePath, stage: "unstaged"|"staged"|"committed"|"pushed"|"pull_request"|
   "merged"|"trunk", status?: "added"|"modified"|"deleted"|"renamed",
@@ -1654,7 +1654,7 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
 | file-tracking.sync | workspaceId (req), force?: boolean (default false) | { success, … } — reconciles tracked changes against live git |
 | file-tracking.load | workspaceId (req) | { changes: TrackedChange[], truncated, totalCount } |
 | file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
-| file-tracking.loadCommits | workspaceId (req), limit?: number (≤200) | { commits: CommitWithAttribution[] } |
+| file-tracking.loadCommits | workspaceId (req), limit?: number (≤200) | { commits: CommitWithAttribution[] } — **metadata-only** entries (no `files`/`filesChanged`; see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6) |
 | file-tracking.getLineStats | workspaceId (req) | { additions, deletions } — real-time totals across unstaged + staged + local commits |
 | file-tracking.stage | workspaceId (req), paths (req): string[] | { ok: true } — stages the referenced files |
 | file-tracking.unstage | workspaceId (req), paths (req): string[] | { ok: true } — unstages the referenced files |
