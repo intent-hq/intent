@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-164 (as of 2026-07-21)
+**Next available ID:** STAB-165 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-164 (2026-07-21, area: intentd agent subscriptions / delegation groups, severity: P1)
+
+A parent that delegated multiple children with `waitMode: "after_all"` received no wake when a child failed mid-group — the failed child sat parked in Error while the parent stayed silent until every remaining member settled (observed 40-minute silent gaps in production).
+
+**Repro:** (a) Delegate ≥2 children with `waitMode: "after_all"`; one child hits the 1800s session/prompt idle timeout → `agent:failed`. Observed: the parent receives NO wake until every remaining group member settles, while the failed child is parked in Error awaiting coordinator intervention (STAB-52 gate — never auto-redriven). (b) Secondary: the aggregated settlement wake reported `completionStatus: completed` even when a member failed (`partial` was only used for deletions). (c) Related: `agent.sendMessage` with `priority: "interrupt"` emitted the STAB-28 synthetic `agent:idle` before the follow-up message queued, delivering a spurious "child settled" completion wake to subscribed parents.
+
+**Status:** fixed ([intent-hq/intentd#312](https://github.com/intent-hq/intentd/pull/312), [intent-hq/intentd#317](https://github.com/intent-hq/intentd/pull/317), 2026-07-21) — #312 adds an immediate grouped-failure wake (dedup-guarded) and reports the group wake status as `partial` when any member failed or was deleted; #317 makes `interrupt_send_message` suppress the synthetic idle emit (plain interrupt / `agent.stop` unchanged).
+
+---
 
 ### STAB-163 (2026-07-21, area: intentd agent runtime / direct-send events + cloudlands-fe chat edit flow, severity: P1)
 
