@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-153 (as of 2026-07-21)
+**Next available ID:** STAB-154 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-153 (2026-07-21, area: cloudlands-fe desktop notifications / main-process lifecycle, severity: P1)
+
+Desktop notifications for `agent:idle` events never fired: the `NotificationService` lifecycle was homed on the legacy `workspace:open` IPC path, which is dead under the mock-router architecture, so `events.subscribe` was never issued and no OS banners appeared.
+
+**Repro:** Open a workspace, let an agent run to completion (agent goes idle) while the app is unfocused. Observed: no OS notification banner is shown, ever.
+
+**Root cause:** Two gaps. (1) The renderer's `window:set-in-workspace` / `window:set-open-workspace-tabs` invokes were swallowed by the mock router and never reached the main process, so the main process had no view of open workspaces. (2) Even with state flowing, notification-service startup was still keyed to the dead `workspace:open` trigger, and the initial `events.subscribe` could race the daemon client's first connect and fail permanently.
+
+**Expected:** Notification services are reconciled with the set of open workspaces from `window-workspace-state-changed` (including on window close), and a failed initial subscribe retries on the next `status → connected` transition.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#210](https://github.com/intent-hq/cloudlands-fe/pull/210), 2026-07-21) — added a renderer window-state bridge seeder forwarding the two window-state invokes to the real preload bridge, re-homed notification lifecycle onto `syncNotificationServices(openWorkspaceIds)` driven by `window-workspace-state-changed` (now also emitted on window close so services for workspaces no longer open anywhere are torn down), and added an initial-connect `events.subscribe` retry armed on the backend client `status` event. Note: the PR title/commit references STAB-152, which was concurrently assigned to the workspace-tasks staleness entry below; this issue is tracked as STAB-153.
+
+---
 
 ### STAB-152 (2026-07-21, area: cloudlands-fe daemon-events-bridge / workspace-tasks staleness, severity: P2)
 
