@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-160 (as of 2026-07-21)
+**Next available ID:** STAB-161 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-160 (2026-07-21, area: cloudlands-fe CI / lint, severity: P1)
+
+cloudlands-fe main's CI went red: the required "Lint & Static Checks" job failed on every PR with an `intent/no-component-async-data-fetch` violation in `CommitNode.svelte`, blocking all merges (observed while landing the Grok provider UI PR, whose branch was green except for this pre-existing main breakage).
+
+**Repro:** Open any PR against cloudlands-fe main after [intent-hq/cloudlands-fe#214](https://github.com/intent-hq/cloudlands-fe/pull/214) merged. Observed: "Lint & Static Checks" fails with `intent/no-component-async-data-fetch` on the `$effect`-driven lazy `git.commitDetails` fetch added to `src/lib/components/file-tracking/accept-changes/CommitNode.svelte`, regardless of the PR's own changes.
+
+**Root cause:** PR #214 (lazy-load commit files via `git.commitDetails`) introduced a component-level async data fetch that violates the repo's `intent/no-component-async-data-fetch` lint rule; the PR predated the rule being enforced on that path, so the violation landed directly on main and every subsequent PR inherited the red required check.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#216](https://github.com/intent-hq/cloudlands-fe/pull/216), 2026-07-21) — the CommitNode lazy detail fetch is an intentional interaction-gated fetch (expand-on-click), so the rule is suppressed with a scoped eslint-disable at that site; Lint & Static Checks is green on main again and blocked PRs (e.g. the Grok provider UI PR [#217](https://github.com/intent-hq/cloudlands-fe/pull/217)) rebased and merged.
+
+---
 
 ### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
 
