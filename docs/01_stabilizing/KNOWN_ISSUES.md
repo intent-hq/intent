@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-151 (as of 2026-07-21)
+**Next available ID:** STAB-152 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-151 (2026-07-21, area: cloudlands-fe chat edit-and-regenerate UI, severity: P1)
+
+The edit-and-regenerate confirmation dialog (shipped in cloudlands-fe #197 / STAB-145) rendered clipped inside the message edit textbox: no backdrop, warning text cut off left and right, and the "Edit & regenerate" / "Cancel" action buttons not visible at all — making the destructive-truncation confirmation impossible to operate from the UI.
+
+**Repro:** In a chat with prior turns, click a past user message to enter edit mode, change the text, and submit. Observed: the confirmation appears as a clipped strip inside the edit textbox bounds with no backdrop and no visible buttons.
+
+**Root cause:** `EditRegenerateConfirmDialog` (via `BulkActionConfirmDialog`) rendered its `fixed inset-0` overlay inline in `ChatMessage`'s DOM, where ancestor overflow/transform stacking contexts turn the fixed-position overlay into a clipped, locally-positioned box.
+
+**Expected:** The confirmation renders as a full-screen centered overlay modal above all stacking contexts, with both buttons visible and Escape/backdrop-click cancelling back to edit mode with the draft intact.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#206](https://github.com/intent-hq/cloudlands-fe/pull/206), 2026-07-21) — the dialog is now portaled to `document.body` via the app-standard `Portal` (same pattern as `DeleteWarningDialog`); `BulkActionConfirmDialog` additionally defers its focus-on-open a microtask so focus lands on the dialog after the Portal relocation (moving a focused node drops focus to `<body>`, which broke Escape). Confirm/cancel semantics unchanged; tests cover portal placement, visible buttons, focus-on-open, and Escape/backdrop cancel.
+
+---
 
 ### STAB-150 (2026-07-21, area: cloudlands-fe provider availability / Settings, severity: P1)
 
