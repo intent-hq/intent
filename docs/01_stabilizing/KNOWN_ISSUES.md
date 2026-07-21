@@ -527,7 +527,7 @@ Opencode tool calls render in the FE chat as generic `other` entries (wrench ico
 
 **Expected:** Opencode's title shapes are recognized so tool calls carry real tool names/kinds and the FE renders proper icons and titles.
 
-**Status:** open
+**Status:** fixed ([intent-hq/intentd#294](https://github.com/intent-hq/intentd/pull/294), 2026-07-21) — `derive_tool_name` now strips opencode's leading `workspace-mcp_` MCP prefix (mirror of auggie's trailing suffix), recognizes opencode's camelCase `rawInput` shapes captured from real 1.18.3 ACP traffic (`filePath`+`oldString`/`newString` → `edit`, `filePath`+`content` → `write`, `filePath` → `read`, string `command`+`cwd` → `bash`, `url` → `web-fetch`), and normalizes the bare `webfetch` title to `web-fetch`; with real names derived, `tool_kind_word` emits proper FE kinds (`file`/`terminal`/`search`/`note`) instead of `other`. Guards keep auggie (`launch-process` carries `wait`/`max_wait_seconds`) and codex (array `command`) derivation unchanged, regression-tested.
 
 ---
 
