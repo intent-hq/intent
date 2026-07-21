@@ -966,8 +966,9 @@ CREATE TABLE specialist (
 );
 
 -- Opaque machine-state blobs only (repos.known, workspace.changeHistory,
--- workspaceInitializer.state, permissions.rules, userRules/workspaceRules,
--- endUserRules). Human-editable settings live in config.toml (§9.8, §11.2).
+-- workspaceInitializer.state, model.workspaceOverrides, permissions.rules,
+-- userRules/workspaceRules, endUserRules). Human-editable settings live in
+-- config.toml (§9.8, §11.2).
 CREATE TABLE settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL                              -- JSON-encoded value
@@ -1147,7 +1148,7 @@ Provide `intentd import --from <intent-userData-dir>` to migrate an existing ins
 | providers.paths.{auggie,claude-code,codex,…} | map<string,path> | {} | no | src/shared/app-settings-schema.ts |
 | model.default | string | provider default | no | src/shared/app-settings-schema.ts |
 | model.providerDefaults | map | {} | no | src/shared/app-settings-schema.ts |
-| model.workspaceOverrides | map | {} | no | src/shared/app-settings-schema.ts |
+| model.workspaceOverrides | map | {} | no | src/shared/app-settings-schema.ts (SQLite state blob — not TOML-backed, no origin field) |
 | backgroundAgents.defaultModel | string | — | no | src/shared/app-settings-schema.ts |
 | backgroundAgents.typeOverrides | map | {} | no | src/shared/app-settings-schema.ts |
 | backgroundAgents.providerSettings | map | {} | no | src/shared/app-settings-schema.ts |
@@ -1194,7 +1195,7 @@ Source-control provider config is namespaced as `sourceControl.<provider>.*` so 
 
 #### Persistence, validation, secrets
 
-- **Storage.** Non-secret **human-editable** settings are TOML-backed: they persist in`<data_dir>/config.toml` (§11.2), parsed strictly at startup into a typed schema (unknown key /type error / range violation ⇒ refuse to start naming the offending key; missing file ⇒ write adefault-populated, fully-commented file). At runtime a `SettingsRegistry` layers effectivevalues `defaults < config.toml < startup flags/env`; `settings.update` rewrites config.tomlatomically (temp file + rename via `toml_edit`, preserving user comments/layout), and a debouncedfile watcher live-reloads external hand-edits (invalid content keeps last-good values and logs aWARN — never crashes the daemon). Keys pinned by a startup flag/env var report `origin:"flag"`and reject wire mutation with `-32602` while pinned. Opaque **machine-state blobs**(`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`, `permissions.rules`,`userRules` / `workspaceRules`, `endUserRules`) stay in the SQLite `settings` table (§9.2) —they are high-churn, not human-editable, and would thrash the file. Definitions (label,description, category, type, enum/min/max, default, sensitive, scope) are ported from`app-settings-schema.ts` as `AppSettingDefinition`s; group B adds its own definitions.
+- **Storage.** Non-secret **human-editable** settings are TOML-backed: they persist in`<data_dir>/config.toml` (§11.2), parsed strictly at startup into a typed schema (unknown key /type error / range violation ⇒ refuse to start naming the offending key; missing file ⇒ write adefault-populated, fully-commented file). At runtime a `SettingsRegistry` layers effectivevalues `defaults < config.toml < startup flags/env`; `settings.update` rewrites config.tomlatomically (temp file + rename via `toml_edit`, preserving user comments/layout), and a debouncedfile watcher live-reloads external hand-edits (invalid content keeps last-good values and logs aWARN — never crashes the daemon). Keys pinned by a startup flag/env var report `origin:"flag"`and reject wire mutation with `-32602` while pinned. Opaque **machine-state blobs**(`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`, `model.workspaceOverrides`, `permissions.rules`,`userRules` / `workspaceRules`, `endUserRules`) stay in the SQLite `settings` table (§9.2) —they are high-churn, not human-editable, and would thrash the file. Definitions (label,description, category, type, enum/min/max, default, sensitive, scope) are ported from`app-settings-schema.ts` as `AppSettingDefinition`s; group B adds its own definitions.
 - **Validation.** Every mutation is validated against its `AppSettingDefinition` (type, enummembership, numeric min/max) via the analog of `findAppSettingDefinition` before persisting;invalid changes are rejected with an `invalid params` error and nothing is written.
 - **Secrets.** Settings marked **sensitive** (`mcp.servers`, `server.auth.token`, `sourceControl.github.token`) are stored in the daemon's file-backed secret store (`intent_core::FileSecretStore` — `~/intent/secrets.json`, `0600` file / `0700` dir on unix, `INTENTD_SECRETS_FILE` override), never in `config.toml`, never in logs, and are **never returned in plaintext over the wire** — `settings.list`/`settings.get` redact them (presence/placeholder only). `server.auth.token` is read-only via the API (regenerate, not set). `workspace.sshKeyPath` is **not** sensitive: it holds a filesystem path to the SSH key, not key material — the real secret is the key file on disk, protected by filesystem permissions — so the value is stored as a plain string and read back verbatim by `settings.get`/`settings.list` (the FE `git`-env consumer needs the real path to hand to `git` via `GIT_SSH_COMMAND`).
 - **Change notification.** A successful `settings.update`/`settings.reset` persists the changeand emits a `settings:changed` event (§10) so every connected client stays in sync.
@@ -1323,7 +1324,7 @@ Resolve paths via the `directories` crate (with env overrides `INTENTD_DATA_DIR`
 | Runtime (UDS, pidfile) | ~/Library/Application Support/intentd/ | $XDG_RUNTIME_DIR/intentd/ |
 | Logs | ~/Library/Logs/intentd/ | $XDG_STATE_HOME/intentd/logs/ |
 
-`config.toml` holds every non-secret human-editable setting (the TOML-backed catalog of §9.8:providers, model, workspace/git, mcp toggles, notifications, rtk, server/transport, sourcecontrol, ai, context, storage/runtime, logging, agents, events). It lives in the **data dir**(`<data_dir>/config.toml`, same directory as the DB/socket/secrets; `INTENTD_CONFIG` overrideretained), is strictly parsed at startup, live-reloaded on external edits, and atomicallyrewritten (comment-preserving) by `settings.update`. Secrets (bearer token, GitHub token) livein the **file-backed secret store** (`~/intent/secrets.json`, `0600` file / `0700` dir), neverin `config.toml`.
+`config.toml` holds every non-secret human-editable setting (the TOML-backed catalog of §9.8:providers, model, workspace/git, mcp toggles, notifications, rtk, server/transport, sourcecontrol, context, storage/runtime, logging, agents, events). It lives in the **data dir**(`<data_dir>/config.toml`, same directory as the DB/socket/secrets; `INTENTD_CONFIG` overrideretained), is strictly parsed at startup, live-reloaded on external edits, and atomicallyrewritten (comment-preserving) by `settings.update`. Secrets (bearer token, GitHub token) livein the **file-backed secret store** (`~/intent/secrets.json`, `0600` file / `0700` dir), neverin `config.toml`.
 
 ### 11.3 Security considerations
 
