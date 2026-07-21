@@ -361,14 +361,15 @@ The `system.status` result includes two **optional** self-process resource field
 ```jsonc
 {
   "cpuPercent": 12.5,        // optional — daemon process CPU usage
-  "memoryBytes": 104857600,  // optional — daemon process resident set size (RSS), in bytes
-  ...
+  "memoryBytes": 104857600   // optional — daemon process resident set size (RSS), in bytes
+  // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
 
 - **`cpuPercent`** uses the raw `sysinfo` convention: `100` = one full core, so values **may exceed 100** on multicore systems (not normalized to total capacity). The first sample after daemon startup **may read `0`** before a usage baseline is established.
 - **`memoryBytes`** is the daemon process RSS in bytes.
 - Both fields are **additive and optional**; clients must tolerate their absence and degrade gracefully.
+- **Versioning:** these fields shipped within protocol **v2.0** — the daemon still advertises `protocolVersion: "2.0"`. They add optional response fields to an existing method without changing the method surface (the golden-test-enforced catalog is unchanged), so no version bump was made; clients must detect them by **presence**, not by protocol version.
 
 #### `pairing.getInfo` (local-only)
 
