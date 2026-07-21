@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-148 (as of 2026-07-21)
+**Next available ID:** STAB-149 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-147 (2026-07-21, area: intentd CI / e2e coverage jobs, severity: P1)
+### STAB-148 (2026-07-21, area: intentd CI / e2e coverage jobs, severity: P1)
 
 Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed deterministically with `daemon did not start` panics at exactly the 10-second daemon-startup budget, blocking all PR merges (the `coverage-e2e` check is required with no admin bypass).
 
@@ -993,7 +993,7 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 Home-screen repo selector does not default to the most recent repository; workspace-initializer persistence never re-homed after saga removal.
 
-**Repro:** Before the fix: Open the Cloudlands home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
+**Repro:** Before the fix: Open the Intent home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
 
 **Root cause:** The workspace-initializer component (`WorkspaceInitializer.svelte`) previously persisted its form state (selected repo, branch, prompt text) via a Redux-observable saga (`workspace-initializer-saga.ts`). The saga subscribed to form-state actions and wrote to an electron-store `workspace-initializer` bag. Commit 95d908a2 ("refactor: remove redux-observable") deleted the saga file and all persistence logic, but the component continued to read from the now-static electron-store entry. New form interactions (repo selection, branch typing, prompt edits) updated local component state and Redux store state but never persisted, so the electron-store bag stayed frozen at its last pre-saga-removal value. On app restart, the component rehydrated from the stale electron-store entry, discarding all session state. The repo selector defaulted to no selection (or the stale repo) instead of the most recent repository.
 
