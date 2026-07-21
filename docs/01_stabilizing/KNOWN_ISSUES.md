@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-165 (as of 2026-07-21)
+**Next available ID:** STAB-166 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-165 (2026-07-21, area: intentd / intent-services (workspace.list, workspace.get), severity: P1)
+
+`workspace.list` times out on large worktrees or many workspaces.
+
+**Repro:** With several large repos or many workspaces, FE polls `workspace.list` and hits "JSON-RPC request timed out: workspace.list" — the call ran synchronous git diffs (`head_diff_rollup`) and live CoW filesystem probes per workspace inline on the async runtime.
+
+**Status:** fixed ([intent-hq/intentd#314](https://github.com/intent-hq/intentd/pull/314), 2026-07-21) — enrichment offloaded to the blocking pool, parallelized with bounded concurrency, cached (5s TTL for diffs, per-pair lifetime for CoW), and time-budgeted (1.5s/aggregate) so the call degrades to stale/omitted aggregates instead of blocking.
+
+---
 
 ### STAB-164 (2026-07-21, area: intentd agent subscriptions / delegation groups, severity: P1)
 
