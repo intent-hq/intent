@@ -796,6 +796,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
 | git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty |
+| git.commitDetails | workspaceId (req), commitHash (req) | { commitHash, author, authorEmail, date, message, files: string[], fileDetails: [{ path, additions, deletions }] } — metadata + per-file line stats for one commit (diff vs first parent; a root commit diffs against the empty tree). `commitHash` accepts anything revparse-able. `files` mirrors `fileDetails[].path` for callers that only want names. Unknown/remote/non-repo workspaces and unresolvable hashes degrade to the same shape with empty strings/arrays (echoing `commitHash`), never a JSON-RPC error; missing `commitHash` → `-32602`. This is the on-demand per-file read behind metadata-only commit lists (see CommitWithAttribution, §5.18) |
 | git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
 | git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
 
@@ -1604,8 +1605,14 @@ from the new FE), so `execute` rejects `action:"export"`. A step that fails sets
   isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
   existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" } }`.
 - **CommitWithAttribution** — a local commit carrying agent provenance:
-  `{ hash, message, author, date, filesChanged, isPushed, files?: [{ path, additions?,
-  deletions?, status? }], agentId?, linkedNoteId? }`.
+  `{ hash, message, author, date, filesChanged?, isPushed, files?: [{ path, additions?,
+  deletions?, status? }], agentId?, linkedNoteId? }`. `files` and `filesChanged` are
+  emitted only when the producing walk computed per-commit tree diffs:
+  `file-tracking.loadCommits` (§5.19) includes them; `accept-changes.getStatus`
+  `localCommits` entries are **metadata-only** (both fields omitted — the walk skips
+  per-commit diffs for performance; clients fetch per-file data on demand via
+  `git.commitDetails`, §5.6). The `changes:git-status` event (§6.5) carries the same
+  reduced `WorkspaceGitStatus`.
 - **TrackedChange** — one file's audit record through the git stages (see §5.19):
   `{ id, file, relativePath, stage: "unstaged"|"staged"|"committed"|"pushed"|"pull_request"|
   "merged"|"trunk", status?: "added"|"modified"|"deleted"|"renamed",
