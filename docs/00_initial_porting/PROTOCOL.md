@@ -1928,7 +1928,7 @@ errors are logged and surfaced. Script output is streamed to a "Setup" terminal 
 
 ### 5.27 `github.*` namespace *(new in intentd — not part of the ported 104)*
 
-> **✅ SHIPPED.** The `github.*` namespace is fully implemented and wired end-to-end (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B) — 21 methods routed daemon-owned against `api.github.com`, with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in §5.27 conventions below). The field names and shapes here remain the source of truth for both sides.
+> **✅ SHIPPED.** The `github.*` namespace is fully implemented and wired end-to-end (engine: GH-ENG; wire arms: GH-WIRE-A / GH-WIRE-B) — 22 methods routed daemon-owned against `api.github.com`, with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in §5.27 conventions below). The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here remain the source of truth for both sides.
 
 > **New namespace — replaces the Augment Cloud proxy.** In `augmentcode/intent` the GitHub +
 > identity surface is served by the Augment Cloud `augment-api.client.ts` (a hosted proxy +
@@ -1943,15 +1943,23 @@ errors are logged and surfaced. Script output is streamed to a "Setup" terminal 
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
 
-> **Auth model — PAT from the environment (no OAuth/device flow, no credential store).** A local
-> daemon has no hosted OAuth callback, so v1 authenticates with a **Personal Access Token resolved
-> from the environment**: `GITHUB_TOKEN`, falling back to `GH_TOKEN` (the existing
-> `intent-sourcecontrol` token resolution; explicit `sourceControl.github.token` / `gh auth token`
-> remain as lower-priority fallbacks per §5.12).
+> **Auth model — OAuth device flow, daemon-owned (with env-PAT fallbacks).** `github.connect`
+> starts GitHub's **OAuth device flow** (no client secret, no callback URL — only a public OAuth
+> App client id, `sourceControl.github.oauthClientId`): the daemon requests a `user_code`, hands it
+> to the client, and **polls GitHub in the background** until the user authorizes at
+> `github.com/login/device` (or the codes expire / the user denies). On authorize the access token
+> is persisted server-side under `sourceControl.github.token` — the **first slot** of the existing
+> `intent-sourcecontrol` resolution chain, ahead of the `GITHUB_TOKEN` / `GH_TOKEN` env vars and
+> the `gh auth token` fallback (§5.12) — so every `github.*` / `pr.*` consumer picks it up with
+> zero resolution changes. Because the daemon owns the poll loop, the flow **survives client
+> refreshes**: a reconnecting client re-reads the in-flight state from `github.authStatus`.
 >
-> - `github.authStatus` validates the resolved token via `GET /user` and reports connection state.
-> - `github.connect` / `github.revoke` are **no-ops / guidance** (the FE buttons are inert, like
->   Linear): there is nothing to connect/revoke when the token comes from the environment.
+> - `github.authStatus` validates the resolved token via `GET /user` and reports connection state,
+>   plus the in-flight device flow (if any) under `deviceFlow`.
+> - `github.connect` starts the flow (or returns the **same codes** while one is still pending —
+>   idempotent); terminal transitions are pushed as `github:auth-changed` events (§6.5).
+> - `github.cancelAuth` aborts a pending flow; `github.revoke` deletes the **stored** token (env /
+>   `gh` fallbacks are untouched — they re-resolve on the next probe).
 > - **Identity** is GitHub-derived: `github.getUser` returns the authenticated user from `GET /user`.
 >
 > **🔒 Secret guardrail.** The PAT is a secret: it is **never logged, echoed, or returned** over the
@@ -1990,10 +1998,11 @@ missing/invalid params and "not found" (404) lookups → `-32602`; a token that 
 
 | Method | Params | Result |
 | --- | --- | --- |
-| github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes } — `isConfigured` = env PAT resolves **and** `GET /user` succeeds. `oauthUrl` is `""` and `configuredButNeedsUpdate` is `false` in the PAT-from-env model (fields kept for FE shape parity) |
-| github.connect | — | { ok: false, guidance } — **no-op**; `guidance` explains setting `GITHUB_TOKEN` (no OAuth/device flow) |
-| github.revoke | — | { ok: false, guidance } — **no-op**; token is environment-owned, nothing to revoke |
-| github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the PAT |
+| github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
+| github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
+| github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
+| github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched |
+| github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
 
 #### Pulls
 
@@ -2125,11 +2134,12 @@ interface ReviewThreadComment {
 #### Examples
 
 ```json
-// → check GitHub auth (validates the env PAT via GET /user)
+// → check GitHub auth (validates the resolved token via GET /user)
 { "jsonrpc":"2.0","id":50,"method":"github.authStatus","params":{} }
-// ← response (GITHUB_TOKEN present and valid)
+// ← response (token present and valid, no flow in flight)
 { "jsonrpc":"2.0","id":50,"result":{
-  "isConfigured": true, "oauthUrl": "", "configuredButNeedsUpdate": false, "updatedScopes": "" } }
+  "isConfigured": true, "oauthUrl": "", "configuredButNeedsUpdate": false, "updatedScopes": "",
+  "deviceFlow": null } }
 ```
 
 ```json
@@ -2153,11 +2163,16 @@ interface ReviewThreadComment {
 ```
 
 ```json
-// → connect is inert in the PAT-from-env model
+// → start the OAuth device flow (daemon polls GitHub in the background)
 { "jsonrpc":"2.0","id":53,"method":"github.connect","params":{} }
-// ← response (guidance only — nothing to connect)
+// ← response — the user enters userCode at verificationUri
 { "jsonrpc":"2.0","id":53,"result":{
-  "ok": false, "guidance": "GitHub uses a Personal Access Token from the environment. Set GITHUB_TOKEN (or GH_TOKEN) and restart." } }
+  "ok": true, "userCode": "ABCD-1234", "verificationUri": "https://github.com/login/device",
+  "expiresIn": 900, "interval": 5 } }
+// … the user authorizes on github.com; the daemon's background poll persists
+//   the token server-side and pushes the terminal transition:
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"…","event":{
+  "type":"github:auth-changed", "data":{ "status":"authorized" }, "…":"…" } } }
 ```
 
 ### 5.28 `linear.*` namespace *(new in intentd — not part of the ported 104)*
@@ -3021,6 +3036,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest, pullRequests }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest, pullRequests }`, `pr:unlinked` → `{ workspaceId }`. `pullRequests` is the daemon-owned `PullRequestInfo[]` list (every refreshed/discovered/created PR upserted by number, merged/closed PRs retained) so clients can render the full per-branch PR list without a refetch; it is always an array on the wire (`[]` when empty, never `null`). |
 | agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. New in intentd — not part of the ported reference taxonomy. |
+| github (new in intentd) | github:auth-changed | Terminal transitions of the GitHub auth surface (§5.27). data = { status: "authorized"\|"expired"\|"denied"\|"error"\|"revoked" } — device-flow outcomes from the daemon's background poll, plus `revoked` from `github.revoke`. Global (no `workspaceId`, like `settings:changed`); never carries a token or code. New in intentd — not part of the ported reference taxonomy. |
 | skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace. The daemon watches the 5 scan roots (user p1-3 + project p4-5) via `notify` watchers; when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the set actually changed. User-tier changes (p1-3) affect all workspaces; project-tier changes (p4-5) are workspace-scoped. data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.34) to refresh the skill roster. New in intentd — not part of the ported reference taxonomy. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback (IMPLEMENTATION_SPEC.md §6.8) — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
