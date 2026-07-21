@@ -19,6 +19,20 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
+
+The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
+
+**Repro:** Create a workspace with provider opencode via `make dev`. Observed: the workspace title is never set on the first turn, and no workspace tools appear in the agent's tool stream.
+
+**Root cause:** In `intent-services/src/agent_manager.rs`, the generated MCP config pointing at the bridge subcommand is written only when `opts.provider.supports_mcp_config` is true (auggie-only), and every `session/new` / `session/load` passes an empty `mcpServers` list. The per-provider translators in `intent-acp/src/mcp_config.rs` (`to_opencode_mcp_config`, `to_codex_mcp_overrides`, `to_claude_mcp_json`, `to_acp_mcp_servers`) exist and are tested but are never called from any production path.
+
+**Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
+
+**Status:** fixed — opencode portion fixed ([intent-hq/intentd#306](https://github.com/intent-hq/intentd/pull/306), 2026-07-21): at spawn, for EnvConfig-injection providers (opencode), the normalized MCP server set (workspace bridge + user servers) is translated via `to_opencode_mcp_config` and merged into `OPENCODE_CONFIG_CONTENT` as an `mcp` block alongside `permission`/`model`/`instructions`; the bridge entry points at the same `mcp-bridge --connect <addr>` endpoint the auggie path uses. (Note: monorepo PR [#353](https://github.com/intent-hq/monorepo/pull/353) cited intent-hq/intentd#295 for this wiring — #295 is the Grok Build provider PR; the correct reference is intent-hq/intentd#306.) claude-code/codex/droid portion fixed ([intent-hq/intentd#309](https://github.com/intent-hq/intentd/pull/309), 2026-07-21): these providers consume MCP servers from the ACP session setup, so a new `supports_session_mcp_servers` provider flag makes `create_agent` build the typed server list (`to_acp_session_mcp_servers`) and `start_session` carry it in the `session/new` / `session/load` `mcpServers` field (all three session-open branches), pointing at the same bridge endpoint; http/sse entries are gated on the agent's advertised `mcpCapabilities` from `initialize`. Verified by a WSS e2e (`mock_agent_full_turn_over_wss_with_session_mcp_servers`) in which the mock agent reaches the bridge solely via the session-delivered entry. All five ACP providers (auggie, opencode, claude-code, codex, droid) now receive workspace tools.
+
+---
+
 ### STAB-159 (2026-07-21, area: ios navigation, severity: P1)
 
 On iPad, the "< Agents" back button in the conversation toolbar did nothing after the app auto-restored the last-open agent on launch — tapping it left the conversation on screen, with no way back to the agent list without force-quitting.
@@ -606,20 +620,6 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
-
-### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
-
-The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
-
-**Repro:** Create a workspace with provider opencode via `make dev`. Observed: the workspace title is never set on the first turn, and no workspace tools appear in the agent's tool stream.
-
-**Root cause:** In `intent-services/src/agent_manager.rs`, the generated MCP config pointing at the bridge subcommand is written only when `opts.provider.supports_mcp_config` is true (auggie-only), and every `session/new` / `session/load` passes an empty `mcpServers` list. The per-provider translators in `intent-acp/src/mcp_config.rs` (`to_opencode_mcp_config`, `to_codex_mcp_overrides`, `to_claude_mcp_json`, `to_acp_mcp_servers`) exist and are tested but are never called from any production path.
-
-**Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
-
-**Status:** open — opencode portion fixed ([intent-hq/intentd#306](https://github.com/intent-hq/intentd/pull/306), 2026-07-21): at spawn, for EnvConfig-injection providers (opencode), the normalized MCP server set (workspace bridge + user servers) is translated via `to_opencode_mcp_config` and merged into `OPENCODE_CONFIG_CONTENT` as an `mcp` block alongside `permission`/`model`/`instructions`; the bridge entry points at the same `mcp-bridge --connect <addr>` endpoint the auggie path uses. claude-code, codex, and droid remain unwired. (Note: monorepo PR [#353](https://github.com/intent-hq/monorepo/pull/353) cited intent-hq/intentd#295 for this wiring — #295 is the Grok Build provider PR; the correct reference is intent-hq/intentd#306.)
-
----
 
 ### STAB-157 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
 
