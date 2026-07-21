@@ -19,6 +19,16 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-147 (2026-07-21, area: intentd CI / e2e coverage jobs, severity: P1)
+
+Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed deterministically with `daemon did not start` panics at exactly the 10-second daemon-startup budget, blocking all PR merges (the `coverage-e2e` check is required with no admin bypass).
+
+**Repro:** Any push to main or any PR triggered the coverage jobs; e2e tests panicked at ~10.2–11.0s in `await_uds`-style startup waits (e.g. `e2e_config_precedence`, `e2e_transport`, `e2e_wss_agent_lifecycle`; the specific suites varied per run). The same tests pass locally in ~0.2s uninstrumented.
+
+**Root cause:** The coverage-instrumented `intentd` binary's startup latency crept past the hardcoded 10s budget on the oversubscribed 4-vCPU runners (`NEXTEST_TEST_THREADS: 8`). The coverage scripts export `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`, but only one suite (`e2e_wss_agent_rehydration`) honored it — every other suite hardcoded its startup wait.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up: hoist a shared multiplier-aware `test_timeout()` helper into `tests/common/` so budgets are centrally tunable.
+
 ### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
 
 The Claude model list drifted from what the `claude` CLI itself offered: the model picker showed a stale catalog (missing newly released models / retaining retired ones) because the claude-code ACP adapter binary being spawned was an old, unpinned copy rather than one matching the installed CLI.
