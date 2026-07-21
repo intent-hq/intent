@@ -27,7 +27,7 @@ The workspace sidebar's task-completion indicator went stale: a workspace whose 
 
 **Root cause:** Task notes are plain notes — task state lives in note metadata — so `note:created` / `note:updated` / `note:deleted` events can change the BE-owned `task.list` stats rollup without any `task:status-changed` edge. The daemon-events bridge only refetched workspace tasks on `task:status-changed`, so `note:*` events never invalidated the cached stats.
 
-**Expected:** The workspace-tasks stats refetch on `note:*` events (debounced per workspace), so the sidebar indicator reflects the current BE rollup without requiring a status change or reload.
+**Expected:** The workspace-tasks stats are refetched on `note:*` events (debounced per workspace), so the sidebar indicator reflects the current BE rollup without requiring a status change or reload.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#209](https://github.com/intent-hq/cloudlands-fe/pull/209), 2026-07-21) — the daemon-events bridge triggers a debounced (~1s per workspace, mirroring the changes-refresh pattern) `loadWorkspaceTasksRequested` refetch on `note:*` events, gated on the workspace-tasks slice already being initialized (at schedule time and re-checked at fire time) so tasks are never eagerly loaded for workspaces nobody has viewed. Covered by unit tests for the refetch, the uninitialized gate, burst coalescing, and the cleared-during-debounce case.
 
