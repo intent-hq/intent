@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-162 (as of 2026-07-21)
+**Next available ID:** STAB-163 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-162 (2026-07-21, area: iOS chat streaming, severity: P2)
+
+Live tool calls still rendered as bare spanners after STAB-158: every tool call arriving over the live `chat.subscribe` delta path rendered as a spanner row with no title at all and stayed that way for the rest of the turn; leaving and re-entering the conversation (hydration via `agent.getConversation`) rendered the same rows correctly, and desktop was unaffected.
+
+**Repro:** On iOS (build containing the STAB-158 fix, ios `c3c27a4`), enter a conversation and watch an agent turn stream tool calls. Observed: each live tool call shows a bare spanner with no title text, and later updates for that call do not repair it; re-entering the conversation fixes existing rows but new live ones degrade again.
+
+**Root cause:** Sparse `tool_call_update` progress ticks over `chat.subscribe` carry default/empty fields (`name: ''`, `input: {}`, `toolKind: 'other'`). The iOS `ConversationStore` upserted these ticks as full block replacements, clobbering the previously titled `tool_use` block — and each subsequent sparse tick re-clobbered it, so the row never recovered. The desktop bridge merges such updates instead of replacing, which is why it was unaffected; the hydration path rebuilds blocks from full snapshots, which is why re-entry fixed the rows.
+
+**Expected:** Sparse progress ticks must not erase previously known tool name/input; live tool rows keep their classified titles for the whole turn, matching desktop behavior.
+
+**Status:** fixed ([intent-hq/ios#34](https://github.com/intent-hq/ios/pull/34), 2026-07-21) — `ConversationStore` now merges empty-name `tool_call_update` ticks onto the prior block (desktop bridge parity), preserving name/input/title. Regression test added (fails without the fix); full suite green (304 tests).
+
+---
 
 ### STAB-161 (2026-07-21, area: cloudlands-fe desktop notifications / event subscription scope, severity: P1)
 
@@ -79,7 +93,7 @@ While an agent turn streamed in the iOS app, tool call rows rendered as the gene
 
 **Root cause:** Live `tool_use` block deltas frequently carry empty `input` (`{}`) with only `input._acpTitle` populated (the daemon coerces auggie's `raw_input: null` to `{}` + `_acpTitle`, PROTOCOL §7.1). The iOS `ToolCallView` classifier needed input values for most branches and lacked the `_acpTitle` fallback the desktop FE classifier uses, so it fell through to the generic spanner.
 
-**Status:** fixed ([intent-hq/ios#32](https://github.com/intent-hq/ios/pull/32), 2026-07-21) — the iOS tool classifier now falls back to `input._acpTitle` when raw input is missing, matching the desktop behavior, so mid-turn tool rows render their proper titles while streaming.
+**Status:** fixed ([intent-hq/ios#32](https://github.com/intent-hq/ios/pull/32), 2026-07-21) — the iOS tool classifier now falls back to `input._acpTitle` when raw input is missing, matching the desktop behavior, so mid-turn tool rows render their proper titles while streaming. This fix turned out to be partial: sparse live progress ticks still clobbered the titled blocks in `ConversationStore`, filed and fixed as STAB-162 ([intent-hq/ios#34](https://github.com/intent-hq/ios/pull/34)).
 
 ---
 
