@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-167 (as of 2026-07-21)
+**Next available ID:** STAB-168 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-167 (2026-07-21, area: intentd shutdown / agent_manager, severity: P1)
+
+Provider children and their bridge-style grandchildren (e.g. npx-launched ACP/MCP bridges) survived daemon shutdown as orphans.
+
+**Repro:** Run several active provider agents (e.g. auggie sessions whose ACP/MCP bridges are launched via npx), then stop the daemon (`intentd stop` or quitting the Electron app). Observed: provider processes and their grandchildren keep running after the daemon exits — the shutdown kill sweep processed agents sequentially with a 2s grace period each, so with enough agents it exceeded the supervisor's 5s SIGTERM→SIGKILL escalation and later agents were never signaled; additionally, some spawn sites did not place children in their own process groups, so bridge-style grandchildren were never signaled even for agents the sweep did reach.
+
+**Status:** fixed ([intent-hq/intentd#323](https://github.com/intent-hq/intentd/pull/323), 2026-07-21) — the shutdown sweep now kills all agents in parallel under a time budget that fits inside the supervisor's escalation window, and the direct-child-only kill paths signal the whole process group so grandchildren are reaped too.
+
+---
 
 ### STAB-166 (2026-07-21, area: intentd agent runtime / process cap, severity: P1)
 
