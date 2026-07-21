@@ -905,7 +905,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **NOT PORTING (won't-port-v1)**: no router arm; see the `browser.docs — NOT PORTING (v1)` block below |
-| terminal.list | workspaceId (req) | { terminals: [{ id, name, cwd, isExecutingCommand }] } — `name` is the PTY's optional daemon-tracked display name, assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25); serialized as the constant `"Terminal"` when the PTY has no name (clients may still fall back to `"Terminal"` defensively) |
+| terminal.list | workspaceId (req) | { terminals: [{ id, name, cwd, isExecutingCommand }] } — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
