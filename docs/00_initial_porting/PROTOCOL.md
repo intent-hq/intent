@@ -1078,8 +1078,9 @@ entry) carries an additive `origin` field naming the layer the effective value c
 `"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
 boot by a startup flag / env var, e.g. `--listen`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
-`permissions.rules`, `userRules` / `workspaceRules`, `endUserRules`) have **no** `origin` — they
-never live in config.toml (secrets stay in `secrets.json`, state blobs stay in SQLite).
+`model.workspaceOverrides`, `permissions.rules`, `userRules` / `workspaceRules`,
+`endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
+`secrets.json`, state blobs stay in SQLite).
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
 comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
 re-parse, debounced; invalid content keeps last-good values) and emit the same
@@ -1089,14 +1090,13 @@ the overriding flag ("overridden by startup flag …").
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed. These are the ported, BE-owned settings (group A) plus `intentd`-specific host/daemon settings (group B):
 
-- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.workspaceOverrides`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`.
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. `model.workspaceOverrides` shares this wire surface but is an opaque machine-state blob (SQLite-backed, no `origin` field — see above).
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
-- **Primary AI provider (new in intentd):** `ai.apiToken` *(sensitive)*, `ai.apiUrl` *(string)*,`ai.model` *(string)*, `ai.temperature` *(number, 0..=2, default 0.7)*, `ai.maxTokens` *(number,>=1, default 4096)*, `ai.streamingSpeed` *(number, >=0, default 0)*. Ports the FE`workspace-config` `config.ai.*` blob one-to-one; `ai.apiToken` is redacted on the wire.
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the known-repositorylist the FE previously kept in the `repo-registry` electron-store; `workspace.changeHistory`*(object)* — per-workspace diff-history bags the FE previously kept in the default `config.json`electron-store. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
