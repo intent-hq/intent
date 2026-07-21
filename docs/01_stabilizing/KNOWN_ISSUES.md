@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-156 (as of 2026-07-21)
+**Next available ID:** STAB-158 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -582,6 +582,34 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
+
+The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
+
+**Repro:** Create a workspace with provider opencode via `make dev`. Observed: the workspace title is never set on the first turn, and no workspace tools appear in the agent's tool stream.
+
+**Root cause:** In `intent-services/src/agent_manager.rs`, the generated MCP config pointing at the bridge subcommand is written only when `opts.provider.supports_mcp_config` is true (auggie-only), and every `session/new` / `session/load` passes an empty `mcpServers` list. The per-provider translators in `intent-acp/src/mcp_config.rs` (`to_opencode_mcp_config`, `to_codex_mcp_overrides`, `to_claude_mcp_json`, `to_acp_mcp_servers`) exist and are tested but are never called from any production path.
+
+**Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
+
+**Status:** open
+
+---
+
+### STAB-157 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
+
+Opencode tool calls render in the FE chat as generic `other` entries (wrench icons) with raw prose/pattern titles — e.g. a literal grep regex or file path — instead of real tool names and kinds.
+
+**Repro:** Run any opencode turn that greps or reads files. Observed: tool calls in the chat show wrench icons and literal regex/path titles rather than named tools.
+
+**Root cause:** `derive_tool_name` / `derive_tool_name_from_input` in `intent-acp/src/session.rs` expect `name: description`-style titles or known `raw_input` shapes. Opencode emits raw prose/pattern/path titles that bypass both heuristics, so `toolName` falls through verbatim and `tool_kind` maps to `other`.
+
+**Expected:** Opencode's title shapes are recognized so tool calls carry real tool names/kinds and the FE renders proper icons and titles.
+
+**Status:** fixed ([intent-hq/intentd#294](https://github.com/intent-hq/intentd/pull/294), 2026-07-21) — `derive_tool_name` now strips opencode's leading `workspace-mcp_` MCP prefix (mirror of auggie's trailing suffix), recognizes opencode's camelCase `rawInput` shapes captured from real 1.18.3 ACP traffic (`filePath`+`oldString`/`newString` → `edit`, `filePath`+`content` → `write`, `filePath` → `read`, string `command`+`cwd` → `bash`, `url` → `web-fetch`), and normalizes the bare `webfetch` title to `web-fetch`; with real names derived, `tool_kind_word` emits proper FE kinds (`file`/`terminal`/`search`/`note`) instead of `other`. Guards keep auggie (`launch-process` carries `wait`/`max_wait_seconds`) and codex (array `command`) derivation unchanged, regression-tested.
+
+---
 
 ### STAB-147 (2026-07-20, area: intentd test harness / workspace provisioning, severity: P2)
 
