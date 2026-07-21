@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-150 (as of 2026-07-21)
+**Next available ID:** STAB-151 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-150 (2026-07-21, area: cloudlands-fe provider availability / Settings, severity: P1)
+
+Codex was shown as not installed in Settings even though the real `codex` CLI was on PATH, because provider availability keyed off the `codex-acp` adapter binary instead of the CLI itself.
+
+**Repro:** Have the real `codex` CLI installed and on PATH, but no locally-installed `codex-acp` adapter binary. Open Settings → Agents. Observed: Codex is reported as not installed/unavailable, even though claude-code (which gates on the `claude` CLI) is reported correctly in the equivalent situation.
+
+**Root cause:** The provider status bridge seeder (`provider-status-bridge-seeder.ts`) treated the `codex-acp` adapter binary as the availability signal for codex (`PROVIDER_BINARIES.codex` was `codex-acp`), so availability, auth probing, and `providers:get-paths` all keyed off the adapter rather than the real CLI.
+
+**Expected:** Codex availability gates on the real `codex` CLI (mirroring how claude-code gates on the `claude` CLI); the adapter is probed only to attach a missing-adapter warning when neither a local `codex-acp` binary nor `npx` (the pinned adapter fallback runner) resolves.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#205](https://github.com/intent-hq/cloudlands-fe/pull/205), 2026-07-21) — `PROVIDER_BINARIES.codex` is now the real `codex` CLI; `providers:get-availability` / `providers:check-single` key availability and auth off the CLI, with `codex-acp`/`npx` probed only for a `CODEX_ADAPTER_MISSING_WARNING` ride-along warning (failed probes treated as unknowns, not confirmed absences); `providers:get-paths` resolves the real CLI path.
+
+---
 
 ### STAB-149 (2026-07-21, area: ios chat streaming, severity: P1)
 
