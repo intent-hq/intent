@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-144 (as of 2026-07-21)
+**Next available ID:** STAB-150 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -19,7 +19,7 @@ Each issue entry includes:
 
 ## Fixed Issues
 
-### STAB-143 (2026-07-21, area: ios chat streaming, severity: P1)
+### STAB-149 (2026-07-21, area: ios chat streaming, severity: P1)
 
 iOS chat streaming still failed after STAB-139: entering a chat with an active turn showed "thinking" with intermittent chunk flicker, the transcript was repeatedly wiped back to "thinking", and re-entering only showed the latest state.
 
@@ -28,6 +28,76 @@ iOS chat streaming still failed after STAB-139: entering a chat with an active t
 **Root cause:** MainActor routing race. The daemon's wire order is correct (`chat.subscribe` response before the seq-0 snapshot push), but on iOS the response frame resumes the request continuation and `subscribeLiveChat` only registers its subscription handler one or more MainActor hops later. The seq-0 snapshot push often landed in that window, hit the unrouted-push path in `ConnectionManager.handleTextMessage`, and was dropped. With the snapshot lost, `chatSeeded` stayed false, so the first delta looked like a gap and triggered `resnapshotChat()` — whose re-subscribe re-ran the same race, producing a resnapshot storm that repeatedly wiped the transcript.
 
 **Status:** fixed ([intent-hq/ios#30](https://github.com/intent-hq/ios/pull/30), 2026-07-21) — `ConnectionManager` buffers unrouted `subscription.push` frames (64-frame cap, 30s TTL) and replays them in arrival order when a handler registers (removed before delivery, so exactly-once); unregister drops buffered frames and tombstones the id so dead-subscription stragglers are not buffered (a fresh seq-0 snapshot revives a tombstoned id to handle daemon-restart id reuse); `ConversationStore` ignores stale deltas (`seq < chatExpectedSeq`) and stale snapshot re-delivery that would rewind the transcript, instead of treating them as gaps. 10 regression tests; full IntentTests suite (288 tests) passes.
+
+---
+
+### STAB-148 (2026-07-21, area: intentd CI / e2e coverage jobs, severity: P1)
+
+Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed deterministically with `daemon did not start` panics at exactly the 10-second daemon-startup budget, blocking all PR merges (the `coverage-e2e` check is required with no admin bypass).
+
+**Repro:** Any push to main or any PR triggered the coverage jobs; e2e tests panicked at ~10.2–11.0s in `await_uds`-style startup waits (e.g. `e2e_config_precedence`, `e2e_transport`, `e2e_wss_agent_lifecycle`; the specific suites varied per run). The same tests pass locally in ~0.2s uninstrumented.
+
+**Root cause:** The coverage-instrumented `intentd` binary's startup latency crept past the hardcoded 10s budget on the oversubscribed 4-vCPU runners (`NEXTEST_TEST_THREADS: 8`). The coverage scripts export `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`, but only one suite (`e2e_wss_agent_rehydration`) honored it — every other suite hardcoded its startup wait.
+
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up: hoist a shared multiplier-aware `test_timeout()` helper into `tests/common/` so budgets are centrally tunable.
+
+### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
+
+The Claude model list drifted from what the `claude` CLI itself offered: the model picker showed a stale catalog (missing newly released models / retaining retired ones) because the claude-code ACP adapter binary being spawned was an old, unpinned copy rather than one matching the installed CLI.
+
+**Repro:** Update the `claude` CLI to a version whose model catalog changed, then open the model picker for a claude-code agent in cloudlands-fe (or query the model catalog via intentd). Observed: the model list reflected an older adapter's catalog, not what `claude` itself reported — e.g. new models missing from the picker.
+
+**Root cause:** Both intentd and cloudlands-fe resolved the claude-code ACP adapter (`@agentclientprotocol/claude-agent-acp`) through discovery paths that could pick up a stale globally-installed or cached copy, and npx invocations were unpinned — so the adapter version (and thus its model catalog) silently drifted from the installed `claude` CLI. The codex npx fallback had the same unpinned-spawn exposure.
+
+**Expected:** The ACP adapter is spawned at a known pinned version in both repos (bumped together per the paired version-pin rule), so the model catalog is deterministic and matches the CLI; claude-code availability is gated on actual `claude` CLI presence rather than daemon discovery of a possibly-stale adapter.
+
+**Status:** fixed ([intent-hq/intentd#279](https://github.com/intent-hq/intentd/pull/279) + [intent-hq/intentd#282](https://github.com/intent-hq/intentd/pull/282) + [intent-hq/cloudlands-fe#188](https://github.com/intent-hq/cloudlands-fe/pull/188) + [intent-hq/cloudlands-fe#192](https://github.com/intent-hq/cloudlands-fe/pull/192) + [intent-hq/cloudlands-fe#194](https://github.com/intent-hq/cloudlands-fe/pull/194) + [intent-hq/cloudlands-fe#196](https://github.com/intent-hq/cloudlands-fe/pull/196), 2026-07-20) — intentd: claude-code is spawned exclusively via pinned npx `@agentclientprotocol/claude-agent-acp@0.60.0` (#279) and the codex npx fallback is pinned to `@zed-industries/codex-acp@0.16.0` (#282); cloudlands-fe: pi-acp pinned to `0.0.31` (#188), claude-code resolver made npx-only with the same `0.60.0` pin (#192), managed codex-acp runtime bumped to `0.16.0` (#194), and claude-code availability gated on `claude` CLI presence instead of daemon discovery (#196).
+
+---
+
+### STAB-145 (2026-07-20, area: cloudlands-fe chat edit-and-regenerate + intentd agent runtime, severity: P1)
+
+Editing a past user message in the chat did nothing — the edit UI dispatched `agentSessionEditAndRegenerateRequested`, but that event had been orphaned since saga-removal commit `95d908a2` (nothing listened for it anymore), and no daemon RPC existed to truncate the transcript and reset the ACP session anyway.
+
+(Planned as "STAB-141" in the shipping task; renumbered on merge because STAB-141 through STAB-144 were taken by entries that landed on main first.)
+
+**Repro:** In a chat with prior turns, hover a past user message, click Edit, change the text, and submit. Observed: nothing happens — no truncation, no regeneration, no error; the event fires into the void.
+
+**Expected:** The transcript is truncated to just before the edited message, the agent's ACP session is reset so the provider does not retain the truncated turns in context, and the edited content is sent as a fresh user message that regenerates the conversation from that point.
+
+**Status:** fixed ([intent-hq/intentd#283](https://github.com/intent-hq/intentd/pull/283) + [intent-hq/cloudlands-fe#197](https://github.com/intent-hq/cloudlands-fe/pull/197), 2026-07-20) — intentd: new `agent.editAndRegenerate` RPC orchestrates the whole flow daemon-side (validate the target is an existing user message, stop any in-flight turn, optional model switch, truncate via the replaceMessages machinery with an `agent:updated { truncatedCount, remainingCount }` event, force a fresh ACP `session/new` that replays the kept history as `<supervisor>` XML, then regenerate through the normal send path); cloudlands-fe: the edit flow calls the new RPC directly (replacing the orphaned event) behind a confirm gate warning that subsequent messages will be discarded. Protocol shape documented in `docs/00_initial_porting/PROTOCOL.md` §5.5.
+
+---
+
+### STAB-144 (2026-07-20, area: intentd agent queue / interrupted-agent resume, severity: P1)
+
+Queued agent messages were silently dropped on intentd shutdown — the per-agent send queue lived only in memory, so any daemon restart (graceful or crash) lost everything the user had queued while an agent was working.
+
+(Planned as "STAB-142" in the shipping task; renumbered on merge because STAB-142 and STAB-143 were taken by entries that landed on main first.)
+
+**Repro:** Queue one or more messages on a busy agent (`agent.queueMessage`), then restart or kill intentd. After restart, resume the interrupted agent via `agent.resolveInterrupted { resume }`. Observed: the continuation message was delivered but `agent.getQueue` returned an empty queue — every queued message was gone.
+
+**Root cause:** `Services.agent_queues` was a purely in-memory map with no persistence; nothing snapshotted it to SQLite on mutation or rehydrated it at boot.
+
+**Expected:** Queued messages survive daemon restarts. On resume, the continuation streams first, then the preserved queue drains FIFO in original order after that turn completes. Abandoning leaves the preserved queue intact and inert.
+
+**Status:** fixed ([intent-hq/intentd#284](https://github.com/intent-hq/intentd/pull/284), 2026-07-20) — new `agent_queue` SQLite table (additive migration 0046) with write-through persistence on every queue mutation (serialized per-daemon so an older snapshot can never overwrite a newer one) and startup rehydration before RPCs are served; rehydration never auto-starts a turn and restores mid-edit entries as ready-to-send. Covered by store/services unit tests plus 3 real-SIGKILL WSS e2e tests locking in the resume ordering contract.
+
+---
+
+### STAB-143 (2026-07-20, area: workspace-create (cloudlands-fe CompactWorkspaceInitializer + intentd workspace.create), severity: P1)
+
+(Filed as "STAB-141" in monorepo PR #318; renumbered on merge because STAB-141 and STAB-142 were taken by entries that landed on main first.)
+
+A failed workspace create from the home-page initializer permanently poisons retries: every subsequent create attempt fails with `UNIQUE constraint failed: agent_session.id`, and each failed click leaves an orphaned workspace behind.
+
+**Repro:** From the home-page initializer (`CompactWorkspaceInitializer`), trigger a `workspace.create` that fails, then retry the create. Observed: every retry fails with an opaque `-32603 Internal error`; `make dev` logs show repeated `WARN intent_services: workspace.create failed ... UNIQUE constraint failed: agent_session.id`. The create button fails forever until sessionStorage is cleared. Each failed attempt also leaves an orphaned workspace (row, worktree, spec note, `workspace:created` event) behind.
+
+**Root cause:** (1) FE — `CompactWorkspaceInitializer.svelte` generates the initial agent ID once via `getOrCreateAgentId()` and caches it in sessionStorage (`compact-workspace-initializer-agent-id`), rotating it only in `clearForm()`, which runs only on the success path; after any failed/partially-observed create, every retry sends the same `initialAgent.agentId`. (2) BE — `workspace.create` forwards the client-supplied `agentId` to `agent_create_op`, which validates only the ID *format*; a duplicate hits the SQLite UNIQUE constraint (1555) → opaque `-32603 internal error` — after the workspace row, worktree, spec note, and `workspace:created` event were already persisted (no rollback).
+
+**Expected:** Retrying a failed create from the home-page initializer succeeds: the FE sends a fresh initial-agent ID per create attempt, and the daemon rejects a duplicate client-supplied `agentId` fast and cleanly (`-32602` naming the ID) before provisioning anything, leaving no partial workspace.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#193](https://github.com/intent-hq/cloudlands-fe/pull/193) + [intent-hq/intentd#281](https://github.com/intent-hq/intentd/pull/281), 2026-07-20) — cloudlands-fe: `CompactWorkspaceInitializer` generates a fresh initial-agent ID per create attempt instead of reusing the sessionStorage-cached one across failed attempts; intentd: `workspace.create` / `agent.create` reject a duplicate client-supplied `agentId` fast with `-32602` naming the duplicate id, before any provisioning, so no partial workspace (row, worktree, spec note, `workspace:created` event) is left behind. Duplicate-id contract documented in `docs/00_initial_porting/PROTOCOL.md` §5.1/§5.5.
 
 ---
 
@@ -432,6 +502,18 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-147 (2026-07-20, area: intentd test harness / workspace provisioning, severity: P2)
+
+Integration-test runs leave orphaned workspace directories in the real `~/intent/workspaces/` instead of an isolated temp location. An audit on 2026-07-20 found 116 such directories (animal-pair slugs like `blue-yak`, `ancient-falcon`); by cleanup time on 2026-07-21 the count had grown to 162.
+
+**Repro:** Run the intentd integration-test suite, then inspect `~/intent/workspaces/`. Observed: leftover directories containing only `.workspace/workspace.json` whose metadata points at a temp repository (`repositoryPath` under `/var/folders/.../T/repo-<uuid>`) with `skipWorktree: true` — no DB rows, no worktrees, no branches. They accumulate across runs and pollute the real workspaces directory.
+
+**Expected:** The test harness provisions workspace directories under a temp dir (e.g. alongside its temp repos) or cleans them up when a run finishes, leaving `~/intent/workspaces/` untouched.
+
+**Status:** open
+
+---
 
 ### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
 
@@ -923,7 +1005,7 @@ These items were genuinely open/deferred in [../00_initial_porting/BREADCRUMBS.m
 
 Home-screen repo selector does not default to the most recent repository; workspace-initializer persistence never re-homed after saga removal.
 
-**Repro:** Before the fix: Open the Cloudlands home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
+**Repro:** Before the fix: Open the Intent home screen, create a workspace from repo A, then create another workspace from repo B. Close the app, reopen, and return to the home screen. Observed: the repo selector dropdown defaults to "Select a repository" (no selection) instead of repo B. Expected: the selector should default to the most recent repository (repo B).
 
 **Root cause:** The workspace-initializer component (`WorkspaceInitializer.svelte`) previously persisted its form state (selected repo, branch, prompt text) via a Redux-observable saga (`workspace-initializer-saga.ts`). The saga subscribed to form-state actions and wrote to an electron-store `workspace-initializer` bag. Commit 95d908a2 ("refactor: remove redux-observable") deleted the saga file and all persistence logic, but the component continued to read from the now-static electron-store entry. New form interactions (repo selection, branch typing, prompt edits) updated local component state and Redux store state but never persisted, so the electron-store bag stayed frozen at its last pre-saga-removal value. On app restart, the component rehydrated from the stale electron-store entry, discarding all session state. The repo selector defaulted to no selection (or the stale repo) instead of the most recent repository.
 
@@ -1460,3 +1542,13 @@ Agent commits do not appear in the sidebar Changes panel in a brand-new workspac
 **Expected:** Agent commits (and git pull / changes:tracked events) should trigger the Changes panel to refresh within ~2 seconds, without requiring a workspace switch.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#82](https://github.com/intent-hq/cloudlands-fe/pull/82), 2026-07-16) — frontend firehose daemon event bridge now dispatches per-workspace debounced (1s) `changes/refreshRequested` on `git:commit`, `git:pull`, and `changes:tracked` events
+
+### STAB-130 (2026-07-20, area: intentd e2e tests / agent lifecycle, severity: P2)
+
+Pre-existing flaky test: `e2e_wss_agent_lifecycle` fails intermittently with a queue-drain race.
+
+**Repro:** Run `cargo test` in `packages/intentd` under load (e.g. alongside other test binaries) — `e2e_wss_agent_lifecycle` intermittently fails on a queued-message drain assertion. It is intermittent even in isolation, though it usually passes when run alone (`cargo test --test e2e_wss_agent_lifecycle`). The flake pre-dates the settings→TOML migration (fails identically at the pre-migration HEAD).
+
+**Expected:** The lifecycle e2e should deterministically wait for queue-drain events (bounded wait loops filtered by agent ID/event type, as in the STAB-34/STAB-36 fix pattern) instead of racing async event delivery.
+
+**Status:** open

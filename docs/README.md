@@ -1,6 +1,6 @@
 # Documentation
 
-Index of the `docs/` tree for the Cloudlands monorepo.
+Index of the `docs/` tree for the Intent monorepo.
 
 ## Wire Contract — `PROTOCOL.md`
 
@@ -43,13 +43,13 @@ record of how the port progressed. The **canonical, versioned wire contract** is
 
 **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with
 the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto the
-Cloudlands stack (`intentd` + `cloudlands-fe`) — the IDE now builds the next version of
+Intent stack (`intentd` + `cloudlands-fe`) — the IDE now builds the next version of
 itself.
 
 ## `01_stabilizing/`
 
 Documents for the **ongoing stabilization and hardening phase**, post-initial-port.
-Development now happens on the self-hosted Cloudlands stack (`intentd` + `cloudlands-fe`),
+Development now happens on the self-hosted Intent stack (`intentd` + `cloudlands-fe`),
 which now builds the next version of itself.
 
 - **[STABILIZATION.md](./01_stabilizing/STABILIZATION.md)** — the **dogfooding process**:
