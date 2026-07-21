@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-147 (as of 2026-07-20)
+**Next available ID:** STAB-148 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -480,6 +480,18 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 ---
 
 ## Open Issues
+
+### STAB-147 (2026-07-20, area: intentd test harness / workspace provisioning, severity: P2)
+
+Integration-test runs leave orphaned workspace directories in the real `~/intent/workspaces/` instead of an isolated temp location. An audit on 2026-07-20 found 116 such directories (animal-pair slugs like `blue-yak`, `ancient-falcon`); by cleanup time on 2026-07-21 the count had grown to 162.
+
+**Repro:** Run the intentd integration-test suite, then inspect `~/intent/workspaces/`. Observed: leftover directories containing only `.workspace/workspace.json` whose metadata points at a temp repository (`repositoryPath` under `/var/folders/.../T/repo-<uuid>`) with `skipWorktree: true` — no DB rows, no worktrees, no branches. They accumulate across runs and pollute the real workspaces directory.
+
+**Expected:** The test harness provisions workspace directories under a temp dir (e.g. alongside its temp repos) or cleans them up when a run finishes, leaving `~/intent/workspaces/` untouched.
+
+**Status:** open
+
+---
 
 ### STAB-139 (2026-07-20, area: cloudlands-fe workspace initializer / renderer store persistence, severity: P2)
 
