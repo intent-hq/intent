@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-163 (as of 2026-07-21)
+**Next available ID:** STAB-164 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-163 (2026-07-21, area: intentd agent runtime / direct-send events + cloudlands-fe chat edit flow, severity: P1)
+
+After editing a past user message (STAB-145's `agent.editAndRegenerate` flow), the edited message vanished from the chat until a full reload (cmd+r) — the transcript showed the prior turns and the streaming assistant reply, but not the edited user message itself.
+
+**Repro:** In a chat with prior turns, edit a past user message and submit. Observed: the transcript truncates and the regenerated assistant reply streams, but the edited user message is missing until cmd+r rehydrates the transcript.
+
+**Root cause:** two PROTOCOL.md §5.5 divergences in the direct-send branch of `AgentManager::send_message` (which `edit_and_regenerate` routes through): (1) it published no `agent:message` event for the persisted user row — only the queue-drain and wake-delivery paths emitted — so the FE bridge's convergence (unknown user `messageId` → transcript refetch) never fired after the edit truncated the local transcript; (2) the RPC result `messageId` was minted independently of the store row id (the store minted its own UUIDv7 and the caller's id was discarded), so the result id named a row that did not exist.
+
+**Status:** fixed ([intent-hq/intentd#316](https://github.com/intent-hq/intentd/pull/316), 2026-07-21) — the direct-send branch now persists the user row under the client-supplied `messageId` (or the minted `user-msg-{uuid}` default) so the result `messageId` IS the persisted row id, publishes `agent:message` (role=user) with that id, and validates client-supplied id length (≤ 256 bytes, `-32602`) before any state change. No FE change (wire divergence fixed at the diverging side per PROTOCOL.md). Covered by 3 new agent-manager unit tests plus extended WSS e2e assertions on the direct-send and editAndRegenerate flows.
+
+---
 
 ### STAB-162 (2026-07-21, area: iOS chat streaming, severity: P2)
 
