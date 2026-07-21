@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-152 (as of 2026-07-21)
+**Next available ID:** STAB-158 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,86 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-155 (2026-07-21, area: cloudlands-fe state persistence, severity: P2)
+
+`workspaceInitializer.state` persistence failed from boot with `DataCloneError`: every persist attempt logged "object could not be cloned" and nothing was saved, so initializer state (recent repos, form state) silently stopped surviving restarts.
+
+**Repro:** Launch cloudlands-fe and open the New Workspace initializer (any interaction that dispatches `setCompactWorkspaceInitializerFormState`). Observed: `settings.update` threw `DataCloneError: object could not be cloned` on every persist of the `workspaceInitializer.state` bag, from boot onward.
+
+**Root cause:** Svelte 5 `$state` proxies (the `remoteSetup`/scope form state in `CompactWorkspaceInitializer.svelte`) were dispatched as-is into the Redux bag. The persistence service then sent the whole bag over Electron IPC via `settings.update`, whose structured clone cannot serialize reactive proxies.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — the `$state`-dispatching sites (`CompactWorkspaceInitializer.svelte`, `RepoSelector.svelte`, `RemoteSetupSelector.svelte`) wrap the value in `$state.snapshot()` so no proxies enter the store, and the persistence service gained a non-throwing safety net that verifies the outgoing bag is structured-cloneable, falls back to a plain-JSON round-trip (warning once with the clone error), and skips the write entirely when even that fails. Regression tests: a proxied `remoteSetup` still persists as plain JSON with the exact PROTOCOL §5.12 wire request; an unsanitizable bag skips the persist without throwing.
+
+---
+
+### STAB-154 (2026-07-21, area: cloudlands-fe workspace operations, severity: P1)
+
+Deleting a workspace and then quitting (or reloading) the app within the 15-second undo window silently lost the delete — the workspace reappeared on the next launch.
+
+**Repro:** Delete a workspace in cloudlands-fe, then quit or reload the app before the 15s undo window elapses. Relaunch. Observed: the "deleted" workspace is back — the daemon never received `workspace.delete`.
+
+**Root cause:** The soft-hide-then-commit delete flow deferred the `workspace.delete` wire commit behind the undo window's `setTimeout`, which dies with the renderer. Nothing flushed pending deletions on unload, so quitting inside the window dropped the commit entirely.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — pending deletions are tracked in a module-level registry (mirroring the agent soft-hide-then-commit pattern) and flushed on `beforeunload`/`pagehide`, initiating the wire request synchronously before teardown; undo removes the registry entry so a flush never deletes an undone workspace, commit bails when its registry entry is already gone (no double-send), and Undo stays inert after a flush already committed. Regression tests cover flush-on-unload, undo-cancels-flush, no-double-commit, and inert-Undo-after-flush.
+
+---
+
+### STAB-153 (2026-07-21, area: cloudlands-fe desktop notifications / main-process lifecycle, severity: P1)
+
+Desktop notifications for `agent:idle` events never fired: the `NotificationService` lifecycle was homed on the legacy `workspace:open` IPC path, which is dead under the mock-router architecture, so `events.subscribe` was never issued and no OS banners appeared.
+
+**Repro:** Open a workspace, let an agent run to completion (agent goes idle) while the app is unfocused. Observed: no OS notification banner is shown, ever.
+
+**Root cause:** Two gaps. (1) The renderer's `window:set-in-workspace` / `window:set-open-workspace-tabs` invokes were swallowed by the mock router and never reached the main process, so the main process had no view of open workspaces. (2) Even with state flowing, notification-service startup was still keyed to the dead `workspace:open` trigger, and the initial `events.subscribe` could race the daemon client's first connect and fail permanently.
+
+**Expected:** Notification services are reconciled with the set of open workspaces from `window-workspace-state-changed` (including on window close), and a failed initial subscribe retries on the next `status → connected` transition.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#210](https://github.com/intent-hq/cloudlands-fe/pull/210), 2026-07-21) — added a renderer window-state bridge seeder forwarding the two window-state invokes to the real preload bridge, re-homed notification lifecycle onto `syncNotificationServices(openWorkspaceIds)` driven by `window-workspace-state-changed` (now also emitted on window close so services for workspaces no longer open anywhere are torn down), and added an initial-connect `events.subscribe` retry armed on the backend client `status` event. Note: the PR title/commit references STAB-152, which was concurrently assigned to the workspace-tasks staleness entry below; this issue is tracked as STAB-153.
+
+---
+
+### STAB-152 (2026-07-21, area: cloudlands-fe daemon-events-bridge / workspace-tasks staleness, severity: P2)
+
+The workspace sidebar's task-completion indicator went stale: a workspace whose stats showed all tasks complete kept its "Complete" checkmark even after new (incomplete) task notes were added, until a task status changed or the app reloaded.
+
+**Repro:** Complete all tasks in a workspace (the sidebar checkmark shows "Complete"), then have the coordinator add new task notes to that workspace. Observed: the checkmark incorrectly stays "Complete" until some task's status changes or the app is reloaded.
+
+**Root cause:** Task notes are plain notes — task state lives in note metadata — so `note:created` / `note:updated` / `note:deleted` events can change the BE-owned `task.list` stats rollup without any `task:status-changed` edge. The daemon-events bridge only refetched workspace tasks on `task:status-changed`, so `note:*` events never invalidated the cached stats.
+
+**Expected:** The workspace-tasks stats are refetched on `note:*` events (debounced per workspace), so the sidebar indicator reflects the current BE rollup without requiring a status change or reload.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#209](https://github.com/intent-hq/cloudlands-fe/pull/209), 2026-07-21) — the daemon-events bridge triggers a debounced (~1s per workspace, mirroring the changes-refresh pattern) `loadWorkspaceTasksRequested` refetch on `note:*` events, gated on the workspace-tasks slice already being initialized (at schedule time and re-checked at fire time) so tasks are never eagerly loaded for workspaces nobody has viewed. Covered by unit tests for the refetch, the uninitialized gate, burst coalescing, and the cleared-during-debounce case.
+
+---
+
+### STAB-151 (2026-07-21, area: cloudlands-fe chat edit-and-regenerate UI, severity: P1)
+
+The edit-and-regenerate confirmation dialog (shipped in cloudlands-fe #197 / STAB-145) rendered clipped inside the message edit textbox: no backdrop, warning text cut off left and right, and the "Edit & regenerate" / "Cancel" action buttons not visible at all — making the destructive-truncation confirmation impossible to operate from the UI.
+
+**Repro:** In a chat with prior turns, click a past user message to enter edit mode, change the text, and submit. Observed: the confirmation appears as a clipped strip inside the edit textbox bounds with no backdrop and no visible buttons.
+
+**Root cause:** `EditRegenerateConfirmDialog` (via `BulkActionConfirmDialog`) rendered its `fixed inset-0` overlay inline in `ChatMessage`'s DOM, where ancestor overflow/transform stacking contexts turn the fixed-position overlay into a clipped, locally-positioned box.
+
+**Expected:** The confirmation renders as a full-screen centered overlay modal above all stacking contexts, with both buttons visible and Escape/backdrop-click cancelling back to edit mode with the draft intact.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#206](https://github.com/intent-hq/cloudlands-fe/pull/206), 2026-07-21) — the dialog is now portaled to `document.body` via the app-standard `Portal` (same pattern as `DeleteWarningDialog`); `BulkActionConfirmDialog` additionally defers its focus-on-open a microtask so focus lands on the dialog after the Portal relocation (moving a focused node drops focus to `<body>`, which broke Escape). Confirm/cancel semantics unchanged; tests cover portal placement, visible buttons, focus-on-open, and Escape/backdrop cancel.
+
+---
+
+### STAB-150 (2026-07-21, area: cloudlands-fe provider availability / Settings, severity: P1)
+
+Codex was shown as not installed in Settings even though the real `codex` CLI was on PATH, because provider availability keyed off the `codex-acp` adapter binary instead of the CLI itself.
+
+**Repro:** Have the real `codex` CLI installed and on PATH, but no locally-installed `codex-acp` adapter binary. Open Settings → Agents. Observed: Codex is reported as not installed/unavailable, even though claude-code (which gates on the `claude` CLI) is reported correctly in the equivalent situation.
+
+**Root cause:** The provider status bridge seeder (`provider-status-bridge-seeder.ts`) treated the `codex-acp` adapter binary as the availability signal for codex (`PROVIDER_BINARIES.codex` was `codex-acp`), so availability, auth probing, and `providers:get-paths` all keyed off the adapter rather than the real CLI.
+
+**Expected:** Codex availability gates on the real `codex` CLI (mirroring how claude-code gates on the `claude` CLI); the adapter is probed only to attach a missing-adapter warning when neither a local `codex-acp` binary nor `npx` (the pinned adapter fallback runner) resolves.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#205](https://github.com/intent-hq/cloudlands-fe/pull/205), 2026-07-21) — `PROVIDER_BINARIES.codex` is now the real `codex` CLI; `providers:get-availability` / `providers:check-single` key availability and auth off the CLI, with `codex-acp`/`npx` probed only for a `CODEX_ADAPTER_MISSING_WARNING` ride-along warning (failed probes treated as unknowns, not confirmed absences); `providers:get-paths` resolves the real CLI path.
+
+---
 
 ### STAB-149 (2026-07-21, area: ios chat streaming, severity: P1)
 
@@ -39,7 +119,7 @@ Main's CI went red: the `coverage-e2e` and `coverage-all` jobs failed determinis
 
 **Root cause:** The coverage-instrumented `intentd` binary's startup latency crept past the hardcoded 10s budget on the oversubscribed 4-vCPU runners (`NEXTEST_TEST_THREADS: 8`). The coverage scripts export `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`, but only one suite (`e2e_wss_agent_rehydration`) honored it — every other suite hardcoded its startup wait.
 
-**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up: hoist a shared multiplier-aware `test_timeout()` helper into `tests/common/` so budgets are centrally tunable.
+**Status:** fixed (https://github.com/intent-hq/intentd/pull/289, 2026-07-21) — daemon-startup budgets raised to 60s across all e2e/uds suites. Follow-up landed (https://github.com/intent-hq/intentd/pull/291, 2026-07-21): shared multiplier-aware `test_timeout()` / `daemon_startup_timeout()` helpers hoisted into `tests/common/`; all 41 suites now honor `INTENTD_TEST_TIMEOUT_MULTIPLIER`.
 
 ### STAB-146 (2026-07-20, area: claude-code ACP adapter spawn / model catalog (intentd + cloudlands-fe), severity: P2)
 
@@ -503,7 +583,7 @@ Agent becomes wedged in `error` status with an undrainable queue after a mid-tur
 
 ## Open Issues
 
-### STAB-150 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
+### STAB-156 (2026-07-21, area: intentd agent spawn / workspace-MCP bridge, severity: P1)
 
 The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task editing, delegation) is only delivered to providers with `supports_mcp_config` — which is set for auggie alone. Opencode, claude-code, codex, and droid sessions get no workspace tools at all, so the coordinator workflow is broken on those providers: agents cannot set the workspace title, edit notes, or delegate.
 
@@ -517,7 +597,7 @@ The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task edit
 
 ---
 
-### STAB-151 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
+### STAB-157 (2026-07-21, area: intentd intent-acp tool-name derivation / cloudlands-fe tool rendering, severity: P2)
 
 Opencode tool calls render in the FE chat as generic `other` entries (wrench icons) with raw prose/pattern titles — e.g. a literal grep regex or file path — instead of real tool names and kinds.
 
