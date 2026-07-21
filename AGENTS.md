@@ -4,7 +4,7 @@ Instructions for AI agents working in this monorepo.
 
 ## Repository Structure
 
-This is a private monorepo that references Cloudlands component repositories as git
+This monorepo references the Intent component repositories as git
 submodules:
 
 - `packages/intentd` → [intent-hq/intentd](https://github.com/intent-hq/intentd) — Rust backend daemon

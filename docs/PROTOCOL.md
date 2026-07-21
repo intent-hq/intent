@@ -13,12 +13,13 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 4. [Message Envelope (JSON-RPC 2.0)](#4-message-envelope-json-rpc-20)
 5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
 6. [Method Catalog](#6-method-catalog)
-   - 6.1 [Router Methods](#61-router-methods-253-total)
-   - 6.2 [Fast-Path Methods](#62-fast-path-methods-27-total)
+   - 6.1 [Router Methods](#61-router-methods-261-total)
+   - 6.2 [Fast-Path Methods](#62-fast-path-methods-29-total)
    - 6.3 [Method Aliases](#63-method-aliases-2-total)
    - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
    - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
    - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
+   - 6.7 [`models.list` Per-Provider Catalog](#67-modelslist-per-provider-catalog-v20-additions)
 7. [Events & Subscriptions](#7-events--subscriptions)
 8. [Error Codes](#8-error-codes)
 
@@ -30,7 +31,7 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 
 The protocol version is advertised in two places:
 
-- **`client.hello`** response: `{ server: { protocolVersion: "2.0", ... }, ... }`
+- **`client.hello`** response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block.
 - **`system.status`** response: `{ protocolVersion: "2.0", ... }`
 
 ### Compatibility Policy
@@ -218,28 +219,28 @@ Returns commit history with attribution and workspace boundary information.
 
 ## 6. Method Catalog
 
-The API exposes **282 dispatchable method names** across the following categories:
+The API exposes **292 dispatchable method names** across the following categories:
 
-- **Router methods:** 253 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 27 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 261 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 29 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 282 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 292 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
 
-**Total:** 282 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 292 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields `-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires `workspaceId` (see §4.6) and may return `-32603 Internal error` if the underlying service throws.
 
-### 6.1 Router Methods (253 total)
+### 6.1 Router Methods (261 total)
 
-The following 253 methods are routed through the main dispatch match in `router.rs`.
+The following 261 methods are routed through the main dispatch match in `router.rs`.
 
-#### `agent.*` (37 methods)
+#### `agent.*` (38 methods)
 
-agent.appendMessage, agent.cancelSubscriptions, agent.completeOnce, agent.create, agent.delegate, agent.delete, agent.diagnostics, agent.editQueuedMessage, agent.enhancePrompt, agent.forceMessage, agent.get, agent.getConversation, agent.getModels, agent.getQueue, agent.getSession, agent.getSessionStats, agent.getSubscriptions, agent.list, agent.listInterrupted, agent.pendingPermissions, agent.queueMessage, agent.removeQueuedMessage, agent.rename, agent.replaceMessages, agent.reportToParent, agent.resolveInterrupted, agent.respondPermission, agent.retry, agent.sendMessage, agent.sendToTask, agent.setModel, agent.stop, agent.subscribe, agent.summary, agent.unsubscribe, agent.update, agent.wakeOrCreate
+agent.appendMessage, agent.cancelSubscriptions, agent.completeOnce, agent.create, agent.delegate, agent.delete, agent.diagnostics, agent.editAndRegenerate, agent.editQueuedMessage, agent.enhancePrompt, agent.forceMessage, agent.get, agent.getConversation, agent.getModels, agent.getQueue, agent.getSession, agent.getSessionStats, agent.getSubscriptions, agent.list, agent.listInterrupted, agent.pendingPermissions, agent.queueMessage, agent.removeQueuedMessage, agent.rename, agent.replaceMessages, agent.reportToParent, agent.resolveInterrupted, agent.respondPermission, agent.retry, agent.sendMessage, agent.sendToTask, agent.setModel, agent.stop, agent.subscribe, agent.summary, agent.unsubscribe, agent.update, agent.wakeOrCreate
 
 #### `comment.*` (6 methods)
 
@@ -285,9 +286,9 @@ models.list
 
 note.add, note.create, note.delete, note.edit, note.editLines, note.get, note.getVersion, note.lineAttribution.computeNow, note.lineAttribution.load, note.list, note.listTasks, note.listVersions, note.readAsset, note.restoreVersion, note.saveAsset, note.setContent, note.update, note.updateMetadata
 
-#### `pr.*` (12 methods)
+#### `pr.*` (13 methods)
 
-pr.createReview, pr.getReviews, pr.listCheckRuns, pr.listComments, pr.listReviewComments, pr.merge, pr.postComment, pr.replyToReviewComment, pr.resolveThread, pr.status, pr.updateBranch, pr.waitForChanges
+pr.createReview, pr.getReviews, pr.listCheckRuns, pr.listComments, pr.listReviewComments, pr.merge, pr.postComment, pr.refresh, pr.replyToReviewComment, pr.resolveThread, pr.status, pr.updateBranch, pr.waitForChanges
 
 #### `primitive.*` (4 methods)
 
@@ -296,6 +297,10 @@ primitive.addAgentAction, primitive.addCli, primitive.addPatch, primitive.addRef
 #### `repo.*` (2 methods)
 
 repo.list, repo.remove
+
+#### `repoConfig.*` (4 methods)
+
+repoConfig.ensureDir, repoConfig.get, repoConfig.has, repoConfig.save
 
 #### `rules.*` (3 methods)
 
@@ -321,6 +326,10 @@ sentry.assignIssue, sentry.authStatus, sentry.getIssue, sentry.ignoreIssue, sent
 
 settings.get, settings.list, settings.reset, settings.update
 
+#### `skill.*` (1 method)
+
+skill.list
+
 #### `specialist.*` (5 methods)
 
 specialist.create, specialist.delete, specialist.edit, specialist.get, specialist.list
@@ -333,17 +342,41 @@ task.assignAgent, task.convertBlocks, task.createPrerequisite, task.get, task.ge
 
 terminal.create, terminal.getBuffer, terminal.kill, terminal.list, terminal.readOutput, terminal.resize, terminal.write
 
-#### `workspace.*` (21 methods)
+#### `workspace.*` (23 methods)
 
-workspace.archive, workspace.cleanup, workspace.create, workspace.delete, workspace.detectProjectType, workspace.dismissAttention, workspace.duplicate, workspace.findRepositories, workspace.generateSetupScript, workspace.get, workspace.getContext, workspace.getSetupScript, workspace.getTokenUsage, workspace.initializeRepository, workspace.list, workspace.markSeen, workspace.restore, workspace.saveSetupScript, workspace.unarchive, workspace.update, workspace.updateContext
+workspace.archive, workspace.cleanup, workspace.create, workspace.delete, workspace.detectProjectType, workspace.dismissAttention, workspace.duplicate, workspace.findRepositories, workspace.generateSetupScript, workspace.get, workspace.getContext, workspace.getSetupScript, workspace.getTokenUsage, workspace.getUiContext, workspace.initializeRepository, workspace.list, workspace.markSeen, workspace.restore, workspace.saveSetupScript, workspace.unarchive, workspace.update, workspace.updateContext, workspace.updateUiContext
 
-### 6.2 Fast-Path Methods (27 total)
+### 6.2 Fast-Path Methods (29 total)
 
-The following 27 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 29 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.status, host.toolAvailability, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, system.shutdown, system.status
 
 **UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports.
+
+#### `pairing.getInfo` (local-only)
+
+Returns the structured QR pairing payload so local clients (the `intentd pair` CLI, desktop GUI) can render a QR code for LAN pairing.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```json
+{
+  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...",
+  "hosts": ["192.168.1.10", "10.0.0.5"],
+  "port": 5181,
+  "fingerprint": "AA:BB:...",
+  "token": "abab...",
+  "version": 1
+}
+```
+
+- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`) are provided so clients can render their own payloads.
+- Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd token`, so all pairing surfaces stay consistent.
+- **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
+- Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available.
 
 ### 6.3 Method Aliases (2 total)
 
@@ -470,6 +503,41 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 - `INFO`: `--resume-all: auto-resume sweep complete` (with `resumed`, `failed` counts)
 
 After the sweep completes, `agent.listInterrupted` returns an empty list.
+
+### 6.7 `models.list` Per-Provider Catalog (v2.0 additions)
+
+`models.list` (porting-era §5.30) accepts two additive **optional** parameters. With both omitted the request and response schemas are unchanged from the ported contract: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog) with its 5-minute in-memory success cache, returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId`.
+
+**Request:**
+
+```jsonc
+{
+  "providerId": "auggie",  // optional — per-provider catalog via the generic cache
+  "forceRefresh": false    // optional, default false — skip the cache read, await a fresh probe
+}
+```
+
+**Response (with `providerId`):**
+
+```jsonc
+{
+  "providerId": "auggie",
+  "models": [ /* ModelInfo rows */ ],
+  "source": "auggie",          // the provider id, or "static" on fallback
+  "stale": true,               // optional — present only when serving last-good after a failed probe
+  "warning": "..."             // optional — human-readable reason for fallback/stale/empty data
+}
+```
+
+**Semantics:**
+
+- **Generic per-provider cache.** Requests with a `providerId` go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. an adapter version pin such as `CLAUDE_AGENT_ACP_VERSION`); a pin bump invalidates cached entries automatically.
+- **`forceRefresh: true`** skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
+- **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
+- **Registered sources:** seven providers are registered — `auggie` (CLI discovery, as above); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); and `opencode` (native CLI discovery). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
+- **Unknown/unregistered `providerId`** degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
+- **Legacy path with `forceRefresh`.** Without `providerId`, `forceRefresh: true` skips the legacy in-memory cache read and awaits a fresh auggie probe; on probe failure it serves the last-good cached list labeled `stale: true` + `warning` (same contract as the per-provider path), falling back to the static catalog only when no last-good list exists. The response omits the `providerId` field (legacy shape) but may still carry the optional `stale` / `warning` fields on this fallback path. Note the legacy in-memory cache and the persisted per-provider cache are separate; `providerId: "auggie"` and the no-`providerId` path may diverge within a TTL window.
+- **Errors:** `-32603` only on internal failure; probe/CLI failures degrade as described above.
 
 ---
 
@@ -618,8 +686,8 @@ The daemon uses the following JSON-RPC 2.0 error codes:
 
 ## Summary
 
-**Protocol v2.0** exposes **282 dispatchable method names** (253 router methods + 27 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 282 dispatchable names AND are also issued daemon→client on remote connections.
+**Protocol v2.0** exposes **292 dispatchable method names** (261 router methods + 29 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 292 dispatchable names AND are also issued daemon→client on remote connections.
 
 The method surface is frozen and enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift causes CI failure with the instruction to update the catalog, this document, and bump the protocol version.
 
-For implementation details and per-method signatures, see the source code in `crates/intent-transport/src/router.rs` and the fast-path modules (`client.rs`, `events.rs`, `drafts.rs`, `browser.rs`, `forward.rs`, `host.rs`, `control.rs`).
+For implementation details and per-method signatures, see the source code in `crates/intent-transport/src/router.rs` and the fast-path modules (`client.rs`, `events.rs`, `drafts.rs`, `browser.rs`, `forward.rs`, `host.rs`, `control.rs`, `pairing.rs`).
