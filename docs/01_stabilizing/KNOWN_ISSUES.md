@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-158 (as of 2026-07-21)
+**Next available ID:** STAB-160 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,30 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-159 (2026-07-21, area: ios navigation, severity: P1)
+
+On iPad, the "< Agents" back button in the conversation toolbar did nothing after the app auto-restored the last-open agent on launch — tapping it left the conversation on screen, with no way back to the agent list without force-quitting.
+
+**Repro:** On iPad, open an agent conversation, background/kill the app, and relaunch so the app auto-restores the agent. Tap "< Agents" in the toolbar. Observed: nothing happens; the conversation stays on screen.
+
+**Root cause:** `RootView.syncNavigationState()` performed a programmatic navigation tear-down that fired the user-back handler, desyncing `currentScreen` from the actually-visible view — subsequent back taps mutated state that no longer matched the navigation stack.
+
+**Status:** fixed ([intent-hq/ios#33](https://github.com/intent-hq/ios/pull/33), 2026-07-21) — programmatic navigation changes no longer trigger the user-back handler, so `currentScreen` stays in sync with the visible view after auto-restore and the back button navigates to the agent list as expected.
+
+---
+
+### STAB-158 (2026-07-21, area: ios chat streaming, severity: P2)
+
+While an agent turn streamed in the iOS app, tool call rows rendered as the generic spanner fallback ("🔧" + cleaned tool name, no subject) instead of the proper classified title (e.g. "📄 Read foo.rs"). Swiping out of the conversation and back in re-rendered them correctly.
+
+**Repro:** On iOS, watch a conversation while an agent turn is streaming and the agent makes tool calls. Observed: mid-turn tool rows show the generic "🔧" fallback; after leaving and re-entering the conversation (hydration via `agent.getConversation`), the same rows show the classified icon + verb + subject.
+
+**Root cause:** Live `tool_use` block deltas frequently carry empty `input` (`{}`) with only `input._acpTitle` populated (the daemon coerces auggie's `raw_input: null` to `{}` + `_acpTitle`, PROTOCOL §7.1). The iOS `ToolCallView` classifier needed input values for most branches and lacked the `_acpTitle` fallback the desktop FE classifier uses, so it fell through to the generic spanner.
+
+**Status:** fixed ([intent-hq/ios#32](https://github.com/intent-hq/ios/pull/32), 2026-07-21) — the iOS tool classifier now falls back to `input._acpTitle` when raw input is missing, matching the desktop behavior, so mid-turn tool rows render their proper titles while streaming.
+
+---
 
 ### STAB-155 (2026-07-21, area: cloudlands-fe state persistence, severity: P2)
 
@@ -593,7 +617,7 @@ The workspace-MCP bridge (workspace tools: `set_workspace_title`, note/task edit
 
 **Expected:** Non-auggie providers receive the workspace-MCP bridge through their respective MCP config mechanisms, so workspace tools work regardless of provider.
 
-**Status:** open
+**Status:** open — opencode portion fixed ([intent-hq/intentd#306](https://github.com/intent-hq/intentd/pull/306), 2026-07-21): at spawn, for EnvConfig-injection providers (opencode), the normalized MCP server set (workspace bridge + user servers) is translated via `to_opencode_mcp_config` and merged into `OPENCODE_CONFIG_CONTENT` as an `mcp` block alongside `permission`/`model`/`instructions`; the bridge entry points at the same `mcp-bridge --connect <addr>` endpoint the auggie path uses. claude-code, codex, and droid remain unwired. (Note: monorepo PR [#353](https://github.com/intent-hq/monorepo/pull/353) cited intent-hq/intentd#295 for this wiring — #295 is the Grok Build provider PR; the correct reference is intent-hq/intentd#306.)
 
 ---
 
