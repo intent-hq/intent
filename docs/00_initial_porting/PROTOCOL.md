@@ -294,8 +294,13 @@ daemon executes it non-blocking (fire-and-forget spawn) in the worktree director
 the user's shell with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
 (the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
 (baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
-surfaced. Script output is streamed to a "Setup" terminal for the workspace,
-consistent with other workspace terminals.
+surfaced. Script output is streamed to a workspace terminal named **"Setup Script"**
+(the PTY's daemon-tracked display name, surfaced by `terminal.list` — §5.9),
+consistent with other workspace terminals. The script runs through a POSIX-sh timing
+wrapper that appends a newline-prefixed completion summary to the scrollback —
+`Setup script completed in <N>s (exit code <C>)` on success,
+`Setup script failed in <N>s (exit code <C>)` on failure — preserving the script's
+exit code.
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon minimally creates the agent session (honoring `name`/`model`/
@@ -900,7 +905,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **NOT PORTING (won't-port-v1)**: no router arm; see the `browser.docs — NOT PORTING (v1)` block below |
-| terminal.list | workspaceId (req) | { terminals: [...] } |
+| terminal.list | workspaceId (req) | { terminals: [{ id, name, cwd, isExecutingCommand }] } — `name` is the PTY's optional daemon-tracked display name, assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25); serialized as the constant `"Terminal"` when the PTY has no name (clients may still fall back to `"Terminal"` defensively) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -965,6 +970,9 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > **Interactive terminals.** `terminal.list` / `terminal.readOutput` above are the ported,
 > read-only methods (part of the 104). `intentd` adds interactive
 > `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
+> PTYs carry an optional daemon-assigned display name (set at spawn; not a
+> `terminal.create` parameter) that `terminal.list` surfaces as `name` with a
+> `"Terminal"` fallback — see the `terminal.list` row above.
 
 ### 5.10 `event.*` (query/aggregation)
 
@@ -1146,7 +1154,11 @@ the overriding flag ("overridden by startup flag …").
 > interactive methods below so a thin client can open, drive, resize, and tear down PTYs that
 > run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
 > host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
-> (re)connect; multiple clients may attach to the same session. See IMPLEMENTATION_SPEC.md —
+> (re)connect; multiple clients may attach to the same session. Each PTY may carry an
+> optional daemon-assigned display name (internal spawn metadata, e.g. `"Setup Script"`
+> for the workspace setup terminal — §5.1); `terminal.create` does **not** accept a name
+> parameter, and `terminal.list` (§5.9) surfaces the name with a `"Terminal"` fallback.
+> See IMPLEMENTATION_SPEC.md —
 > Terminal & script execution (unified PTY host) and §6.7 (ACP client-served `terminal/*`).
 
 | Method | Params | Result |
@@ -1883,7 +1895,11 @@ fallback), the daemon executes it non-blocking (fire-and-forget spawn) after wor
 provisioning in the worktree directory via the user's shell with env vars `MAIN_CHECKOUT`
 (repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
 branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
-errors are logged and surfaced. Script output is streamed to a "Setup" terminal for the workspace.
+errors are logged and surfaced. Script output is streamed to a workspace terminal named
+**"Setup Script"** (its daemon-tracked PTY display name in `terminal.list`, §5.9); a POSIX-sh
+timing wrapper appends a newline-prefixed `Setup script completed in <N>s (exit code <C>)` /
+`Setup script failed in <N>s (exit code <C>)` summary to the scrollback, preserving the
+script's exit code (§5.1).
 
 | Method | Params | Result |
 | --- | --- | --- |
