@@ -1622,7 +1622,7 @@ from the new FE), so `execute` rejects `action:"export"`. A step that fails sets
   emitted only when the producing walk computed per-commit tree diffs. All current
   producers are **metadata-only** (both fields omitted — the list walks skip
   per-commit diffs for performance; clients fetch per-file data on demand via
-  `git.commitDetails`, §5.6): `accept-changes.getStatus` `localCommits` and
+  `git.commitDetails` (§5.6)): `accept-changes.getStatus` `localCommits` and
   `file-tracking.loadCommits` (§5.19). The `changes:git-status` event (§6.5) carries
   the same reduced `WorkspaceGitStatus`.
 - **TrackedChange** — one file's audit record through the git stages (see §5.19):
