@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-161 (as of 2026-07-21)
+**Next available ID:** STAB-162 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-161 (2026-07-21, area: cloudlands-fe desktop notifications / event subscription scope, severity: P1)
+
+`agent:idle` desktop notifications only fired for workspaces currently open in a window: the `NotificationService` was instantiated per open workspace (STAB-153's `syncNotificationServices(openWorkspaceIds)` reconciliation) and each instance subscribed with a `workspaceId` filter, so agents completing in closed/background workspaces never produced an OS banner — precisely the case where a notification matters most.
+
+**Repro:** Delegate an agent in workspace A, close its window (or never open one), let the agent run to completion. Observed: no OS notification banner when the agent goes idle.
+
+**Root cause:** STAB-153's fix scoped the subscription lifecycle to open workspaces. PROTOCOL.md §6.1 supports omitting `workspaceId` on `events.subscribe` to receive matching events across all workspaces, but the per-workspace service design couldn't use it.
+
+**Expected:** One app-lifetime notification service subscribes globally (`events.subscribe { eventTypes: ['agent:idle'] }`, no `workspaceId`) and routes each event by its `workspaceId`: per-workspace prefs/suppression/focus-gating are applied per event; when the workspace has no open window, the notification falls back to the focused (or any) window for sound delivery and navigates that window to the workspace on click.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#220](https://github.com/intent-hq/cloudlands-fe/pull/220), 2026-07-21) — replaced the per-open-workspace service instances with a single boot-time global `NotificationService` (started once from `main/index.ts`), removed `syncNotificationServices`/`disposeNotificationService`, retained STAB-153's reconnect/initial-connect resubscribe hardening (plus releasing a superseded subscription id on concurrent same-epoch subscribes), and added sound + click-navigation fallbacks for workspaces without an open window, with unit tests for the wire shape, routing, and both fallbacks.
+
+---
 
 ### STAB-160 (2026-07-21, area: cloudlands-fe CI / lint, severity: P1)
 
