@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-154 (as of 2026-07-21)
+**Next available ID:** STAB-156 (as of 2026-07-21)
 
 ## Intake Convention
 
@@ -18,6 +18,30 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-155 (2026-07-21, area: cloudlands-fe state persistence, severity: P2)
+
+`workspaceInitializer.state` persistence failed from boot with `DataCloneError`: every persist attempt logged "object could not be cloned" and nothing was saved, so initializer state (recent repos, form state) silently stopped surviving restarts.
+
+**Repro:** Launch cloudlands-fe and open the New Workspace initializer (any interaction that dispatches `setCompactWorkspaceInitializerFormState`). Observed: `settings.update` threw `DataCloneError: object could not be cloned` on every persist of the `workspaceInitializer.state` bag, from boot onward.
+
+**Root cause:** Svelte 5 `$state` proxies (the `remoteSetup`/scope form state in `CompactWorkspaceInitializer.svelte`) were dispatched as-is into the Redux bag. The persistence service then sent the whole bag over Electron IPC via `settings.update`, whose structured clone cannot serialize reactive proxies.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — the `$state`-dispatching sites (`CompactWorkspaceInitializer.svelte`, `RepoSelector.svelte`, `RemoteSetupSelector.svelte`) wrap the value in `$state.snapshot()` so no proxies enter the store, and the persistence service gained a non-throwing safety net that verifies the outgoing bag is structured-cloneable, falls back to a plain-JSON round-trip (warning once with the clone error), and skips the write entirely when even that fails. Regression tests: a proxied `remoteSetup` still persists as plain JSON with the exact PROTOCOL §5.12 wire request; an unsanitizable bag skips the persist without throwing.
+
+---
+
+### STAB-154 (2026-07-21, area: cloudlands-fe workspace operations, severity: P1)
+
+Deleting a workspace and then quitting (or reloading) the app within the 15-second undo window silently lost the delete — the workspace reappeared on the next launch.
+
+**Repro:** Delete a workspace in cloudlands-fe, then quit or reload the app before the 15s undo window elapses. Relaunch. Observed: the "deleted" workspace is back — the daemon never received `workspace.delete`.
+
+**Root cause:** The soft-hide-then-commit delete flow deferred the `workspace.delete` wire commit behind the undo window's `setTimeout`, which dies with the renderer. Nothing flushed pending deletions on unload, so quitting inside the window dropped the commit entirely.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#208](https://github.com/intent-hq/cloudlands-fe/pull/208), 2026-07-21) — pending deletions are tracked in a module-level registry (mirroring the agent soft-hide-then-commit pattern) and flushed on `beforeunload`/`pagehide`, initiating the wire request synchronously before teardown; undo removes the registry entry so a flush never deletes an undone workspace, commit bails when its registry entry is already gone (no double-send), and Undo stays inert after a flush already committed. Regression tests cover flush-on-unload, undo-cancels-flush, no-double-commit, and inert-Undo-after-flush.
+
+---
 
 ### STAB-153 (2026-07-21, area: cloudlands-fe desktop notifications / main-process lifecycle, severity: P1)
 
