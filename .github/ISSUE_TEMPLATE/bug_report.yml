@@ -30,8 +30,9 @@ body:
     attributes:
       label: Component
       description: >
-        Check all that apply. Triage applies the matching label
-        (`component:intentd`, `component:fe`, `component:ios`, `docs`).
+        Check all that apply. Checkboxes do not apply labels automatically —
+        a triager will add the matching label (`component:intentd`,
+        `component:fe`, `component:ios`, `docs`).
       options:
         - label: intentd (Rust backend daemon)
         - label: cloudlands-fe (Electron + SvelteKit desktop frontend)
@@ -53,4 +54,4 @@ body:
     attributes:
       label: Agent-filed
       options:
-        - label: This issue was filed by an AI agent (triage applies the `agent-filed` label)
+        - label: This issue was filed by an AI agent (a triager will add the `agent-filed` label)
