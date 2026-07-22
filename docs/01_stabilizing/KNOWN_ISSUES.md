@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-170 (as of 2026-07-22)
+**Next available ID:** STAB-171 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-170 (2026-07-22, area: intentd/model-discovery, severity: P1)
+
+With an MCP server registered in `~/.codex/config.toml` (auggie `--mcp --mcp-auto-workspace`), every daemon codex `models.list` probe spawned a throwaway `codex-acp` that honored the user's codex config and started the auggie MCP server — which immediately indexes the workspace (heavy CPU). Failed probes were not cached and not single-flighted, and the MCP children escaped process-group reaping, producing an orphaned codex-acp/auggie CPU storm on each `make dev`.
+
+**Repro:** Register auggie as an MCP server in `~/.codex/config.toml` (`command = ".../auggie"`, `args = ["--mcp", "--mcp-auto-workspace"]`), then run `make dev`. Observed: on startup the FE calls daemon `models.list`, and every call (including concurrent ones) spawned a fresh codex-acp ACP probe; each probe's codex-acp started the auggie MCP server, whose workspace indexing blew the 15s probe cap, so the probe kept failing — and since only successful probes were cached (no negative caching) and there was no single-flight coalescing, every subsequent `models.list` spawned another. On timeout, `killpg` on the probe's process group never reached auggie (it runs as its own process-group leader), so codex-acp/auggie survived orphaned (ppid 1) and kept churning CPU, with a surviving codex-acp respawning auggie repeatedly when MCP init failed under load.
+
+**Status:** fixed ([intent-hq/intentd#328](https://github.com/intent-hq/intentd/pull/328), [intent-hq/intentd#329](https://github.com/intent-hq/intentd/pull/329), 2026-07-22) — #328 isolates the codex probe from the user's codex config by pointing `CODEX_HOME` at a throwaway probe-scoped config dir, so probes no longer start user-configured MCP servers; #329 single-flights all providers' `models.list` fetches and adds a 60s negative cache (falling back to last-good then the static default list), so failing probes no longer respawn per call. A descendant-reap backstop for probe children that escape the process group is in progress (reap backstop PR pending).
+
+---
 
 ### STAB-169 (2026-07-22, area: cloudlands-fe queued event-wake rows, severity: P2)
 
