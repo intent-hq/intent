@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v2.0
+# Intent Backend — JSON-RPC Protocol v2.1
 
-**Protocol Version:** `2.0`
+**Protocol Version:** `2.1`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,12 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `2.0`
+**Version:** `2.1`
+
+Version 2.1 is an **additive** minor bump over 2.0: it adds the `pr.capabilities` router method and the provider capability gating described in §5.7. No existing method changed shape.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "2.0", ... }`
+- `client.hello` response: `{ protocolVersion: "2.1", server: { protocolVersion: "2.1", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.1", ... }`
 
 ### Compatibility Policy
 
@@ -157,22 +159,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **294 dispatchable method names** across the following categories:
+The API exposes **295 dispatchable method names** across the following categories:
 
-- **Router methods:** 262 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 263 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 30 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 294 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 295 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 294 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 295 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.35) carry each method's parameter and result contract.
 
-### Router methods by namespace (262 total)
+### Router methods by namespace (263 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -188,7 +190,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
-| pr | 13 | createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch, waitForChanges |
+| pr | 14 | capabilities, createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch, waitForChanges |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | repo | 2 | list, remove |
 | repoConfig | 4 | ensureDir, get, has, save |
@@ -955,7 +957,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below).
+All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below), **and `pr.capabilities`** (v2.1), which reports the active provider's capability flags before any PR exists (see below).
 
 > Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
@@ -971,17 +973,34 @@ All `pr.*` methods require an active pull request on the workspace — otherwise
 | pr.listComments | count? | conversation-level comments |
 | pr.postComment | body (req) | service result |
 
-**Review & CI methods.** Four further methods round out the `pr.*` namespace. Three
+**Review & CI methods.** Five further methods round out the `pr.*` namespace. Three
 review/CI methods map onto the `SourceControl` trait (`list_reviews` / `check_runs` /
 `submit_review`) and stay host-agnostic. `pr.refresh` forces the same PR
 discovery/refresh the daemon's background sweep runs for one workspace, on demand.
+`pr.capabilities` (v2.1) exposes the active provider's capability flags.
 
 | Method | Params | Result |
 | --- | --- | --- |
 | pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
-| pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas) |
-| pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR |
+| pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas). Gated on the `checkRuns` capability (see capability gating below) |
+| pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR. A `"request-changes"` verdict is gated on the `reviewRequiredChanges` capability (see capability gating below); `"approve"` / `"comment"` are ungated |
 | pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
+| pr.capabilities | — (workspaceId only, per §3.6) | { provider, capabilities: { draftPrs, squashMerge, rebaseMerge, reviewRequiredChanges, checkRuns, issues } } — the active provider's id (e.g. `"github"`) and its boolean capability flags, so clients can gate UI before invoking gated operations |
+
+> **`pr.capabilities` semantics (v2.1).** Requires a resolvable source-control provider but
+> **not** an active PR — clients gate UI on the flags before any PR exists. The
+> `workspaceId` is still validated (unknown workspace → not-found error like every other
+> workspace-scoped method).
+
+> **Capability gating (v2.1).** Operations a provider does not support fail with
+> `-32603 "Internal error"` whose `error.data` carries a message with the stable prefix
+> `unsupported by provider:` (per the §3.3/§9 envelope, `error.data` holds the original
+> internal message for `-32603`). Gated operations: `pr.merge` with
+> `mergeMethod: "squash"` (`squashMerge` flag) or `"rebase"` (`rebaseMerge` flag — a plain
+> `"merge"` is ungated), `pr.createReview` with `verdict: "request-changes"`
+> (`reviewRequiredChanges` flag), and `pr.listCheckRuns` (`checkRuns` flag). Clients should
+> match on the `unsupported by provider:` prefix to distinguish capability failures from
+> other internal errors.
 
 > **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
@@ -1665,7 +1684,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.0"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.1"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -1677,18 +1696,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.0",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.1",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"2.0","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.1","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.0",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.1",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"2.0","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.1","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
