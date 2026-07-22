@@ -58,7 +58,13 @@ jobs:
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          # Debian ordering: "-" starts a revision that sorts ABOVE the bare
+          # upstream version (0.2.0-beta.1 > 0.2.0), while "~" sorts below
+          # (0.2.0~beta.1 < 0.2.0), so map prerelease hyphens to "~" to keep
+          # stable releases upgradeable over prerelease installs.
+          version=${tag#v}
+          version=${version//-/'~'}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Download released musl tarballs
         env:
           TAG: ${{ steps.meta.outputs.tag }}
@@ -72,6 +78,11 @@ jobs:
         run: |
           ./scripts/build-deb.sh intentd-x86_64-unknown-linux-musl.tar.xz "$VERSION" amd64
           ./scripts/build-deb.sh intentd-aarch64-unknown-linux-musl.tar.xz "$VERSION" arm64
+          # .sha256 companions, same format as the other release assets
+          # (sha256sum --binary: "HASH *NAME").
+          for deb in intentd_*.deb; do
+            sha256sum --binary "$deb" > "$deb.sha256"
+          done
       - name: Verify package metadata and contents
         run: |
           for deb in intentd_*.deb; do
@@ -86,10 +97,12 @@ jobs:
         env:
           TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          gh release upload "$TAG" intentd_*.deb --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" intentd_*.deb intentd_*.deb.sha256 --clobber --repo "$GITHUB_REPOSITORY"
       - name: Upload .debs as workflow artifacts (dry run)
         if: ${{ inputs.plan == '' && !inputs.upload }}
         uses: actions/upload-artifact@v6
         with:
           name: debs
-          path: intentd_*.deb
+          path: |
+            intentd_*.deb
+            intentd_*.deb.sha256

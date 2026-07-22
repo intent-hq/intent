@@ -28,11 +28,17 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 staging=$(mktemp -d)
 trap 'rm -rf "$staging"' EXIT
 
-# Reject unsafe member paths (absolute or with ".." components) before
-# extracting, and do not honor archived ownership/permissions — the payload
-# modes are set explicitly by the install calls below.
+# Reject unsafe member paths (absolute or with ".." components) and any
+# symlink/hardlink entries (which could redirect later writes outside the
+# staging dir) before extracting, and do not honor archived
+# ownership/permissions — the payload modes are set explicitly by the
+# install calls below.
 if tar -tJf "$tarball" | grep -E '^/|(^|/)\.\.(/|$)' >/dev/null; then
   echo "error: unsafe member path in $tarball" >&2
+  exit 1
+fi
+if tar -tvJf "$tarball" | grep -E '^[lh]' >/dev/null; then
+  echo "error: symlink/hardlink entry in $tarball" >&2
   exit 1
 fi
 
