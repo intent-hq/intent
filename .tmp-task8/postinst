@@ -1,0 +1,13 @@
+#!/bin/sh
+# Post-install message for the intentd .deb. The package ships a systemd
+# *user* unit (/usr/lib/systemd/user/intentd.service); maintainer scripts run
+# as root and cannot enable user units for individual users, so the unit is
+# intentionally NOT auto-enabled — just print the enable hint.
+set -e
+
+if [ "$1" = "configure" ]; then
+    echo "intentd installed. To start it now and at every login, run as your user:"
+    echo "    systemctl --user enable --now intentd"
+fi
+
+exit 0

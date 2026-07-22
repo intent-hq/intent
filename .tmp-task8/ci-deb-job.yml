@@ -1,0 +1,34 @@
+
+  # Packaging assets guard: asserts the systemd user unit keeps the exact
+  # semantics the daemon's `service install` used to generate (Type=simple,
+  # serve/stop, Restart=on-failure, WantedBy=default.target), and that
+  # scripts/build-deb.sh produces a well-formed .deb (stub binary here; the
+  # real release tarballs are repacked by .github/workflows/build-deb.yml).
+  deb-packaging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Assert systemd user unit content
+        run: |
+          unit=packaging/deb/intentd.service
+          grep -qx 'Description=Intent backend daemon (intentd)' "$unit"
+          grep -qx 'Type=simple' "$unit"
+          grep -qx 'ExecStart=/usr/bin/intentd serve' "$unit"
+          grep -qx 'ExecStop=/usr/bin/intentd stop' "$unit"
+          grep -qx 'Restart=on-failure' "$unit"
+          grep -qx 'WantedBy=default.target' "$unit"
+      - name: Build and inspect a stub .deb
+        run: |
+          dir=intentd-x86_64-unknown-linux-musl
+          mkdir -p "stub/$dir"
+          printf '#!/bin/sh\necho stub\n' > "stub/$dir/intentd"
+          chmod +x "stub/$dir/intentd"
+          tar -C stub -cJf "$dir.tar.xz" "$dir"
+          ./scripts/build-deb.sh "$dir.tar.xz" 0.0.0 amd64
+          dpkg-deb --info intentd_0.0.0_amd64.deb
+          dpkg-deb --contents intentd_0.0.0_amd64.deb
+          test "$(dpkg-deb --field intentd_0.0.0_amd64.deb Package)" = intentd
+          test "$(dpkg-deb --field intentd_0.0.0_amd64.deb Architecture)" = amd64
+          dpkg-deb --contents intentd_0.0.0_amd64.deb | grep -q ' \./usr/bin/intentd$'
+          dpkg-deb --contents intentd_0.0.0_amd64.deb | grep -q ' \./usr/lib/systemd/user/intentd\.service$'
