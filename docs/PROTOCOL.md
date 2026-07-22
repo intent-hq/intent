@@ -399,7 +399,7 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 
 Daemon-owned provider auth probes: reports whether each CLI-backed agent provider is authenticated, so clients consume verdicts instead of orchestrating auth-check commands themselves.
 
-**Request:** `{ "providerId": "grok", "force": true }` — both parameters optional. `providerId` scopes the sweep to a single provider; an unknown `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
+**Request:** `{ "providerId": "grok", "force": true }` — both parameters optional. `providerId` scopes the sweep to a single provider; it must be a non-empty string when present, and an unknown, empty, or non-string `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
 
 **Response:**
 
