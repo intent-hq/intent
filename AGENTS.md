@@ -73,26 +73,20 @@ Breadcrumb edits were docs-only and followed the same conventional-commit / PR c
 (using a `docs:` commit). They typically shipped in the monorepo PR that bumped the
 submodule, so the recorded HEAD matched the gitlink.
 
-## Known Issues (stabilization)
+## Filing Issues
 
-For the **`01_stabilizing`** phase — ongoing stabilization and hardening on the
-self-hosted stack — keep the issue tracker at `docs/01_stabilizing/KNOWN_ISSUES.md`
-current.
+When you encounter a bug or limitation while working on the codebase (including while
+dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
+[intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues) — the single tracker
+for all components.
 
-- **When to file**: whenever you discover a bug while dogfooding (using intentd +
-  cloudlands-fe for daily development work).
-- **What to file**: document with id `STAB-N`, date (YYYY-MM-DD), area
-  (component/subsystem), severity (P0 crash/data-loss, P1 broken feature, P2 papercut),
-  repro steps, and status (`open` | `fixed (PR link, date)`).
-- **When to update**: when you fix an issue, mark it fixed with the PR link and resolution
-  date.
-- **Accuracy**: file issues as you encounter them; update status when PRs land. Known
-  issues should reflect the current state of the app.
-
-Issue-tracker edits follow the same conventional-commit / PR conventions above. When the
-KNOWN_ISSUES.md update is standalone (documenting a newly-discovered bug), use a `docs:`
-commit. When the tracker update rides along in the same PR as the actual code fix (marking
-an issue fixed), the PR/commit type follows the code change (`fix:`, `feat:`, etc.).
+- **Labels**: apply the appropriate `component:*` label (`component:intentd`,
+  `component:fe`, `component:ios`) plus `agent-filed`.
+- **Aggressive dedup**: search existing issues first
+  (`gh issue list --repo intent-hq/monorepo --search "<keywords>" --state all`) and
+  comment on / link the existing issue instead of filing a duplicate.
+- **Cross-reference**: reference the issue number in related commits/PRs (e.g.
+  `fix: correct panel focus (#123)`).
 
 ## Terminology
 
