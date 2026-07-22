@@ -41,7 +41,7 @@ The method surface is enforced by golden tests in `crates/intent-transport/src/c
 
 ### 1.1 Connection URL
 
-The backend runs a dedicated **HTTPS server bound to `0.0.0.0`** (LAN-reachable) exposing a single WebSocket endpoint:
+When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note below), the backend runs a dedicated **HTTPS server bound to `0.0.0.0`** (LAN-reachable) exposing a single WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws

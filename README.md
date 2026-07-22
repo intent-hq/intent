@@ -110,9 +110,10 @@ make clean      # remove build artifacts
 #   make run-fe
 #
 # Occasional "debug the release app with its own state" variant: run intentd
-# against its default (real) data dir over UDS only, no TCP listener bound:
+# against its default (real) data dir (UDS always on; the secure WSS listener
+# starts only if the persisted `server.wsApi.enabled` setting is true):
 #
-#   make release-daemon                                      # UDS only on the real data dir
+#   make release-daemon                                      # real data dir, no --insecure
 #   INTENTD_SOCKET=~/Library/Application\ Support/intentd/intentd.sock make run-fe
 #
 # `make run-intentd` is a deprecated alias for `make release-daemon`.
