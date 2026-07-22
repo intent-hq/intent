@@ -29,21 +29,21 @@ implementation, so the frontend can also run standalone). It was migrated in wit
 │  │   └── ios/            ⇒ submodule → intent-hq/ios      │  │
 │  │         SwiftUI iOS companion app                      │  │
 │  ├────────────────────────────────────────────────────────┤  │
-│  │ docs/00_initial_porting/   IMPLEMENTATION_SPEC + PROTOCOL │
+│  │ docs/   ARCHITECTURE.md + PROTOCOL.md                  │  │
 │  │ AGENTS.md   Makefile   cliff.toml   .github/workflows/ │  │
 │  └────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 Code lives in the submodule repos; the monorepo tracks specific commits of each submodule and
-carries the cross-cutting docs and tooling. See `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`
+carries the cross-cutting docs and tooling. See `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`
 for the full design.
 
 ## Status
 
 | Component | Status |
 | --- | --- |
-| `packages/intentd` | **Backend port — canonical persistence landed.** 218 JSON-RPC request methods + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, workspace-file/note-primitive/cross-workspace, the settings/rules/specialist/`mcp.servers`/MCP-OAuth agent ecosystem, GitHub-browse/Linear/Sentry integrations, and the ACP agent runtime (`agent.*`). The daemon owns all persistent user-facing state (notes/comments/assets/settings/agent sessions). Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`token`/`mcp-bridge`. See `docs/00_initial_porting/BREADCRUMBS.md` for the live log. |
+| `packages/intentd` | **Backend port — canonical persistence landed.** The full JSON-RPC method catalog (see [docs/PROTOCOL.md](./docs/PROTOCOL.md)) + a server-initiated `events.event` notification over SQLite, spanning workspace/repo/note/task/comment, events, git/PR/file-tracking/metrics/accept-changes, search/terminal/script, workspace-file/note-primitive/cross-workspace, the settings/rules/specialist/`mcp.servers`/MCP-OAuth agent ecosystem, GitHub-browse/Linear/Sentry integrations, and the ACP agent runtime (`agent.*`). The daemon owns all persistent user-facing state (notes/comments/assets/settings/agent sessions). Transports: UDS (default, `0600`) + WSS/TLS (bearer auth, origin allow-list, fingerprint pinning) + mDNS. CLI: `serve`/`call`/`status`/`stop`/`doctor`/`import`/`service`/`token`/`mcp-bridge`. |
 | `packages/cloudlands-fe` | **Desktop frontend — daemon-canonical.** Electron + SvelteKit + TypeScript app, mounted at `packages/cloudlands-fe`. Reaches the backend only through the `AppClient` JSON-RPC boundary (live `intentd` + a mock implementation for standalone runs); local persistence, execution spawns, the legacy agent transport, and the remote-backend stack are all retired onto daemon RPCs. |
 | `packages/ios` | **iOS companion app — submodule mounted.** SwiftUI iOS app, mounted at `packages/ios`. Early-stage development. |
 
@@ -57,7 +57,8 @@ monorepo/
 ├── .gitmodules                    # Submodule definitions (intentd, cloudlands-fe, ios)
 ├── cliff.toml                     # git-cliff changelog config (conventional commits)
 ├── docs/
-│   └── 00_initial_porting/        # IMPLEMENTATION_SPEC.md + PROTOCOL.md
+│   ├── ARCHITECTURE.md            # Durable backend architecture
+│   └── PROTOCOL.md                # Canonical wire contract (protocol v2.0)
 ├── packages/
 │   ├── intentd/                   # ⇒ submodule → intent-hq/intentd (Rust backend)
 │   ├── cloudlands-fe/             # ⇒ submodule → intent-hq/cloudlands-fe (Electron + SvelteKit frontend)
@@ -142,10 +143,10 @@ Conventions:
 
 ## Documentation
 
-- [`docs/00_initial_porting/IMPLEMENTATION_SPEC.md`](docs/00_initial_porting/IMPLEMENTATION_SPEC.md)
-  — architecture, crate layout, persistence, and the phased roadmap.
-- [`docs/00_initial_porting/PROTOCOL.md`](docs/00_initial_porting/PROTOCOL.md) — the wire
-  contract: transport, JSON-RPC envelope, full method catalog, events, and error codes.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the durable backend architecture:
+  system overview, crate layout, dependency rules, persistence, and transports.
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md) — the canonical wire contract (protocol v2.0):
+  transport, JSON-RPC envelope, full method catalog, events, and error codes.
 
 ## Related Repositories
 

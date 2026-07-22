@@ -1,116 +1,110 @@
 # Intent Backend — JSON-RPC Protocol v2.0
 
-**Protocol Version:** `2.0`  
-**Status:** Frozen as of 2026-07-14
+**Protocol Version:** `2.0`
 
-This document specifies the wire contract between Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). The protocol surface is frozen at v2.0 and enforced by golden tests in the `intent-transport` crate.
+This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
 ## Table of Contents
 
-1. [Protocol Version & Compatibility](#1-protocol-version--compatibility)
-2. [Transport](#2-transport)
-3. [Authentication](#3-authentication)
-4. [Message Envelope (JSON-RPC 2.0)](#4-message-envelope-json-rpc-20)
-5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
-6. [Method Catalog](#6-method-catalog)
-   - 6.1 [Router Methods](#61-router-methods-262-total)
-   - 6.2 [Fast-Path Methods](#62-fast-path-methods-30-total)
-   - 6.3 [Method Aliases](#63-method-aliases-2-total)
-   - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
-   - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
-   - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
-   - 6.7 [`models.list` Per-Provider Catalog](#67-modelslist-per-provider-catalog-v20-additions)
-7. [Events & Subscriptions](#7-events--subscriptions)
-8. [Error Codes](#8-error-codes)
+- [Protocol Version & Compatibility](#protocol-version--compatibility)
 
----
+1. [Transport](#1-transport)
+2. [Authentication](#2-authentication)
+3. [Message Envelope (JSON-RPC 2.0)](#3-message-envelope-json-rpc-20)
+4. [Heartbeat & Lifecycle](#4-heartbeat--lifecycle)
+5. [Method Catalog](#5-method-catalog)
+6. [Events & Subscriptions](#6-events--subscriptions)
+7. [Agent Streaming](#7-agent-streaming)
+8. [Permission Flow](#8-permission-flow)
+9. [Error Codes](#9-error-codes)
+10. [Thin-Client Guidance](#10-thin-client-guidance)
 
-## 1. Protocol Version & Compatibility
+## Protocol Version & Compatibility
 
 **Version:** `2.0`
 
 The protocol version is advertised in two places:
 
-- **`client.hello`** response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block.
-- **`system.status`** response: `{ protocolVersion: "2.0", ... }`
+- `client.hello` response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.0", ... }`
 
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
 
-The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "update `catalog.rs` + `docs/PROTOCOL.md` and bump the protocol version."
+The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "update `catalog.rs` + `docs/PROTOCOL.md` and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
 
----
+## 1. Transport
 
-## 2. Transport
+### 1.1 Connection URL
 
-### 2.1 Connection URL
-
-The backend runs an **HTTPS server** bound to `0.0.0.0` (LAN-reachable) exposing a single WebSocket endpoint:
+The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable) exposing a single WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5181` (fixed; the daemon exits if the port is in use).
-- **Scheme:** `wss://` (TLS) in the default secure posture. Plain `ws://` is available only in insecure dev mode (`--insecure` / `INTENTD_INSECURE=1`), which disables TLS and bearer-token enforcement and logs a prominent warning.
-- **Health check:** `GET /health` → `{"status":"ok","clients":<n>}` for liveness probing.
-- Any path other than `/ws` is rejected at upgrade time.
+- **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.3) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.port`.
+- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make run-intentd` uses it by default) and logs a prominent startup warning.
+- A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
+- Any path other than `/ws` is rejected at upgrade time (socket destroyed).
 
-**Unix-domain socket (UDS):** The daemon also supports a UDS transport for the local-first default. The JSON-RPC envelope, method catalog, and event semantics are **identical** across UDS and WSS — only the listener differs.
+> Unix-domain socket: The daemon also supports a UDS transport for the local-first default. The JSON-RPC envelope, method catalog, and event semantics are **identical** across UDS and TCP/TLS — only the listener differs.
 
-### 2.2 TLS & Fingerprint Pinning
+### 1.2 TLS & fingerprint pinning
 
-The server generates a **self-signed** EC (P-256) certificate on first start, persists it under the app's data directory (`ws-cert.pem` / `ws-key.pem`), and reuses it across restarts (10-year validity).
+The server generates a **self-signed** EC (P-256) certificate on first start, persists it under the app's data directory (`ws-cert.pem` / `ws-key.pem`), and reuses it across restarts (10-year validity). Because it is self-signed, **clients pin the certificate** rather than relying on a CA:
 
-- **SHA-256 fingerprint:** Clients pin the certificate by its SHA-256 fingerprint (colon-separated uppercase hex, e.g., `AB:CD:EF:...`), computed over the DER body of the cert.
-- **SANs:** The cert includes `localhost`, `127.0.0.1`, `::1`, and every non-internal IPv4 address on the host (LAN, Tailscale, etc.).
-- Clients should **reject** any cert whose fingerprint does not match.
+- The server exposes a **SHA-256 fingerprint**, colon-separated uppercase hex (e.g. `AB:CD:EF:...`), computed over the DER body of the cert.
+- Certificate SANs include `localhost`, `127.0.0.1`, `::1`, and every non-internal IPv4 address on the host (LAN, Tailscale, etc.), so connecting by hostname or LAN IP validates against the SAN.
+- Clients should **pin the fingerprint** (obtained out-of-band during pairing, or from the mDNSTXT record `fp=` below) and reject any cert whose fingerprint does not match.
 
-### 2.3 mDNS / Bonjour Discovery
+### 1.3 mDNS / Bonjour discovery
 
-When discovery is enabled, the server advertises a Bonjour/DNS-SD service:
+When discovery is enabled the server advertises a Bonjour/DNS-SD service so mobile/LAN clients can auto-discover the running instance:
 
 - **Service type:** `_intent-ws._tcp`
 - **Service name:** `Intent on <hostname>`
-- **Port:** the bound WSS port
+- **Port:** the bound WSS port.
 - **TXT record keys:**
   - `version` — `"1"`
   - `path` — `"/ws"`
   - `hostname` — `os.hostname()`
-  - `fp` — the TLS cert SHA-256 fingerprint (for pinning)
+  - `fp` — the TLS cert SHA-256 fingerprint (present when a cert exists; used for pinning)
 
----
+A client resolves the service, reads `fp` for pinning, and connects to `wss://<resolved-host>:<port>/ws`.
 
-## 3. Authentication
+## 2. Authentication
 
-### 3.1 Bearer Token on Upgrade
+### 2.1 Bearer token on upgrade
 
-Every WebSocket upgrade must present a bearer token. The server checks the token **during the HTTP upgrade** (before the socket is upgraded) in this order:
+Every WebSocket upgrade must present a bearer token. The server checks the token **during theHTTP upgrade** (before the socket is upgraded) in this order:
 
-1. `Authorization: Bearer <token>` header
-2. `?token=<token>` query parameter on the `/ws` URL (for clients that cannot set headers)
+1. `Authorization: Bearer <token>` header.
+2. `?token=<token>` query parameter on the `/ws` URL (for clients that cannot set headers).
 
-Validation is **timing-safe** (constant-time compare). On failure, the upgrade is rejected with `HTTP/1.1 401 Unauthorized`.
+Validation is **timing-safe** (constant-time compare) against the stored token. On failure theupgrade is rejected with `HTTP/1.1 401 Unauthorized` and the socket is destroyed.
 
-- The token is **32 random bytes, hex-encoded (64 chars)**, generated once and persisted in app settings. It can be rotated by the host application.
+- The token is **32 random bytes, hex-encoded (64 chars)**, generated once and persisted in appsettings. It can be rotated (regenerated) by the host application.
 - If the WebSocket API is disabled in settings, upgrades are rejected with `403 Forbidden`.
 
-### 3.2 Origin Allow-List
+### 2.2 Origin allow-list
 
 Browser-origin upgrades are gated to prevent cross-origin attacks; native clients are allowed:
 
-- **Allowed:** missing/empty `Origin` (native iOS/CLI clients), `file://` (Electron renderer), loopback hosts (`localhost`, `127.0.0.1`, `[::1]`), and the host's own hostname / `.local` form.
-- **Rejected** (`403`): `Origin: null` (sandboxed/`data:` contexts) and any other cross-origin host.
+- **Allowed:** missing/empty `Origin` (native iOS/CLI clients never send one), `file://` (desktop app renderer), loopback hosts (`localhost`, `127.0.0.1`, `[::1]`), and the host's own hostname / `.local` form (so LAN clients connecting by advertised hostname pass).
+- **Rejected (**`403`**):** `Origin: null` (sandboxed/`data:` contexts) and any other cross-origin host.
 
----
+### 2.3 Where the token lives
 
-## 4. Message Envelope (JSON-RPC 2.0)
+The token, the API-enabled flag, and the discovery-enabled flag are persisted in the daemon's settings store. Clients obtain the token out-of-band via a pairing flow (the daemon surfaces token + fingerprint together — see also `pairing.getInfo` in the §5 fast-path catalog). An operator can run `intentd token` to print the current bearer token and TLS certificate fingerprint together for pairing (and `intentd token --rotate` to regenerate the token).
 
-All application messages are **JSON-RPC 2.0** text frames.
+## 3. Message Envelope (JSON-RPC 2.0)
 
-### 4.1 Request
+All application messages are **JSON-RPC 2.0** text frames. The handler is transport-agnostic: ittakes a message string and returns a response string (or `null` for notifications).
+
+### 3.1 Request
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "method": "note.list", "params": { "workspaceId": "ws-abc" } }
@@ -119,105 +113,49 @@ All application messages are **JSON-RPC 2.0** text frames.
 - `jsonrpc` — **must** be the string `"2.0"`. Otherwise → `-32600 Invalid Request`.
 - `method` — **must** be a non-empty string. Otherwise → `-32600`.
 - `id` — string, number, or `null`. Any other type → `-32600`.
-- `params` — object (named) or array (positional). **Named (object) params are required by this API.** Positional arrays are accepted per spec but coerced to `{}`. Non-object/array `params` → `-32602 Invalid params`.
+- `params` — object (named) or array (positional). **Named (object) params are required by thisAPI.** Positional arrays are *accepted* per spec but coerced to `{}` (so the call runs with noargs). Non-object/array `params` → `-32602 Invalid params`.
 
-### 4.2 Success Response
+### 3.2 Success response
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "result": { "notes": [ /* ... */ ] } }
 ```
 
-`result` is always a JSON **object** (never a bare array/scalar); list endpoints wrap their array under a named key (e.g., `{ "notes": [...] }`, `{ "agents": [...] }`).
+`result` is always a JSON **object** (never a bare array/scalar); list endpoints wrap their arrayunder a named key (e.g. `{ "notes": [...] }`, `{ "agents": [...] }`).
 
-### 4.3 Error Response
+### 3.3 Error response
 
 ```json
 { "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "Missing required parameter: noteId" } }
 ```
 
-`error.data` is optional and carries extra context (e.g., the original internal error message for `-32603`). See §8 for the code table.
+`error.data` is optional and carries extra context (e.g. the original internal error message for`-32603`). See §9 for the code table.
 
-### 4.4 Notifications (No Response)
+### 3.4 Notifications (no response)
 
-A request **without an `id` member** is a notification: the server processes it and returns nothing. Note the distinction required by JSON-RPC 2.0:
+A request **without an **`id`** member** is a notification: the server processes it and returnsnothing. Note the distinction required by JSON-RPC 2.0:
 
 - `id` **absent** → notification → no response is ever sent (even on error / unknown method).
 - `id: null` **present** → a normal request that **must** receive a response.
 
-Unknown methods sent as notifications are silently ignored; unknown methods sent as requests get `-32601 Method not found`.
+Unknown methods sent as notifications are silently ignored; unknown methods sent as requests get`-32601 Method not found`.
 
-### 4.5 Batching
+### 3.5 Batching
 
-The server processes **one JSON-RPC object per WebSocket text frame**. JSON-RPC batch *arrays* are **not** supported: a top-level array fails envelope validation (`-32600 Invalid Request: expected an object`). Clients should send one message per frame and correlate responses by `id`. Independent requests can be pipelined.
+The server processes **one JSON-RPC object per WebSocket text frame**. JSON-RPC batch *arrays* are **not** supported as a batch unit: a top-level array fails envelope validation (`-32600 Invalid Request: expected an object`). Clients should send one message per frame and correlate responses by `id`. (Independent requests can be pipelined — the server does not require request/response lock-step — but each must be its own frame.)
 
-### 4.6 `workspaceId` Scoping
+### 3.6 `workspaceId` scoping
 
-Most methods operate within a workspace. `workspaceId` is read from `params.workspaceId`, falling back to a connection-level context value if the transport provides one. If neither is present, the method returns `-32602 "workspaceId is required"`. Workspace/repo/specialist/global methods (e.g., `workspace.list`, `repo.list`, `specialist.list`, `agent.getModels`) do not require it.
+Most methods operate within a workspace. `workspaceId` is read from `params.workspaceId`, fallingback to a connection-level context value if the transport provides one. If neither is present, themethod returns `-32602 "workspaceId is required"`. The workspace/repo/specialist/global methods(e.g. `workspace.list`, `repo.list`, `specialist.list`, `agent.getModels`) do not require it.
 
----
+## 4. Heartbeat & Lifecycle
 
-## 5. Heartbeat & Lifecycle
+- **Ping/pong:** The server sends a WebSocket **ping every 30s** (`HEARTBEAT_INTERVAL_MS`). Theclient's transport must answer with a standard pong frame (handled automatically by compliantWebSocket libraries). If no pong is seen within **60s** (`HEARTBEAT_TIMEOUT_MS`), the serverterminates the connection and cleans up its subscriptions.
+- **Server shutdown:** On graceful stop, clients are closed with code `1001`(`"Server shutting down"`) and all transport-local subscriptions are dropped.
+- **Disconnect cleanup:** On `close` or socket `error`, the server removes the client and all ofits event subscriptions. Subscriptions are **per-connection** and do **not** survive reconnects.
+- **Reconnection guidance:** Clients should reconnect with backoff, re-authenticate on the newupgrade, and **re-establish all subscriptions** (re-send `events.subscribe`). Because canonicalstate lives in the backend, after reconnect a client should **re-fetch** the entities it caresabout (subscribe-then-fetch, §10) rather than assuming it missed nothing.
 
-- **Ping/pong:** The server sends a WebSocket **ping every 30s**. The client's transport must answer with a standard pong frame. If no pong is seen within **60s**, the server terminates the connection and cleans up its subscriptions.
-- **Server shutdown:** On graceful stop, clients are closed with code `1001` (`"Server shutting down"`) and all transport-local subscriptions are dropped.
-- **Disconnect cleanup:** On `close` or socket `error`, the server removes the client and all of its event subscriptions. Subscriptions are **per-connection** and do **not** survive reconnects.
-- **Reconnection guidance:** Clients should reconnect with backoff, re-authenticate on the new upgrade, and **re-establish all subscriptions** (re-send `events.subscribe`). After reconnect, a client should **re-fetch** the entities it cares about rather than assuming it missed nothing.
-
-### 5.19 `file-tracking.loadCommits`
-
-Returns commit history with attribution and workspace boundary information.
-
-**Request:**
-
-```jsonc
-{
-  "workspaceId": "workspace-abc",
-  "limit": 50,           // optional, default 50
-  "nextToken": "...",    // optional, for pagination
-  "includeOlder": false  // optional, default false - when true, returns commits before and including the boundary
-}
-```
-
-**Result:**
-
-```jsonc
-{
-  "commits": [
-    {
-      "hash": "abc123...",
-      "message": "feat: add feature",
-      "author": "...",
-      "date": "...",
-      "files": ["..."],
-      "filesChanged": 3,
-      "isPushed": true,
-      "agentId": "agent-...",      // optional
-      "linkedNoteId": "note-..."   // optional
-    }
-  ],
-  "boundarySha": "def456...",  // workspace boundary commit SHA, or null when no boundary info or unresolvable
-  "nextToken": "..."            // pagination token, or null
-}
-```
-
-**Boundary Semantics:**
-
-- When `includeOlder` is `false` (default), returns commits in the `boundary..HEAD` range (workspace-owned commits only)
-- When `includeOlder` is `true`, returns commits before and including the workspace boundary (for "show previous" functionality; the boundary commit itself is included)
-- `boundarySha` is `null` when:
-  - The workspace has no boundary info (`baseRef` or `baseCommitSha` not set), OR
-  - Boundary info exists but cannot be resolved (e.g., shallow clone, nonexistent ref, base commit not an ancestor of HEAD)
-- **Fail-closed safety net:** When boundary info exists but cannot be resolved, the method returns an empty commit list (regardless of `includeOlder` value) to prevent leaking arbitrary base-branch history
-
-**Boundary Resolution Strategy:**
-
-1. Prefer merge-base of HEAD with `origin/<baseRef>` or `<baseRef>` (rebase-resilient)
-2. Fall back to `baseCommitSha` if it is a valid ancestor of HEAD
-3. Return `null` if neither resolves
-
----
-
-## 6. Method Catalog
+## 5. Method Catalog
 
 The API exposes **294 dispatchable method names** across the following categories:
 
@@ -227,132 +165,71 @@ The API exposes **294 dispatchable method names** across the following categorie
 
 Additionally, the protocol includes:
 
-- **Server→client notifications:** 1 notification (`events.event`)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 294 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
+- **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 294 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
 **Total:** 294 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields `-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires `workspaceId` (see §4.6) and may return `-32603 Internal error` if the underlying service throws.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.35) carry each method's parameter and result contract.
 
-### 6.1 Router Methods (262 total)
+### Router methods by namespace (262 total)
 
-The following 262 methods are routed through the main dispatch match in `router.rs`.
+| Namespace | Count | Methods |
+| --- | --- | --- |
+| agent | 38 | appendMessage, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, editAndRegenerate, editQueuedMessage, enhancePrompt, forceMessage, get, getConversation, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listInterrupted, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| comment | 6 | add, delete, getThread, list, resolveThread, respond |
+| crossWorkspace | 3 | listNotes, listSiblings, readNote |
+| event | 5 | agentActivity, directoryChanges, query, recentFiles, workspaceSummary |
+| file | 9 | delete, exists, list, mkdir, read, rename, stat, tree, write |
+| git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
+| github | 22 | authStatus, branches.list, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
+| mcp | 11 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update |
+| metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
+| models | 1 | list |
+| note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
+| pr | 13 | createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch, waitForChanges |
+| primitive | 4 | addAgentAction, addCli, addPatch, addReference |
+| repo | 2 | list, remove |
+| repoConfig | 4 | ensureDir, get, has, save |
+| rules | 3 | get, list, update |
+| sandbox | 2 | discard, merge |
+| script | 9 | create, list, output, remove, restart, run, start, status, stop |
+| search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
+| sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
+| settings | 4 | get, list, reset, update |
+| skill | 1 | list |
+| specialist | 5 | create, delete, edit, get, list |
+| task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
+| terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
+| workspace | 23 | archive, cleanup, create, delete, detectProjectType, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, unarchive, update, updateContext, updateUiContext |
 
-#### `agent.*` (38 methods)
+Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-agent.appendMessage, agent.cancelSubscriptions, agent.completeOnce, agent.create, agent.delegate, agent.delete, agent.diagnostics, agent.editAndRegenerate, agent.editQueuedMessage, agent.enhancePrompt, agent.forceMessage, agent.get, agent.getConversation, agent.getModels, agent.getQueue, agent.getSession, agent.getSessionStats, agent.getSubscriptions, agent.list, agent.listInterrupted, agent.pendingPermissions, agent.queueMessage, agent.removeQueuedMessage, agent.rename, agent.replaceMessages, agent.reportToParent, agent.resolveInterrupted, agent.respondPermission, agent.retry, agent.sendMessage, agent.sendToTask, agent.setModel, agent.stop, agent.subscribe, agent.summary, agent.unsubscribe, agent.update, agent.wakeOrCreate
-
-#### `comment.*` (6 methods)
-
-comment.add, comment.delete, comment.getThread, comment.list, comment.resolveThread, comment.respond
-
-#### `crossWorkspace.*` (3 methods)
-
-crossWorkspace.listNotes, crossWorkspace.listSiblings, crossWorkspace.readNote
-
-#### `event.*` (5 methods)
-
-event.agentActivity, event.directoryChanges, event.query, event.recentFiles, event.workspaceSummary
-
-#### `file.*` (9 methods)
-
-file.delete, file.exists, file.list, file.mkdir, file.read, file.rename, file.stat, file.tree, file.write
-
-#### `git.*` (28 methods)
-
-git.agentCommit, git.branchDiff, git.branchStatus, git.changes, git.checkMergeConflicts, git.checkoutBranch, git.clone, git.commit, git.commitDetails, git.commits, git.createBranch, git.diffs, git.discard, git.fetch, git.getBranches, git.getConfig, git.getRemoteUrl, git.numstat, git.pull, git.push, git.removeLockFile, git.renameBranch, git.showFile, git.stage, git.stageHunk, git.status, git.unstage, git.unstageHunk
-
-#### `github.*` (22 methods)
-
-github.authStatus, github.branches.list, github.cancelAuth, github.connect, github.getReviewThreads, github.getUser, github.issues.list, github.issues.search, github.listReviewComments, github.pulls.create, github.pulls.get, github.pulls.list, github.pulls.merge, github.pulls.search, github.pulls.updateBranch, github.replyReviewComment, github.repos.get, github.repos.list, github.repos.search, github.resolveThread, github.revoke, github.unresolveThread
-
-#### `linear.*` (11 methods)
-
-linear.authStatus, linear.createIssue, linear.getIssue, linear.listIssues, linear.listLabels, linear.listProjects, linear.listTeams, linear.listWorkflowStates, linear.searchIssues, linear.updateIssue, linear.viewer
-
-#### `mcp.*` (11 methods)
-
-mcp.oauth.delete, mcp.oauth.get, mcp.oauth.list, mcp.oauth.set, mcp.servers.create, mcp.servers.delete, mcp.servers.getStatus, mcp.servers.list, mcp.servers.restart, mcp.servers.toggle, mcp.servers.update
-
-#### `metrics.*` (4 methods)
-
-metrics.clearAgentStats, metrics.getAgentStats, metrics.getAllWorkspaceStats, metrics.getWorkspaceStats
-
-#### `models.*` (1 method)
-
-models.list
-
-#### `note.*` (18 methods)
-
-note.add, note.create, note.delete, note.edit, note.editLines, note.get, note.getVersion, note.lineAttribution.computeNow, note.lineAttribution.load, note.list, note.listTasks, note.listVersions, note.readAsset, note.restoreVersion, note.saveAsset, note.setContent, note.update, note.updateMetadata
-
-#### `pr.*` (13 methods)
-
-pr.createReview, pr.getReviews, pr.listCheckRuns, pr.listComments, pr.listReviewComments, pr.merge, pr.postComment, pr.refresh, pr.replyToReviewComment, pr.resolveThread, pr.status, pr.updateBranch, pr.waitForChanges
-
-#### `primitive.*` (4 methods)
-
-primitive.addAgentAction, primitive.addCli, primitive.addPatch, primitive.addReference
-
-#### `repo.*` (2 methods)
-
-repo.list, repo.remove
-
-#### `repoConfig.*` (4 methods)
-
-repoConfig.ensureDir, repoConfig.get, repoConfig.has, repoConfig.save
-
-#### `rules.*` (3 methods)
-
-rules.get, rules.list, rules.update
-
-#### `sandbox.*` (2 methods)
-
-sandbox.discard, sandbox.merge
-
-#### `script.*` (9 methods)
-
-script.create, script.list, script.output, script.remove, script.restart, script.run, script.start, script.status, script.stop
-
-#### `search.*` (7 methods)
-
-search.cancel, search.codebase, search.events, search.fileNames, search.inFiles, search.messages, search.notes
-
-#### `sentry.*` (8 methods)
-
-sentry.assignIssue, sentry.authStatus, sentry.getIssue, sentry.ignoreIssue, sentry.listIssues, sentry.listProjects, sentry.resolveIssue, sentry.searchIssues
-
-#### `settings.*` (4 methods)
-
-settings.get, settings.list, settings.reset, settings.update
-
-#### `skill.*` (1 method)
-
-skill.list
-
-#### `specialist.*` (5 methods)
-
-specialist.create, specialist.delete, specialist.edit, specialist.get, specialist.list
-
-#### `task.*` (14 methods)
-
-task.assignAgent, task.convertBlocks, task.createPrerequisite, task.get, task.getMyTask, task.linkAgent, task.list, task.listAgentLinks, task.markAsTask, task.removeAgentFromAllTasks, task.unlinkAgent, task.update, task.updateNoteStatus, task.updateStatus
-
-#### `terminal.*` (7 methods)
-
-terminal.create, terminal.getBuffer, terminal.kill, terminal.list, terminal.readOutput, terminal.resize, terminal.write
-
-#### `workspace.*` (23 methods)
-
-workspace.archive, workspace.cleanup, workspace.create, workspace.delete, workspace.detectProjectType, workspace.dismissAttention, workspace.duplicate, workspace.findRepositories, workspace.generateSetupScript, workspace.get, workspace.getContext, workspace.getSetupScript, workspace.getTokenUsage, workspace.getUiContext, workspace.initializeRepository, workspace.list, workspace.markSeen, workspace.restore, workspace.saveSetupScript, workspace.unarchive, workspace.update, workspace.updateContext, workspace.updateUiContext
-
-### 6.2 Fast-Path Methods (30 total)
+### Fast-path methods (30 total)
 
 The following 30 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
 browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, system.shutdown, system.status
 
-**UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports.
+The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
+
+**UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`.
+
+#### `drafts.*` — draft attachments (additive, optional)
+
+`drafts.set` accepts an **optional** `attachments` param and `drafts.get` returns it when present:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| drafts.get | workspaceId (req), agentId (req) | `{ text, attachments?, updatedAt } \| null` — `attachments` present only when non-empty |
+| drafts.set | workspaceId (req), agentId (req), text (req), attachments (opt) | `{ ok: true, updatedAt }` — emits `draft:changed` |
+| drafts.clear | workspaceId (req), agentId (req) | `{ ok: true }` — emits `draft:changed` |
+
+- **`attachments`** is an opaque **JSON array** of FE-authored objects (e.g. image context items with base64 `imageData`), stored verbatim like workspace context items. Omitted, `null`, or an **empty array** ⇒ no attachments stored.
+- A `drafts.set` with empty `text` **and** no attachments is still a **clear** (row deleted); empty `text` **with** attachments persists the row.
+- The serialized `attachments` payload is capped at **25 MB**; larger payloads (and non-array `attachments`) are rejected with `-32602`.
+- **Additive:** draft rows written before this field existed read back with no attachments; the `draft:changed` event payload is unchanged (`hasDraft` is `true` when text **or** attachments exist — never any content).
 
 #### `system.status` — process resource fields (additive, optional)
 
@@ -366,10 +243,9 @@ The `system.status` result includes two **optional** self-process resource field
 }
 ```
 
-- **`cpuPercent`** uses the raw `sysinfo` convention: `100` = one full core, so values **may exceed 100** on multicore systems (not normalized to total capacity). The first sample after daemon startup **may read `0`** before a usage baseline is established.
-- **`memoryBytes`** is the daemon process RSS in bytes.
-- Both fields are **additive and optional**; clients must tolerate their absence and degrade gracefully.
-- **Versioning:** these fields shipped within protocol **v2.0** — the daemon still advertises `protocolVersion: "2.0"`. They add optional response fields to an existing method without changing the method surface (the golden-test-enforced catalog is unchanged), so no version bump was made; clients must detect them by **presence**, not by protocol version.
+- `cpuPercent` uses the raw `sysinfo` convention: `100` = one full core, so values **may exceed 100** on multicore systems (not normalized to total capacity). The first sample after daemon startup **may read **`0` before a usage baseline is established.
+- `memoryBytes` is the daemon process RSS in bytes.
+- Both fields are **additive and optional**; clients must tolerate their absence and degrade gracefully. They shipped within protocol **v2.0** without a version bump (additive optional response fields; the method surface is unchanged) — clients must detect them by **presence**, not by protocol version.
 
 #### `pairing.getInfo` (local-only)
 
@@ -417,41 +293,2819 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 - `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
 
-### 6.3 Method Aliases (2 total)
+### Method aliases (2 total)
 
 The daemon accepts these 2 alias forms and dispatches them to their canonical counterparts. The wire accepts both, but the canonical name is the documented form.
 
-- **`git.diff`** → `git.diffs`
-- **`git.log`** → `git.commits`
+- `git.diff` → `git.diffs`
+- `git.log` → `git.commits`
 
-### 6.4 Server→Client Notifications (1 total)
+### Client-served reverse RPCs (4 total)
 
-The daemon sends the following notification (unsolicited, no request `id`) to connected clients:
+These methods are client-callable triggers whose real work happens on the connected frontend. The daemon validates the envelope, then dispatches a reverse RPC back to the client with a synthetic `rev-<n>` request id and echoes the client's result back to the original caller. These 4 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections.
 
-- **`events.event`** — event notification envelope (see §7)
+- `browser.exec` — browser automation (Chrome DevTools) — §5.9
+- `host.openExternal` — open a URL in the default browser — §5.14
+- `host.openInEditor` — open a file or directory in the user's editor — §5.14
+- `host.pickApplication` — prompt the user to select an application — §5.14
 
-### 6.5 Client-Served Reverse RPCs (4 total)
+> **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads (§5.19) plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
-These methods are client-callable triggers whose real work happens on the connected frontend. The daemon validates the envelope, then dispatches a reverse RPC back to the client with a synthetic `rev-<n>` request id and echoes the client's result back to the original caller.
+> **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed (see §5.22). See §6.8.
 
-These 4 method names are **dual-role**: they appear in the dispatchable method catalog (§6.1 or §6.2) AND are also issued daemon→client as reverse RPCs on remote connections.
+> **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
 
-- **`browser.exec`** — browser automation (Chrome DevTools)
-- **`host.openExternal`** — open a URL in the default browser
-- **`host.openInEditor`** — open a file or directory in the user's editor
-- **`host.pickApplication`** — prompt the user to select an application
+> Deprecated aliases. agent.subscribe/agent.unsubscribe and event.subscribe/event.unsubscribe exist in the method map but are not the canonical WebSocket subscription surface. For live event streaming use the bridge methods events.subscribe / events.unsubscribe (note the plural events.), handled directly by the server before the dispatcher — see §6. The agent./event.* variants create internal/agent-style subscriptions and do not wire a WebSocket client up to events.event notifications. (A bare `{ workspaceId }` `agent.subscribe` frame instead routes to the agent collection channel — see §6.9.)
 
----
+Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields`-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires`workspaceId` (see §3.6) and may return `-32603 Internal error` if the underlying service throws.
 
-### 6.6 Interrupted-Agent Resumption (v2.0 additions)
+### 5.1 `workspace.*`
 
-The following methods manage agent resumption across daemon restarts. When `intentd` restarts, in-flight agent sessions (`active`, `processing`, `waiting` statuses) are captured as **interrupted records** before the heal sweep rewrites them to `idle`. This capture occurs on both graceful shutdown (`SIGINT`/`SIGTERM`) and crash scenarios, ensuring that agents mid-turn are always resumable. Clients discover interrupted agents via `agent.listInterrupted` and resolve them via `agent.resolveInterrupted` (resume or abandon). For headless deployments, `intentd serve --resume-all` auto-resumes all interrupted agents at startup.
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
+| workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipWorktree?, githubUrl?, clonePath?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → worktree → spec seed → initial agent). |
+| workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
+| workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup (`remove_dir_all`) runs in a background task under a per-repository lock |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. -32602 if not found. |
+| workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
+| workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
+| workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
+| workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
+
+```json
+// → request
+{ "jsonrpc": "2.0", "id": 1, "method": "workspace.list", "params": { "includeArchived": false } }
+// ← response
+{ "jsonrpc": "2.0", "id": 1, "result": { "workspaces": [ { "id": "ws-abc", "title": "My Workspace" } ] } }
+```
+
+**Branch naming (`workspace.create`).** An explicit `branch` is used untouched. Otherwise
+the daemon auto-names the branch with a friendly `word-word` slug (TS parity): extracted
+from `initialAgent.prompt` via local keyword heuristics when possible (`generateLocalSlug`
+— e.g. "fix the auth flow" → `auth-fix`), else a random adjective-animal pair
+(`generateWorkspaceSlug` — e.g. `amber-forest`). The `workspace.branchPrefix` setting
+(§5.12), when set, is prepended (e.g. `aw/auth-fix`). When `repositoryPath` is a local git
+repository the name is uniquified against existing local and remote-tracking branches by
+appending `-2`, `-3`, … until free. The branch is never the raw workspace UUID.
+
+**Workspace id (`workspace.create`).** The daemon derives the workspace id as a friendly
+`word-word` slug (extracted from `initialAgent.prompt` when possible, else a random
+adjective-animal pair), uniquified with a `-2`, `-3`, … suffix whenever the candidate id was
+**ever** used — a live workspace, a previously deleted workspace (persisted delete
+tombstone), or a leftover `<root>/<id>` directory on disk. Ids are therefore never recycled
+across delete/recreate (reuse would collide the old workspace's agent streams and file
+paths with the new one's); callers must use the id returned in the `workspace.create`
+result rather than predicting it.
+
+**Worktree provisioning (`workspace.create`).** When `repositoryPath` points at a local git
+repository, the daemon provisions a linked worktree before persisting the row (TS
+`createGitWorktree` parity): the worktree lives at
+`<root>/<workspaceId>/<repo-slug>` — `root` is `$INTENTD_WORKSPACES_DIR`, else
+`~/intent/workspaces` (the FE's `WorkspaceConfig.WORKSPACES_BASE`); the slug is the
+slugified `repositoryName` (basename fallback) — checked out on the workspace `branch`
+(auto-named as above when not supplied), created from `baseRef` resolved as
+`refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
+any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
+local state. The returned `Workspace` carries `worktreePath` and `baseCommitSha` (the
+checked-out tip). An unresolvable `baseRef` on a valid repo fails with `-32602`.
+Provisioning is skipped — prior row-only behavior — for `skipWorktree: true`,
+`isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or a
+`repositoryPath` that is not a local git repository.
+
+**Clone orchestration (`workspace.create`).** When `githubUrl` is set and
+`repositoryPath` is not already a local git repository, the daemon clones the URL
+before branch naming and worktree provisioning, reusing the streaming `git.clone`
+pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
+else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
+`.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
+with `-32603`. Progress streams as `git:clone:progress` frames and terminates in exactly
+one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
+failure fails the whole `workspace.create` (no row persisted, no `workspace:created`).
+On success the checkout becomes the workspace's `repositoryPath` and, when the URL
+carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
+daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
+left them blank. Independently of cloning, any create that ends up with a local
+`repositoryPath` but no caller-supplied `repositoryOwner`/`repositoryName` best-effort
+derives them from the local repository's `origin` remote URL (local git config read only,
+no network) when the remote is a GitHub URL (https or ssh forms, strict `github.com` host
+check); non-GitHub or missing remotes leave `repositoryOwner` unset. Caller-supplied
+values always win; `repositoryName` persists the path basename as a last resort when blank.
+
+**Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
+`spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
+id `"spec"`, title `"Spec"`, empty markdown body, tags `["spec"]`, pinned, default,
+workspace visibility. The seed captures an initial `v1` version snapshot and publishes
+`note:created` so subscribers see the standard note lifecycle. Seeding runs inside the
+idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
+a replayed create returns the stored result and does not re-seed.
+
+**Setup script persistence and execution (`workspace.create`).** When an explicit
+`setupScript` parameter is supplied, the daemon writes it into
+`<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
+provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
+writes are no-op when the existing value is identical. The `.intent/config.json` file
+becomes the sole source of truth for the setup script; the workspace DB `setup_script`
+field is retired from all write paths (kept for wire compat and legacy read-only
+fallback only). After the config write, if an effective setup script exists (non-empty,
+resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
+daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
+`/bin/sh` with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+(the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
+(baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
+surfaced. Script output is streamed to a workspace terminal named **"Setup Script"**
+(the PTY's daemon-tracked display name, surfaced by `terminal.list` — §5.9),
+consistent with other workspace terminals. The script runs through a POSIX-sh timing
+wrapper that appends a newline-prefixed completion summary to the scrollback —
+`Setup script completed in <N>s (exit code <C>)` on success,
+`Setup script failed in <N>s (exit code <C>)` on failure — preserving the script's
+exit code.
+
+**Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
+daemon minimally creates the agent session (honoring `name`/`model`/
+`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
+delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+The agent's id is **server-assigned**: whenever a session is created the daemon mints a
+fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected with `-32602`
+("agent IDs are server-assigned and the field must be omitted") **before any side
+effect** — no workspace row, worktree, spec seed, or `workspace:created` event is
+persisted.
+The result's `initialAgent` is the created session's full `AgentLite` projection (its
+server-minted id is `initialAgent.id`); the agent's turn starts
+asynchronously (fire-and-forget) but the create call is not idempotent unless a
+`idempotencyKey` is supplied — a replay with the same key returns the stored result
+(carrying the originally minted `initialAgent.id`) without re-creating the
+session or re-delivering the prompt.
+
+**Delete cascade (`workspace.delete`).** Before the store cascade drops the
+workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
+per-session state so recreating a workspace with the same slug never surfaces ghost agents
+whose workers are still draining or whose completion watches are still firing:
+
+- list the workspace's sessions via `store.list_agent_sessions` (a store error is
+  propagated with `?` — a partial teardown is worse than a failed delete);
+- per session, `AgentManager::stop` aborts the in-flight turn worker, drops the
+  session handle (which calls `kill_child_tree` on the ACP child on drop),
+  clears the busy flag + the `agent_ws` workspace mapping, and deregisters the
+  process from the LRU registry;
+- drop the session's live-turn slot and pending message-queue entry in
+  `Services` (both are `HashMap::remove` calls, not a drain);
+- drop the workspace's `agent_subscriptions` entry (completion watches and
+  delegation groups are workspace-scoped, so the whole map row goes at once).
+
+Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
+the last chance to unlink the workspace-scoped state, so recovery beats a panic.
+The daemon emits **one `agent:deleted` per swept session BEFORE** the terminal
+`workspace:deleted`, so subscribers see the per-session teardown first and can
+retire agent-scoped UI (chat panes, banners) before the workspace row disappears
+(§6.5).
+
+**Workspace status fields (new in intentd).** Two BE-owned fields appear on every `Workspace`
+object returned by `workspace.*` — lightweight status metadata, **not** a notification store —
+each with a dedicated change event (§6.5) that carries the new value:
+
+- `activity` — **derived, read-only (green dot).** In-flight agent state, e.g.
+  `"idle" | "agent_running"`. The BE computes it from agent state; clients never set or
+  recompute it. It has no setter; it surfaces in `workspace.*` results and via
+  `workspace:activity-changed` (§6.5).
+- `attention` — **dismissible (blue dot).** A small flag raised by BE transitions, e.g.
+  `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
+  clears it for all clients. Cleared via `workspace.dismissAttention` / `workspace.markSeen`;
+  surfaces via `workspace:attention-changed` (§6.5). This is shared BE state rather than
+  per-client local state (the daemon is single-user in v1; per-viewer cursors are a future
+  extension).
+
+**`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
+string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
+the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
+`Workspace` fields (`statusMessage`, `baseRef`, `prUrl`, `prNumber`, `prStatus`,
+`activePullRequest`, `pullRequests`, `archivedAt`, repository/worktree fields, …) are
+**omitted when absent**
+(`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
+
+**`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
+authoritative "most recent thing that happened in this workspace" timestamp. The daemon
+derives it on every path that returns a `Workspace` on the wire (`workspace.list` /
+`workspace.get` / `workspace.create` / `workspace.update` / `workspace.archive` /
+`workspace.unarchive`) as the **max** of the persisted `lastActivity`, `updatedAt`,
+`createdAt`, every note's `updatedAt`, and every agent session's `updatedAt` (FE
+`deriveWorkspaceLastActivity` parity). It is always present on the wire —
+clients never need to recompute it from notes/agents.
+
+**PR-field ownership (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`, `pullRequests`).**
+These five fields are BE-owned: the daemon writes them from PR discovery / refresh
+(§5.9, §6.5 `pr:*` events) and clients read them off the returned `Workspace`. All five
+are `Option`s that serialize with `skip_serializing_if` (absent, not `null`). The
+persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) sits
+alongside `activePullRequest` and carries the reconciliation candidates the FE matches
+`activePullRequest` against.
+
+**Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
+five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
+`pullRequests`) accept three wire forms: **missing** the key leaves the stored value
+untouched, an explicit **JSON `null`** clears the stored value, and a **present value**
+sets it. The applied `WorkspaceUpdate` delta emitted as
+`workspace:updated { changes }` (§6.5) preserves this distinction — omitted keys were
+untouched, `null` keys were explicit clears, present keys were sets.
+
+**`baseRef` canonicalisation.** On `workspace.create` and `workspace.update`, an incoming
+`baseRef` has any known remote prefix (`origin/`, `upstream/`, `fork/`) stripped before
+persistence, so `origin/main` and `main` collapse to the same canonical `main`. The
+returned `Workspace.baseRef` and the persisted DB value are always the canonical form;
+values without a known prefix are stored verbatim. `git.*` methods that need the
+fully-qualified remote-tracking name reconstruct it as `origin/<baseRef>` locally.
+
+**Card aggregates (`taskStats` / `agentSummary` / `diffSummary`).** `workspace.list` and
+`workspace.get` enrich each `Workspace` with the nested rollup objects the iOS coverflow cards
+read, computed fresh from live state on the emit path (never persisted). They are decoded as
+optional by iOS and each is **omitted when not computable** (`skip_serializing_if`) rather than
+emitted as `null`, so absent simply yields a sparser card:
+
+- `taskStats: { total, completed, inProgress }` — ports the canonical `computeTaskStats`
+  (`task-stats.ts`) over the spec-linked direct-child task notes: `cancelled` is excluded from
+  `total`, `complete` counts as `completed`, and `in_progress` + `review_required` count as
+  `inProgress`. The renderer-only per-task `tasks` array is omitted.
+- `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
+  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding }`.
+  This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
+  `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
+  the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
+  `agentSummary?.agentIds ?? []`) and lists the same agents (same order) used to build `agents`.
+  `status` carries the same wire strings as `agent.list`; `isStreaming`/`isResponding` are always
+  `false` (the headless backend has no live stream state — `status` carries liveness, matching the
+  `AgentLite` decision); `lastActivity` is the session `updatedAt`.
+- `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
+  ports the on-demand `computeWorkspaceDiffSummary` (`workspace-summaries.ts`): `totalFiles` counts
+  changed-vs-`HEAD` (staged+unstaged) plus untracked files; line totals sum the tracked diff;
+  `files` mirrors the on-demand source (empty array). Omitted entirely when the workspace has no git
+  worktree or no changes.
+
+
+
+```json
+// → request — dismiss the blue-dot attention flag
+{ "jsonrpc":"2.0","id":2,"method":"workspace.dismissAttention","params":{ "workspaceId":"ws-abc" } }
+// ← response (attention reset; emits workspace:attention-changed)
+{ "jsonrpc":"2.0","id":2,"result":{ "workspace":{ "id":"ws-abc","activity":"idle","attention":"none" } } }
+```
+
+**Workspace chat-context items (`workspace.getContext` / `updateContext`, new in intentd).**
+Migrates the renderer-only `localStorage["workspace:context:{workspaceId}"]` store (attached
+files/notes/URLs, Linear/GitHub/Sentry issues surfaced in the chat context panel) into
+daemon-owned rows so the surface is queryable by MCP tools and other clients. The daemon
+treats each item as an **opaque JSON blob** authored by the FE — the `ContextItem` union in
+`packages/cloudlands-fe/src/features/context/types.ts` — and only pulls `id` out for keying
+and ordering. `updateContext` is a full-list replacement (matches the FE's collapsed
+`hydrate/add/remove/update` write pattern) and preserves the caller-supplied order. Every
+successful `updateContext` emits `workspace:context-changed` with the persisted list
+(§6.5), so subscribers refresh without a follow-up `getContext`.
+
+- **ContextItem** — `{ id: string (required, non-empty), ...extras }`. `id` is the row key
+  and the only field the daemon inspects; every other field (`type`, `provider`, `title`,
+  `url?`, `parentNoteId?`, `createdAt`, `updatedAt`, plus provider-specific extras such as
+  `identifier`, `number`, `favicon`, `noteId`, `isSpec?`, `taskStatus?`) round-trips
+  verbatim. The FE's union types are the source of truth.
+
+```json
+// → request — write the authoritative list
+{ "jsonrpc":"2.0","id":10,"method":"workspace.updateContext","params":{
+  "workspaceId":"ws-abc",
+  "items":[
+    { "id":"ctx-1","type":"linear-issue","provider":"linear","title":"ENG-42",
+      "identifier":"ENG-42","createdAt":"2026-07-13T00:00:00Z","updatedAt":"2026-07-13T00:00:00Z" }
+  ]
+} }
+// ← response (emits workspace:context-changed)
+{ "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
+```
+
+### 5.2 `note.*`
+
+All `note.*` methods require `workspaceId`. All except `list` and `create` additionally require `noteId` (`list` returns every note; `create` mints a new id). The spec note is addressed with the well-known id `"spec"`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.list | workspaceId (req) | { notes: NoteSummary[] } |
+| note.get | noteId (req) | { note: Note } — -32602 if not found |
+| note.create | title (req), content?, tags?: string[], parentId? | { note: Note } |
+| note.update | noteId (req); content? or title?/tags? | { note } — content present → full setContent; else metadata update |
+| note.add | noteId (req), content (req), heading?, position?: "end" | "start" |
+| note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement |
+| note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean | { ok, ... } (full replace) |
+| note.updateMetadata | noteId (req), title?, tags?: string | string[] |
+| note.delete | noteId (req) | { ok, noteId, deleted } |
+| note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId) |
+| note.readAsset | asset (req) — asset id or workspace-asset:// URL | { assetId, mimeType, data, sizeKb } (image assets returned as data) |
+| note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
+| note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
+| note.getVersion | noteId (req), v (req,int) | `{ type:"snapshot", v, date, author, title, content }` — -32602 if the version does not exist |
+| note.restoreVersion | noteId (req), v (req,int) | { ok, noteId, restoredFrom, v, note } — resets title+content to version `v`, bumps `rev`, appends a new version capturing the restored state |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":7,"method":"note.add",
+  "params":{ "workspaceId":"ws-abc","noteId":"spec","content":"## Phase 2\nDraft","position":"end" } }
+// ← response
+{ "jsonrpc":"2.0","id":7,"result":{ "ok": true, "noteId":"spec" } }
+```
+
+**Version history (deliberate divergence from the FE).** The FE's file-based store
+appended mixed snapshot/diff entries to a `.versions/<noteId>.jsonl` sidecar
+(`SNAPSHOT_INTERVAL = 10` diffs between full snapshots). The daemon stores **every
+version as a full snapshot** in the `note_version` table instead — content sizes are
+note-scale, SQLite holds blobs natively, and full snapshots make `getVersion`/
+`restoreVersion` O(1) with no diff-chain replay. The FE cap is kept: on append the
+store prunes to the newest **50** versions per note (`MAX_NOTE_VERSIONS`). Versions are
+captured on every content mutation (`note.create`, `note.update` with `content`,
+`note.add`, `note.edit`, `note.editLines`, `note.setContent`, `note.restoreVersion`);
+metadata-only updates do not create versions. `note.*` writes carry no author context
+on the wire yet, so every version is stamped with the system author
+(`{ id:"system", name:"intentd", type:"system" }`).
+
+**CRDT merge on full-content writes (§5.2 / A5).** `note.setContent` and the
+content arm of `note.update` are **not** last-write-wins: incoming content is
+routed through a per-note `yrs` (Rust Yjs) document seeded from the note's
+stored content on first touch, and each write applies a single-hunk char-level
+diff (common UTF-16 prefix / suffix trimmed) inside a `yrs` transaction. The
+merged `Y.Text` output is what the daemon cleans and persists, so two
+concurrent full-content writes whose diffs target different regions both
+survive in the stored content. The CRDT state is **session-only** — never
+persisted, sweepable after 24 h idle, keyed by `(workspaceId, noteId)`. The
+surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
+`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write
+straight to storage and invalidate the cached session so the next full-content
+write reseeds from the fresh persisted content; `note.delete` drops the
+session. The wire shapes on §5.2 are unchanged.
+
+### 5.2.1 `note.lineAttribution.*`
+
+Per-line attribution over the daemon's full-snapshot version history (§5.2). Ports the FE
+`LineAttributionService` that backed the tiptap `LineAttributionGutter`, so a client can
+render "who last touched each line" without re-implementing the diff.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| note.lineAttribution.load | noteId (req) | `LineAttributionData \| null` — see payload below; `null` when the daemon has not computed attributions yet |
+| note.lineAttribution.computeNow | noteId (req) | `{ ok: true }` — force an immediate recompute + persist + `line-attribution:updated` emit (bypasses the debounce) |
+
+**Payload shape (`LineAttributionData`).** Identical to the FE JSON the
+`line-attribution:load` IPC handler served, so `LineAttributionGutter.svelte` decodes it
+unchanged:
+
+```json
+{
+  "noteId": "…",
+  "workspaceId": "…",
+  "computedAt": "2026-07-05T12:34:56.000Z",
+  "attributions": {
+    "1": { "timestamp": 1720193696000,
+            "author": { "id": "system", "name": "intentd", "type": "system" } },
+    "2": { "timestamp": 1720193710000,
+            "author": { "id": "agent-…", "name": "Assistant", "type": "agent" } }
+  }
+}
+```
+
+Keys of `attributions` are stringified 1-based line numbers (only lines the algorithm
+attributed to a stored version are present). `timestamp` is milliseconds since the Unix
+epoch. `author.type` is `user` / `agent` / `system`; `turnNumber` is emitted when
+available (currently omitted because `note.*` writes still stamp the system author —
+see §5.2 version-history extensions).
+
+**Recompute lifecycle.** Every content-changing `note.*` mutation schedules a debounced
+recompute (5 s, mirroring `LineAttributionService.DEBOUNCE_MS`). A fresh mutation cancels
+any pending timer so a burst of writes coalesces into one persist + one
+`line-attribution:updated` emit (§6.5). Persistence is one row per note in
+`note_line_attribution` (SQLite migration `0028_note_line_attribution.sql`), upserted on
+each recompute so the read path is O(1) and survives restart. `note.delete` cascades.
+
+### 5.3 `comment.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
+| comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
+| comment.getThread | noteId (req), threadId? or commentId? | { thread } |
+| comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.delete | noteId (req), commentId (req) | { ok, ... } |
+
+**Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
+`<!--anchor:{commentId}:start-->` / `<!--anchor:{commentId}:end-->` markers into the
+note markdown around the anchored span, and captures up to 50 characters of
+surrounding text as `anchorBefore` / `anchorAfter` on the persisted comment
+(reference `extractAnchoredText` in `markdown-anchor-recovery.ts`). Every
+content-changing `note.*` mutation (`note.update`, `note.add`, `note.edit`,
+`note.editLines`, `note.setContent`) then runs the rewritten markdown through a
+recovery pass before persist: healthy anchors are left alone; partial anchors
+(only one marker surviving) are relocated using the stored `anchorBefore` /
+`anchorAfter` context; unrecoverable and degenerate anchors have their stray
+markers scrubbed from the persisted content and the comment is flipped to
+`isOrphaned: true`. Comments in the wire `Comment` shape carry an optional
+`isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
+`false` explicitly when a previously-orphaned comment heals).
+
+**Tolerant anchoring + actionable errors.** `comment.add` first attempts an
+exact substring match of `searchContext` against the note markdown. When no
+exact occurrence exists, it retries against a *plaintext projection* of the
+markdown (heading/list/blockquote markers, emphasis/code delimiters, link
+syntax — keeping link text — HTML comments including existing anchor markers,
+and all whitespace stripped, with a byte map back to the source), so anchors
+derived from an editor's rendered plain text (e.g. tiptap `textBetween`, which
+joins blocks with no separator) anchor correctly onto the formatted source.
+Uniqueness rules are identical on both paths: an ambiguous `searchContext` or
+`commentTarget` is rejected. All anchoring failures (context not found /
+ambiguous, target not in context / ambiguous) and the empty-field validations
+(`comment`, `searchContext`, `commentTarget`, invalid `authorType`) return
+`-32602` with a descriptive message, **not** `-32603 "Internal error"`. The
+optional `authorType` param sets the persisted comment's `authorType`
+(defaulting `author` to `"User"` / `"Agent"` accordingly when absent);
+omitting it keeps the backward-compatible `agent` default.
+
+**Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| comment.resolveThread | noteId (req), threadId? or commentId?, resolved?: bool (default true) | { ok, ... } — marks every comment in the thread (un)resolved |
+
+### 5.4 `task.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| task.updateStatus | noteId (req), taskText (req), status (req: done | todo |
+| task.updateNoteStatus | noteId (req), status (req: not_started | waiting |
+| task.update | noteId (req), line (req,int), text?, status?, expected? | { ok, lineNumber, ... } (atomic single-line edit) |
+| task.getMyTask | taskNoteId (req) | task note w/ metadata, dependencies, acceptance criteria |
+| task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort? | { ok, ... } |
+| task.convertBlocks | noteId (req) | { convertedCount, createdNoteIds } |
+| task.createPrerequisite | dependentNoteId (req), title (req), content?, status? | { ok, ... } |
+| task.assignAgent | noteId (req), agentId (req) | { ok, noteId, agentId } |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":11,"method":"task.update",
+  "params":{ "workspaceId":"ws-abc","noteId":"task-1","line":3,"status":"done" } }
+// ← response
+{ "jsonrpc":"2.0","id":11,"result":{ "ok": true, "lineNumber": 3, "status": "done" } }
+```
+
+**Task projections & bulk cleanup.** Two read methods project a workspace's spec-linked task notes into the canonical `WorkspaceTask` shape, and one bulk write clears an agent from every task in a workspace.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| task.list | workspaceId (req), status? | { tasks: WorkspaceTask[], stats: WorkspaceTaskStats } — optional `status` filter; `stats` is the `{ total, completed, inProgress }` aggregate (§5.1 card aggregates — same `computeTaskStats` projection: `cancelled` is excluded from `total`, `complete` counts as `completed`, `in_progress` + `review_required` count as `inProgress`) served alongside the filtered task list |
+| task.get | workspaceId (req), taskNoteId (req) | { task: WorkspaceTask } — unknown id → `-32602 Task not found` |
+| task.removeAgentFromAllTasks | workspaceId (req), agentId (req) | { ok, updatedCount } — strips `agentId` from every task-note's `assignedAgentIds` in the workspace; called from agent teardown (delete-agent, wake-or-create stale-assignment cleanup). Idempotent: absent `agentId` → `updatedCount: 0`. |
+| task.linkAgent | workspaceId (req), noteId (req), taskText (req), agentId (req), taskKey? | { link: TaskAgentLink } — upsert on `(workspace_id, note_id, task_key)`. `taskKey` defaults to `taskText` when omitted, matching the FE derivation `association.taskKey ?? association.taskText`. `createdAt` is set to the current epoch-ms. Emits `task:agent-linked`. |
+| task.unlinkAgent | workspaceId (req), noteId (req), taskKey (req) | { removed: boolean } — deleting an unknown row is not an error (`removed: false`); an actual delete emits `task:agent-unlinked`. |
+| task.listAgentLinks | workspaceId (req) | { links: TaskAgentLink[], linksByNoteId: Record<noteId, Record<taskKey, TaskAgentLink>> } — flat oldest-first list plus the FE-parity `byNoteId → byTaskKey` map so hydration is a mechanical cut-over from `localStorage["task-agent-associations:{wsId}"]`. |
+
+**`task.*` linkage types.** `task.linkAgent` / `unlinkAgent` / `listAgentLinks` migrate the
+renderer-only `taskAgentAssociations` slice into daemon-owned rows so MCP tools and other
+clients can ask "who is working on this task?".
+
+- **TaskAgentLink** — `{ workspaceId, noteId, taskKey, taskText, agentId, createdAt }`.
+  `taskKey` mirrors the FE key (`association.taskKey ?? association.taskText`);
+  `taskText` records the human-readable checkbox text at link time; `createdAt` is
+  epoch-ms (FE parity with `TaskAgentAssociation.createdAt: number`).
+
+```json
+// → request — link an agent to a task
+{ "jsonrpc":"2.0","id":12,"method":"task.linkAgent","params":{
+  "workspaceId":"ws-abc","noteId":"spec","taskText":"Ship it","agentId":"agent-alpha"
+} }
+// ← response (emits task:agent-linked)
+{ "jsonrpc":"2.0","id":12,"result":{ "link":{
+  "workspaceId":"ws-abc","noteId":"spec","taskKey":"Ship it","taskText":"Ship it",
+  "agentId":"agent-alpha","createdAt":1750000000000
+} } }
+```
+
+### 5.5 `agent.*`
+
+The largest namespace. Every `agent.*` method is served daemon-primary by `intent-services` via the `intent-transport` router; no renderer-owned agent transport remains. `agentId` values are **server-assigned** and of the form `agent-{uuid}`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, delegationDepth?, initialMessage? } (the P3-1.2b persistence-gap fields; omitted when absent). `metadata.isBackground` is served from the persisted session flag (harvested at spawn; G-A1/P3-1.2c) so rehydrated background agents stay background. **Turn-liveness (STAB-125, additive):** `turnInFlight: bool` is `true` while an active worker is draining a `session/prompt` turn for the agent, and `lastStreamActivityAt` (RFC-3339; omitted when no turn is in flight) is the timestamp of the most recent stream event observed for that turn — a long turn persists nothing until it ends, so these let a poller tell a long-but-alive turn (timestamp advancing) from a wedged agent (timestamp pinned) while `lastActivity` stays pinned at the last persisted message. Caveat: the stamp only advances on stream traffic, so during a long silent tool call it pins too — combine with `isWaitingOnTool` to avoid misclassifying a healthy-but-slow tool turn |
+| agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list (including the STAB-125 `turnInFlight`/`lastStreamActivityAt` turn-liveness fields); -32602 if not found (falls back to disk) |
+| agent.getConversation | agentId (req), limit?: number, nextToken?: string, workspaceId? | { agentId, messages, truncated, totalMessages, nextToken, turnInFlight, lastStreamActivityAt } (capped to most-recent limit; `nextToken` is the opaque cursor for the next older page — `null` when no more history remains, non-null iff `truncated` is `true`; pass it back as the `nextToken` input to fetch the next page). `turnInFlight`/`lastStreamActivityAt` are the STAB-125 turn-liveness fields (same semantics as `agent.get`; `lastStreamActivityAt` is `null` when no turn is in flight) so a conversation read mid-turn — when nothing has persisted yet — is distinguishable from a wedged agent |
+| agent.create | workspaceId (req), name?, model?, specialistId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, isBackground? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. The agent's id is **server-assigned**: the daemon always mints a fresh `agent-{uuid}`, and a request carrying `agentId` is rejected with `-32602` ("agent IDs are server-assigned and the field must be omitted") before any side effect; an `idempotencyKey` replay returns the stored result carrying the originally minted id. `provider` persists on the session. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b — plus `isBackground`, G-A1/P3-1.2c) with the top-level `contextReferences`/`imageBlocks`/`isBackground` params winning over the `metadata` copies; `isBackground` defaults to `false` when absent from both. `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
+| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?, isolation?) | `{ ok: true, agentId, name, effectiveIsolation? }` — the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b); delegated children always persist `isBackground: true` (matching the TS `DelegateTaskTool`; G-A1/P3-1.2c). **Sandbox isolation (new in intentd).** `isolation` controls whether the delegated agent runs in an isolated sandbox: `"cow"` provisions a copy-on-write directory clone (requires CoW filesystem support; see below), `"direct"` runs in the main workspace (default when omitted). CoW sandboxes are full-directory clones of the workspace repository (including `.git` and build caches) via OS-level copy-on-write primitives (macOS `copyfile(COPYFILE_CLONE)`, Linux `ioctl(FICLONE)` on APFS/Btrfs/XFS with reflink support); the sandbox directory layout is `<workspaces_root>/<workspaceId>/sandboxes/<agentId>/<repo-slug>` with a snapshot branch `sb/<agentId>` created in the sandbox's `.git`. When `isolation: "cow"` is requested but the filesystem does not support CoW reflinks, the daemon falls back to `"direct"` mode (no bytes copied) and returns `effectiveIsolation: "direct"` in the result; on successful CoW provisioning, `effectiveIsolation: "cow"` is returned. The child session's TOP-LEVEL fields (not nested under metadata) `sandbox_id`, `sandbox_path`, and `sandbox_branch` are persisted and served in both `AgentSession` and `AgentLite`, and a `sandbox:created` event is emitted with `data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha }`. The sandbox directory is never auto-cleaned — cleanup is the responsibility of higher-level orchestration. All agent file/exec/terminal/search operations are restricted to the sandbox path when present (logical containment guards in `intent-services`), preventing escape to the main workspace or parent directories |
+| agent.sendToTask | taskNoteId (req), message (req), priority?, messageMetadata? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist. `messageMetadata` is the same opaque per-message payload as `agent.sendMessage`, persisted on the assignee's user message row; it is threaded through both the runtime turn path and the store-only fallback (read-only wiring with no agent manager), so attribution is consistent across deployments |
+| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? } — `priority: "interrupt"` preempts an in-flight turn instead of queueing: the current turn is cancelled keep-alive (`session/cancel` + one terminal `agent:stream:end`; the agent process is never killed) and the message streams immediately as a fresh turn on the same session (`queued: false`); the pending queue is preserved and drains afterwards. On an idle agent, interrupt priority falls through to the normal send path. **Duplicate delivery** of the SAME interrupt (same client-supplied `messageId`) preempts exactly once: the duplicate is acknowledged idempotently as `{ success: true, queued: false, messageId, deduplicated: true }` — no second preemption, message NOT double-persisted (dedup keys on `messageId`; omit it and duplicates are indistinguishable from new sends). **During turn startup** (busy slot claimed but no cancellable turn live yet — spawn/`session/new` in flight) the preemption is skipped and the message queues keep-alive behind the starting turn (`queued: true`); the agent is never killed and never fails. **Per-turn prompt-assembly hints (Fidelity B).** `stdinContext` is prepended verbatim to the outbound prompt as a `Context:\n<stdin>\n\n---\n\n` block (reference-parity `acp-provider.ts`); when absent, one is synthesised from `contextReferences` (port of `agent-backend-handler.service.ts`’s builder — first-non-empty wins across `content` / `selectedText` / `taskText` / `codeChunk`, with per-`type` framing for `selection` / `task` / `code_chunk` / `file` / `linear-issue` / `github-issue` / `sentry-issue` / `terminal`; unknown types fall through to the raw content). `noteIds` are resolved to workspace-asset image content blocks: each note's markdown is scanned for `workspace-asset://<workspaceId>/<assetId>` URLs in the current workspace, the referenced bytes are appended as ACP `image` blocks, and a single system text notice is added noting how many images were inlined. `messageMetadata` is opaque JSON persisted on the user message row (new `agent_message.metadata` column) and echoed on read — used by clients (e.g. `{ source: "system" }`) to distinguish daemon-initiated turns; the daemon never inspects its shape. **Row identity + events.** A direct (non-queued) send persists the user row UNDER the client-supplied `messageId` when given (validated ≤ 256 bytes, `-32602` otherwise) — else a server-minted `user-msg-{uuid}` — the result `messageId` IS that persisted row id, and the daemon emits `agent:message` `{ agentId, messageId, role: "user", appMessageId? }` for the append (`appMessageId` present only when the row carries a `userAppMessageId`) (same event the queue-drain and wake-delivery persists emit), so clients converge on the canonical row without a refetch race. **Sender attribution (`agent_message`, new in intentd).** Agent-originated sends through the MCP host bindings — `ws.agent.send`, `ws.agent.sendToTask`, and the `ws.agent.create` kickoff message — are auto-tagged by the daemon with `messageMetadata = { "type": "agent_message", "fromAgentId": string, "fromAgentName": string \| null }` so recipients and clients can attribute who sent the message. An explicit caller-supplied `messageMetadata` always wins over the auto-tag (a `null` value is treated as absent and does NOT suppress it); `fromAgentName` is always present for a stable schema and is `null` when the sender's session lookup fails. Human-originated FE/RPC sends (no agent caller, no explicit metadata) stay untagged. The tag persists on the user message row and survives the busy-agent queued path — the enqueue captures it and the drain-time persist writes it — including the store-only fallback. **Client message identity (`userAppMessageId`).** The FE’s client-minted optimistic-message id is consumed by the router: it is trimmed, validated ≤ 256 bytes (`-32602` otherwise; whitespace-only reads as absent), folded into the row `messageMetadata` under `userAppMessageId` (the top-level param wins over a caller-supplied metadata copy; supplying it alongside a non-object `messageMetadata` is `-32602`), lifted back out as the top-level `appMessageId` field on `AgentMessage` reads (`agent.getConversation` / `agent.getSession`), and echoed as `appMessageId` on the user-row `agent:message` event — activating the FE’s optimistic-insert dedup guard. The id survives the busy-agent queued path (enqueue capture → drain-time persist) but is excluded from the drain persist’s in-block `messageMetadata` copy (row-level only) so queued rows’ content blocks match direct-send rows. Requests without it are byte-for-byte unchanged (no `appMessageId` key on rows or events). **Daemon-ignored fields (FE-forwarded, unwired daemon-side).** The assistant-side ids (`assistantMessageId` / `assistantAppMessageId`) are accepted by the router but not consumed: assistant rows are keyed on the server-minted row `id`. Per-turn `model` override is likewise accepted but **not extracted** by the daemon router today; the session-level model set at `agent.create` / `agent.setModel` remains authoritative (deferred pending an ACP-provider-side change to switch model mid-session). |
+| agent.forceMessage | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, userAppMessageId? | service result (stops current stream first) — same per-turn hint semantics as `agent.sendMessage` (Fidelity B): `stdinContext` / `contextReferences` build the `Context:` block, `noteIds` inlines workspace-asset images with a system notice, and `messageMetadata` persists on the user message row; `userAppMessageId?` is also accepted and folded/persisted the same way (round-trips as `appMessageId` on reads, incl. the store-only fallback), though the forced-delivery path emits no user-row `agent:message` event (pre-existing), so the live echo covers `agent.sendMessage` only |
+| agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks?, model? | { success, queued: false, messageId, truncatedCount } — edit a past **user** message and regenerate from that point (additive `agent.*` extension). The result `messageId` is the freshly-minted server id of the NEW regenerated user message — NOT the input `messageId`, which names the edit target whose row (and everything after it) is dropped by the truncation; the two are never the same id. Orchestrated daemon-side, in order: (1) `messageId` is validated FIRST (must reference an existing user message in the transcript — unknown or non-user ids are rejected with `-32602` before any state changes; the transcript is untouched); (2) any in-flight turn is stopped (same hard-cancel + queue-discard semantics as `agent.forceMessage`); (3) with `model` supplied, the session model is switched (same semantics as `agent.setModel`) before the regenerated turn; (4) the transcript is truncated to just BEFORE the edited message — the edited message and everything after it are dropped (destructive; fresh row ids / 0-based `seq` via the replaceMessages store machinery) and `agent:updated` is emitted with `{ truncatedCount, remainingCount }`; (5) the agent's ACP session is flagged for forced recreation — the next prompt SKIPS the `session/load` resume, opens a fresh `session/new`, and prepends the truncated prior history as `<supervisor>` XML (the provider must not retain the truncated turns in context; the forced-recreate flag survives intervening `agent.stop`s and is only consumed when a fresh session opens); (6) `content` is sent as a fresh user message (normal `agent.sendMessage` semantics; `imageBlocks`/`fileBlocks` ride along; the usual `agent:message` / `agent:stream:*` events follow) |
+| agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? | { success, queuedMessage } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks?, messageMetadata? } — `messageMetadata` is only present when the entry was enqueued with per-message metadata (e.g. an internal wake's `event_notification` payload, or an agent-to-agent send's `agent_message` sender-attribution tag, captured while the agent was busy); user-typed `agent.queueMessage` entries never carry it. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send |
+| agent.editQueuedMessage | agentId (req), messageId (req), content (req) | { success, queuedMessage } (QueuedMessage shape as above) |
+| agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
+| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, imageBlocks?, fileBlocks?, messageMetadata? } (shape as `agent.queueMessage`) |
+| agent.stop | agentId (req) | { success: true } |
+| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result — emits `agent:updated` |
+| agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
+| agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet? | { success: true, name } — an applied rename emits `agent:renamed`. With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
+| agent.delete | agentId (req), workspaceId? | { success: true } |
+| agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. |
+| agent.summary | agentId (req) | quick summary of what the agent did |
+| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` (P3-1.2b). Delivery: a non-grouped delegated child delivers the single immediate parent wake at reportToParent time (directly to `session.parent_agent_id`, no watch required); the parent's oneShot watches are marked `report_delivered` so the child's later `agent:idle` is suppressed for that parent. `agent:failed` / `agent:deleted` after a report still deliver wakes. Children that never report keep the idle-driven wake with `lastResponseSummary`. Grouped children (`after_all`) do not get an immediate wake — the persisted report reaches the parent only inside the group's single aggregated wake (as that child's `Report:` line, which wins over `lastResponseSummary`); a late report after group delivery wakes immediately. All internal parent wakes (one-shot completion watches, the aggregated group wake, immediate reports) run a real parent turn through the runtime send-message path — normal `agent:stream:*` / `agent:idle` lifecycle, queued if the parent is mid-turn |
+| agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses } (filter fields flattened as top-level actorIds/eventTypes per subscription; no legacy filter object) |
+| agent.cancelSubscriptions | agentId (req), workspaceId (req) | { success: true } |
+| agent.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — not the WS streaming surface (use events.subscribe) |
+| agent.unsubscribe (deprecated) | subscriptionId (req) | service result |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":20,"method":"agent.sendMessage",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-123","content":"Run the tests" } }
+// ← response (agent was idle — message delivered)
+{ "jsonrpc":"2.0","id":20,"result":{ "success": true, "queued": false, "messageId": "user-msg-1718...-ab12" } }
+```
+
+```json
+// → agent.wakeOrCreate: wake branch (a resumable assigned agent exists — most-recent-first)
+{ "jsonrpc":"2.0","id":21,"method":"agent.wakeOrCreate",
+  "params":{ "workspaceId":"ws-abc","taskNoteId":"note-task-1","contextMessage":"resume","model":"opus4.7" } }
+// ← response (agent was woken; earlier stale assignments are reported via cleanedUpAgentIds when present)
+{ "jsonrpc":"2.0","id":21,"result":{ "ok": true, "agentId": "agent-abc", "agentName": "Task: Deploy", "created": false, "action": "woke_existing", "taskTitle": "Deploy", "result": { "success": true, "queued": false, "messageId": "user-msg-...", "action": "woke_existing" }, "cleanedUpAgentIds": ["agent-stale-1"] } }
+
+// → agent.wakeOrCreate: create branch (no live/resumable assignment — rich payload; specialist/model from a newest assigned session would override create.specialist/create.model)
+{ "jsonrpc":"2.0","id":22,"method":"agent.wakeOrCreate",
+  "params":{ "workspaceId":"ws-abc","taskNoteId":"note-task-1","contextMessage":"kickoff","callerAgentId":"agent-parent","delegationDepth":1,"messageMetadata":{"type":"task_wake","source":"wake"},
+             "create":{"specialist":"implementor","provider":"acp/mock","metadata":{"custom":"field"},"skipAutoCommit":true} } }
+// ← response (new agent created; agent.create's rich result nested under `result`)
+{ "jsonrpc":"2.0","id":22,"result":{ "ok": true, "agentId": "agent-new", "agentName": "Task: Deploy", "created": true, "action": "created_new", "taskTitle": "Deploy", "result": { "id": "agent-new", "text": "...", "backgrounded": true, "queued": false } } }
+
+// → agent.wakeOrCreate: depth-guard rejection (delegationDepth >= MAX_DELEGATION_DEPTH)
+// ← { "jsonrpc":"2.0","id":23,"error":{ "code": -32602, "message": "agent.wakeOrCreate: delegation depth 2 exceeds MAX_DELEGATION_DEPTH (2)" } }
+```
+
+> **Migrating off the removed FE `sendBackendInitiatedMessage`.** Callers that
+> previously branched on the FE-only `errorCode: "ALREADY_STREAMING"` result
+> should now treat `agent.sendMessage`'s `{ queued: true }` response as the
+> "agent is mid-turn / already streaming" case: the daemon auto-queues the
+> message behind the in-flight turn and returns `{ success: true, queued: true,
+> messageId? }` without preempting. For the "resume or spin up the assignee for
+> a `taskNoteId`" branch, use `agent.wakeOrCreate`; for a known existing
+> `agentId`, use `agent.sendMessage` directly (the daemon distinguishes the
+> mid-turn case via the boolean `queued` flag).
+
+**Diagnostics & session-shape RPCs.** A sanitized diagnostics snapshot for the agent runtime — agent statuses, subscriptions, queues, delegation groups, delivery stats, recent delivery events, and stuck-risk signals. Plus four session-shape RPCs: the full-session read `agent.getSession`, the partial-mutation writer `agent.update`, and the transcript-mutation pair `agent.appendMessage` / `agent.replaceMessages`. `agent.enhancePrompt` (one-shot prompt-enhance / AI-layout generation; full contract in §5.31) is cross-referenced here as a namespace index entry. `agent.retry` redrives a failed agent spawn.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.diagnostics | workspaceId (req), agentId?, taskNoteId?, staleRespondingAfterMs? | { diagnostics, text } — JSON snapshot plus a pre-formatted text rendering; optional filters narrow to one agent or task |
+| agent.getSession | agentId (req), workspaceId? | { session: AgentSession } — full projection (superset of `AgentLite`): includes `systemPrompt`, `specialist`, the persisted metadata block, and the full `messages` log (chronological). Backs the FE-side `loadAgent` rehydration path. `-32602 "Agent not found"` when the session is unknown |
+| agent.update | agentId (req), workspaceId?, changes (req) | { success: true, agent: AgentLite } — partial update of the persisted `AgentSession` from a `changes` object. Whitelisted fields: `status`, `isActive`, `acpSessionId`, `backendSessionId`, `name`, `nameExplicitlySet`, `model`, `provider`, `systemPrompt`, `specialist`, `taskNoteId`, `skipAutoCommit`, `completionReport`, `completionReportTimestamp`, `delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`, `isBackground`. Optional-string fields accept a JSON `null` to clear. Write-once (`acpSessionId`) and immutable (`provider`) invariants are still enforced by the store. Emits `agent:updated` (or `agent:renamed` when `name` is the only mutated field). Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"` |
+| agent.appendMessage | agentId (req), role (req, `user`\|`assistant`\|`tool`\|`system`), contentBlocks (req), workspaceId?, metadata? | { success: true, message: AgentMessage } — append a single message to the transcript. `metadata` persists verbatim on the row and round-trips on reads. Emits `agent:message`. Rejected with `-32602` when the agent is mid-turn (transcript mutations must not race the streaming writer) |
+| agent.replaceMessages | agentId (req), messages (req, `AgentMessage[]`), workspaceId? | { success: true, messages: AgentMessage[] } — atomically swap the entire transcript. Each entry needs `role` + `contentBlocks`; `metadata` / `timestamp` are optional. Row ids and `seq` values (`0..n`) are minted by the store so callers cannot smuggle stale ids across the swap. Emits `agent:updated` with `{ replacedCount }`. Rejected with `-32602` when the agent is mid-turn (same rationale as `agent.appendMessage`) |
+| agent.retry | workspaceId (req), agentId (req) | { ok: true \| false } — redrive a failed agent spawn. Only valid when the session status is `error`; returns `{ ok: false }` otherwise. Clears the error status back to pending, emits `agent:status-changed`, tears down any stale child handle, and attempts to redrive the front-of-queue message (requeued at exhaustion) plus any subsequent messages. Reuses the spawn-retry/backoff machinery, so a retry that fails again lands back in the `error` state with the full event sequence (`agent:stream:status` retry hints, terminal `agent:failed` + `agent:stream:end`, `agent:status-changed` persisting `error`) |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } — one-shot prompt-enhance / AI-layout generation via a spawned `auggie --print`; no agent session is created or persisted, no events emitted. Full contract in §5.31 |
+
+### 5.5a `sandbox.*`
+
+> **New namespace.** The `sandbox.*` methods manage CoW (copy-on-write) sandboxed agent workspaces. When `agent.delegate` provisions a CoW sandbox (§5.5), the agent works in an isolated repository clone. When the agent completes, `sandbox.merge` attempts to automatically merge the sandbox commits back to the canonical repository, preserving agent attribution. If the merge encounters conflicts or the canonical repository has uncommitted overlapping changes, the agent is bounced with resolution instructions or the merge is deferred to manual resolution. All `sandbox.*` methods require `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sandbox.merge | workspaceId (req), agentId (req) | { ok, outcome, canonicalHead?, conflictingPaths?, reason?, overlappingPaths? } — manually merge a sandbox back to the canonical repository. `outcome` is `"merged"` (clean merge succeeded; emits `sandbox:merged`), `"conflict"` (merge conflicts detected; canonical left pristine; returns `conflictingPaths`), or `"blocked"` (canonical has uncommitted changes overlapping with sandbox; returns `overlappingPaths` and `reason`). When `outcome = "merged"`, `canonicalHead` is the canonical repository HEAD SHA after the merge. `-32602 "Sandbox not found"` when no sandbox exists for the agent |
+| sandbox.discard | workspaceId (req), agentId (req) | { ok, removed } — discard a sandbox without merging. Removes the sandbox directory and database record. `removed` is `true` if the sandbox was discarded, `false` if no sandbox existed (no-op success). This is the escape hatch when a sandbox is no longer needed or the agent failed |
+
+**Automatic merge on completion.** When a sandboxed agent completes (`agent:idle` event), the daemon automatically attempts `sandbox.merge`. On a clean merge, the agent's coordinator sees the `merged` sandbox status in the completion event and receives a `sandbox:merged` event. On conflict, the agent is bounced with a list of conflicting paths and resolution instructions (conflict resolution is iterative; the agent re-completes after fixing conflicts). On `blocked` outcome or retry exhaustion, the completion propagates with `merge-pending` status, and the user must call `sandbox.merge` manually once canonical is clean.
+
+**Status lifecycle.** Sandbox records track status through the merge lifecycle: `created` (provisioned), `merging` (merge in progress), `merged` (successfully merged and discarded), `conflict_bounced` (conflicts detected; agent woken with paths), `merge_pending` (awaiting manual merge; blocked or retry cap hit), `discarded` (discarded without merging). The `agent:idle` completion event includes the sandbox status when applicable.
+
+**WIP snapshot exclusion.** Sandboxes provisioned from a dirty canonical repository create a snapshot commit of the WIP state (message prefix `"WIP snapshot for"`). These snapshot commits are **never merged back** to canonical — only commits made by the agent after the snapshot are cherry-picked. This ensures the user's uncommitted work stays local.
+
+**Attribution preservation.** Merged commits preserve the agent's original author/committer identity (from the sandbox git signature). The canonical repository gains the agent's commits as if the agent had worked directly in canonical, maintaining the audit trail.
+
+```json
+// Request: manual merge after resolution
+{ "jsonrpc":"2.0","id":80,"method":"sandbox.merge",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-123" } }
+// ← response (clean merge)
+{ "jsonrpc":"2.0","id":80,"result":{
+  "ok":true,"outcome":"merged","canonicalHead":"a1b2c3d4..." } }
+// ← (also emits sandbox:merged event)
+
+// Request: discard a failed sandbox
+{ "jsonrpc":"2.0","id":81,"method":"sandbox.discard",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-456" } }
+// ← response
+{ "jsonrpc":"2.0","id":81,"result":{ "ok":true,"removed":true } }
+```
+
+### 5.6 `git.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| git.status | workspaceId (req) | { modified, staged, untracked, deleted, ... } |
+| git.stage | paths (req, CSV string or array) | { ok, paths } — staging ./*/--all is rejected (-32603) |
+| git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
+| git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } |
+| git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
+| git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
+
+**Path-based branch reads (`git.getBranches`, `git.branchStatus`).** These two read-only methods take a filesystem `repoPath` instead of a `workspaceId` because the workspace-initializer BranchSelector lists branches for a user-picked repo *before* any workspace referencing it exists — a known-repo gate here is a chicken-and-egg failure (the create flow can never register the repo it cannot list). Mirroring the ungated legacy IPC handlers (`git:getBranches` `{ repoPath }` variant, `git:getBranchStatus`), the daemon accepts **any local path that exists and is a git repository** (registered as a workspace or not) and rejects invalid paths with distinct `-32602` errors: `Repository path does not exist: <path>` for a nonexistent path, `Path is not a git repository: <path>` for an existing non-git directory. `git.pull` (extensions table below) shares the same `repoPath` validation for the same reason — the workspace-create auto-pull runs before the repo is registered; all other mutating `git.*` methods remain workspace-scoped and are unaffected.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":30,"method":"git.stage","params":{ "workspaceId":"ws-abc","paths":["src/a.ts","src/b.ts"] } }
+// ← response
+{ "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
+```
+
+**Auto-commit on `agent:idle` (daemon-internal, not wire surface).** When an agent turn completes (`agent:idle` event) and the workspace has uncommitted changes with `git.autoCommit` enabled (and the session did not set `skip_auto_commit`), the daemon automatically generates a conventional-commit-formatted message via `agent.completeOnce` (§5.32) with the bundled `commit-message` instruction as system prompt. The prompt context includes: the uncommitted diff (truncated), recent commit subjects (for style mimicry), the repo-root `AGENTS.md` when present (truncated), and the task title / agent name as hints. The generated output is parsed for `<<<COMMIT_MESSAGE>>>` tags. On any generation failure, timeout, or malformed output, the daemon falls back to the deterministic subject chain (`taskTitle` → agent name → `"Agent changes"`) so auto-commit is never blocked or skipped because generation failed. The `agent.completeOnce` binary resolution order (§5.32 Execution) honors the `context.auggiePath` setting when set, ensuring hermetic e2e tests and explicit user config are respected. This internal auto-commit path has no wire RPC — clients only observe the resulting `git:commit` event (§6.5).
+
+**Working-tree & branch operations.** The inverse of `git.stage` plus working-tree/branch reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| git.unstage | paths (req, CSV string or array) | { ok, paths } — inverse of `git.stage`; rejects `./*/--all` with `-32603`; idempotent on already-unstaged paths |
+| git.discard | workspaceId (req), paths (req, CSV string or array) | { ok, paths } — discard working-tree changes: tracked paths restored from the index (equivalent to `git checkout -- <paths>`), untracked paths deleted from disk (files unlinked, directories removed recursively); staged changes are untouched. Rejects `./*/--all` with `-32603`; idempotent on already-clean tracked paths and on missing untracked paths (ENOENT parity with the reference's race-tolerant `fs.unlink`). Ports the legacy `git:discard-changes` IPC. |
+| git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
+| git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). After a successful pull, if `.gitmodules` exists, runs `git submodule update --init --recursive` (bounded 100s timeout) to sync submodule worktrees to updated gitlinks. Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems, submodule sync timeout/failures) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
+| git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
+| git.diffs (alias git.diff) | workspaceId (req), path?, staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir; optional `path` narrows to one file) |
+| git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty. **Metadata-only**: each `CommitSummary` is `{ hash, sha, author, email, date, message, agentId?, linkedNoteId? }` — `hash` is the canonical full commit hash (pass it as `git.commitDetails` `commitHash`), `sha` is its 7-char abbreviation for display, and `email` carries the same value `git.commitDetails` returns as `authorEmail` (both fields kept for legacy-client parity). The walk skips per-commit tree diffs, so `files` is omitted; fetch per-file data on demand via `git.commitDetails` |
+| git.commitDetails | workspaceId (req), commitHash (req) | { commitHash, author, authorEmail, date, message, files: string[], fileDetails: [{ path, additions, deletions }] } — metadata + per-file line stats for one commit (diff vs first parent; a root commit diffs against the empty tree). `commitHash` accepts anything revparse-able. `files` mirrors `fileDetails[].path` for callers that only want names. Unknown/remote/non-repo workspaces and unresolvable hashes degrade to the same shape with empty strings/arrays (echoing `commitHash`), never a JSON-RPC error; missing `commitHash` → `-32602`. This is the on-demand per-file read behind metadata-only commit lists (see CommitWithAttribution, §5.18) |
+| git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
+| git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
+
+**Streaming `git.clone`.** Long-running clones cannot use the buffered `host.exec` (§5.14) — the FE animates a progress bar as objects arrive. `git.clone` mirrors the `search.*` streaming shape (§5.15 / §6.5): the method returns `{ requestId, targetPath }` immediately and the daemon spawns `git clone --progress` with a piped stderr, parses the canonical phases (`starting` → `counting` → `compressing` → `receiving` → `resolving` → `checkout` → `complete`) into `git:clone:progress` frames, and emits a terminal `git:clone:done` when the child exits, times out (5 min hard cap), or fails to spawn. `GIT_LFS_SKIP_SMUDGE=1` is preserved so a missing/unreachable LFS object never fails the clone. The `url` is used only at spawn time; neither the URL nor the environment ever appears in the streamed payloads, and any `user:pass@` credential fragment in stderr is redacted before it surfaces on the `git:clone:done { error }` frame.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":40,"method":"git.clone",
+  "params":{ "url":"https://github.com/example/repo.git","parentDir":"/tmp/wt","targetName":"repo","requestId":"clone-1" } }
+// ← prompt ack — the clone runs in the background
+{ "jsonrpc":"2.0","id":40,"result":{ "requestId":"clone-1","targetPath":"/tmp/wt/repo" } }
+// ← incremental progress (§6.5), correlated by requestId
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"git:clone:progress","workspaceId":"","id":"evt-a1",
+    "timestamp":"2026-07-01T05:01:00.000Z","actor":{ "type":"system" },
+    "data":{ "requestId":"clone-1","phase":"receiving","percent":45,"message":"Receiving objects: 45%" } } } }
+// ← terminal event — clone finished
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"git:clone:done","workspaceId":"","id":"evt-a2",
+    "timestamp":"2026-07-01T05:01:12.000Z","actor":{ "type":"system" },
+    "data":{ "requestId":"clone-1","ok":true } } } }
+```
+
+### 5.7 `pr.*`
+
+All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below).
+
+> Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| pr.merge | mergeMethod?: "merge" | "squash" |
+| pr.status | — | { prNumber, title, url, state, mergeable, mergeableState, hasConflicts, isDraft, isMerged, isClosed, summary } |
+| pr.updateBranch | — | service result |
+| pr.waitForChanges | timeoutSeconds?, pollIntervalSeconds?, watch?: "any" | "checks" |
+| pr.listReviewComments | path?, status?: "unresolved" | "resolved" |
+| pr.replyToReviewComment | commentId (req), body (req) | service result |
+| pr.resolveThread | threadId (req), action?: "resolve" | "unresolve" |
+| pr.listComments | count? | conversation-level comments |
+| pr.postComment | body (req) | service result |
+
+**Review & CI methods.** Four further methods round out the `pr.*` namespace. Three
+review/CI methods map onto the `SourceControl` trait (`list_reviews` / `check_runs` /
+`submit_review`) and stay host-agnostic. `pr.refresh` forces the same PR
+discovery/refresh the daemon's background sweep runs for one workspace, on demand.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
+| pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas) |
+| pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
+
+> **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
+> active PR — it exists to establish/repair the link. It runs the shared refresh path
+> (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
+> resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
+> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
+> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring.
+> Unlike the usual omitted-when-absent (`skip_serializing_if`) convention, `prNumber` /
+> `prUrl` / `prStatus` are always present and serialize as literal `null` when no PR is
+> linked after the refresh; `pullRequests` is always an array (possibly empty). An unknown
+> `workspaceId` → `-32602 "Workspace not found"`.
+
+```json
+// → request — submit an approving review on the active PR
+{ "jsonrpc":"2.0","id":40,"method":"pr.createReview",
+  "params":{ "workspaceId":"ws-abc","verdict":"approve","body":"LGTM" } }
+// ← response
+{ "jsonrpc":"2.0","id":40,"result":{ "review":{
+  "author":"octocat","verdict":"approve","body":"LGTM","submittedAt":"2026-06-17T05:00:00.000Z" } } }
+```
+
+### 5.8 `script.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| script.list | workspaceId (req) | { scripts: [...] } |
+| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
+| script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.start | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
+| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, ... } |
+| script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
+
+> **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
+> the daemon and share the **unified PTY/terminal host** with interactive terminals (§5.13), so
+> a script and a terminal can interact (shared env, signals, attaching to a running script's
+> terminal). Live output/state stream as the `script:output` / `script:state` events (§6.5);
+> `script.output` / `script.status` remain the historical poll reads. Service/command modes,
+> auto-restart, and URL/port detection are preserved — a detected dev-server URL feeds the
+> `forward.*` hook when the connection is remote (§5.14).
+
+### 5.9 `browser.*`, `terminal.*`, `file.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
+| browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
+| terminal.list | workspaceId (req) | bare array `[{ id, name, cwd, isExecutingCommand }]` — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
+| terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
+| file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
+| file.write | path (req), content (req) | { ok, path, size } |
+| file.list | path? (default .) | [{ name, type }] |
+| file.delete | path (req) | { ok, path, deleted } |
+| file.mkdir | path (req) | { ok, path, created? |
+| file.rename | oldPath (req), newPath (req) | { ok, oldPath, newPath } |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":40,"method":"file.write",
+  "params":{ "workspaceId":"ws-abc","path":"notes/out.txt","content":"hello" } }
+// ← response
+{ "jsonrpc":"2.0","id":40,"result":{ "ok": true, "path": "notes/out.txt", "size": 5 } }
+```
+
+**File-explorer & metadata reads.** Three further methods: `file.tree` — a file-explorer read returning the entries directly under the given path as a **bare array**; and `file.exists` / `file.stat` — the existence probe and metadata read. The FE anchors the explorer at the workspace root and lazy-lists children via the existing `file.list`. All three share the within-workspace containment guard with the other `file.*` ops.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| file.tree | path? (default .) | [{ path, name, isDirectory }] — bare array; paths outside the workspace rejected |
+| file.exists | path (req) | { exists, isFile, isDirectory } |
+| file.stat | path (req) | { size, mtime, isFile, isDirectory, isSymlink, permissions } |
+
+> **`browser.exec` — client-callable trigger + FE-served reverse RPC.**
+> `browser.exec` is a **client-callable trigger** whose real work happens on the connected
+> frontend (Chrome DevTools Protocol against embedded browser tabs — no CDP driver runs in
+> the daemon). Wire pattern mirrors `host.openInEditor` (§5.14): the FE binding calls
+> `browser.exec` like any other method; the daemon validates the envelope, then dispatches
+> an FE-served reverse RPC (`browser.exec`, `id: "rev-<n>"`) so the CDP work resolves on the
+> user's machine. `actions` must be a **non-empty array** (`-32602` otherwise); the FE's
+> raw `{ success, results, error? }` envelope is reshaped for the caller — a single-action
+> batch yields the action's `{ action, success, result?, error? }` envelope, a multi-action
+> batch yields `{ results: [...] }` (parity with the FE `browser_exec` MCP tool).
+> A closed reverse channel ("no frontend connected"), a reverse-RPC timeout, and an
+> FE-reported failure envelope all surface as `-32603` carrying the underlying context.
+> The FE-served reverse-RPC pattern keeps the daemon a thin proxy and the
+> CDP surface an FE concern.
+>
+> **Agent-initiated `browser.exec` — first-client-sticky reverse dispatch (REV-1,
+> interim).** When `browser.exec` is triggered by an *agent* (via the MCP
+> `ws.browser.exec` binding, §6.8) rather than by a client connection, there is no
+> ambient reverse channel to reuse: the caller is the daemon-hosted MCP server, not a
+> client-facing socket. The daemon therefore routes the reverse RPC to the
+> **first-connected live client**; if that client disconnects, the next-connected client
+> takes over — failover follows connection arrival order (UDS + WSS clients share the same
+> registry). When no client is connected at all the call fails fast with `-32603` and
+> `browser.exec: no client connected` so the agent surfaces the same class of failure a
+> closed channel already produces. This is a deliberate stopgap ahead of an explicit
+> target-selection surface (§5.17 client identity): "sticky first" needs no wire
+> change and is trivially observable, but it does not distinguish overlapping clients.
+> Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
+> caller's own connection.
+>
+> **`browser.docs` — not exposed.** The `browser_docs` MCP tool that
+> served static reference docs on-demand has no consumer in the daemon surface (skills-style
+> docs stay in the FE MCP layer) and is deferred, not cancelled: revisit
+> only if a future FE feature needs BE-owned browser docs. The `terminal.*` and `file.*`
+> methods above are **unaffected**.
+
+> **Interactive terminals.** `terminal.list` / `terminal.readOutput` above are the
+> read-only methods. The daemon also serves interactive
+> `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
+> PTYs carry an optional daemon-assigned display name (set at spawn; not a
+> `terminal.create` parameter) that `terminal.list` surfaces as `name` with a
+> `"Terminal"` fallback — see the `terminal.list` row above.
+
+### 5.10 `event.*` (query/aggregation)
+
+These are **historical/aggregate read** helpers — distinct from live streaming (§6). Each requires`workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| event.recentFiles | limit? | recently modified files |
+| event.agentActivity | agentId?, minutesAgo? | activity events |
+| event.workspaceSummary | minutesAgo? | aggregated activity summary |
+| event.directoryChanges | dir (req), limit? | recent changes under a directory prefix |
+| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. |
+| event.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result — use events.subscribe for WS streaming |
+| event.unsubscribe (deprecated) | subscriptionId (req) | service result |
+
+### 5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*`
+
+| Method | Params | Result |
+| --- | --- | --- |
+| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces sharing the same git repository (the workspace's own repo) |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace |
+| crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace |
+| primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
+| primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
+| primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
+| primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
+| specialist.list | — (no workspaceId) | { specialists: SpecialistDef[] } (user files override bundled) |
+| specialist.get | id (req), workspacePath? | { specialist: SpecialistDef } — resolved view; -32602 if not found |
+| specialist.create | id (req), spec (req): SpecialistDef, scope?: "project"\|"user" (default "user") | { specialist: SpecialistDef } |
+| specialist.edit | id (req), spec (req): SpecialistDef, scope (req): "project"\|"user" | { specialist: SpecialistDef } |
+| specialist.delete | id (req), scope (req): "project"\|"user", workspacePath? | { success: true } — `bundled` definitions are read-only |
+| repo.list | — (no workspaceId) | { repos: [...] } |
+| repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":50,"method":"specialist.list" }
+// ← response
+{ "jsonrpc":"2.0","id":50,"result":{ "specialists": [
+  { "id":"implementor","name":"Implementor","description":"...","source":"bundled" } ] } }
+```
+
+**`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
+`get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
+(`.augment/specialists/`) overrides **user** (`~/.augment/specialists/`) overrides **bundled** — and
+`scope` selects which tier a write targets (`bundled` is read-only). `list`/`get` return the
+resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
+non-existent or `bundled` definition → `-32602`.
+
+- **SpecialistDef** — `{ id, name, description, modelTier?: "low"|"medium"|"high", prompt?,
+  source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the **winning** tier
+  and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit` the body
+  carries the authored fields and `scope` chooses the target tier.
+
+```json
+// → request — author a project-scoped specialist
+{ "jsonrpc":"2.0","id":51,"method":"specialist.create",
+  "params":{ "id":"reviewer","scope":"project",
+    "spec":{ "id":"reviewer","name":"Reviewer","description":"Reviews diffs",
+      "modelTier":"high","prompt":"You review code changes…" } } }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "specialist":{
+  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"high",
+  "source":"project","path":".augment/specialists/reviewer.md" } } }
+```
+
+### 5.12 `settings.*`
+
+> The daemon owns the settings that affect server-side behavior and lets thin clients read/mutate them over the wire. These methods are global — like specialist.list / repo.list they do not require workspaceId (§3.6).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted; TOML-backed entries carry `origin`) |
+| settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
+| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }] }; triggers settings:changed |
+| settings.reset | path (req) | { path, value } (restores defaultValue) — -32602 if path is unknown |
+
+`SettingDefinition`** shape:**
+
+```ts
+interface SettingDefinition {
+  path: string;            // dotted key, e.g. "server.port" or "sourceControl.github.token"
+  label: string;          // human-readable name
+  description: string;    // help text
+  category: string;       // grouping, e.g. "server", "sourceControl", "providers"
+  type: "boolean" | "number" | "string" | "enum" | "object";
+  enumValues?: string[];  // present when type === "enum"
+  min?: number;           // numeric bound (type === "number")
+  max?: number;           // numeric bound (type === "number")
+  defaultValue?: unknown; // value used by settings.reset
+  sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
+}
+// SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
+```
+
+`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
+
+**Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
+persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`.
+For TOML-backed paths, `settings.get` (and each `settings.list`
+entry) carries an additive `origin` field naming the layer the effective value came from:
+`"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
+boot by a startup flag / env var, e.g. `--listen`, `INTENTD_TCP_PORT`). Secrets and the opaque
+machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
+`model.workspaceOverrides`, `permissions.rules`, `userRules` / `workspaceRules`,
+`endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
+`secrets.json`, state blobs stay in SQLite).
+`settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
+comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
+re-parse, debounced; invalid content keeps last-good values) and emit the same
+`settings:changed` notification. A key pinned by a startup flag is **read-only over the wire**
+while pinned: `settings.update` / `settings.reset` on it yields `-32602` with a message naming
+the overriding flag ("overridden by startup flag …").
+
+**BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
+
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. `model.workspaceOverrides` shares this wire surface but is an opaque machine-state blob (SQLite-backed, no `origin` field — see above).
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
+- **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
+- **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
+- **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
+- **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
+- **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
+- **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
+- **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
+- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
+- **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
+- **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
+
+**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `linear.issueFilter`.
+
+```json
+// → request — list all BE-owned settings (sensitive values redacted)
+{ "jsonrpc":"2.0","id":51,"method":"settings.list" }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "settings": [
+  { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
+    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
+  { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
+    "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
+```
+
+```json
+// → request — read one setting
+{ "jsonrpc":"2.0","id":52,"method":"settings.get","params":{ "path":"sourceControl.activeProvider" } }
+// ← response
+{ "jsonrpc":"2.0","id":52,"result":{ "path":"sourceControl.activeProvider","value":"github",
+  "origin":"default",
+  "definition":{ "path":"sourceControl.activeProvider","label":"Source-control provider",
+    "description":"Active forge implementation","category":"sourceControl","type":"enum",
+    "enumValues":["github"],"defaultValue":"github" } } }
+```
+
+```json
+// → request — mutate settings (emits settings:changed)
+{ "jsonrpc":"2.0","id":53,"method":"settings.update","params":{ "changes":[
+  { "path":"server.port","value":5182 },
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli","reason":"use gh auth token" } ] } }
+// ← response
+{ "jsonrpc":"2.0","id":53,"result":{ "applied":[
+  { "path":"server.port","value":5182 },
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
+```
+
+```json
+// → request — reset one setting to its default
+{ "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
+// ← response
+{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
+```
+
+### 5.13 Interactive `terminal.*`
+
+> Alongside the read-only methods (`terminal.list` / `terminal.readOutput`, §5.9), the
+> interactive methods below let a thin client open, drive, resize, and tear down PTYs that
+> run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
+> host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
+> (re)connect; multiple clients may attach to the same session. Each PTY may carry an
+> optional daemon-assigned display name (internal spawn metadata, e.g. `"Setup Script"`
+> for the workspace setup terminal — §5.1); `terminal.create` does **not** accept a name
+> parameter, and `terminal.list` (§5.9) surfaces the name with a `"Terminal"` fallback.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `cwd` omitted → the workspace's worktree root (falls back to the daemon's cwd when the workspace has no resolvable worktree); `env` layers onto the daemon's inherited environment (later keys override) |
+| terminal.write | terminalId (req), data (req, base64) | { ok: true } — `data` is base64-encoded input bytes |
+| terminal.resize | terminalId (req), cols (req,int), rows (req,int) | { ok: true } |
+| terminal.kill | terminalId (req) | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
+| terminal.getBuffer | terminalId (req), maxBytes? | { terminalId, data } — base64 scrollback for replay |
+
+**Base64 framing.** Terminal payloads are **binary-safe**: input (`terminal.write` `data`),
+scrollback (`terminal.getBuffer` `data`), and streamed output (`terminal:data` `chunk`, §6.5)
+are **base64-encoded** so arbitrary bytes (control sequences, UTF-8, non-text) survive the
+JSON-RPC text channel. Clients decode on receipt and encode on send.
+`terminal.readOutput` (§5.9) stays a plaintext convenience read.
+
+```json
+// → create an 80×24 PTY running the default shell
+{ "jsonrpc":"2.0","id":70,"method":"terminal.create",
+  "params":{ "workspaceId":"ws-abc","cols":80,"rows":24 } }
+// ← response
+{ "jsonrpc":"2.0","id":70,"result":{ "terminalId":"term-1" } }
+// → send input "ls\n" (base64 of "ls\n" is "bHMK")
+{ "jsonrpc":"2.0","id":71,"method":"terminal.write","params":{ "terminalId":"term-1","data":"bHMK" } }
+// ← { "jsonrpc":"2.0","id":71,"result":{ "ok": true } }
+// ← server pushes output as it arrives (§6.5); chunk is base64
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"terminal:data","workspaceId":"ws-abc","id":"evt-901",
+    "timestamp":"2026-06-17T05:00:00.000Z","actor":{ "type":"system" },
+    "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK" } } } }
+```
+
+### 5.14 Execution locus, locality & remote behavior
+
+All side effects — PTYs, scripts, file I/O, git, ACP provider processes — run on the **daemon
+host**, not on the client. A thin client is a remote viewer/driver over the wire, so the
+protocol surfaces **where** execution happens and adapts when the client is not on the same
+machine.
+
+**Locality is inferred from the transport:**
+
+- **UDS (Unix-domain socket) or explicit `--mode local` ⇒ same machine.** The desktop FE
+  typically spawns `intentd` itself and connects over a local Unix socket; a UDS connection is
+  the signal that GUI windows, `open`, simulators, and detected URLs are directly visible and
+  usable by the user. A `server.locality = local | remote` setting (§5.12) can force this.
+- **TCP / WSS ⇒ treat as remote.** Side effects happen on another machine, so GUI-spawning
+  commands may not be visible and detected dev-server URLs need forwarding.
+
+**`host.*` — capability probe + FE-served intents:**
+
+The `Direction` column below records who initiates the JSON-RPC **request** on the wire:
+`client → daemon` is a normal client-called method (client picks the `id`); `daemon → client`
+is a **reverse RPC** where the *daemon* is the requester and the connected client responds
+(daemon picks the `id`, always in the `rev-<n>` namespace — the mechanism is spelled out
+in the bullet under this table).
+
+| Method | Direction | Params | Result |
+| --- | --- | --- | --- |
+| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
+| host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
+| host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
+| host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
+| host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
+| host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
+| host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
+| host.execStream.cancel | client → daemon | requestId (req) | { ok: true, cancelled: bool } — reap a live stream's process group (idempotent on unknown ids) |
+
+- `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
+  reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
+  `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
+- `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
+  frontend, not the daemon** (reverse RPCs — the *daemon* sends the JSON-RPC `request` and the
+  connected client returns the `response`). Clients never call `openExternal` /
+  `pickApplication` on the daemon; the daemon dispatches them to the client so these
+  inherently-user-side GUI intents resolve on the user's machine. `host.openInEditor` is
+  additionally **client-callable as a trigger** (the FE's "Open in editor / VS Code" buttons):
+  the daemon serves the request by short-circuiting locally on a local connection, or by
+  re-dispatching the same intent to the connected client as the FE-served reverse RPC on a
+  remote connection. Reverse-request ids are always in the `rev-<n>` namespace (allocated
+  by the daemon, distinct from the client's own `id` space) with a 30s default timeout; the
+  local branch short-circuits directly on the daemon host without a wire round-trip (via
+  `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
+  `openInEditor`, and — when available — a native chooser for `pickApplication`).
+- `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
+  commands itself. It uses `argv` only — **no shell interpolation** — spawns with the child in
+  its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree), enriches
+  `PATH` with the daemon's host PATH, and merges caller-supplied `env` on top. It is
+  **secret-safe**: no env values are logged or returned; only `stdout` / `stderr` / `exitCode`
+  (and `timedOut: true` on the timeout path) cross the wire. `cwd` requires `workspaceId` so
+  the daemon can enforce the same lexical within-workspace containment guard that `file.*` uses;
+  a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
+  workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
+  stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
+- `host.execStream` is the **streaming/interactive** counterpart for FE surfaces (e.g.
+  `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
+  something neither the buffered `host.exec` nor the PTY-mangling `terminal.*` nor the
+  workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
+  process-group + `kill_on_drop` + `timeoutMs` reap, enriched PATH, caller `env` on top,
+  workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
+  `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
+  `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
+  daemon publishes one bus frame per output chunk plus one terminal exit frame, all correlated
+  by `requestId`:
+  - `host:exec:stdout` — `{ requestId, chunk }` where `chunk` is base64-encoded so binary
+    output crosses the wire intact (mirrors `terminal:data.chunk`).
+  - `host:exec:stderr` — same shape as stdout, over the child's stderr.
+  - `host:exec:exit` — terminal: `{ requestId, ok, exitCode?, timedOut?, cancelled? }`.
+    Emitted exactly once; subscribers unregister on receipt.
+  Callers pipe stdin two ways: an optional initial `stdin`/`stdinBase64` on the request itself
+  (written to the child before any reader task starts) and follow-up `host.execStream.write
+  { requestId, stdin?, stdinBase64?, eof? }` calls that append bytes and optionally close the
+  child's stdin end (`eof=true`) so a reader-to-EOF like `cat` / `augment-cli` finishes
+  cleanly. Only one of `stdin` / `stdinBase64` may be set per request. `host.execStream.cancel
+  { requestId }` reaps the whole process group (SIGTERM → grace → SIGKILL, mirroring the
+  `host.exec` timeout path) and is idempotent on unknown / already-finished ids
+  (`cancelled:false` still surfaces `ok:true`). Command payloads carry env values that are
+  **never logged or streamed** — only `stdout` / `stderr` / exit metadata crosses the wire.
+- **ACP model/readiness handshake probes ride `host.execStream`** — the four
+  bidirectional-stdio provider probes (codex / claude-code / pi / droid) that R1b retired do
+  **not** get a dedicated `provider.probeAcp` RPC. Every guarantee an ACP handshake needs is
+  already on this surface: argv-only spawn (no shell), `PATH` enrichment, workspace-cwd
+  containment, secret-safe env, initial `stdin` payload written before any reader task starts,
+  `timeoutMs` reap of the whole process group, and a terminal `host:exec:exit` frame carrying
+  `timedOut` / `cancelled` metadata. A thin FE probe therefore (1) calls `host.execStream`
+  with `command`+`args` for the ACP CLI and the `initialize` JSON-RPC line as `stdin`,
+  (2) subscribes to `host:exec:*` frames correlated by `requestId`, (3) parses the
+  `\n`-terminated JSON reply out of the base64 stdout chunks, and (4) closes the child via
+  `host.execStream.write { eof:true }` (clean exit) or `host.execStream.cancel` (force reap).
+  The `providerId` a caller would want to tag such a probe with never needed to cross the
+  wire — it stays as FE-local correlation. Retiring the pre-R1b probes in favor of this
+  reuse keeps the daemon a **thin process host** and avoids duplicating spawn / reap / stdin
+  plumbing behind a purpose-built RPC.
+
+**`forward.*` — port-forwarding (remote only):**
+
+When a script/terminal URL-detection hook (§5.8) finds a dev-server URL/port on a **remote**
+daemon, the client tunnels the remote port to `localhost` so the web UI is viewable locally. On
+a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| forward.create | remotePort (req,int), localPort? | { forwardId, localPort, remotePort } — opens a tunnel |
+| forward.list | — | { forwards: [{ forwardId, localPort, remotePort, url? }] } |
+| forward.close | forwardId (req) | { ok: true } |
+
+```json
+// → probe host capabilities (gate GUI / forwarding UI)
+{ "jsonrpc":"2.0","id":80,"method":"host.status" }
+// ← response (headless remote host)
+{ "jsonrpc":"2.0","id":80,"result":{ "os":"linux","arch":"x86_64","hostname":"build-01",
+  "hasDisplay":false,"locality":"remote" } }
+// reverse RPC — daemon → client — open a detected URL on the user's machine (FE-served)
+// ← daemon sends the request (id in the `rev-<n>` namespace)
+{ "jsonrpc":"2.0","id":"rev-1","method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
+// → client replies with the same rev-* id
+{ "jsonrpc":"2.0","id":"rev-1","result":{ "ok": true } }
+// client-called trigger — FE asks the daemon to open the user's editor
+// (local daemon: direct launch; remote daemon: re-dispatched as the reverse RPC below)
+{ "jsonrpc":"2.0","id":81,"method":"host.openInEditor","params":{
+  "editorId":"vscode","path":"/repo/src/main.rs","line":12,"column":3
+} }
+// ← { "jsonrpc":"2.0","id":81,"result":{ "ok": true } }
+// reverse RPC — daemon → client — launch the user's editor on the user's machine (FE-served; local daemons short-circuit)
+// ← daemon sends the request
+{ "jsonrpc":"2.0","id":"rev-2","method":"host.openInEditor","params":{
+  "editorId":"vscode","path":"/repo/src/main.rs","line":12,"column":3
+} }
+// → client replies
+{ "jsonrpc":"2.0","id":"rev-2","result":{ "ok": true } }
+// reverse RPC — daemon → client — present "open with…" chooser on the user's machine (FE-served)
+// ← daemon sends the request
+{ "jsonrpc":"2.0","id":"rev-3","method":"host.pickApplication","params":{ "path":"/repo/README.md" } }
+// → client replies with the selection
+{ "jsonrpc":"2.0","id":"rev-3","result":{ "applicationId":"com.microsoft.VSCode" } }
+// client-called trigger — FE binding (ws.browser.exec) asks the daemon to run CDP actions
+// (daemon validates the envelope and dispatches the reverse RPC below to the same FE)
+{ "jsonrpc":"2.0","id":85,"method":"browser.exec","params":{
+  "actions":[{"action":"listTabs"}],"tabId":"tab-1","agentId":"agent-1","workspaceId":"ws-1"
+} }
+// ← single-action → the action's envelope
+{ "jsonrpc":"2.0","id":85,"result":{ "action":"listTabs","success":true,"result":[{"id":"tab-1"}] } }
+// reverse RPC — daemon → client — run CDP actions against the embedded browser (FE-served, §5.9)
+// ← daemon sends the request (envelope forwarded verbatim)
+{ "jsonrpc":"2.0","id":"rev-4","method":"browser.exec","params":{
+  "actions":[{"action":"listTabs"}],"tabId":"tab-1","agentId":"agent-1","workspaceId":"ws-1"
+} }
+// → client replies with the raw execution envelope (daemon reshapes for the caller)
+{ "jsonrpc":"2.0","id":"rev-4","result":{ "success":true,"results":[
+  { "action":"listTabs","success":true,"result":[{"id":"tab-1"}] }
+] } }
+// AGENT-INITIATED `browser.exec` (REV-1, interim) — the MCP `ws.browser.exec`
+// binding has no ambient client connection, so the daemon routes the reverse
+// RPC to the FIRST-connected live client (across UDS + WSS). When that client
+// disconnects the next-connected one takes over; when no client is connected
+// the call fails fast with `-32603` "browser.exec: no client connected".
+// Wire shape of the reverse RPC and its result is unchanged from the
+// client-triggered case above.
+// → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
+{ "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
+  "command":"echo","args":["hello"],"timeoutMs":5000
+} }
+// ← { "jsonrpc":"2.0","id":82,"result":{ "stdout":"hello\n","stderr":"","exitCode":0 } }
+// → daemon-owned streaming exec (argv only, cwd validated against workspace root)
+{ "jsonrpc":"2.0","id":90,"method":"host.execStream","params":{
+  "command":"cat","stdin":"hello\n"
+} }
+// ← { "jsonrpc":"2.0","id":90,"result":{ "requestId":"hexec-<uuid>" } }
+// then, correlated by requestId, subscribers see (base64 chunks):
+// { "method":"events.event","params":{ "event":{ "type":"host:exec:stdout",
+//   "data":{ "requestId":"hexec-<uuid>","chunk":"aGVsbG8K" } } } }
+// (optionally more stdout/stderr frames)
+// → follow-up stdin write, closing the child's stdin end so `cat` exits
+{ "jsonrpc":"2.0","id":91,"method":"host.execStream.write","params":{
+  "requestId":"hexec-<uuid>","stdin":"","eof":true
+} }
+// ← { "jsonrpc":"2.0","id":91,"result":{ "ok": true } }
+// terminal frame (ok:true when exitCode==0):
+// { "method":"events.event","params":{ "event":{ "type":"host:exec:exit",
+//   "data":{ "requestId":"hexec-<uuid>","ok":true,"exitCode":0 } } } }
+// → force-reap a live stream's whole process group
+{ "jsonrpc":"2.0","id":92,"method":"host.execStream.cancel","params":{
+  "requestId":"hexec-<uuid>"
+} }
+// ← { "jsonrpc":"2.0","id":92,"result":{ "ok": true, "cancelled": true } }
+```
+
+### 5.15 `search.*`
+
+> Search is a **BE-owned namespace**: it executes on the daemon **where the code and data
+> live**, so a thin client just renders results (when the daemon *is* the remote host, `rg`
+> runs locally to it).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search |
+| search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
+| search.messages | workspaceId (req), query (req), agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — over persisted agent sessions (BE owns session storage) |
+| search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
+| search.memories | query (req), workspaceId?, requestId? | { requestId, matches: MemoryMatch[] } — over the BE memories store |
+| search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
+| search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search. auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait is retained as forward-looking infra |
+| search.cancel | requestId (req) | { ok: true } — aborts an in-flight search by its `requestId` |
+
+**`requestId` & cancellation.** Every search method accepts an optional caller-supplied
+`requestId` (echoed in the result and in every streamed event). It is the handle used by
+`search.cancel` and the correlation key for `search:result` / `search:done` events — mirroring
+the renderer's `AbortController` debounce/cancel today. If the client omits it the server mints
+one and returns it in the result.
+
+**Match / result shape.** Content-style matches (`SearchMatch`) carry enough to render a hit
+without a follow-up fetch:
+
+```ts
+interface SearchMatch {
+  file: string;        // workspace-relative path
+  line: number;        // 1-based line number
+  col: number;         // 1-based column of the match start
+  preview: string;     // the matching line (trimmed for display)
+  before?: string[];   // optional context lines before
+  after?: string[];    // optional context lines after
+  score?: number;      // relevance (semantic/codebase results)
+}
+// MessageMatch / EventMatch / MemoryMatch / NoteMatch / CodebaseMatch are store-specific:
+// each carries its entity id (agentId+messageId / eventId / memoryId / noteId / symbol),
+// a `preview` snippet, and an optional `score`.
+```
+
+**Result delivery — direct or streamed.** Small result sets are returned inline in the method
+result (`matches`/`files` + `truncated`). Large or long-running searches are **streamed**: the
+method returns `{ requestId }` promptly and the daemon pushes incremental `search:result`
+batches followed by a terminal `search:done` (§6.5), correlated by `requestId`. Either way the
+final, complete answer is the `search:done` event (or the inline result when not streamed).
+
+```json
+// → content search across a workspace
+{ "jsonrpc":"2.0","id":90,"method":"search.inFiles",
+  "params":{ "workspaceId":"ws-abc","query":"TODO","requestId":"srch-1",
+    "opts":{ "caseSensitive":false,"regex":false,"maxResults":500 } } }
+// ← prompt ack (large result set → streamed)
+{ "jsonrpc":"2.0","id":90,"result":{ "requestId":"srch-1","matches":[],"truncated":false } }
+// ← incremental results (§6.5), correlated by requestId
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"search:result","workspaceId":"ws-abc","id":"evt-910",
+    "timestamp":"2026-06-17T05:01:00.000Z","actor":{ "type":"system" },
+    "data":{ "requestId":"srch-1","matches":[
+      { "file":"src/main.rs","line":42,"col":3,"preview":"// TODO: handle error" } ] } } } }
+// ← terminal event — search finished
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"search:done","workspaceId":"ws-abc","id":"evt-911",
+    "timestamp":"2026-06-17T05:01:00.200Z","actor":{ "type":"system" },
+    "data":{ "requestId":"srch-1","total":17,"truncated":false } } } }
+```
+
+```json
+// → cancel an in-flight search
+{ "jsonrpc":"2.0","id":91,"method":"search.cancel","params":{ "requestId":"srch-1" } }
+// ← { "jsonrpc":"2.0","id":91,"result":{ "ok": true } }
+```
+
+**Errors.** Missing `query`/`pattern`/`workspaceId`/`requestId` → `-32602`. `search.cancel`
+with an unknown or already-finished `requestId` is a no-op success (`{ ok: true }`). A malformed
+`opts.regex` pattern yields `-32602 "Invalid regex"`. Host-API searches (PR/issue/repo) are
+**not** part of `search.*` — they stay under `pr.*` / the provider-agnostic `SourceControl`
+(§5.7, host-agnostic).
+
+### 5.16 `drafts.*`
+
+> Message drafts (typed-but-not-sent input) are BE state, keyed by
+> **`(workspaceId, agentId, clientId)`** — where `clientId` is the stable client identity from
+> `client.hello` (§5.17) — so each client keeps its **own private** draft that survives
+> reconnects. With multiple thin clients connected to one daemon, per-client local storage
+> would not survive reconnects or share across devices, and concurrent writers would clobber
+> each other.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| drafts.get | workspaceId (req), agentId (req) | { text, updatedAt } \| null — the draft for the **calling client** (resolved from its `clientId`); `null` if none |
+| drafts.set | workspaceId (req), agentId (req), text (req) | { ok: true, updatedAt } — upsert for the calling client; emits `draft:changed` |
+| drafts.clear | workspaceId (req), agentId (req) | { ok: true } — delete on send / explicit clear; emits `draft:changed` |
+
+**Implicit client keying.** The `clientId` is **not** a parameter — it is resolved from the
+calling connection's logical client (established by `client.hello`, §5.17). A connection that
+never completed the handshake is treated as an anonymous, connection-scoped client (its drafts
+do not survive reconnect). The FE debounces `drafts.set` exactly as it debounces the local-only
+save today, and calls `drafts.clear` on send.
+
+**Per-client private by default.** Each client restores only its own draft on reconnect; drafts
+are never returned to a different `clientId`. A future opt-in **shared-draft** (collaborative)
+mode is noted but **out of scope for v1**.
+
+**`draft:changed` event — no text leakage.** `drafts.set` / `drafts.clear` emit
+`draft:changed { workspaceId, agentId, clientId, hasDraft }` (§6.5). The payload deliberately
+**omits the draft text** — it lets other clients optionally show a "someone is composing"
+affordance without leaking content, and lets the owning client's *other* connections (same
+`clientId`) know to re-fetch their own text via `drafts.get`. Kept minimal in v1.
+
+```json
+// → restore this client's draft on (re)connect
+{ "jsonrpc":"2.0","id":95,"method":"drafts.get","params":{ "workspaceId":"ws-abc","agentId":"agent-1" } }
+// ← response (a draft exists)
+{ "jsonrpc":"2.0","id":95,"result":{ "text":"half-written question…","updatedAt":"2026-06-17T05:02:00.000Z" } }
+// → save (debounced) as the user types
+{ "jsonrpc":"2.0","id":96,"method":"drafts.set",
+  "params":{ "workspaceId":"ws-abc","agentId":"agent-1","text":"half-written question…" } }
+// ← { "jsonrpc":"2.0","id":96,"result":{ "ok":true,"updatedAt":"2026-06-17T05:02:00.000Z" } }
+// ← event — other connections learn a draft exists (no text)
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
+  "event":{ "type":"draft:changed","workspaceId":"ws-abc","id":"evt-920",
+    "timestamp":"2026-06-17T05:02:00.000Z","actor":{ "type":"user" },
+    "data":{ "workspaceId":"ws-abc","agentId":"agent-1","clientId":"cli-7f3a","hasDraft":true } } } }
+// → clear on send
+{ "jsonrpc":"2.0","id":97,"method":"drafts.clear","params":{ "workspaceId":"ws-abc","agentId":"agent-1" } }
+// ← { "jsonrpc":"2.0","id":97,"result":{ "ok":true } }
+```
+
+**Errors.** Missing `workspaceId` / `agentId` (all three methods) or `text` (`drafts.set`) →
+`-32602`. `drafts.get` for a non-existent draft returns `null` (not an error); `drafts.clear`
+on a non-existent draft is a no-op success.
+
+### 5.17 `client.hello` handshake & stable client identity
+
+The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
+per-connection id used internally for subscription bookkeeping is retained purely for transport
+bookkeeping and never crosses the wire.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| client.hello | clientId?, name?, capabilities? | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, protocolVersion, capabilities } } |
+
+- **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
+  first call a client makes after the auth upgrade (§2) and before scoped work.
+- **Client-persisted `clientId`.** The client **generates and persists its own `clientId`** (a
+  UUID in its local storage) and **re-presents it on every (re)connect**. If the client omits
+  `clientId`, the server generates one and returns it for the client to persist and reuse from
+  then on.
+- **Connection → client mapping.** The daemon maps each live connection to its logical
+  `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
+  several windows of one app).
+- **Disambiguation key.** `clientId` is the key that disambiguates `drafts.*` (§5.16) and is the
+  foundation for **future per-viewer read cursors** (the `attention` extension noted in §5.1). It
+  also lets FE-served intents (`host.openExternal`, §5.14) and `forward.*` target the right
+  client.
+- **`server` block.** The result advertises daemon capabilities so a client can gate UI right
+  after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
+  `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.0"`), and
+  `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
+  channels of §6.9).
+- **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
+  `server.protocolVersion` so clients can version-check without digging into the `server` block
+  (see [Protocol Version & Compatibility](#protocol-version--compatibility)).
+
+```json
+// → first call after auth: client re-presents its persisted clientId
+{ "jsonrpc":"2.0","id":1,"method":"client.hello",
+  "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
+// ← response — capabilities of the daemon host
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.0",
+  "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
+    "protocolVersion":"2.0","capabilities":{ "liveState":true } } } }
+```
+
+```json
+// → first-ever connect: no clientId yet, server mints one
+{ "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
+// ← server returns a clientId for the client to persist
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.0",
+  "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
+    "protocolVersion":"2.0","capabilities":{ "liveState":true } } } }
+```
+
+**Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
+re-sending `client.hello` on the same connection updates `name` / `capabilities` and re-returns
+the same `server` block.
+
+### 5.18 `accept-changes.*`
+
+The multi-step "accept the agent's work" workflow: the backend owns local git **and** the forge
+(the `SourceControl` trait), so a thin client drives commit → push → create-PR →
+merge through a handful of calls. `execute` runs the orchestrated pipeline and **restores agent
+attribution** from `file-tracking` (§5.19) on each step. Every method requires `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| accept-changes.getStatus | workspaceId (req) | WorkspaceGitStatus (schema below) |
+| accept-changes.prepare | workspaceId (req), action (req), files?: string[] | PrepareResult { valid, warnings[], errors[], suggestedCommitMessage?, suggestedPRTitle?, suggestedPRBody?, filesCount, additions, deletions, files: [{ path, additions, deletions, staged }] } |
+| accept-changes.execute | workspaceId (req), action (req), files?, commitMessage?, prTitle?, prBody?, targetBranch?, mergeStrategy?: "merge"\|"squash"\|"rebase", upToCommitHash?, undoCommitsMetadata?, options?: { stageUnstaged?, pushAfterCommit?, createPRAfterPush?, rebaseFirst?, localOnly? } | AcceptChangesResult { success, steps: [{ id, name, status, message?, error? }], result?: { commitHash?, prNumber?, prUrl?, mergeCommitHash?, … }, error? } |
+| accept-changes.mergePR | workspaceId (req), prNumber (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | AcceptChangesResult |
+| accept-changes.addRemote | workspaceId (req), remoteUrl (req) | WorkspaceGitStatus (refreshed after adding `origin`) |
+
+`action` is one of `commit \| push \| create-pr \| merge \| export \| undo-push \| undo-commit \|
+reset-to-trunk \| rebase-onto-trunk` — except **`export` is not supported** (no UI consumer),
+so `execute` rejects `action:"export"`. A step that fails sets `success:false` and the offending
+`steps[].status:"failed"` with `error`; malformed params → `-32602`, underlying service throws →
+`-32603`.
+
+```json
+// → request — prepare a commit for the staged files
+{ "jsonrpc":"2.0","id":50,"method":"accept-changes.prepare",
+  "params":{ "workspaceId":"ws-abc","action":"commit" } }
+// ← response
+{ "jsonrpc":"2.0","id":50,"result":{
+  "valid":true,"warnings":[],"errors":[],
+  "suggestedCommitMessage":"Add review wire surface",
+  "filesCount":2,"additions":140,"deletions":12,
+  "files":[{ "path":"docs/rust-backend/PROTOCOL.md","additions":140,"deletions":12,"staged":true }] } }
+```
+
+**Shared schemas (Code Changes Review).** Defined once here; referenced by §5.7, §5.19, §5.20.
+
+- **WorkspaceGitStatus** — `{ branch, trunkBranch, aheadOfTrunk, behindTrunk, hasRemote,
+  isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
+  existingPR?: { number, url, htmlUrl, title, state: "open"|"closed"|"merged"|"draft" } }`.
+- **CommitWithAttribution** — a local commit carrying agent provenance:
+  `{ hash, message, author, date, filesChanged?, isPushed, files?: [{ path, additions?,
+  deletions?, status? }], agentId?, linkedNoteId? }`. `files` and `filesChanged` are
+  emitted only when the producing walk computed per-commit tree diffs. All current
+  producers are **metadata-only** (both fields omitted — the list walks skip
+  per-commit diffs for performance; clients fetch per-file data on demand via
+  `git.commitDetails` (§5.6)): `accept-changes.getStatus` `localCommits` and
+  `file-tracking.loadCommits` (§5.19). The `changes:git-status` event (§6.5) carries
+  the same reduced `WorkspaceGitStatus`.
+- **TrackedChange** — one file's audit record through the git stages (see §5.19):
+  `{ id, file, relativePath, stage: "unstaged"|"staged"|"committed"|"pushed"|"pull_request"|
+  "merged"|"trunk", status?: "added"|"modified"|"deleted"|"renamed",
+  stats: { additions, deletions, binary? },
+  attribution: { agent?: { agentId, agentName, sessionId, turnNumber, messageId?, toolCallId?,
+  timestamp }, manual?, timestamp } }`.
+- **Review** — `{ author, verdict: "approve"|"request-changes"|"comment", body?, submittedAt }`
+  (host-agnostic; GitHub's `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED` map onto `verdict`).
+- **CheckRun** — `{ name, state: "pending"|"success"|"failure"|"neutral"|"cancelled", url? }`.
+- **Metrics** — line-change totals: `{ additions, deletions, filesChanged, byAgent }` (workspace-level
+  stats include `byAgent`; per-agent stats may omit `byAgent`; see §5.20).
+- **DiffChunk / DiffDetail** *(internal — no wire method)* — old/new content + hunks, computed and
+  stored inside the backend; never returned by a `diffs.*` RPC.
+  Diff content reaches the client only via the `file-tracking.*` reads and the §6.5 change events.
+
+### 5.19 `file-tracking.*` (reads)
+
+A per-file audit trail as changes move through the git stages
+(`unstaged → staged → committed → pushed → pull_request → merged`) with agent attribution. Only
+the **UI-invoked reads** are wire methods; the attribution writer `trackChange` is **internal**
+(the backend records it as agents edit files — no client RPC; see §6.8). Every method requires
+`workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| file-tracking.init | workspaceId (req) | { ok: true } — initializes/attaches the tracker for the workspace |
+| file-tracking.sync | workspaceId (req), force?: boolean (default false) | { success, … } — reconciles tracked changes against live git |
+| file-tracking.load | workspaceId (req) | { changes: TrackedChange[], truncated, totalCount } |
+| file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
+| file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
+| file-tracking.getLineStats | workspaceId (req) | { additions, deletions } — real-time totals across unstaged + staged + local commits |
+| file-tracking.stage | workspaceId (req), paths (req): string[] | { ok: true } — stages the referenced files |
+| file-tracking.unstage | workspaceId (req), paths (req): string[] | { ok: true } — unstages the referenced files |
+
+**`file-tracking.loadCommits` boundary semantics.** The commit walk is bounded by the workspace's **boundary commit** so a workspace only surfaces its own history:
+
+- When `includeOlder` is `false` (default), returns commits in the `boundary..HEAD` range (workspace-owned commits only).
+- When `includeOlder` is `true`, returns commits before and including the workspace boundary (for "show previous" functionality; the boundary commit itself is included).
+- `boundarySha` is the workspace boundary commit SHA, or `null` when the workspace has no boundary info (`baseRef` or `baseCommitSha` not set), or when boundary info exists but cannot be resolved (e.g. shallow clone, nonexistent ref, base commit not an ancestor of HEAD).
+- **Fail-closed safety net:** when boundary info exists but cannot be resolved, the method returns an empty commit list (regardless of `includeOlder`) to prevent leaking arbitrary base-branch history.
+- **Boundary resolution strategy:** (1) prefer the merge-base of HEAD with `origin/<baseRef>` or `<baseRef>` (rebase-resilient); (2) fall back to `baseCommitSha` if it is a valid ancestor of HEAD; (3) return `null` if neither resolves.
+- `nextToken` in the result is the pagination token for the next page, or `null` when exhausted; pass it back as the `nextToken` parameter.
+
+```json
+// → request — load committed changes for one agent
+{ "jsonrpc":"2.0","id":51,"method":"file-tracking.getChanges",
+  "params":{ "workspaceId":"ws-abc","filter":{ "stage":"committed","agentId":"agent-123" } } }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "changes":[
+  { "id":"git-1-src/x.ts","file":"/ws/src/x.ts","relativePath":"src/x.ts",
+    "stage":"committed","status":"modified","stats":{ "additions":10,"deletions":2 },
+    "attribution":{ "agent":{ "agentId":"agent-123","agentName":"Coordinator",
+      "sessionId":"sess-9","turnNumber":4,"timestamp":1750000000000 },"timestamp":1750000000000 } } ],
+  "truncated":false,"totalCount":1 } }
+```
+
+### 5.20 Change metrics (reads)
+
+Read-only line-change aggregates. Aggregation
+itself (`metrics.calculate`, the `update*` writers, `mark-agent-active`) is **internal** — the
+backend computes metrics as agents work and pushes change events (§6.5); clients only **read**.
+Metrics are durable (the `workspace_metrics` / `agent_metrics` tables).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| metrics.getWorkspaceStats | workspaceId (req) | Metrics \| null — `{ additions, deletions, filesChanged, byAgent }` for the workspace |
+| metrics.getAgentStats | agentId (req) | Metrics \| null — `{ additions, deletions, filesChanged }` for one agent (`byAgent` omitted) |
+| metrics.getAllWorkspaceStats | — | { [workspaceId]: Metrics } — all workspaces |
+| metrics.clearAgentStats | agentId (req) | { success: boolean } — resets one agent's counters |
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":52,"method":"metrics.getWorkspaceStats","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":52,"result":{ "additions":140,"deletions":12,"filesChanged":3,
+  "byAgent":{ "agent-123":{ "additions":140,"deletions":12,"filesChanged":3 } } } }
+```
+
+### 5.21 `rules.*`
+
+The backend owns prompt **rules**: the workspace rule files
+(`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization
+rules attached to a specialist, and **user-rule overrides** persisted by the daemon. `list`/`get`
+are reads; `update` is the UI-invoked op that edits the **user-override** content. Assembling these
+into an agent's system prompt (the **injection pipeline**) runs **internally** as agents start —
+there is no wire method for it (§6.8). Every method requires `workspaceId` except where noted.
+
+Within that internal pipeline the **per-agent-type specialization** layer is **not settings-only**:
+it resolves through a **3-tier fallback** (highest priority first) — the `endUserRules`
+**user-settings override** (edited via `rules.update`) **>** the **workspace file**
+`.augment/agent-rules/{agentType}.md` **>** the compiled-in **bundled built-in** template — so a
+workspace rule file and a bundled default both back the per-agent-type key when no settings override
+exists. The composition (with the agent-id alias map and the utility/background-agent
+special-cases) remains internal — no method or shape changes.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| rules.list | workspaceId? | { rules: RuleSet } — all rule sources for the workspace (or global when omitted) |
+| rules.get | workspaceId (req), ruleType (req): user-override key — "base-system-prompt", a per-agent-type specialization key, "workspace", … | { enabled, content, updatedAt } for that one user-override type |
+| rules.update | workspaceId (req), ruleType (req): user-override key (as in rules.get), content (req): string, enabled?: boolean | { rules: RuleSet } — upserts the user-override body (+ enabled) and re-reads the set |
+
+**RuleSet** — `{ workspaceId?, rules: RuleEntry[] }` where **RuleEntry** =
+`{ ruleType: string, source: string, path?, content, enabled: boolean, updatedAt: number,
+editable: boolean }`. `ruleType` is the user-override key the entry is stored under (e.g.
+`"base-system-prompt"`, a per-agent-type specialization key, or `"workspace"`); `source` names the
+origin (e.g. `"AGENTS.md"`, `".augment/guidelines.md"`, a specialist id, or `"user-override"`);
+`path?` is the backing file when one exists; `enabled` toggles whether the override is applied and
+`updatedAt` is its last-write epoch-ms; only `user-override` entries are `editable` (the target of
+`rules.update`). File-sourced entries are read-only over the wire — edit the files directly.
+
+```json
+// → request — set the user-rule override for a workspace
+{ "jsonrpc":"2.0","id":60,"method":"rules.update",
+  "params":{ "workspaceId":"ws-abc","ruleType":"workspace","enabled":true,
+    "content":"Always run the linter before committing." } }
+// ← response
+{ "jsonrpc":"2.0","id":60,"result":{ "rules":{ "workspaceId":"ws-abc","rules":[
+  { "ruleType":"base-system-prompt","source":"user-override","content":"…",
+    "enabled":false,"updatedAt":1750000000000,"editable":true },
+  { "ruleType":"workspace","source":"user-override",
+    "content":"Always run the linter before committing.","enabled":true,
+    "updatedAt":1750000000000,"editable":true } ] } } }
+```
+
+### 5.22 `mcp.servers.*`
+
+The **external** MCP-server lifecycle/config surface, backed by the `mcp.servers` setting
+(**sensitive** — §5.12; secrets in `env`/`headers` are redacted on the wire). This is the
+**user-facing** management surface: register, edit,
+enable/disable, and restart MCP servers the daemon hosts. It is **distinct** from the **agent→BE
+MCP callback**, which lets a running agent reach BE-hosted MCP tools
+and surfaces as the `mcp:notification` event — that callback has no `mcp.servers.*` method. Health
+and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.servers.list | workspaceId? | { servers: McpServerConfig[] } — sensitive `env`/`headers` redacted |
+| mcp.servers.create | config (req): McpServerConfig | { server: McpServerConfig } |
+| mcp.servers.update | serverId (req), config (req): McpServerConfig | { server: McpServerConfig } |
+| mcp.servers.delete | serverId (req) | { success: true } |
+| mcp.servers.toggle | serverId (req), enabled (req): boolean | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop) |
+| mcp.servers.restart | serverId (req) | { status: McpServerStatus } — stop-then-start |
+| mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
+
+- **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
+  env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace" }`. `command`
+  / `args` / `env` apply to `stdio`; `url` / `headers` describe `http`/`sse`. **Only `stdio` is
+  supported — `http`/`sse` are not** (such a server returns an error status rather than
+  connecting). Sensitive `env` and
+  `headers` values are **redacted** (presence/placeholder only) on `list`/`create`/`update`
+  responses, mirroring `settings.*` (§5.12).
+- **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"error", pid?,
+  toolCount?, lastError?, startedAt? }`. `toolCount` is the number of tools the server advertised
+  once connected.
+
+```json
+// → request — enable (start) an MCP server
+{ "jsonrpc":"2.0","id":61,"method":"mcp.servers.toggle",
+  "params":{ "serverId":"srv-fs","enabled":true } }
+// ← response (emits mcp.servers:status-changed)
+{ "jsonrpc":"2.0","id":61,"result":{ "status":{
+  "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 } } }
+```
+
+> **No `memories.*` wire surface.** Long-term agent **memories** exist as an internal context source the
+> agent runtime consumes; they are **not** exposed over the wire (no client caller). The internal
+> `memories` table ships and the internal `search.memories` path scans it; a `memories.*` namespace
+> (list/create/search/delete) could be added additively later **only if** a memories UI ever ships.
+
+#### 5.22.1 `mcp.oauth.*` — per-server OAuth token bags
+
+Companion to §5.22: manage the OAuth token bag associated with each external MCP server id.
+Bags are **secret material**; the daemon
+persists them in the dedicated `mcp_oauth_tokens` table and every wire response is
+**presence-only** — the bag body **never** crosses the wire (mirrors the `settings.*`
+redaction seam and `mcp.servers.*` `env`/`headers` redaction). Internal daemon consumers that
+need to build an outbound request read the raw bag directly from the store; there is no
+"reveal" RPC. This is a separate namespace (not a `settings.*` key) because bag counts are
+unbounded and rotate independently of the config surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.oauth.list | — | `{ tokens: [{ serverId, value }] }` — one entry per stored bag, `value` always the redaction placeholder |
+| mcp.oauth.get | serverId (req) | `{ serverId, value }` — `value` is the placeholder when a bag exists and `null` when it does not |
+| mcp.oauth.set | serverId (req), tokenBag (req) | `{ serverId, value }` — persists the bag; `value` is always the placeholder (bag itself is never echoed) |
+| mcp.oauth.delete | serverId (req) | `{ success: true }` — idempotent (absent bag succeeds) |
+
+- `tokenBag` is an opaque JSON body (object / array / scalar) so the FE's bag shape can
+  evolve without a daemon change; the typical bag is
+  `{ access_token, refresh_token?, expires_at?, token_type? }`.
+- Missing/empty `serverId` yields `-32602`; `mcp.oauth.set` also requires `tokenBag`.
+- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
+  polls / re-fetches on demand.
+
+```json
+// → request — persist an OAuth bag for one MCP server
+{ "jsonrpc":"2.0","id":62,"method":"mcp.oauth.set",
+  "params":{ "serverId":"srv-linear",
+             "tokenBag":{ "access_token":"…","refresh_token":"…",
+                          "expires_at":1750000000,"token_type":"Bearer" } } }
+// ← response (bag never echoed — value is a placeholder)
+{ "jsonrpc":"2.0","id":62,"result":{ "serverId":"srv-linear","value":"********" } }
+
+// → request — list stored bags (presence only)
+{ "jsonrpc":"2.0","id":63,"method":"mcp.oauth.list" }
+// ← response
+{ "jsonrpc":"2.0","id":63,"result":{ "tokens":[
+  { "serverId":"srv-linear","value":"********" } ] } }
+```
+
+### 5.23 Usage metrics — `workspace.getTokenUsage`
+
+The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
+usage per agent and per model and writes the durable `tokenUsage` field on the `Workspace`; only the
+**read** and its change event cross the wire — the scan job itself has **no** RPC (§6.8).
+`workspace.getTokenUsage` requires `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.getTokenUsage | workspaceId (req) | { tokenUsage: TokenUsage } — -32602 if the workspace is not found |
+
+**TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
+byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
+**TokenUsageTotals** is the four consumption counters
+`{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`. `byAgentId` keys are
+`agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
+the RFC-3339 timestamp of the last internal scan (`null` before the first scan). Updated values are
+pushed via `workspace:tokenUsage-changed` (§6.5).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
+// ← response (emitted again as workspace:tokenUsage-changed after each internal scan)
+{ "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
+  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
+  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
+  "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 },
+  "lastScanAt":"2026-06-17T12:00:00Z" } } }
+```
+
+### 5.24 Session stats — `agent.getSessionStats`
+
+Per-session usage rollup sourced from the auggie CLI (`session stats --json`) and cached on the
+`stats` field of the `AgentSession`. `agent.getSessionStats` is a point **read**; live changes are
+pushed via `agent:session-stats-changed` (§6.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.getSessionStats | sessionId (req) | { stats: SessionStats } — -32602 if the session is unknown |
+
+**SessionStats** — `{ creditsUsed: number | null, messageCount, toolCount }`: cumulative credits
+consumed (`null` until computed), user/assistant messages exchanged, and tool calls made in the
+session. The same object appears as the `stats` field on `AgentSession` in `agent.*` results.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":63,"method":"agent.getSessionStats","params":{ "sessionId":"sess-9" } }
+// ← response
+{ "jsonrpc":"2.0","id":63,"result":{ "stats":{ "creditsUsed":1.54,"messageCount":18,"toolCount":42 } } }
+```
+
+### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript`
+
+A per-workspace **setup script** that provisions a fresh worktree (install deps, build prereqs, …),
+**persisted in `.intent/config.json`** in the worktree (committable, repo-scoped). The workspace
+DB `setup_script` field is retired from all write paths (kept for wire compat and legacy
+read-only fallback only). `detectProjectType` inspects manifest files to classify the project;
+`generateSetupScript` is the **AI-assisted** generator. Every method requires `workspaceId`.
+
+**Setup script execution:** When a workspace is created (`workspace.create`) and an effective
+setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
+fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
+provisioning in the worktree directory via `/bin/sh` with env vars `MAIN_CHECKOUT`
+(repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
+branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
+errors are logged and surfaced. Script output is streamed to a workspace terminal named
+**"Setup Script"** (its daemon-tracked PTY display name in `terminal.list`, §5.9); a POSIX-sh
+timing wrapper appends a newline-prefixed `Setup script completed in <N>s (exit code <C>)` /
+`Setup script failed in <N>s (exit code <C>)` summary to the scrollback, preserving the
+script's exit code (§5.1).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspace.getSetupScript | workspaceId (req) | { setupScript: SetupScript } — reads from worktree `.intent/config.json` (when present), falls back to legacy DB row `setup_script` (read-only) |
+| workspace.saveSetupScript | workspaceId (req), script (req): string | { setupScript: SetupScript } — writes to worktree `.intent/config.json` (merge semantics, best-effort) and returns synthesized record; DB field is not written. Returns -32602 (invalid params) when the workspace has no `worktreePath` or `repositoryPath` |
+| workspace.detectProjectType | workspaceId (req) | { projectType: ProjectType \| null } — null when no known manifest is found |
+| workspace.generateSetupScript | workspaceId (req) | { setupScript: SetupScript } — AI-assisted draft (returned, not auto-saved; persist with saveSetupScript) |
+
+- **SetupScript** — `{ script: string, projectType?: ProjectType, updatedAt: number,
+  generatedBy?: "user"\|"agent" }`. `generatedBy` records whether the body was hand-written
+  (`saveSetupScript`) or AI-drafted (`generateSetupScript`); `updatedAt` is the last-write epoch-ms.
+  When read from `.intent/config.json`, `generatedBy` is synthesized as `"user"`.
+- **ProjectType** — `"node" | "python" | "go" | "rust" | "ruby"` (detected from `package.json`,
+  `pyproject.toml`/`requirements.txt`, `go.mod`, `Cargo.toml`, and `Gemfile` respectively).
+
+```json
+// → request — detect the project type, then generate a draft script
+{ "jsonrpc":"2.0","id":64,"method":"workspace.detectProjectType","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":64,"result":{ "projectType":"rust" } }
+// → request
+{ "jsonrpc":"2.0","id":65,"method":"workspace.generateSetupScript","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":65,"result":{ "setupScript":{
+  "script":"#!/usr/bin/env bash\nset -euo pipefail\ncargo fetch\n",
+  "projectType":"rust","updatedAt":1750000000000,"generatedBy":"agent" } } }
+```
+
+### 5.26 Future integrations & observability *(design notes — NOT v1 wire surface)*
+
+> **Future integrations (design stubs — NOT v1).** Of the original design stubs, **Sandbox /
+> DevContainer** workspace configuration remains a future per-workspace execution-environment
+> surface — anticipated but **not** exposed over the protocol in v1, folded into the same future
+> track.
+>
+> **Linear** (issue tracking) is re-implemented daemon-owned against Linear's GraphQL API
+> (**no Augment proxy**) as the `linear.*` namespace — **specified as a TARGET contract — see §5.28**.
+>
+> **Sentry** (error tracking) is re-implemented daemon-owned against Sentry's REST API
+> (**no Augment proxy**) as the `sentry.*` namespace — **specified as a TARGET contract — see §5.29**.
+>
+> These are documented so the surface is anticipated.
+
+> **Observability is internal, not wire.** Tracing, structured logging, and log files are
+> **daemon-internal** operational concerns — there is **no** `logging.*` / `telemetry.*` wire
+> surface, and none is planned for v1. Clients observe backend work through domain **events** (§6.5),
+> not through a logging API.
+
+### 5.27 `github.*` namespace
+
+> The `github.*` namespace is served **daemon-owned** against `api.github.com` — 22 methods, with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
+>
+> **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
+> that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
+> **auth** and GitHub-**derived identity** live on `github.*`. The existing `pr.*` methods (§5.7) are
+> deliberately **workspace/active-PR scoped** (`ws` → owner/repo/number) and are left **untouched**;
+> `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
+> rather than resolving from the workspace.
+
+> **Auth model — OAuth device flow, daemon-owned (with env-PAT fallbacks).** `github.connect`
+> starts GitHub's **OAuth device flow** (no client secret, no callback URL — only a public OAuth
+> App client id, `sourceControl.github.oauthClientId`): the daemon requests a `user_code`, hands it
+> to the client, and **polls GitHub in the background** until the user authorizes at
+> `github.com/login/device` (or the codes expire / the user denies). On authorize the access token
+> is persisted server-side under `sourceControl.github.token` — the **first slot** of the existing
+> `intent-sourcecontrol` resolution chain, ahead of the `GITHUB_TOKEN` / `GH_TOKEN` env vars and
+> the `gh auth token` fallback (§5.12) — so every `github.*` / `pr.*` consumer picks it up with
+> zero resolution changes. Because the daemon owns the poll loop, the flow **survives client
+> refreshes**: a reconnecting client re-reads the in-flight state from `github.authStatus`.
+>
+> - `github.authStatus` validates the resolved token via `GET /user` and reports connection state,
+>   plus the in-flight device flow (if any) under `deviceFlow`.
+> - `github.connect` starts the flow (or returns the **same codes** while one is still pending —
+>   idempotent); terminal transitions are pushed as `github:auth-changed` events (§6.5).
+> - `github.cancelAuth` aborts a pending flow; `github.revoke` deletes the **stored** token (env /
+>   `gh` fallbacks are untouched — they re-resolve on the next probe).
+> - **Identity** is GitHub-derived: `github.getUser` returns the authenticated user from `GET /user`.
+>
+> **🔒 Secret guardrail.** The PAT is a secret: it is **never logged, echoed, or returned** over the
+> wire. Only **derived identity** fields (login, avatar, profile URL) and the boolean
+> connection state cross the wire — never the token itself.
+
+**Field naming.** The DTOs below mirror the FE `shared/types.ts` GitHub shapes
+(`GithubRepo` / `GithubUser` / `GithubPullRequest` / `GithubIssue`, and the review-comment /
+review-thread shapes) **field-for-field**, rendered in this protocol's **camelCase** convention
+(serde `rename_all = "camelCase"`, matching `pr.*` in §5.7 and the rest of the catalog). The FE's
+Augment-proxy passthrough exposed GitHub-native **snake_case**; on the `github.*` wire those keys
+are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`, `updated_at → updatedAt`,
+`merged_at → mergedAt`, `closed_at → closedAt`, `default_branch → defaultBranch`, `head_ref → headRef`,
+`base_ref → baseRef`, `head_sha → headSha`, `base_sha → baseSha`, `mergeable_state → mergeableState`,
+`review_comments → reviewComments`, `changed_files → changedFiles`, `avatar_url → avatarUrl`,
+`in_reply_to_id → inReplyToId`. The set of fields is otherwise identical to the FE types.
+
+**Conventions.** Unless noted, `owner` + `repo` are **(req)** string params (and `number` is the
+**(req)** PR/issue number where applicable). Reads that paginate follow the uniform pagination
+contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
+in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
+missing/invalid params and "not found" (404) lookups → `-32602`; a token that is absent or fails
+`GET /user`, and any other GitHub/service failure → `-32603` with a descriptive `message`
+(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
+
+#### Repos & branches
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.repos.list | limit?, nextToken? | { repos: GithubRepo[], nextToken? } — the authenticated user's repositories (`GET /user/repos`) |
+| github.repos.search | query (req), limit?, nextToken? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
+| github.repos.get | owner (req), repo (req) | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
+| github.branches.list | owner (req), repo (req), limit?, nextToken? | { branches: string[], nextToken? } — **remote** branch names (`GET /repos/{owner}/{repo}/branches`) |
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
+| github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
+| github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
+| github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched |
+| github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
+
+#### Pulls
+
+`createPullRequest` sends `head` **verbatim** (no `owner:branch` login prefix) — preserving the
+FE's "bypass the buggy backend" behavior for same-repo branches.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.pulls.create | owner (req), repo (req), title (req), body (req), head (req), base (req), draft? | { pull: GithubPullRequest \| null } — `POST /repos/{owner}/{repo}/pulls` (head verbatim) |
+| github.pulls.get | owner (req), repo (req), number (req) | { pull: GithubPullRequest \| null } — `GET /repos/{owner}/{repo}/pulls/{number}` |
+| github.pulls.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", head?, base?, sort?: "created"\|"updated"\|"popularity"\|"long-running", direction?: "asc"\|"desc", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /repos/{owner}/{repo}/pulls` |
+| github.pulls.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"review-requested"\|"involves", state?: "open"\|"closed", limit?, nextToken? | { pulls: GithubPullRequest[], nextToken? } — `GET /search/issues?q=is:pr repo:{o}/{r} is:{state} {author\|assignee\|review-requested\|involves}:@me`; `filter:"all"`+`state:"open"` delegates to `github.pulls.list` |
+| github.pulls.merge | owner (req), repo (req), number (req), mergeMethod?: "merge"\|"squash"\|"rebase", commitTitle?, commitMessage? | { merged, message, sha? } — `PUT /repos/{owner}/{repo}/pulls/{number}/merge` |
+| github.pulls.updateBranch | owner (req), repo (req), number (req), expectedHeadSha? | { message, url? } — `PUT /repos/{owner}/{repo}/pulls/{number}/update-branch` |
+
+#### Issues
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.issues.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", assignee?, creator?, labels?, sort?: "created"\|"updated"\|"comments", direction?: "asc"\|"desc", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /repos/{owner}/{repo}/issues` (items carrying `pull_request` are filtered out) |
+| github.issues.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"involves", state?: "open"\|"closed", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /search/issues?q=is:issue repo:{o}/{r} …` |
+
+#### Review comments & threads
+
+Review **comments** are the REST inline comments (`/pulls/{n}/comments`); review **threads** are the
+GraphQL `pullRequest.reviewThreads` with resolve state — `resolveThread` / `unresolveThread` map to
+the GraphQL `resolveReviewThread` / `unresolveReviewThread` mutations (parity with the FE's
+`pr-comment.service.ts`).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| github.listReviewComments | owner (req), repo (req), number (req), limit?, nextToken? | { comments: ReviewComment[], nextToken? } — `GET /repos/{owner}/{repo}/pulls/{number}/comments` |
+| github.replyReviewComment | owner (req), repo (req), number (req), commentId (req), body (req) | { comment: ReviewComment } — `POST /repos/{owner}/{repo}/pulls/{number}/comments` (`inReplyToId = commentId`) |
+| github.getReviewThreads | owner (req), repo (req), number (req), limit?, nextToken? | { threads: ReviewThread[], nextToken? } — GraphQL `pullRequest.reviewThreads` |
+| github.resolveThread | threadId (req) | { isResolved: true } — GraphQL `resolveReviewThread` |
+| github.unresolveThread | threadId (req) | { isResolved: false } — GraphQL `unresolveReviewThread` |
+
+#### DTO schemas
+
+```ts
+interface GithubRepo {
+  owner: string;
+  name: string;
+  htmlUrl?: string;
+  createdAt?: string;     // ISO 8601
+  updatedAt?: string;     // ISO 8601
+  defaultBranch?: string;
+}
+
+interface GithubUser {     // derived identity — never carries the PAT
+  login: string;
+  avatarUrl: string;
+  htmlUrl: string;
+}
+
+interface GithubPullRequest {
+  number: number;
+  title: string;
+  body: string;
+  state: string;
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  mergedAt?: string;
+  closedAt?: string;
+  user: GithubUser;
+  headRef: string;
+  baseRef: string;
+  headSha: string;
+  baseSha: string;
+  merged: boolean;
+  draft: boolean;
+  mergeable?: boolean | null;
+  mergeableState?: string;
+  labels: string[];
+  assignees?: GithubUser[];
+  comments: number;
+  reviewComments: number;
+  commits: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+}
+
+interface GithubIssue {
+  number: number;
+  title: string;
+  body?: string;
+  state: "open" | "closed";
+  htmlUrl: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  user: GithubUser;
+  labels: string[];
+  comments: number;
+  owner?: string;          // repository owner (echoed for convenience)
+  repo?: string;           // repository name
+}
+
+interface ReviewComment {  // REST inline review comment
+  id: number;
+  body: string;
+  path: string;
+  line: number | null;
+  user: { login: string; avatarUrl?: string };
+  createdAt: string;
+  updatedAt: string;
+  inReplyToId?: number;
+  htmlUrl: string;
+}
+
+interface ReviewThread {   // GraphQL review thread
+  id: string;
+  isResolved: boolean;
+  comments: ReviewThreadComment[];
+}
+
+interface ReviewThreadComment {
+  id: string;
+  body: string;
+  author: { login: string };
+  path: string;
+  line: number | null;
+  createdAt: string;
+}
+```
+
+#### Examples
+
+```json
+// → check GitHub auth (validates the resolved token via GET /user)
+{ "jsonrpc":"2.0","id":50,"method":"github.authStatus","params":{} }
+// ← response (token present and valid, no flow in flight)
+{ "jsonrpc":"2.0","id":50,"result":{
+  "isConfigured": true, "oauthUrl": "", "configuredButNeedsUpdate": false, "updatedScopes": "",
+  "deviceFlow": null } }
+```
+
+```json
+// → derived identity (no token ever returned)
+{ "jsonrpc":"2.0","id":51,"method":"github.getUser","params":{} }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "user":{
+  "login":"octocat","avatarUrl":"https://avatars.githubusercontent.com/u/1","htmlUrl":"https://github.com/octocat" } } }
+```
+
+```json
+// → create a PR with the head ref sent verbatim (no login prefix)
+{ "jsonrpc":"2.0","id":52,"method":"github.pulls.create",
+  "params":{ "owner":"octocat","repo":"hello","title":"Add feature","body":"…",
+    "head":"feature/x","base":"main","draft":false } }
+// ← response
+{ "jsonrpc":"2.0","id":52,"result":{ "pull":{
+  "number":42,"title":"Add feature","state":"open","htmlUrl":"https://github.com/octocat/hello/pull/42",
+  "headRef":"feature/x","baseRef":"main","draft":false,"merged":false,
+  "user":{ "login":"octocat","avatarUrl":"…","htmlUrl":"…" } } } }
+```
+
+```json
+// → start the OAuth device flow (daemon polls GitHub in the background)
+{ "jsonrpc":"2.0","id":53,"method":"github.connect","params":{} }
+// ← response — the user enters userCode at verificationUri
+{ "jsonrpc":"2.0","id":53,"result":{
+  "ok": true, "userCode": "ABCD-1234", "verificationUri": "https://github.com/login/device",
+  "expiresIn": 900, "interval": 5 } }
+// … the user authorizes on github.com; the daemon's background poll persists
+//   the token server-side and pushes the terminal transition:
+{ "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"…","event":{
+  "type":"github:auth-changed", "data":{ "status":"authorized" }, "…":"…" } } }
+```
+
+### 5.28 `linear.*` namespace
+
+> The full `linear.*` read surface — `linear.authStatus`, `linear.listIssues`, `linear.searchIssues`, `linear.getIssue`, `linear.viewer`, `linear.listTeams`, `linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels` — plus the issue-write methods `linear.createIssue` / `linear.updateIssue` are served **daemon-owned** against Linear's GraphQL API (`POST https://api.linear.app/graphql`) via the `intent-linear` crate. The `filter` values map to **typed Linear GraphQL filters server-side**. Only the `linear.listComments` / `linear.createComment` comment surface (no FE shape) remains out of scope — see "Deferred — comments" below. The field names and shapes here are the source of truth for both sides.
+
+> **Auth model — personal API key (no OAuth/device flow).** A local
+> daemon has no hosted OAuth callback, so v1 authenticates with a **Linear personal API key**: the
+> default `auto` resolution tries the secret-store account `linear.token` first (the daemon's
+> file-backed secret store; settable via `settings.update { path: "linear.token" }`, §5.12), then falls back to the
+> `LINEAR_API_KEY` environment variable. Linear is GraphQL-only; the key is sent as the **`Authorization: <key>` header
+> with NO `Bearer` prefix** for `lin_api_…` personal keys (a future OAuth access token would use
+> `Authorization: Bearer <token>` — the prefix differs by credential type).
+>
+> - `linear.authStatus` validates the resolved key via the GraphQL `viewer` probe and reports
+>   connection state.
+> - **There is no `linear.connect` / `linear.revoke` / `cancelAuth` wire method.** Unlike `github.*`
+>   (which keeps inert no-op `connect`/`revoke` for FE shape parity), Linear exposes **nothing**
+>   here: "connect" is `settings.update` on the `linear.token` catalog entry (§5.12) — or set
+>   `LINEAR_API_KEY` — "revoke/logout" is `settings.reset { path: "linear.token" }`, and
+>   `cancelAuth` was always a pure client-side no-op.
+>
+> **🔒 Secret guardrail.** The API key is a secret: it is **never logged, echoed, or returned** over
+> the wire. Only **derived identity** (the `login` from `viewer`) and the boolean connection state
+> cross the wire — never the key itself.
+
+**Field naming.** The DTOs below mirror the FE `src/features/linear-auth/types.ts` shapes
+**field-for-field** in this protocol's **camelCase** convention (serde `rename_all = "camelCase"`,
+matching `github.*` §5.27 and the rest of the catalog). The wire returns the **flattened
+`LinearIssueResult`** — the exact shape the FE's `fetchMyIssues` / `searchIssues` already consume —
+so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `assignee` / `creator`
+/ `project` / `labels`) are pre-flattened to scalar / `string[]` fields server-side. Absent
+(`None`) optional fields are **omitted** from the JSON.
+
+**Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
+returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items, nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the `github.*` list reads, etc.), every Linear arm returns a **bare result** —
+either a bare object (`linear.authStatus`, `linear.viewer`, `linear.getIssue`) or a bare array
+(`linear.listIssues`, `linear.searchIssues`, `linear.listTeams`, `linear.listWorkflowStates`,
+`linear.listProjects`, `linear.listLabels`) — there is **no `{ items, nextToken }` envelope and no
+cursor** (the consumed Linear surface is small and bounded; cursor pagination is not part of this
+phase). Absent (`None`) optional fields are **omitted** from the JSON. Errors reuse the §9
+conventions: missing/invalid params → `-32602` (e.g. `linear.getIssue` requires `id` **or**
+`identifier`, otherwise `Missing required parameter: id`); a key that is **absent or fails the
+`viewer` probe** ("not configured"), and any other Linear/service failure → `-32603` with a
+descriptive `message` (e.g. `"Linear is not configured."`). There are **no** custom numeric codes.
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.authStatus | — | { authenticated, login?, scopes } — `authenticated` = env key resolves **and** the GraphQL `viewer { id name email }` probe succeeds; `login` is the viewer's name/email; `scopes` is always `[]` (Linear's `viewer` returns no key scopes). Never includes the key. |
+
+#### Issues
+
+`filter` maps to a typed Linear GraphQL filter **server-side**.
+`linear.listIssues` backs the FE's `fetchMyIssues`; `linear.searchIssues`
+backs the FE's `searchIssues`. Both return the flattened `LinearIssueResult[]` directly.
+`linear.getIssue` resolves a single flattened `LinearIssueResult` by UUID `id` **or** `ENG-123`-style
+`identifier` (the engine picks the lookup mode by string shape); it is not consumed by the FE today
+but completes the read surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit? | LinearIssueResult[] — the authenticated viewer's issues for the typed `filter` |
+| linear.searchIssues | query (req), limit? | LinearIssueResult[] — full-text issue search |
+| linear.getIssue | id \| identifier (one required — UUID `id` or `ENG-123`-style `identifier`) | LinearIssueResult — one flattened issue |
+
+#### Viewer & catalogs
+
+`linear.viewer` returns the authenticated user as a bare `LinearUser`; the four list methods return
+small bounded catalogs (teams, workflow states, projects, labels) as bare DTO arrays. All four
+lists accept an optional `limit`. None of these reads are currently consumed by the FE — they are
+forward-looking surface for a future create/edit UI.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.viewer | — | LinearUser — the authenticated user |
+| linear.listTeams | limit? | LinearTeam[] |
+| linear.listWorkflowStates | limit? | LinearWorkflowState[] |
+| linear.listProjects | limit? | LinearProject[] |
+| linear.listLabels | limit? | LinearLabel[] |
+
+#### DTO schemas
+
+```ts
+interface AuthStatus {          // shared with the auth probe; never carries the API key
+  authenticated: boolean;
+  login?: string;               // viewer name or email
+  scopes: string[];             // always [] — Linear's viewer returns no key scopes
+}
+
+interface LinearIssueResult {   // flattened UI shape — matches the FE verbatim
+  id: string;
+  identifier: string;           // e.g. "ENG-123"
+  title: string;
+  description?: string;
+  url?: string;
+  teamName?: string;
+  teamKey?: string;             // e.g. "ENG"
+  state?: string;               // workflow-state name
+  priority?: number;            // Linear priority 0–4
+  assignee?: string;            // assignee display name
+  labels?: string[];            // label names
+  project?: string;             // project name
+  creator?: string;             // creator name
+  createdAt?: string;           // ISO 8601
+  updatedAt?: string;           // ISO 8601
+}
+
+interface LinearUser {          // linear.viewer
+  id: string;
+  name: string;
+  displayName?: string;
+  email?: string;
+  avatarUrl?: string;
+}
+
+interface LinearTeam {          // linear.listTeams entry
+  id: string;
+  key: string;                  // e.g. "ENG"
+  name: string;
+  description?: string;
+}
+
+interface LinearWorkflowState { // linear.listWorkflowStates entry
+  id: string;
+  name: string;
+  type: string;                 // "backlog" | "unstarted" | "started" | "completed" | "canceled"
+  description?: string;
+  color?: string;
+}
+
+interface LinearProject {       // linear.listProjects entry
+  id: string;
+  name: string;
+  description?: string;
+  state: string;                // "backlog" | "planned" | "started" | "paused" | "completed" | "canceled"
+  url?: string;
+}
+
+interface LinearLabel {         // linear.listLabels entry
+  id: string;
+  name: string;
+  description?: string;
+  color?: string;
+}
+```
+
+#### Examples
+
+```json
+// → check Linear auth (validates the env key via the GraphQL viewer probe)
+{ "jsonrpc":"2.0","id":54,"method":"linear.authStatus","params":{} }
+// ← response (LINEAR_API_KEY present and valid)
+{ "jsonrpc":"2.0","id":54,"result":{ "authenticated": true, "login": "Ada Lovelace", "scopes": [] } }
+```
+
+```json
+// → issues assigned to the authenticated viewer (typed filter, no NL prompt)
+{ "jsonrpc":"2.0","id":55,"method":"linear.listIssues","params":{ "filter":"assigned","limit":50 } }
+// ← response (flattened LinearIssueResult[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":55,"result":[
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","state":"In Progress",
+    "teamName":"Engineering","teamKey":"ENG","priority":2,"assignee":"Ada Lovelace",
+    "labels":["bug"],"url":"https://linear.app/acme/issue/ENG-123" } ] }
+```
+
+```json
+// → full-text issue search
+{ "jsonrpc":"2.0","id":56,"method":"linear.searchIssues","params":{ "query":"widget","limit":20 } }
+// ← response
+{ "jsonrpc":"2.0","id":56,"result":[
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","teamKey":"ENG",
+    "url":"https://linear.app/acme/issue/ENG-123" } ] }
+```
+
+```json
+// → one issue by ENG-123 identifier (or pass `id` for a UUID)
+{ "jsonrpc":"2.0","id":57,"method":"linear.getIssue","params":{ "identifier":"ENG-123" } }
+// ← response (single flattened LinearIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":57,"result":
+  { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","state":"In Progress",
+    "teamKey":"ENG","url":"https://linear.app/acme/issue/ENG-123" } }
+```
+
+```json
+// → the authenticated user
+{ "jsonrpc":"2.0","id":58,"method":"linear.viewer","params":{} }
+// ← response (bare LinearUser; absent optionals omitted)
+{ "jsonrpc":"2.0","id":58,"result":
+  { "id":"u1","name":"Ada Lovelace","displayName":"ada","email":"ada@example.com" } }
+```
+
+```json
+// → list teams (bare array; optional limit caps the result)
+{ "jsonrpc":"2.0","id":59,"method":"linear.listTeams","params":{ "limit":50 } }
+// ← response (bare LinearTeam[])
+{ "jsonrpc":"2.0","id":59,"result":[
+  { "id":"t1","key":"ENG","name":"Engineering" } ] }
+```
+
+#### Writes — P2 (createIssue / updateIssue)
+
+`linear.createIssue` runs the `issueCreate` GraphQL mutation; `linear.updateIssue` runs
+`issueUpdate`. The router validates the required wire fields up front — `createIssue` requires a
+non-empty `title` **and** `teamId`, `updateIssue` requires a non-empty `issueId` (otherwise
+`-32602` `Missing required parameter: <field>`) — and forwards only the fields present. Both return
+the **flattened `LinearIssueResult`** (the same shape as the reads). A key that is **absent or
+fails the `viewer` probe** ("not configured"), and any other Linear/service failure → `-32603`.
+🔒 The API key is never logged, echoed, or returned.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| linear.createIssue | title (req), teamId (req), description?, assigneeId?, stateId?, priority?, labelIds? | LinearIssueResult — the created issue, flattened |
+| linear.updateIssue | issueId (req), title?, description?, assigneeId?, stateId?, priority? | LinearIssueResult — the updated issue, flattened |
+
+##### DTO schemas
+
+```ts
+interface CreateIssueRequest {  // linear.createIssue — `title` + `teamId` required
+  title: string;
+  teamId: string;
+  description?: string;
+  assigneeId?: string;
+  stateId?: string;
+  priority?: number;            // Linear priority 0–4
+  labelIds?: string[];
+}
+
+interface UpdateIssueRequest {  // linear.updateIssue — `issueId` required; rest optional
+  issueId: string;
+  title?: string;
+  description?: string;
+  assigneeId?: string;
+  stateId?: string;
+  priority?: number;            // Linear priority 0–4
+}
+```
+
+##### Examples
+
+```json
+// → create an issue (title + teamId required)
+{ "jsonrpc":"2.0","id":60,"method":"linear.createIssue",
+  "params":{ "title":"New issue","teamId":"team-uuid","priority":2,"labelIds":["l1"] } }
+// ← response (flattened LinearIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":60,"result":
+  { "id":"a1b2","identifier":"ENG-200","title":"New issue","teamKey":"ENG","priority":2,
+    "url":"https://linear.app/acme/issue/ENG-200" } }
+```
+
+```json
+// → missing required `teamId` → -32602
+{ "jsonrpc":"2.0","id":61,"method":"linear.createIssue","params":{ "title":"X" } }
+// ← error
+{ "jsonrpc":"2.0","id":61,"error":{ "code":-32602,"message":"Missing required parameter: teamId" } }
+```
+
+```json
+// → update an issue (issueId required; only present fields are sent through IssueUpdateInput)
+{ "jsonrpc":"2.0","id":62,"method":"linear.updateIssue",
+  "params":{ "issueId":"uuid-1","title":"Updated","stateId":"s1" } }
+// ← response (flattened LinearIssueResult)
+{ "jsonrpc":"2.0","id":62,"result":
+  { "id":"uuid-1","identifier":"ENG-123","title":"Updated","state":"Done",
+    "url":"https://linear.app/acme/issue/ENG-123" } }
+```
+
+```json
+// → not-configured (no LINEAR_API_KEY, or the viewer probe fails) → -32603
+{ "jsonrpc":"2.0","id":63,"method":"linear.createIssue","params":{ "title":"X","teamId":"t1" } }
+// ← error
+{ "jsonrpc":"2.0","id":63,"error":{ "code":-32603,"message":"Linear is not configured." } }
+```
+
+#### Deferred — comments (NOT in this phase)
+
+The read surface (P0 + P1) and the P2 issue writes ship now (above). Only the comment surface
+remains **out of scope** and is listed so it is anticipated:
+
+- **Comments (no FE shape):** `linear.listComments` / `linear.createComment` — comments are not
+  modeled in the FE at all. Do **not** build unless a feature requires them.
+
+When built, the comment methods extend this `linear.*` namespace additively (with their own §9
+error rows and any events) and do not change the contract above.
+
+### 5.29 `sentry.*` namespace
+
+> The full `sentry.*` surface — the reads
+> `sentry.authStatus`, `sentry.listIssues`, `sentry.searchIssues`,
+> `sentry.listProjects`, `sentry.getIssue`; and the writes `sentry.resolveIssue`,
+> `sentry.ignoreIssue`, `sentry.assignIssue` — is served **daemon-owned** against Sentry's REST
+> API (`GET https://sentry.io/api/0/organizations/{org}/issues/`) via the `intent-sentry`
+> crate (wire arm: `intent-services` `sentry_ops` → `intent-transport` router). The `status`
+> filter maps to a **typed `is:<status>` clause** server-side, and `query` is forwarded
+> verbatim as the Sentry search string. The field names and shapes here are the source of
+> truth for both sides.
+
+> **Auth model — token + org from the environment (no OAuth/device flow, no
+> `connect`/`revoke`).** A local daemon has no hosted OAuth callback, so v1 authenticates with
+> a **Sentry user/internal-integration auth token + organization slug resolved from the
+> environment**: `SENTRY_API_TOKEN` (with an optional lower-priority secret-store account
+> `sentry.token`) plus `SENTRY_ORG` (organization slug). Sentry is REST-only; the token is sent
+> as the **`Authorization: Bearer <token>`** header.
+>
+> - `sentry.authStatus` validates the resolved pair via `GET /organizations/{org}/` and reports
+>   connection state.
+> - **There is no `sentry.connect` / `sentry.revoke` / `cancelAuth` wire method.** As with
+>   `linear.*`, Sentry exposes **nothing** here: "connect" becomes "set `SENTRY_API_TOKEN` +
+>   `SENTRY_ORG` and restart", "revoke/logout" is a local "forget token" action, and `cancelAuth`
+>   was always a pure client-side no-op. The settings UI buttons are inert.
+>
+> **🔒 Secret guardrail.** The auth token is a secret: it is **never logged, echoed, or returned**
+> over the wire. Only **derived identity** (the `organization` slug) and the boolean connection
+> state cross the wire — never the token itself.
+
+**Field naming.** The DTOs below mirror the FE `src/features/sentry-auth/types.ts` shapes
+**field-for-field** in this protocol's **camelCase** convention (serde `rename_all =
+"camelCase"`, matching `github.*` §5.27 / `linear.*` §5.28 and the rest of the catalog). The
+wire returns the **flattened `SentryIssueResult`** — the exact shape the FE's `fetchIssues` /
+`searchIssues` already consume — so the rewire is zero-FE-change: nested Sentry relations
+(`project` → `projectName`/`projectSlug`, `metadata` → `type`/`value`/`filename`/`function`,
+`permalink` → `url`) are pre-flattened to scalar fields server-side. Absent (`None`) optional
+fields are **omitted** from the JSON.
+
+**Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
+returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items,
+nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the
+`github.*` list reads, etc.), every Sentry arm returns a **bare result** — either a bare object
+(`sentry.authStatus`) or a bare array (`sentry.listIssues`, `sentry.searchIssues`) — there is
+**no `{ items, nextToken }` envelope and no cursor** (parity with `linear.*`; cursor pagination
+is not part of this phase). Absent (`None`) optional fields are **omitted** from the JSON.
+Errors reuse the §9 conventions: missing/invalid params → `-32602` (e.g. `sentry.searchIssues`
+requires `query`, otherwise `Missing required parameter: query`; an invalid `status` not in
+`unresolved`|`resolved`|`ignored`|`all` → `Invalid params: status must be one of: unresolved,
+resolved, ignored, all`); a credential pair that is **absent or fails the org probe** ("not
+configured"), and any other Sentry/service failure → `-32603` with a descriptive `message`
+(e.g. `"Sentry is not configured."`). There are **no** custom numeric codes.
+
+#### Auth & identity
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.authStatus | — | { authenticated, organization?, error? } — `authenticated` = env credential pair resolves **and** the `GET /organizations/{org}/` probe succeeds; `organization` is the resolved org slug (derived identity only — never the token); `error` is a descriptive failure string when the probe fails. Never includes the token. |
+
+#### Issues
+
+`status` maps to a typed `is:<status>` clause **server-side**;
+`query` is forwarded verbatim as the Sentry search string.
+`sentry.listIssues` backs the FE's `fetchIssues`; `sentry.searchIssues` backs the FE's
+`searchIssues`. Both return the flattened `SentryIssueResult[]` directly.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit? | SentryIssueResult[] — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`) |
+| sentry.searchIssues | query (req — missing → `-32602`), project?, limit? | SentryIssueResult[] — full-text issue search |
+| sentry.getIssue | id \| shortId (one required — UUID/numeric `id` or `WEB-1`-style `shortId`; both missing → `-32602`) | SentryIssueResult — one flattened issue |
+
+#### Projects (P1)
+
+`sentry.listProjects` returns the configured organization's projects as a bare `SentryProject[]`
+(parity with `linear.listTeams` / `linear.listProjects`); it accepts an optional `limit`. Not
+consumed by the FE today — forward-looking surface for a future project picker.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.listProjects | limit? | SentryProject[] |
+
+#### Writes — P2 (resolve / ignore / assign)
+
+`sentry.resolveIssue` / `sentry.ignoreIssue` mutate the issue's status (`resolved` / `ignored`);
+`sentry.assignIssue` sets the assignee. All three require a **non-empty `id`** (otherwise `-32602`
+`Missing required parameter: id`); `assignIssue`'s `assignedTo` is **optional — an absent value
+unassigns** the issue. Each returns the updated flattened `SentryIssueResult`. A credential pair
+that is **absent or fails the org probe** ("not configured"), and any other Sentry/service failure
+→ `-32603`. 🔒 The auth token is never logged, echoed, or returned.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sentry.resolveIssue | id (req) | SentryIssueResult — the issue with `status: "resolved"` |
+| sentry.ignoreIssue | id (req) | SentryIssueResult — the issue with `status: "ignored"` |
+| sentry.assignIssue | id (req), assignedTo? (absent = unassign) | SentryIssueResult — the issue after (un)assignment |
+
+#### DTO schemas
+
+```ts
+interface SentryAuthState {       // shared with the auth probe; never carries the token
+  authenticated: boolean;
+  organization?: string;          // resolved org slug (derived identity only)
+  error?: string;                 // descriptive failure when the probe fails
+}
+
+interface SentryProject {         // sentry.listProjects entry
+  id: string;
+  slug: string;
+  name: string;
+  platform?: string;
+  isMember?: boolean;
+}
+
+interface SentryIssueResult {     // flattened UI shape — matches the FE verbatim
+  id: string;
+  shortId: string;                // e.g. "PROJ-1"
+  title: string;
+  culprit?: string;
+  status: "unresolved" | "resolved" | "ignored";
+  level: "error" | "warning" | "info" | "fatal" | "debug";
+  count: string;                  // total event count (Sentry returns a string)
+  userCount: number;
+  firstSeen: string;              // RFC-3339
+  lastSeen: string;               // RFC-3339
+  projectName: string;
+  projectSlug: string;
+  url?: string;                   // Sentry `permalink`
+  type?: string;                  // metadata.type, e.g. "TypeError"
+  value?: string;                 // metadata.value
+  filename?: string;              // metadata.filename
+  function?: string;              // metadata.function
+}
+```
+
+#### Examples
+
+```json
+// → check Sentry auth (validates the env credential pair via the GET /organizations/{org}/ probe)
+{ "jsonrpc":"2.0","id":70,"method":"sentry.authStatus","params":{} }
+// ← response (SENTRY_API_TOKEN + SENTRY_ORG present and valid)
+{ "jsonrpc":"2.0","id":70,"result":{ "authenticated": true, "organization": "acme" } }
+```
+
+```json
+// → unresolved issues across the org (typed `is:unresolved` clause, no NL prompt)
+{ "jsonrpc":"2.0","id":71,"method":"sentry.listIssues","params":{ "status":"unresolved","limit":50 } }
+// ← response (flattened SentryIssueResult[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":71,"result":[
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "type":"TypeError","filename":"src/app.ts",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+```
+
+```json
+// → full-text issue search (forwarded verbatim as the Sentry search string)
+{ "jsonrpc":"2.0","id":72,"method":"sentry.searchIssues","params":{ "query":"TypeError","limit":20 } }
+// ← response
+{ "jsonrpc":"2.0","id":72,"result":[
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+```
+
+```json
+// → missing required `query` → -32602
+{ "jsonrpc":"2.0","id":73,"method":"sentry.searchIssues","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":73,"error":{ "code":-32602,"message":"Missing required parameter: query" } }
+```
+
+```json
+// → invalid `status` → -32602 (verbatim message)
+{ "jsonrpc":"2.0","id":74,"method":"sentry.listIssues","params":{ "status":"bogus" } }
+// ← error
+{ "jsonrpc":"2.0","id":74,"error":{
+  "code":-32602,"message":"status must be one of: unresolved, resolved, ignored, all" } }
+```
+
+```json
+// → not-configured (no SENTRY_API_TOKEN/SENTRY_ORG, or org probe fails) → -32603
+{ "jsonrpc":"2.0","id":75,"method":"sentry.listIssues","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":75,"error":{ "code":-32603,"message":"Sentry is not configured." } }
+```
+
+```json
+// → one issue by shortId (or pass `id` for a UUID/numeric id)
+{ "jsonrpc":"2.0","id":76,"method":"sentry.getIssue","params":{ "shortId":"WEB-1" } }
+// ← response (single flattened SentryIssueResult; absent optionals omitted)
+{ "jsonrpc":"2.0","id":76,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
+
+```json
+// → getIssue with neither `id` nor `shortId` → -32602
+{ "jsonrpc":"2.0","id":77,"method":"sentry.getIssue","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":77,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
+```
+
+```json
+// → list the org's projects (bare SentryProject[]; optional limit caps the result)
+{ "jsonrpc":"2.0","id":78,"method":"sentry.listProjects","params":{ "limit":25 } }
+// ← response (bare SentryProject[]; absent optionals omitted)
+{ "jsonrpc":"2.0","id":78,"result":[
+  { "id":"1","slug":"web","name":"Web","platform":"javascript","isMember":true } ] }
+```
+
+```json
+// → resolve an issue (id required) → updated flattened issue with status "resolved"
+{ "jsonrpc":"2.0","id":79,"method":"sentry.resolveIssue","params":{ "id":"1" } }
+// ← response
+{ "jsonrpc":"2.0","id":79,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"resolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
+
+```json
+// → assign an issue; omit `assignedTo` to unassign
+{ "jsonrpc":"2.0","id":80,"method":"sentry.assignIssue","params":{ "id":"1","assignedTo":"user-1" } }
+// ← response (updated flattened SentryIssueResult)
+{ "jsonrpc":"2.0","id":80,"result":
+  { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
+    "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
+    "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
+    "url":"https://sentry.io/organizations/acme/issues/1/" } }
+```
+
+```json
+// → a write with a missing/empty `id` → -32602
+{ "jsonrpc":"2.0","id":81,"method":"sentry.resolveIssue","params":{} }
+// ← error
+{ "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
+```
+
+### 5.30 `models.list` — model catalog
+
+The BE-owned model catalog every FE model picker reads (ModelPicker, background-agent settings,
+workspace initializers, onboarding). It is the **richer, additive sibling** of `agent.getModels`
+(§5.5), which keeps its lean `{ id, name, provider, description? }` rows unchanged.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| models.list | providerId?, forceRefresh?: boolean (default false) — no `workspaceId` | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
+
+**ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number }`.
+`id` is the bare model id (`shortName`/`value`), `name` the display label
+(`displayName`/`label`); the optional fields carry the picker metadata clients
+consume (group/within-group ordering, cost tier `1..3`, badges, effort levels,
+default flag). Optional fields are omitted when the provider does not report them.
+
+**Per-provider catalog.**
+
+```jsonc
+// → request
+{
+  "providerId": "auggie",  // optional — per-provider catalog via the generic cache
+  "forceRefresh": false    // optional, default false — skip the cache read, await a fresh probe
+}
+// ← response (with providerId)
+{
+  "providerId": "auggie",
+  "models": [ /* ModelInfo rows */ ],
+  "source": "auggie",          // the provider id, or "static" on fallback
+  "stale": true,               // optional — present only when serving last-good after a failed probe
+  "warning": "..."             // optional — human-readable reason for fallback/stale/empty data
+}
+```
+
+**Semantics:**
+
+- **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
+- `forceRefresh: true` skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
+- **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
+- **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
+- **Registered sources:** seven providers are registered — `auggie` (CLI discovery, below); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); and `opencode` (native CLI discovery). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
+- **Unknown/unregistered **`providerId` degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
+- **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
+
+**Auggie discovery** (the registered `auggie` source):
+
+1. `auggie model list --json` — rich metadata (`id` ← `shortName`, `name` ← `displayName`).
+2. Plain `auggie model list` text fallback (`- Label [model-id]` rows + optional indented
+   description) when the JSON form fails or parses empty.
+3. Rows flagged `isLegacyModel` are **filtered out server-side**; the survivors are sorted by
+   `modelGroupPriority`, then `priority`, then `name` (missing priorities sort last). A
+   successful CLI result is cached per the generic 5-minute cache above.
+4. When the auggie CLI is unavailable or yields nothing parseable (and no last-good entry
+   exists), the static `PROVIDER_MODEL_TIERS` catalog is returned with `source: "static"`
+   (same fallback as `agent.getModels`), so the result is never empty — clients can key honest
+   "live vs fallback" UI off `source`.
+
+Errors: `-32603` only on internal failure; probe/CLI failures degrade as described above.
+
+```json
+// → request (legacy path, no providerId)
+{ "jsonrpc":"2.0","id":82,"method":"models.list" }
+// ← response
+{ "jsonrpc":"2.0","id":82,"result":{ "source":"auggie","models":[
+  { "id":"sonnet4.5","name":"Sonnet 4.5","provider":"auggie",
+    "description":"Balanced general model","modelGroupPriority":1,"costTier":2,
+    "badges":[{ "color":"green","label":"Auto" }],"effortLevels":["low","medium","high"],
+    "isDefault":true,"priority":1 } ] } }
+```
+
+### 5.31 `agent.enhancePrompt` — one-shot prompt enhancement
+
+Daemon-owned prompt enhance / AI-layout generation (the daemon spawns `auggie --print`; no
+client-side CLI involvement). One-shot request/response: no streaming, no
+agent session created or persisted, no events emitted. Part of the `agent.*`
+namespace (§5.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — in `mode: "enhance"` the raw user input to improve; in
+  `mode: "layout"` the full layout-generation instruction sent verbatim.
+- `mode` — `"enhance"` (default) wraps `prompt` in the enhancement template (the FE
+  `getInputWithEnhancePrompt` port) and **extracts** the
+  `<augment-enhanced-prompt>…</augment-enhanced-prompt>` payload from the model reply;
+  `"layout"` skips the template and returns the full cleaned reply (covers the FE
+  `agent:generate-layout` use). Any other value is `-32602`.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree as its
+  working directory (unknown workspace → `-32602`). Without it the CLI runs without a `cwd`
+  (mirrors the FE, which drops `cwd` when no workspace is bound).
+- `timeoutMs` — optional positive integer, default `30000` (the FE's 30-second enhancement
+  timeout), capped at `120000`.
+
+**Execution** — same one-shot CLI discipline as `workspace.generateSetupScript` (§5.25) and
+`models.list` (§5.30): auggie discovery (Intent-managed binary → enhanced PATH), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped for latency — enhancement needs no
+tools) with the composed prompt piped over stdin (`System: <mode system prompt>\n\n<message>`,
+mirroring the FE `streamChat` composition). Stdout is ANSI-stripped and cleaned (🤖-delimited
+response extraction plus tool-artifact line filtering, the FE `cleanAgentMessage` port) before
+the mode-specific parse.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; `mode` not `"enhance"`/`"layout"`; non-positive
+  `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit; in `mode: "enhance"`, a reply missing the
+  `<augment-enhanced-prompt>` tags (`data`: `"Failed to parse enhanced prompt from response"`).
+  CLI absence is a **hard error** here (unlike §5.30) — there is no meaningful static fallback
+  for enhancement.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":83,"method":"agent.enhancePrompt",
+  "params":{ "prompt":"make login better","model":"haiku4.5","workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":83,"result":{
+  "enhanced":"Improve the login flow: add client-side validation …",
+  "original":"make login better","mode":"enhance" } }
+```
+
+
+### 5.32 `agent.completeOnce` — one-shot prompt→completion
+
+A stateless one-shot completion RPC (used for background requests such as slug
+generation and note-status checks). The daemon owns the full
+lifecycle: spawn the auggie CLI, collect its cleaned reply, reap the process on any
+failure path (timeout, cancel, drop). **No agent session or in-memory state is
+created**, so no client-side create→send→read→delete orchestration is needed and
+there is nothing to garbage-collect on the error path. Part of the
+`agent.*` namespace (§5.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| agent.completeOnce | prompt (req), systemPrompt?, model?, workspaceId?, timeoutMs? | { text } |
+
+**Params.**
+
+- `prompt` (required, non-empty) — the user prompt piped verbatim to the CLI over
+  stdin (composed with `systemPrompt` when supplied).
+- `systemPrompt` — optional system prompt; when present the composed input becomes
+  `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
+  used by §5.31. Absent/blank → `prompt` rides through unchanged.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `workspaceId` — optional; when present the CLI runs with the workspace's worktree
+  as its working directory (unknown workspace → `-32602`). Without it the CLI runs
+  without a `cwd`.
+- `timeoutMs` — optional positive integer, default `30000` (matches §5.31 default),
+  capped at `120000`. A hung CLI is reaped when the timeout elapses.
+
+**Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
+binary resolution (`Services.auggie_bin` test seam → `context.auggiePath` setting when
+set and non-empty (exclusive; an invalid path is an error, no silent discovery fallback)
+→ `find_auggie()` discovery via Intent-managed binary → enhanced PATH), then
+`auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
+tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
+(🤖-delimited response extraction plus tool-artifact line filtering, the FE
+`cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
+events, no persistence. The binary resolution order honors the existing
+`context.auggiePath` settings key so explicit user config is never ignored and hermetic
+e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
+discovery.
+
+**Errors** (§9):
+
+- `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
+- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit. CLI absence is a **hard error** —
+  there is no static fallback for completion.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":84,"method":"agent.completeOnce",
+  "params":{ "prompt":"one-line slug for: fix the login flow" } }
+// ← response
+{ "jsonrpc":"2.0","id":84,"result":{ "text":"fix-login-flow" } }
+```
+
+### 5.33 `repoConfig.*` — per-repository configuration
+
+Four JSON-RPC methods for managing per-repository configuration (`.intent/config.json`) at the
+repository root. Each workspace lives in a git worktree; these methods resolve the **repository**
+root (via `worktreePath` → `repositoryPath` → `git_ops::worktree_path`) and read/write/check the
+shared `.intent/config.json` that sits at that root. The config carries project-wide settings
+(branch naming prefix, default setup script, agent instructions, repo scripts) that apply to all
+workspaces cloned from the same repo.
+
+All methods require `workspaceId` and map `Error::NotFound` to `-32602 "Workspace not found"`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| repoConfig.get | workspaceId (req) | { config: RepoConfig } — reads the config from the repo root; returns default empty config if the file is absent or contains invalid JSON |
+| repoConfig.save | workspaceId (req), config (req): RepoConfig | { config: RepoConfig } — writes the config, ensures `.intent/.gitignore`, and returns the persisted record |
+| repoConfig.has | workspaceId (req) | { exists: boolean } — checks whether `.intent/config.json` exists at the repo root |
+| repoConfig.ensureDir | workspaceId (req) | { ok: true } — creates the `.intent/` directory at the repo root if missing |
+
+**RepoConfig** — all fields are optional; absent fields have no effect on the workspace (fallback to workspace-level or global settings):
+
+- `branchPrefix?: string` — string prefix (e.g. `"feat/"`, `"aw/"`) prepended to auto-generated branch names in `workspace.create` (§5.1)
+- `setupScript?: string` — default setup script used when `workspace.create` omits `setupScript`
+- `instructions?: string` — repo-level instructions injected into agent prompts
+- `runScript?: string` — optional run script (reserved, no consumer in v1)
+- `archiveScript?: string` — optional archive script (reserved, no consumer in v1)
+- `scripts?: Array<{ id, name, command, mode, cwd?, env?, category?, autoStart? }>` — repo script definitions used to bootstrap workspace scripts when none exist
+
+The `defaultAutoCommit` field mentioned in early drafts was **not implemented** in the initial port.
+
+```json
+// → request — read the config
+{ "jsonrpc":"2.0","id":90,"method":"repoConfig.get","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":90,"result":{ "config":{ "branchPrefix":"feature/","setupScript":"npm install","instructions":"Use TypeScript strict mode" } } }
+
+// → request — write/update the config
+{ "jsonrpc":"2.0","id":91,"method":"repoConfig.save",
+  "params":{ "workspaceId":"ws-abc","config":{ "branchPrefix":"feat/","setupScript":"pnpm install" } } }
+// ← response
+{ "jsonrpc":"2.0","id":91,"result":{ "config":{ "branchPrefix":"feat/","setupScript":"pnpm install" } } }
+
+// → request — check existence
+{ "jsonrpc":"2.0","id":92,"method":"repoConfig.has","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":92,"result":{ "exists":true } }
+
+// → request — ensure the .intent directory exists
+{ "jsonrpc":"2.0","id":93,"method":"repoConfig.ensureDir","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
+```
+
+### 5.34 Skills — `skill.list`
+
+The backend exposes daemon-side skills discovery so clients can list skills for a workspace. The daemon scans the 5-tier precedence (user p1-3: `~/.agents/skills`, `~/.claude/skills`, `~/.augment/skills`; project p4-5: `<workspace>/.agents/skills`, `<workspace>/.augment/skills`) and parses `SKILL.md` frontmatter (name, description, allowedTools, compatibility). Name collisions shadow by precedence with warn logs. The discovered skill set is cached (with mtime-based fingerprints for cache invalidation) and monitored via filesystem watchers on all five scan roots; the daemon emits `skills:changed` events when SKILL.md files are created, modified, or deleted.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — -32602 if the workspace is not found or has no worktree path |
+
+- `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p4-5) and `"user"` for user-tier skills (p1-3); `allowedTools` / `compatibility` are optional frontmatter fields.
+- Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
+- The daemon watches all five scan roots recursively (using `notify` watchers, the same infrastructure as workspace `file:changed` events); when a SKILL.md file is created/modified/deleted under a watched root, the daemon re-runs discovery for the affected workspace(s) (user-tier changes affect all workspaces; project-tier changes are workspace-scoped), compares the newly-discovered set against the cached skill set, and emits `skills:changed` (§6.5) only if the set actually changed (500ms debounce per workspace). Non-existent roots are handled gracefully by watching the nearest existing ancestor. The `skill.list` handler also performs a check-on-read as a fallback safety net.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":64,"method":"skill.list","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":64,"result":[
+  { "name":"python-expert","description":"Python development specialist","location":"/Users/user/.augment/skills/python-expert/SKILL.md","scope":"user" },
+  { "name":"typescript-expert","description":"TypeScript specialist","location":"/workspace/.augment/skills/typescript-expert/SKILL.md","scope":"project","allowedTools":"*","compatibility":"typescript" } ] }
+```
+
+### 5.35 Interrupted-agent resumption — `agent.listInterrupted` / `agent.resolveInterrupted`
+
+These methods manage agent resumption across daemon restarts. When `intentd` restarts, in-flight agent sessions (`active`, `processing`, `waiting` statuses) are captured as **interrupted records** before the heal sweep rewrites them to `idle`. This capture occurs on both graceful shutdown (`SIGINT`/`SIGTERM`) and crash scenarios, ensuring that agents mid-turn are always resumable. Clients discover interrupted agents via `agent.listInterrupted` and resolve them via `agent.resolveInterrupted` (resume or abandon). For headless deployments, `intentd serve --resume-all` auto-resumes all interrupted agents at startup.
 
 #### `agent.listInterrupted`
 
 **Request:** `{}` (no parameters)
 
 **Response:**
+
 ```json
 {
   "agents": [
@@ -468,6 +3122,7 @@ The following methods manage agent resumption across daemon restarts. When `inte
 ```
 
 Returns pending interrupted agents across all workspaces. Each `InterruptedAgent` includes:
+
 - `agentId`, `workspaceId` — session and workspace IDs
 - `workspaceName`, `agentName` — joined from workspace/agent-session tables (may be empty if session deleted after interruption)
 - `prevStatus` — the agent's status before interruption (`active`, `processing`, or `waiting`)
@@ -478,6 +3133,7 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 #### `agent.resolveInterrupted`
 
 **Request:**
+
 ```json
 {
   "resume": ["agent-abc123"],
@@ -486,12 +3142,14 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 ```
 
 **Validation rules:**
+
 - `resume` and `abandon` are **optional** parameters.
 - When present, each must be an **array of strings** (non-array → `-32602 "resume/abandon must be an array"`; non-string element → `-32602 "resume[i]/abandon[i] must be a string"`).
 - `null` is treated as non-array and rejected with `-32602`.
 - At least one of `resume` or `abandon` **does not** need to be present; both can be absent or empty arrays (no-op).
 
 **Response:**
+
 ```json
 {
   "resumed": ["agent-abc123"],
@@ -501,247 +3159,483 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 ```
 
 Resolves interrupted agents:
+
 - **Resume:** Atomically marks row `resolved='resumed'` (claim-first), re-registers parent completion watches (if delegated), delivers a continuation message (`"You were interrupted because the harness shut down. You now have a chance to continue the work — review your last steps and pick up where you left off."`) via `agent.sendMessage`. Delivery lazily respawns the ACP provider and resumes via `session/load` (with `session/new` recreate fallback). If any post-claim step fails, the row is reset to `pending` (resolution=NULL) to restore retryability, and the error is returned.
 - **Abandon:** Marks row `resolved='abandoned'`, appends a system-role interruption message (text block with `meta.kind="interruption"`: `"This conversation was interrupted because intentd restarted. The agent's in-flight work was terminated."`), emits `agent:message` + `agent:updated` events.
 
 **Errors:**
+
 - An agent ID appearing in both `resume` and `abandon` → `-32602 "Agent id X appears in both resume and abandon"`
 - Unknown or already-resolved IDs land in the `failed` array: `{ agentId, error }` (error string describes the failure reason)
 
 Per-agent failures are isolated; other agents in the same call proceed normally.
 
-#### Queued-Message Preservation
+#### Queued-message preservation
 
-**Queues survive restarts.** The per-agent send queue (`agent.queueMessage` / `agent.getQueue`) is persisted write-through to the `agent_queue` SQLite table: every enqueue, edit, remove, and drain mutation of the in-memory queue is mirrored to the store, so both graceful shutdowns and crashes preserve queued messages. At daemon startup, persisted queues are rehydrated into memory before RPCs are served. Rehydration alone never starts a turn; entries mid-edit at shutdown are restored as ready-to-send (`editing: false`), and attachment blocks plus metadata round-trip intact.
+**Queues survive restarts.** The per-agent send queue (`agent.queueMessage` / `agent.getQueue`, §5.5) is persisted write-through to the `agent_queue` SQLite table: every enqueue, edit, remove, and drain mutation of the in-memory queue is mirrored to the store, so both graceful shutdowns and crashes preserve queued messages. At daemon startup, persisted queues are rehydrated into memory before RPCs are served. Rehydration alone never starts a turn; entries mid-edit at shutdown are restored as ready-to-send (`editing: false`), and attachment blocks plus metadata round-trip intact.
 
 **Resume ordering contract:** When an interrupted agent is resumed — via `agent.resolveInterrupted { resume }` or `serve --resume-all` — the continuation message streams **first**; the preserved queue then drains FIFO in original order after that turn completes. Abandoning an interrupted agent leaves its preserved queue intact and inert (no auto-send); entries remain visible via `agent.getQueue` and removable via `agent.removeQueuedMessage`.
 
 No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/remove/drain flows operate on the in-memory map, which is now durable.
 
-#### Delegation-Group Persistence
+#### Delegation-group persistence
 
-**`after_all` groups survive restarts.** When a parent delegates children with `waitMode: "after_all"`, the delegation group is persisted in the `delegation_group` SQLite table. At daemon startup, the heal sweep rehydrates all sealed groups and re-registers the aggregated-wake delivery watch. Resumed grouped children automatically re-enroll in their persisted group; when all children complete, the daemon delivers exactly one aggregated wake to the parent containing all children's reports.
+`after_all`** groups survive restarts.** When a parent delegates children with `waitMode: "after_all"`, the delegation group is persisted in the `delegation_group` SQLite table. At daemon startup, the heal sweep rehydrates all sealed groups and re-registers the aggregated-wake delivery watch. Resumed grouped children automatically re-enroll in their persisted group; when all children complete, the daemon delivers exactly one aggregated wake to the parent containing all children's reports.
 
 **Durable-before-observable:** Child completions are recorded durably in `delegation_group` **before** the `agent:idle` event publishes. A daemon kill between completion and event delivery cannot lose completion state — the resumed child's completion is already persisted when the daemon restarts.
 
 **Group-wake format:** The aggregated wake is a single agent turn delivered to the parent, containing a `[WORKSPACE EVENTS]` summary block listing all children's completion reports. Each child's report line: `**{child_name}** (agent-{id}) completed. Report: {completion_report_text}`. After delivery, the group row is pruned.
 
-#### `serve --resume-all` CLI Flag
+#### `serve --resume-all` CLI flag
 
-`intentd serve --resume-all` is a headless deployment flag that automatically resumes all interrupted agents at startup without waiting for `agent.resolveInterrupted` RPC.
+`intentd serve --resume-all` is a headless deployment flag that automatically resumes all interrupted agents at startup without waiting for the `agent.resolveInterrupted` RPC.
 
-**Execution:** After the daemon is fully up (services wired, event bus live, RPC servers listening), a background task enumerates `agent.listInterrupted` and calls the resume service operation for each pending agent. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup.
+**Execution:** After the daemon is fully up (services wired, event bus live, RPC servers listening), a background task enumerates the interrupted set and calls the resume service operation for each pending agent. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup.
 
-**Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes.
+**Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes. After the sweep completes, `agent.listInterrupted` returns an empty list.
 
-**Logged output:**
-- `INFO`: `--resume-all: enumerating interrupted agents`
-- `INFO`: `--resume-all: resuming interrupted agents` (with `count` field)
-- `INFO`: `--resume-all: resumed agent` (per success; includes `agent_id`, `workspace`)
-- `WARN`: `--resume-all: failed to resume agent` (per failure; includes `agent_id`, `error`)
-- `INFO`: `--resume-all: auto-resume sweep complete` (with `resumed`, `failed` counts)
+## 6. Events & Subscriptions
 
-After the sweep completes, `agent.listInterrupted` returns an empty list.
+Live event streaming is the **canonical** way a thin client stays in sync. It uses twoserver-handled methods (the plural `events.` prefix) plus a server-pushed notification.
 
-### 6.7 `models.list` Per-Provider Catalog (v2.0 additions)
-
-`models.list` (§5.30 of the porting-era protocol, `docs/00_initial_porting/PROTOCOL.md`) accepts two additive **optional** parameters. With both omitted the required keys of the ported contract are unchanged: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog), returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId` — though the optional `stale` / `warning` fields may now appear on probe-failure degradation (see the legacy-path bullet below).
-
-**Request:**
-
-```jsonc
-{
-  "providerId": "auggie",  // optional — per-provider catalog via the generic cache
-  "forceRefresh": false    // optional, default false — skip the cache read, await a fresh probe
-}
-```
-
-**Response (with `providerId`):**
-
-```jsonc
-{
-  "providerId": "auggie",
-  "models": [ /* ModelInfo rows */ ],
-  "source": "auggie",          // the provider id, or "static" on fallback
-  "stale": true,               // optional — present only when serving last-good after a failed probe
-  "warning": "..."             // optional — human-readable reason for fallback/stale/empty data
-}
-```
-
-**Semantics:**
-
-- **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
-- **`forceRefresh: true`** skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
-- **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
-- **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
-- **Registered sources:** seven providers are registered — `auggie` (CLI discovery, as above); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); and `opencode` (native CLI discovery). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
-- **Unknown/unregistered `providerId`** degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
-- **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
-- **Errors:** `-32603` only on internal failure; probe/CLI failures degrade as described above.
-
----
-
-## 7. Events & Subscriptions
-
-Clients subscribe to events via the **`events.subscribe`** method (fast-path, not routed). The server sends matching events as **`events.event`** notifications (no request `id`).
-
-### 7.1 `events.subscribe`
-
-**Request:**
+### 6.1 `events.subscribe`
 
 ```json
-{
-  "jsonrpc": "2.0",
-  "id": 100,
-  "method": "events.subscribe",
-  "params": {
-    "eventTypes": ["agent:*", "workspace:*"],
-    "workspaceId": "ws-abc",
-    "excludeSelf": true,
-    "batchWindow": 500
-  }
-}
+// → request
+{ "jsonrpc":"2.0","id":60,"method":"events.subscribe",
+  "params":{ "eventTypes":["agent:*","note:*"], "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":60,"result":{ "subscriptionId":"ws-sub-1" } }
 ```
 
-**Response:**
+Params:
+
+- `eventTypes` (req) — **non-empty array** of event-type strings. Empty/missing → error(`-32602` over the wire). Supports exact types (`note:updated`) and `:*`** wildcards**(`agent:*`, `file:*`) — see §6.4.
+- `workspaceId?` — scopes delivery to one workspace. Omit to receive matching events across allworkspaces the connection can see.
+- `replaceGroup?` — if set, any existing subscription from the **same connection** with the same`replaceGroup` is removed first (useful for "switch the active workspace" without leaking subs).
+
+A connection may hold **multiple** subscriptions. Each is identified by a server-assigned`subscriptionId` (`ws-sub-<n>`). Subscriptions are **per-connection** and are dropped on disconnect.
+
+### 6.2 `events.unsubscribe`
 
 ```json
-{
-  "jsonrpc": "2.0",
-  "id": 100,
-  "result": {
-    "subscriptionId": "sub-xyz",
-    "eventTypes": ["agent:*", "workspace:*"]
-  }
-}
+{ "jsonrpc":"2.0","id":61,"method":"events.unsubscribe","params":{ "subscriptionId":"ws-sub-1" } }
+// ← { "jsonrpc":"2.0","id":61,"result":{ "success": true } }
 ```
 
-- `eventTypes` (required): array of event type patterns (e.g., `"agent:*"`, `"file:*"`, `"workspace:created"`)
-- `excludeSelf` (optional, default `true`): filter out events caused by this connection
-- `batchWindow` (optional, default `500`ms): batch events within this window
+`success` is `false` if the subscription id is unknown for this connection.
 
-Subscriptions are **per-connection** and do **not** survive reconnects. On disconnect, the server cleans up all subscriptions for that connection.
+### 6.3 `events.event` notification (server → client)
 
-### 7.2 `events.unsubscribe`
-
-**Request:**
+Matching events are pushed as JSON-RPC **notifications** (no `id`):
 
 ```json
-{
-  "jsonrpc": "2.0",
-  "id": 101,
-  "method": "events.unsubscribe",
-  "params": {
-    "subscriptionId": "sub-xyz"
-  }
-}
+{ "jsonrpc":"2.0","method":"events.event","params":{
+  "subscriptionId":"ws-sub-1",
+  "event":{
+    "type":"note:updated",
+    "workspaceId":"ws-abc",
+    "id":"evt-789",
+    "timestamp":"2026-06-17T04:35:04.055Z",
+    "actor":{ "type":"agent","id":"agent-123","name":"Coordinator" },
+    "data":{ "noteId":"spec","title":"Spec","action":"update" }
+  } } }
 ```
 
-**Response:**
+The `event` object carries exactly: `type`, `workspaceId`, `id`, `timestamp`, `actor`, `data`.If one event matches several of a client's subscriptions, the client receives **one notificationper matching subscription** (each tagged with its `subscriptionId`). Clients should de-dupe on`event.id` when they hold overlapping subscriptions.
+
+### 6.4 Filter semantics
+
+`eventTypes` is compiled to a type filter (and an optional `workspaceId` equality filter):
+
+- **Single exact type** → equality match.
+- **Multiple exact types** → membership (`in`) match.
+- **Single **`prefix:*` → `starts_with "prefix:"`.
+- **Multiple wildcards / mixed wildcard+exact** → a regex anchored match combining the prefixesand exact types.
+
+All filters on a subscription are combined with **AND**. Delivery is gated *only* by this filtermatch — the bridge does not maintain any additional allow/deny list.
+
+### 6.5 Event taxonomy
+
+`actor.type` is one of `user | agent | system | external | tool`. Common event types(`namespace:name`) a client will encounter:
+
+| Namespace | Types (selected) | Notes |
+| --- | --- | --- |
+| file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
+| note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`). No `path` field (never emitted). |
+| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
+| task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
+| agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
+| agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (one-shot removal, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
+| agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
+| agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint — the pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. |
+| agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task under a per-repository lock. |
+| spec/goal | spec:updated, goal:updated |  |
+| comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
+| pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest, pullRequests }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest, pullRequests }`, `pr:unlinked` → `{ workspaceId }`. `pullRequests` is the daemon-owned `PullRequestInfo[]` list (every refreshed/discovered/created PR upserted by number, merged/closed PRs retained) so clients can render the full per-branch PR list without a refetch; it is always an array on the wire (`[]` when empty, never `null`). |
+| agent (permission, new in intentd) | agent:permission:request, agent:permission:resolved | The interactive permission flow (§8). `agent:permission:request` carries the normalized `PermissionRequestData`; `agent:permission:resolved` carries the chosen outcome (`selected`/`cancelled`). Both are scoped to the agent (`sessionId == agentId`). |
+| settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. |
+| github (new in intentd) | github:auth-changed | Terminal transitions of the GitHub auth surface (§5.27). data = { status: "authorized"\|"expired"\|"denied"\|"error"\|"revoked" } — device-flow outcomes from the daemon's background poll, plus `revoked` from `github.revoke`. Global (no `workspaceId`, like `settings:changed`); never carries a token or code. |
+| skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace. The daemon watches the 5 scan roots (user p1-3 + project p4-5) via `notify` watchers; when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the set actually changed. User-tier changes (p1-3) affect all workspaces; project-tier changes (p4-5) are workspace-scoped. data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.34) to refresh the skill roster. |
+| mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback — distinct from the `mcp.servers.*` lifecycle surface. |
+| mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
+| git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
+| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error? }`; `error` is present iff `ok == false` and never carries the source URL or credentials. |
+| terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
+| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
+| search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
+| drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
+| changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
+| workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed by the internal scan job (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
+| agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
+| sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with `isolation: "cow"` successfully provisions a CoW worktree sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository. `sandbox:created` → data { workspaceId, sandboxId, sandboxPath, sandboxBranch, agentId } where `sandboxId` is the unique sandbox identifier, `sandboxPath` is the absolute filesystem path to the worktree clone, `sandboxBranch` is the ephemeral branch name (`sandbox/<uuid>`), and `agentId` is the delegated agent assigned to the sandbox. `sandbox:merged` → data { workspaceId, agentId, canonicalHead } where `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
+
+### 6.6 Batching window
+
+`events.subscribe` accepts a `batchWindow` hint on the deprecated `agent.*`/`event.*` aliases; thecanonical bridge delivers each accepted event **individually** as it is accepted (no server-sidecoalescing on the WS bridge). Clients that need coalescing should debounce on their side, keyed by`event.type` + the relevant id in `data`.
+
+### 6.7 Event-design rule: self-sufficient payloads *(new in intentd)*
+
+New event types SHOULD carry a **self-sufficient payload** — the changed entity or field — so a
+thin client can update its local state **directly from the event, with no follow-up fetch**. The
+intentd status events follow this rule:
+
+- `workspace:activity-changed` → `{ workspaceId, activity }` (derived green-dot state)
+- `workspace:attention-changed` → `{ workspaceId, attention }` (dismissible blue-dot state)
+
+Each is emitted **only on change** and carries the new value, so the FE re-renders the
+green/blue dot immediately without a `workspace.get` round-trip. The existing WS event stream
+(`agent:*`, `task:*`, `pr:*`, `note:*`, …) is **unchanged** and remains the UI's primary feed;
+this rule is guidance for new event types, not a change to existing ones. (Incremental token
+streams like `agent:stream:chunk` stay UI sugar — §10.1 — the rule applies to state-change
+events, not partial deltas.)
+
+### 6.8 Cross-cutting principle: autonomous backend work surfaces via events, not RPC *(new in intentd)*
+
+Work the backend performs **on its own** — as agents and pipelines run — is **not** exposed as a
+client RPC. It runs internally and reaches the thin client through **events** (and as fields on
+read responses), following the self-sufficient-payload rule (§6.7). Concretely, these have **no
+wire method**:
+
+- **Agent-attribution tracking** (`file-tracking.trackChange`) — recorded as agents edit files;
+  surfaced via `changes:tracked` and the `file-tracking.*` reads (§5.19).
+- **Diff computation/versioning** (`diffs.*`) — computed/stored internally; diff bodies reach the
+  client only through `file-tracking.*` reads and change events (§5.18 schemas note).
+- **Metrics aggregation** (`metrics.calculate`, the `update*` writers, agent-active tracking) —
+  computed as work happens; surfaced via `changes:metrics-changed` and the metrics **reads**
+  (§5.20).
+
+Clients **read** current state and **subscribe** to changes; they never invoke the internal
+writers. This keeps the FE thin: it reflects backend-owned state rather than driving it.
+
+### 6.9 Snapshot+delta subscription channels *(new in intentd)*
+
+The `events.subscribe` firehose (§6.1) carries every bus event; a thin client that needs **structured live state for a specific entity family** subscribes to a typed channel instead. Each channel is intercepted on the transport fast-path **before** the JSON-RPC dispatcher (alongside `events.subscribe` and `system.*`), returns a `{ subscriptionId }` ack, then pushes a seq-0 **snapshot** followed by ordered **deltas** as `subscription.push` notifications (§3.3). The firehose stays unchanged and **coexists** with these channels.
+
+| Method | Channel | Scope | Snapshot shape (seq 0) | Notes |
+| --- | --- | --- | --- | --- |
+| `note.subscribe` / `note.unsubscribe` | note | per-workspace (`workspaceId` req — `-32602` if missing/empty) | array of `Note` entities (newest-first) | `note:created`/`updated`/`deleted` → `added`/`updated`/`removedIds` via a re-read of the entity. |
+| `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of `WorkspaceTask` entities | tails `task:status-changed`/`task:ready-tasks-changed`. |
+| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of `Workspace` entities visible to the connection | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`. |
+| `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | array of `Comment` entities | tails `comment:added`/`resolved`. |
+| `agent.subscribe` / `agent.unsubscribe` (no `eventTypes`) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Likewise `agent.unsubscribe` without `workspaceId` is the channel form. |
+| `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty) | newest `agent.getConversation` page, plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
+
+**Frame shapes.** Every push is a JSON-RPC notification with method `subscription.push`:
 
 ```json
-{
-  "jsonrpc": "2.0",
-  "id": 101,
-  "result": {
-    "ok": true,
-    "subscriptionId": "sub-xyz"
-  }
-}
+// seq-0 snapshot
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-1","kind":"snapshot","seq":0,
+  "snapshot":[ /* entities */ ] } }
+
+// delta (seq 1, 2, …)
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-1","kind":"delta","seq":1,
+  "delta":{ "added":[…], "updated":[…], "removedIds":[…] } } }
 ```
 
-### 7.3 `events.event` Notification
+`added`/`updated`/`removedIds` are each present only when non-empty; the **invariant** is that the seq-0 snapshot reduced with every delta (honoring `removedIds`) equals a fresh full read of the channel. `*.unsubscribe` takes `{ subscriptionId }` and returns `{ success }` (`false` if the id is unknown for this connection). Subscriptions are **per-connection** and are dropped on disconnect.
 
-The daemon sends **`events.event`** notifications (no request `id`) to subscribed clients:
+`note` and `task` entities carry an explicit `rev` (the optimistic-concurrency version, §4); `workspace`, `comment`, `agent`, and `chat` entities deliberately do **not** carry `rev`.
+
+## 7. Agent Streaming
+
+Agent assistant output is delivered as the `agent:stream:*` event family (subscribe with`events.subscribe(["agent:stream:*"])`, optionally scoped by `workspaceId`). The backend maps aprovider's streaming signals to these canonical event types.
+
+The backend currently emits **three** signals in production; the remaining `agent:stream:*`
+event types are defined as constants (and registered in `ALL_EVENT_TYPES`) but have **no
+production emit site** today and are reserved for future use.
+
+**Emitted today:**
+
+| Provider signal | Event type | data payload |
+| --- | --- | --- |
+| text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
+| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
+| complete or error | agent:stream:end | { agentId, content, streamId? } |
+
+**Reserved / not currently emitted** — the following constants exist and are registered in
+`ALL_EVENT_TYPES`, but the backend does **not** emit them today:
+
+| Event type | intended meaning |
+| --- | --- |
+| agent:stream:start | stream start |
+| agent:stream:content-blocks | structured blocks (e.g. thinking / tool-call) |
+| agent:stream:message | assistant message |
+| agent:stream:tool_use | tool call |
+| agent:stream:tool_result | tool result |
+
+Structured consumers should prefer the §7.1 `chat.subscribe` channel (the canonical structured
+transcript) over reconstructing turn state from the firehose.
+
+Notes for client implementers:
+
+- **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
+- **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
+- **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
+
+### 7.1 `chat.subscribe` — structured live transcript channel *(new in intentd)*
+
+The `agent:stream:*` firehose (above) stays UI sugar (§10.1): a joiner that misses earlier chunks
+cannot reconstruct the turn, and the client must re-fetch `agent.getConversation` after every
+`stream:end`. `chat.subscribe` is the **canonical** alternative — an **agent-scoped** channel on the
+snapshot+delta subscription engine (§6.9) that delivers a self-healing transcript a thin client
+can render directly, with **no follow-up fetch**. It **coexists** additively with the firehose: both
+observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
+
+- **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
+  before the JSON-RPC dispatcher (like `events.subscribe`). `params` is `{ agentId }` — a
+  missing/empty `agentId` is a `-32602` error. `chat.subscribe` returns `{ subscriptionId }`, then
+  pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
+  `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
+- **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
+  `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
+  Each subsequent delta upserts individual **content blocks** within a message.
+- **Stable block ids.** Every assistant block carries a synthetic `id` of `{messageId}:{blockIndex}`
+  (the assistant message UUIDv7 minted at turn start + the 0-based index in the coalesced block
+  array). Snapshot blocks and live deltas derive the same id, so deltas patch the snapshot exactly.
+- **Mid-turn (re)subscribe.** When a turn is streaming, the seq-0 snapshot appends a synthetic
+  in-flight `assistant` message (`isStreaming: true`) whose `contentBlocks` are the current partial
+  blocks, so a subscriber arriving mid-turn renders a coherent partial rather than a gap. The
+  terminal delta clears it to `streamingComplete: true`.
+- **Activity-flags overlay.** The seq-0 snapshot also carries the daemon-owned activity flags from
+  the `AgentLite` projection (§5.5) — `isResponding`, `isWaitingOnTool`, `isWaitingForOtherAgents`,
+  `waitingForAgentIds`, plus the STAB-125 turn-liveness pair `turnInFlight` /
+  `lastStreamActivityAt` (`null` when no turn is in flight) — so a client arriving mid-turn renders
+  the same agent state as `agent.get` without a second read.
+
+**Delta envelope.** Reuses the standard `{ added, updated, removedIds }` envelope with content blocks
+as the id-bearing entities. Each entity carries the **full current block** (not a text diff) plus a
+`{ agentId, messageId, role }` pointer (and `messageSeq` + `timestamp` on the authoritative terminal
+frame):
+
+- `added` — a block's first appearance this turn (e.g. a text block's first chunk, or a `tool_use`).
+- `updated` — an existing block grown/changed, matched by `id` (e.g. each subsequent text chunk
+  carries the full accumulated text; full-block replace is idempotent under re-delivery).
+- `removedIds` — a block emitted **live** that the finally-persisted message does **not** contain.
+  This is non-empty only for orphan self-heal: e.g. a trailing partial the durable turn dropped, or
+  a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
+  snapshot.
+
+**Synthesized `tool_use` block shape.** Both the persisted transcript (`record_tool` in
+`agent_session`) and the live delta stream (`tool_delta` in `intent-transport`) synthesize
+`tool_use` blocks from the same `agent:tool:call` signal (§7) via a single factory —
+`crates/intent-services/src/tool_block.rs::build_tool_use_block` — so seq-0 and every subsequent
+delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
+`"sub-agent-explore: Explore the AI agent system…"`) rather than the raw tool name the model
+invoked; the real name is derived **once**, at `session/update` mapping time
+(`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
+raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
+Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
+identifier followed by `": "` or `":\t"` — is split, taking the prefix. Titles without that
+shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
+`name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
+tool names carry no suffix, and auggie's `<tool>_<server>` convention appends the server
+name, so stripping recovers the registry name (`add_to_note_workspace-mcp` → `add_to_note`).
+The full title, when non-empty, is echoed verbatim as `input._acpTitle` so the FE classifier
+has it alongside `name` for fallback rendering when raw args are missing (auggie frequently
+sends `raw_input: null`); a `Null` `input` is coerced to `{}` so the marker can attach, while
+non-object non-null inputs (arrays / scalars) pass through verbatim (the FE still has `title`
+in the event).
+
+**Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
+blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,
+metadata:{ toolKind, status } }`) and, once the same call completes **with** output, a `tool_result`
+block (`{ type, id, tool_use_id, output, is_error }`).
+
+**Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
+message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
+live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
+`removedIds` for any orphaned live block). The guarantee: **the seq-0 snapshot reduced with every
+delta — honoring `removedIds` — equals a fresh `agent.getConversation` snapshot.**
+
+#### seq-0 snapshot (`subscription.push`, messages page)
 
 ```json
-{
-  "jsonrpc": "2.0",
-  "method": "events.event",
-  "params": {
-    "subscriptionId": "sub-xyz",
-    "event": {
-      "type": "agent:created",
-      "workspaceId": "ws-abc",
-      "id": "evt-123",
-      "timestamp": "2026-07-14T12:00:00.000Z",
-      "actor": {
-        "type": "agent",
-        "id": "agent-456"
-      },
-      "data": {
-        "agentId": "agent-456",
-        "name": "New Agent"
-      }
-    }
-  }
-}
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-7","kind":"snapshot","seq":0,
+  "snapshot":{
+    "agentId":"agent-123",
+    "messages":[
+      { "id":"0190a1b2-user","agentId":"agent-123","seq":0,"role":"user",
+        "contentBlocks":[ { "type":"text","id":"0190a1b2-user:0","text":"Run the tests" } ],
+        "timestamp":"2026-06-27T01:00:00.000Z" }
+    ],
+    "truncated":false,"totalMessages":1,"nextToken":null } } }
 ```
 
-- `subscriptionId`: the ID returned by `events.subscribe`
-- `event`: the event payload
-  - `type`: event type (e.g., `"agent:created"`, `"workspace:updated"`, `"note:changed"`)
-  - `workspaceId`: workspace the event belongs to (empty string for global events)
-  - `id`: unique event ID
-  - `timestamp`: ISO 8601 timestamp
-  - `actor`: who/what caused the event (`{ type: "user" | "agent" | "system", id?: string }`)
-  - `data`: event-specific payload
+#### delta frame (in-flight block upsert)
 
-### 7.4 Event Type Taxonomy
+```json
+{ "jsonrpc":"2.0","method":"subscription.push","params":{
+  "subscriptionId":"sub-7","kind":"delta","seq":6,
+  "delta":{
+    "added":[],
+    "updated":[
+      { "agentId":"agent-123","messageId":"0190a200-asst","role":"assistant",
+        "block":{ "type":"text","id":"0190a200-asst:0","text":"Let me check the logs first." } }
+    ],
+    "removedIds":[] } } }
+```
 
-Event types follow the pattern `<category>:<action>`. Common categories:
+A block's first appearance arrives as `added` with the same `block.id`; each growth is an `updated`
+carrying the **full** block. A tool call arrives as an `added` `tool_use` block, then a `tool_result`
+block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
+with `streamingComplete:true` and any orphan ids in `removedIds`.
 
-- **`agent:*`** — agent lifecycle (created, updated, renamed, deleted, idle, stream:*, failed, etc.)
-- **`workspace:*`** — workspace changes (created, updated, deleted, activity-changed, attention-changed, etc.)
-- **`note:*`** — note mutations (created, updated, changed, deleted, etc.)
-- **`task:*`** — task updates (status-changed, agent-linked, agent-unlinked, etc.)
-- **`file:*`** — file system changes (created, modified, deleted, etc.)
-- **`git:*`** — git operations (commit, stage, push, pull, clone:progress, clone:done, etc.)
-- **`terminal:*`** — terminal activity (created, output, closed, etc.)
-- **`comment:*`** — comment lifecycle (added, resolved, deleted, etc.)
-- **`pr:*`** — pull request events (created, merged, checks-updated, etc.)
-- **`search:*`** — search results (result, done, etc.)
-- **`sandbox:*`** — sandbox lifecycle (created, merged, etc.)
-- **`mcp:*`** — MCP server status changes (status-changed, etc.)
-- **`spec:*`** — spec note events
-- **`goal:*`** — goal tracking events
-- **`github:*`** — GitHub auth surface: `github:auth-changed` carries `data = { status: "authorized" | "expired" | "denied" | "error" | "revoked" }` on device-flow terminal transitions and `github.revoke`; global (empty `workspaceId`), never carries a token or code
+### 7.2 Interrupted partial-turn persistence
 
-### 7.5 Interrupted Partial-Turn Persistence
-
-On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessage`, or `agent.sendMessage` / `agent.sendToTask` called with the request parameter `priority: "interrupt"` — the daemon persists the streamed-so-far partial assistant message **before** emitting the terminal `agent:stream:end`. The partial turn's content blocks are written to the transcript under the assistant `messageId` minted at turn start (the same id carried by the live `agent:stream:chunk` events, and from which the `chat.subscribe` synthetic block ids are derived as `{messageId}:{blockIndex}` — see `docs/00_initial_porting/PROTOCOL.md` §7.1), tagged on the message row with:
+On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessage`, or `agent.sendMessage` / `agent.sendToTask` called with the request parameter `priority: "interrupt"` — the daemon persists the streamed-so-far partial assistant message **before** emitting the terminal `agent:stream:end`. The partial turn's content blocks are written to the transcript under the assistant `messageId` minted at turn start (the same id carried by the live `agent:stream:chunk` events, and from which the `chat.subscribe` synthetic block ids are derived as `{messageId}:{blockIndex}` — §7.1), tagged on the message row with:
 
 - `metadata.interrupted: true`
 - `metadata.stopReason: "interrupted"`
 
 This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
 
-**Consequence for `chat.subscribe` (the terminal reconcile of `docs/00_initial_porting/PROTOCOL.md` §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
+**Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
 
 Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
 
----
+## 8. Permission Flow
 
-## 8. Error Codes
+When an agent's provider (e.g. auggie) wants to run a tool that requires approval, it sends an ACP`session/request_permission` request **to the backend** (over the provider's stdio channel, not theclient WebSocket). The backend mediates approval:
 
-The daemon uses the following JSON-RPC 2.0 error codes:
+1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
+2. **Interactive.** Otherwise the backend **blocks the agent's stream** and surfaces a permission request to the frontend: the daemon pushes it to subscribed clients and awaits a response.
 
-| Code | Meaning | Description |
-|------|---------|-------------|
-| `-32700` | Parse error | Invalid JSON was received by the server. |
-| `-32600` | Invalid Request | The JSON sent is not a valid Request object. |
-| `-32601` | Method not found | The method does not exist / is not available. |
-| `-32602` | Invalid params | Invalid method parameter(s). The `message` field provides details (e.g., `"Missing required parameter: noteId"`). |
-| `-32603` | Internal error | Internal JSON-RPC error. The `error.data` field may carry the original internal error message. |
+> **Implementation status.** The interactive *answer* and *recovery* RPCs are now **wired** in
+> `intentd`. `agent.respondPermission { requestId, outcome }` → `{ resolved: bool }` forwards the
+> chosen outcome to the blocked provider — `resolved` is `false` when no matching pending prompt
+> exists, and a malformed `outcome` shape is rejected as **`-32602`**. `agent.pendingPermissions
+> { agentId? }` → `{ requests: [...] }` snapshots the outstanding prompts (optionally filtered to a
+> single `agentId` = `sessionId`) so a reconnecting client can re-fetch them. Both reach
+> `PermissionRegistry::resolve()` / `::pending()` via `AgentManager` → `WorkspaceApi` / `Services`
+> → the `agent.*` router. The normalized request payload, options normalization, `riskLevel`
+> heuristic, outcome shape, and 5-minute timeout are implemented as described.
+>
+> **Default policy.** The shipped default is **`AllowAll`** for reference parity with the TS
+> acp-provider, selectable at runtime via **`INTENTD_PERMISSION_POLICY`**
+> (`interactive|auto|allow|deny`, default `AllowAll`). Under `AllowAll`,
+> `AgentManager::start_session` additionally issues a best-effort
+> `session/set_mode { modeId: "bypassPermissions" }` after `session/new`,
+> `session/load`, and the recreate fallback on providers that advertise
+> set-mode (auggie today). Providers that don't advertise set-mode, or that
+> reject the mode change, fall through to the local auto-approve inside
+> `ClientRequestHandler` (the previous `AutoByRisk` default silently denied
+> medium/high prompts). An **`Interactive`**
+> deployment instead blocks the agent's stream and surfaces each prompt via
+> `agent.pendingPermissions`, resolving it via `agent.respondPermission` (still
+> bounded by the 5-minute timeout when left unanswered). **`AutoByRisk`** and
+> **`DenyAll`** remain available for headless-with-guardrails deployments and
+> never issue the bypass mode change.
 
-**Domain-specific errors** (e.g., "workspace not found", "agent already running") return `-32603` with a descriptive `message` rather than custom error codes. The `message` field is the canonical error text; clients should display it to users.
+The normalized permission request payload is:
 
----
+```json
+{
+  "requestId": "perm_1718600000000_1",
+  "sessionId": "agent-123",
+  "title": "Run command",
+  "description": "Tool input: { \"command\": \"npm test\" }",
+  "options": [
+    { "id": "allow_once", "label": "Allow", "description": null, "destructive": false },
+    { "id": "reject_once", "label": "Deny", "destructive": true }
+  ],
+  "agentName": "auggie",
+  "riskLevel": "high",
+  "timestamp": 1718600000000
+}
+```
 
-## Summary
+- `options` are normalized from both ACP (`id`/`label`) and auggie (`optionId`/`name`) shapes. If aprovider sends none, the backend defaults to `allow_once` / `reject_once`.
+- `riskLevel` (`low|medium|high`) is heuristically derived from the title (read/list → low;delete/execute/write/create → high).
+- `sessionId` equals the `agentId`, so a client can route the prompt to the right agent view.
 
-**Protocol v2.0** exposes **294 dispatchable method names** (262 router methods + 30 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 294 dispatchable names AND are also issued daemon→client on remote connections.
+The frontend responds with the chosen outcome, which the backend forwards to the provider as the`session/request_permission` result:
 
-The method surface is frozen and enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift causes CI failure with the instruction to update the catalog, this document, and bump the protocol version.
+```json
+{ "requestId": "perm_1718600000000_1", "outcome": { "outcome": "selected", "optionId": "allow_once" } }
+```
 
-For implementation details and per-method signatures, see the source code in `crates/intent-transport/src/router.rs` and the fast-path modules (`client.rs`, `events.rs`, `drafts.rs`, `browser.rs`, `forward.rs`, `host.rs`, `control.rs`, `pairing.rs`).
+Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **now wired** — see the implementation note above.
+
+## 9. Error Codes
+
+Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
+
+| Code | Name | When |
+| --- | --- | --- |
+| -32700 | Parse error | Body is not valid JSON. Always answered (id null), even for would-be notifications. |
+| -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
+| -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
+| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. |
+| -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
+| -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, §5). |
+
+The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict) and `-32001` (Unauthorized, local-only guard); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
+
+## 10. Thin-Client Guidance
+
+The backend is the **single source of truth**; clients should hold only ephemeral UI state.
+
+### 10.1 Canonical state lives in the backend
+
+Never treat streamed deltas as authoritative. `agent:stream:chunk` text, optimistic note edits, andlocal task toggles are **UI sugar** — the persisted entity (fetched via `note.get`,`agent.getConversation`, `note.listTasks`, …) is canonical. Reconcile to it after each mutation/turn.
+
+### 10.2 Subscribe-then-fetch
+
+1. Connect + authenticate (§2), pin the cert (§1.2).
+2. `events.subscribe` for the slices you render (e.g. `["note:*","task:*","agent:*"]`) **before**fetching, so no change is missed in the gap.
+3. Fetch the current state (`workspace.get`, `note.list`, `agent.list`, …).
+4. Apply incoming `events.event` notifications to your local cache; de-dupe on `event.id`.
+5. On reconnect, **re-subscribe and re-fetch** — subscriptions do not survive disconnects.
+
+### 10.3 Optimistic UI
+
+For mutations, optimistically apply locally, send the request, and reconcile when (a) the methodresult returns and (b) the corresponding `events.event` arrives. Roll back on error. Use the stable`messageId` you pass to `agent.sendMessage` (and the echoed `agent:user-message:sent` event) tomatch your optimistic message against the canonical one and avoid duplicates across clients.
+
+### 10.4 Minimal client session walkthrough
+
+```text
+1.  resolve _intent-ws._tcp  → host:port, fp=AB:CD:...        (mDNS, §1.3)
+2.  WSS connect wss://host:port/ws  (pin fp)                  (§1.2)
+        Authorization: Bearer <token>                        (§2.1)
+3.  → events.subscribe { eventTypes:["agent:*","note:*","task:*"], workspaceId:"ws-abc" }
+    ← { subscriptionId:"ws-sub-1" }                          (§6.1)
+4.  → workspace.get { workspaceId:"ws-abc" }   ← { workspace }
+    → note.list      { workspaceId:"ws-abc" }   ← { notes }
+    → agent.list     { workspaceId:"ws-abc" }   ← { agents }
+5.  → agent.sendMessage { workspaceId, agentId:"agent-123", content:"Fix the build", messageId:"m1" }
+    ← { success:true, queued:false, messageId:"m1" }         (§5.5)
+6.  ← events.event agent:stream:start  / :chunk* / :tool_use / :tool_result / :end   (§7)
+7.  → agent.getConversation { agentId:"agent-123" }  ← { messages, ... }   (reconcile, §10.1)
+8.  (permission prompt, if any) ← request_permission → respond selected/allow_once  (§8)
+9.  on disconnect: reconnect, re-auth, repeat from step 3.   (§4)
+```
+
+*The canonical wire-protocol specification for the Intent backend daemon (`intentd`). The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`; changes follow the compatibility policy at the top of this document.*

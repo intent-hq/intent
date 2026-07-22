@@ -12,8 +12,8 @@ submodules:
 - `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
-The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`; see
-`docs/README.md` for how the porting documents relate.
+The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
+`docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
 ## Commit & PR Workflow
 
@@ -55,44 +55,26 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 
 ## Breadcrumbs (initial porting) — **CONCLUDED**
 
-The **`00_initial_porting`** effort is complete as of 2026-07-13.
-`docs/00_initial_porting/BREADCRUMBS.md` is now **frozen** as a historical record. No
-new breadcrumb entries should be added to that file.
+The initial porting effort is complete as of 2026-07-13, and its chronicle (implementation
+spec, porting-era protocol, and the frozen breadcrumbs progress log) has been removed from
+the tree — the original documents remain available in git history. The durable content
+lives on in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`. Do not add new breadcrumb
+entries; progress is tracked via GitHub issues and PRs.
 
-The policy was:
-- **When**: whenever you complete a meaningful unit of porting work (a crate, a method or
-  group of methods, a transport/persistence change, a submodule bump).
-- **What**: append a dated entry to the changelog, newest first. Keep it concise — what
-  changed, which crates/methods were touched, and the resulting `packages/intentd` HEAD.
-  Also update the "Current submodule HEAD" and "Implemented surface" sections when they
-  change, and move items out of "Deferred / planned" as they ship.
-- **Accuracy**: never overstate. Only list surface that is actually implemented; everything
-  else stays under deferred/planned.
+## Filing Issues
 
-Breadcrumb edits were docs-only and followed the same conventional-commit / PR conventions
-(using a `docs:` commit). They typically shipped in the monorepo PR that bumped the
-submodule, so the recorded HEAD matched the gitlink.
+When you encounter a bug or limitation while working on the codebase (including while
+dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
+[intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues) — the single tracker
+for all components.
 
-## Known Issues (stabilization)
-
-For the **`01_stabilizing`** phase — ongoing stabilization and hardening on the
-self-hosted stack — keep the issue tracker at `docs/01_stabilizing/KNOWN_ISSUES.md`
-current.
-
-- **When to file**: whenever you discover a bug while dogfooding (using intentd +
-  cloudlands-fe for daily development work).
-- **What to file**: document with id `STAB-N`, date (YYYY-MM-DD), area
-  (component/subsystem), severity (P0 crash/data-loss, P1 broken feature, P2 papercut),
-  repro steps, and status (`open` | `fixed (PR link, date)`).
-- **When to update**: when you fix an issue, mark it fixed with the PR link and resolution
-  date.
-- **Accuracy**: file issues as you encounter them; update status when PRs land. Known
-  issues should reflect the current state of the app.
-
-Issue-tracker edits follow the same conventional-commit / PR conventions above. When the
-KNOWN_ISSUES.md update is standalone (documenting a newly-discovered bug), use a `docs:`
-commit. When the tracker update rides along in the same PR as the actual code fix (marking
-an issue fixed), the PR/commit type follows the code change (`fix:`, `feat:`, etc.).
+- **Labels**: apply the appropriate `component:*` label (`component:intentd`,
+  `component:fe`, `component:ios`) plus `agent-filed`.
+- **Aggressive dedup**: search existing issues first
+  (`gh issue list --repo intent-hq/monorepo --search "<keywords>" --state all`) and
+  comment on / link the existing issue instead of filing a duplicate.
+- **Cross-reference**: reference the issue number in related commits/PRs (e.g.
+  `fix: correct panel focus (#123)`).
 
 ## Terminology
 
