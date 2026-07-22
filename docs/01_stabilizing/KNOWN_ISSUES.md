@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-173 (as of 2026-07-22; STAB-171 is reserved by other in-flight work and will be filed separately)
+**Next available ID:** STAB-173 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-171 (2026-07-22, area: cloudlands-fe overlays/keyboard, severity: P2)
+
+Pressing Escape with the image lightbox open on top of the New Workspace dialog closed the dialog instead of the lightbox.
+
+**Repro:** Open the New Workspace dialog, attach an image, open the lightbox, press Escape. Observed: the dialog closed instead of the lightbox. Root cause: both overlays registered window capture-phase Escape `keydown` listeners; for listeners on the same target and phase, dispatch order is registration order, so the modal's older listener won.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. Follow-up: `Modal.svelte` still has its own legacy capture-phase Escape listener and should be migrated to the layer stack.
+
+---
 
 ### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
 
