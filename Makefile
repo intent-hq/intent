@@ -70,7 +70,7 @@ ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (id
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
-			git submodule update --init --recursive "$$sm"; \
+			git submodule update --init --recursive "$$sm" || exit 1; \
 		else \
 			echo "[ensure-submodules] $$sm already initialized — leaving as-is"; \
 		fi; \
@@ -88,7 +88,7 @@ ensure-intentd-submodule:
 	fi
 
 # On-demand init for the FE submodule — pulled in only by targets that need it
-# (`run-fe`), so backend-only workflows stay fast.
+# (`run-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
 ensure-fe-submodule:
 	@if [ ! -e "$(FE_DIR)/.git" ]; then \
 		echo "[ensure-fe-submodule] initializing $(FE_DIR)"; \
