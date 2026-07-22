@@ -57,6 +57,12 @@ jobs:
             echo "error: no tag (no announcement_tag in plan, no dispatch input)" >&2
             exit 1
           fi
+          # Strict tag shape check: also guards $GITHUB_OUTPUT against
+          # injection via multi-line/hostile workflow_dispatch input.
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "error: '$tag' is not a valid release tag (expected vX.Y.Z[-prerelease])" >&2
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           # Debian ordering: "-" starts a revision that sorts ABOVE the bare
           # upstream version (0.2.0-beta.1 > 0.2.0), while "~" sorts below

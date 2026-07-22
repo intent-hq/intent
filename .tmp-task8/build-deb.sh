@@ -44,11 +44,12 @@ fi
 
 mkdir "$staging/extract"
 tar -xJf "$tarball" -C "$staging/extract" --no-same-owner --no-same-permissions
-binary=$(find "$staging/extract" -type f -name intentd | head -n1)
-if [[ -z "$binary" ]]; then
-  echo "error: no intentd binary found in $tarball" >&2
+binary_count=$(find "$staging/extract" -type f -name intentd | wc -l)
+if [[ $binary_count -ne 1 ]]; then
+  echo "error: expected exactly one intentd binary in $tarball, found $binary_count" >&2
   exit 1
 fi
+binary=$(find "$staging/extract" -type f -name intentd)
 
 pkg="$staging/pkg"
 install -d "$pkg/usr/bin" "$pkg/usr/lib/systemd/user"
