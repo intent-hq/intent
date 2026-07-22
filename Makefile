@@ -19,12 +19,13 @@ INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
-# `ensure-submodules` covers the intentd submodule that every Rust target
-# (build/test/fmt/clippy/check) needs. The FE and iOS submodules are heavy and
-# not needed for backend-only workflows, so they are initialized on demand by
-# their own `ensure-fe-submodule` / `ensure-ios-submodule` targets (same
-# idempotent init-if-missing contract, just narrower).
-SUBMODULES = $(INTENTD_DIR)
+# `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
+# any that are missing. The FE and iOS submodules are heavy and not needed for
+# backend-only workflows, so those workflows use the narrower per-submodule
+# targets instead: `ensure-intentd-submodule` for every Rust target
+# (build/test/fmt/clippy/check), and `ensure-fe-submodule` /
+# `ensure-ios-submodule` on demand (same idempotent init-if-missing contract).
+SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 
 # Dev-seat data + ports (overridable, e.g. `make dev-daemon DEV_TCP_PORT=6181`).
 #
@@ -56,7 +57,7 @@ export DEV_PORT
 # TCP+UDS or TCP-only postures, e.g. `make release-daemon LISTEN=both`.
 LISTEN ?= uds
 
-.PHONY: all help ensure-submodules ensure-fe-submodule ensure-ios-submodule \
+.PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
 
@@ -65,7 +66,7 @@ all: build
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-ensure-submodules: ## Initialize any missing Rust-workflow submodules (idempotent)
+ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
@@ -74,6 +75,17 @@ ensure-submodules: ## Initialize any missing Rust-workflow submodules (idempoten
 			echo "[ensure-submodules] $$sm already initialized — leaving as-is"; \
 		fi; \
 	done
+
+# Narrow init for the intentd submodule — the only one Rust targets
+# (build/test/fmt/clippy/check and the daemon seats) need, keeping
+# backend-only workflows fast.
+ensure-intentd-submodule:
+	@if [ ! -e "$(INTENTD_DIR)/.git" ]; then \
+		echo "[ensure-intentd-submodule] initializing $(INTENTD_DIR)"; \
+		git submodule update --init --recursive "$(INTENTD_DIR)"; \
+	else \
+		echo "[ensure-intentd-submodule] $(INTENTD_DIR) already initialized — leaving as-is"; \
+	fi
 
 # On-demand init for the FE submodule — pulled in only by targets that need it
 # (`run-fe`), so backend-only workflows stay fast.
@@ -97,20 +109,20 @@ ensure-ios-submodule:
 
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
-build-intentd: ensure-submodules
+build-intentd: ensure-intentd-submodule
 	cd $(INTENTD_DIR) && cargo build --workspace
 
-fmt: ensure-submodules ## cargo fmt --check
+fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
-clippy: ensure-submodules ## cargo clippy -- -D warnings
+clippy: ensure-intentd-submodule ## cargo clippy -- -D warnings
 	cd $(INTENTD_DIR) && cargo clippy --workspace -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
 test: test-intentd ## Run the Rust test suite
 
-test-intentd: ensure-submodules
+test-intentd: ensure-intentd-submodule
 	cd $(INTENTD_DIR) && cargo test --workspace
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
@@ -119,7 +131,7 @@ clean: ## Remove cargo build artifacts (packages/intentd/target)
 clean-dev: ## Wipe the dev-seat state dir (.dev/)
 	rm -rf "$(CURDIR)/.dev"
 
-dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
+dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
@@ -130,7 +142,7 @@ dev-daemon: ensure-submodules ## Dev seat: intentd on isolated data dir, UDS + i
 	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen both --insecure
 
-release-daemon: ensure-submodules ## Release-state debug seat: intentd on real data dir, LISTEN=uds by default, no --insecure
+release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on real data dir, LISTEN=uds by default, no --insecure
 	# Runs intentd against its DEFAULT data dir (no dev override): Config::resolve picks
 	# $$HOME/Library/Application Support/intentd on macOS for the socket + SQLite DB.
 	# LISTEN defaults to `uds` so this seat is UDS-only and does not bind a TCP
@@ -158,7 +170,7 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
 
-build-sidecar: ensure-submodules ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
+build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
 	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
 	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
@@ -167,7 +179,7 @@ build-sidecar: ensure-submodules ensure-fe-submodule ## Build intentd release + 
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
-dev: ensure-submodules ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
+dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
 	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
 	# spawn and supervise its own intentd binary, giving a one-command dev stack.
 	# Always runs the intentd release build first so the sidecar reflects the
