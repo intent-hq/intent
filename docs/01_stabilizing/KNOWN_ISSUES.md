@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-174 (as of 2026-07-22)
+**Next available ID:** STAB-175 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-174 (2026-07-22, area: intentd/model-catalog, severity: P1)
+
+In the packaged app, the auggie model catalog always degraded to the static tier fallback: the intentd sidecar inherits the minimal GUI process PATH, so the daemon-side CLI fetches that spawned a bare `Command::new("auggie")` never resolved the binary, and `models.list` served (and negatively cached) the static tiers.
+
+**Repro:** Packaged app 2.0.11 → Settings → Agents → Default model shows only 3 static tier rows ("haiku4.5 (fast)" etc.); `models.list providerId=auggie` on the sidecar socket returns `source:"static"` with warning "auggie CLI unavailable or returned no models" because the sidecar's minimal PATH cannot resolve the auggie CLI.
+
+**Status:** fixed ([intent-hq/intentd#338](https://github.com/intent-hq/intentd/pull/338), 2026-07-22) — `fetch_auggie_models`, `fetch_auggie_models_rich`, and `fetch_session_stats` now resolve the binary via `intent_context::discovery::find_auggie` (the `with_auggie_bin` test seam wins; auggie's own managed install `~/.augment/bin`, then the enhanced-PATH scan) and run the children with `discovery::exec_path` so the `.mjs` shim's `#!/usr/bin/env node` resolves in a packaged-app environment; discovery failure keeps the existing static/transcript fallbacks. All three fetches are also bounded (15s timeout + `kill_on_drop` + null stdin) so a wedged CLI cannot hang the RPC. The one-shot `opencode models` spawn also gets the enhanced PATH, matching the ACP probe spawns.
+
+---
 
 ### STAB-173 (2026-07-22, area: cloudlands-fe agent creation / specialist picker, severity: P1)
 
