@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-178 (as of 2026-07-22)
+**Next available ID:** STAB-179 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-178 (2026-07-22, area: cloudlands-fe agent deletion / rehydration, severity: P1)
+
+Deleting an agent showed the undo toast but the agent reappeared in the list moments later — any agent event that triggered a list rehydrate during the 15s undo window resurrected the soft-hidden session.
+
+**Repro:** Delete an agent (undo toast shown), then have any agent event land during the 15s undo window (e.g. another agent's lifecycle event triggering `hydrateWorkspaceAgents`, an `ensureAgentSession` refetch, a transcript load, or the boot seeder). Observed: the deleted agent reappears in the agent list even though the user deleted it.
+
+**Root cause:** Agent deletion is soft-hide-then-commit — the session is hidden locally and the wire `agent.delete` is deferred until the undo window elapses, so the daemon still returns the agent from `agent.list` / `agent.get` during the window. The rehydration paths never consulted the pending-deletion registry (a module-level map private to `agent-mutation-service.ts`), so they re-upserted the deleted agent into the store.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#246](https://github.com/intent-hq/cloudlands-fe/pull/246), 2026-07-22) — the pending-deletions registry is extracted into a shared util (`pending-agent-deletions.ts`; the mutation service still owns the set/remove lifecycle) and every rehydration path now consults `isAgentDeletionPending()`: `hydrateWorkspaceAgents` and the boot seeder filter pending agents out of `agent.list` responses, and `ensureAgentSession` / `loadChatTranscript` no-op while a deletion is pending. Undo still restores the agent. Regression tests added alongside each guard (83/83 pass across the 5 touched suites).
+
+---
 
 ### STAB-177 (2026-07-22, area: intentd comment.add anchoring + cloudlands-fe comment UX, severity: P1)
 
