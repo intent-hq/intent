@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-179 (as of 2026-07-22)
+**Next available ID:** STAB-181 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,30 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-180 (2026-07-22, area: settings / providers, severity: P1)
+
+The "Pi needs the pi-mcp-adapter package" warning in the provider selector never cleared — even with the adapter installed — and its Install button was a no-op.
+
+**Repro:** With the `pi` CLI and `pi-mcp-adapter` installed, open the provider selector. Observed: the "Pi needs the pi-mcp-adapter package" warning still shows. Click Install: nothing happens.
+
+**Root cause:** In the desktop build, renderer IPC routes through `src/shared/ipc-mock-router.ts`, and the `pi:check-mcp-adapter` / `pi:install-mcp-adapter` channels sat in `UNBRIDGED_INVOKE_ALLOWLIST` as hard-coded values: check always resolved `false` (warning never cleared) and install resolved a shaped failure with a stale `npm i -g pi-mcp-adapter` hint (Install button a no-op). Neither channel ever reached the daemon.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#245](https://github.com/intent-hq/cloudlands-fe/pull/245), 2026-07-22) — a new renderer seeder (`pi-mcp-bridge-seeder.ts`) bridges both channels to real daemon probes via `host.findBinary` + `host.exec` (check: `pi list` matching `pi-mcp-adapter` lines; install: `pi install npm:pi-mcp-adapter`), mirroring the main-process `pi-resolver.ts` semantics. Both hard-coded allowlist entries are removed and the stale `npm i -g` hint is gone; failures (missing CLI, timeout, non-zero exit, RPC rejection) degrade honestly. Wire-contract tests cover check/install across all failure modes.
+
+---
+
+### STAB-179 (2026-07-22, area: provider availability / onboarding, severity: P1)
+
+Grok and Pi always showed "Log in" on the Welcome screen even when the user was authenticated with those CLIs.
+
+**Repro:** Authenticate the `grok` and/or `pi` CLIs, then open the Welcome screen's provider selector. Observed: Grok and Pi render with a "Log in" affordance regardless of actual auth state.
+
+**Root cause:** The FE's provider availability service only ran auth probes for a subset of providers (auggie, claude-code, codex, opencode); `grok` and `pi` never had an auth probe path, so their `authenticated` verdict was never populated and the UI treated them as logged out.
+
+**Status:** fixed ([intent-hq/intentd#339](https://github.com/intent-hq/intentd/pull/339), [intent-hq/cloudlands-fe#247](https://github.com/intent-hq/cloudlands-fe/pull/247), 2026-07-22) — intentd#339 adds a daemon-owned `host.providerAuthStatus` RPC covering all probe-able providers (auggie, claude-code, codex, opencode, droid, grok, pi) with per-provider probes, a 60s TTL cache with single-flighting, and `force` to bypass the cache read (documented in `docs/PROTOCOL.md` §6.2). cloudlands-fe#247 migrates every FE-side auth check onto the RPC — aggregate paths take one sweep, single rechecks send `{ providerId, force: true }`, wire `null` folds to unknown, and the FE never runs auth-check commands via `host.exec` anymore — so Grok and Pi now report real auth state.
+
+---
 
 ### STAB-178 (2026-07-22, area: cloudlands-fe agent deletion / rehydration, severity: P1)
 
