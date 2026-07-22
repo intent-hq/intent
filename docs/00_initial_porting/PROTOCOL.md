@@ -1499,9 +1499,20 @@ with an unknown or already-finished `requestId` is a no-op success (`{ ok: true 
 
 | Method | Params | Result |
 | --- | --- | --- |
-| drafts.get | workspaceId (req), agentId (req) | { text, updatedAt } \| null — the draft for the **calling client** (resolved from its `clientId`); `null` if none |
-| drafts.set | workspaceId (req), agentId (req), text (req) | { ok: true, updatedAt } — upsert for the calling client; emits `draft:changed` |
+| drafts.get | workspaceId (req), agentId (req) | { text, attachments?, updatedAt } \| null — the draft for the **calling client** (resolved from its `clientId`); `null` if none; `attachments` present only when non-empty |
+| drafts.set | workspaceId (req), agentId (req), text (req), attachments (opt) | { ok: true, updatedAt } — upsert for the calling client; emits `draft:changed` |
 | drafts.clear | workspaceId (req), agentId (req) | { ok: true } — delete on send / explicit clear; emits `draft:changed` |
+
+**Attachments (additive).** `attachments` is an **optional JSON array of opaque objects**
+authored by the FE (e.g. image context items with base64 `imageData`) and stored **verbatim**,
+like workspace context items. An omitted, `null`, or **empty-array** `attachments` means no
+attachments are stored. A `drafts.set` with empty `text` **and** no attachments is still a
+clear (the row is deleted, preserving the original semantics); empty `text` **with**
+attachments persists the row. `drafts.get` includes `attachments` in the result only when
+non-empty; rows written before this field existed read back with no attachments. The
+serialized `attachments` payload is capped at **25 MB** (`-32602` above that). The
+`draft:changed` event payload is unchanged (`hasDraft` is `true` when text **or** attachments
+exist; still no content leakage).
 
 **Implicit client keying.** The `clientId` is **not** a parameter — it is resolved from the
 calling connection's logical client (established by `client.hello`, §5.17). A connection that
@@ -1539,8 +1550,9 @@ affordance without leaking content, and lets the owning client's *other* connect
 ```
 
 **Errors.** Missing `workspaceId` / `agentId` (all three methods) or `text` (`drafts.set`) →
-`-32602`. `drafts.get` for a non-existent draft returns `null` (not an error); `drafts.clear`
-on a non-existent draft is a no-op success.
+`-32602`; a non-array `attachments` or a serialized attachments payload above 25 MB
+(`drafts.set`) → `-32602`. `drafts.get` for a non-existent draft returns `null` (not an
+error); `drafts.clear` on a non-existent draft is a no-op success.
 
 ### 5.17 `client.hello` handshake & stable client identity *(new in intentd — not part of the ported 104)*
 
@@ -3085,7 +3097,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
 | script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
-| drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
+| drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; hasDraft is true when text **or** attachments exist; **no draft text or attachments** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed by the internal scan job (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |

@@ -354,6 +354,21 @@ browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscri
 
 **UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports.
 
+#### `drafts.*` — draft attachments (additive, optional)
+
+`drafts.set` accepts an **optional** `attachments` param and `drafts.get` returns it when present:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| drafts.get | workspaceId (req), agentId (req) | `{ text, attachments?, updatedAt } \| null` — `attachments` present only when non-empty |
+| drafts.set | workspaceId (req), agentId (req), text (req), attachments (opt) | `{ ok: true, updatedAt }` — emits `draft:changed` |
+| drafts.clear | workspaceId (req), agentId (req) | `{ ok: true }` — emits `draft:changed` |
+
+- **`attachments`** is an opaque **JSON array** of FE-authored objects (e.g. image context items with base64 `imageData`), stored verbatim like workspace context items. Omitted, `null`, or an **empty array** ⇒ no attachments stored.
+- A `drafts.set` with empty `text` **and** no attachments is still a **clear** (row deleted); empty `text` **with** attachments persists the row.
+- The serialized `attachments` payload is capped at **25 MB**; larger payloads (and non-array `attachments`) are rejected with `-32602`.
+- **Additive:** draft rows written before this field existed read back with no attachments; the `draft:changed` event payload is unchanged (`hasDraft` is `true` when text **or** attachments exist — never any content).
+
 #### `system.status` — process resource fields (additive, optional)
 
 The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `host`):
