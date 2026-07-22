@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-181 (as of 2026-07-22)
+**Next available ID:** STAB-182 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,20 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-181 (2026-07-22, area: cloudlands-fe model picker, severity: P2)
+
+Selecting a provider's own "Default (recommended)" model in the model picker snapped the trigger label back to the auggie default model instead of showing the chosen provider's default.
+
+**Repro:** New Workspace modal → open the model picker → pick Anthropic Claude Code → choose "Default (recommended)". Observed: the trigger label snaps back to the auggie default (e.g. "Claude Fable 5") while the checkmark stays on the Claude Code row.
+
+**Root cause:** `hasExplicitModel` in `ModelPicker.svelte` treated any parsed `modelId === 'default'` as "no selection", over-matching compound ids like `claude-code:default` — so a provider-prefixed default selection was discarded and the trigger label fell back to the auggie default. The `'default'` sentinel originated in cloudlands-fe PR #6 (`ba7b8255`), before provider-prefixed compound ids existed.
+
+**Expected:** Only the bare `'default'` sentinel means "no explicit selection"; a provider-prefixed `*:default` id is an explicit model choice and the trigger label reflects the selected provider's default.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#248](https://github.com/intent-hq/cloudlands-fe/pull/248), 2026-07-22) — `hasExplicitModel` now treats only the bare `'default'` id as no-selection, so compound `*:default` ids render as explicit selections; regression test covers the trigger label for a provider-prefixed default.
+
+---
 
 ### STAB-180 (2026-07-22, area: settings / providers, severity: P1)
 
