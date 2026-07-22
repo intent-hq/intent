@@ -81,7 +81,7 @@ A client resolves the service, reads `fp` for pinning, and connects to `wss://<r
 
 Inbound JSON-RPC messages are capped at **40 MiB** (`MAX_INBOUND_MESSAGE_BYTES = 40 * 1024 * 1024` in `intent-transport`). The limit is the same on both transports; the behavior on violation differs by framing:
 
-- **WSS:** the limit is enforced on the WebSocket message and frame size; an over-limit frame fails fast on the frame header (the payload is not buffered) and the connection is closed.
+- **WSS:** the limit is enforced on both the WebSocket frame size and the total message size, and the connection is closed on violation. A single over-limit frame fails fast on the frame header (its payload is not buffered); a fragmented message is rejected once its accumulated fragments exceed the cap, so up to the limit may be buffered before rejection.
 - **UDS:** the daemon replies with a `-32600` error (`id: null`, since the request was never parsed) and then closes the connection, without draining the rest of the oversized line.
 
 Outbound (server→client) messages are not subject to this limit.
