@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-173 (as of 2026-07-22)
+**Next available ID:** STAB-173 (as of 2026-07-22; STAB-171 is reserved by other in-flight work and will be filed separately)
 
 ## Intake Convention
 
@@ -21,7 +21,7 @@ Each issue entry includes:
 
 ### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
 
-The onboarding flow's Setup Script dialog did not detect the repo-committed `.intent/config.json` setupScript, unlike the New Workspace dialog — first-run users never saw the "From repo config" entry and got the generic template instead.
+The onboarding flow's Setup Script dialog did not detect the repo-committed `.intent/config.json` `setupScript`, unlike the New Workspace dialog — first-run users never saw the "From repo config" entry and got the generic template instead.
 
 **Repro:** On a fresh install, go through onboarding and select a local project whose repo has a committed `.intent/config.json` with a `setupScript`. The Setup Script dialog showed no "From repo config" entry and did not pre-fill the repo's script, while the New Workspace dialog (`CompactWorkspaceInitializer.svelte`) for the same repo detected and pre-filled it.
 
