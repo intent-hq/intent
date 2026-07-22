@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-168 (as of 2026-07-21)
+**Next available ID:** STAB-169 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-168 (2026-07-21, area: intentd tests / uds_concurrent_dispatch, severity: P2)
+
+`slow_host_exec_does_not_block_fast_workspace_list` in `crates/intentd/tests/uds_concurrent_dispatch.rs` flaked under host load and under `INTENTD_TEST_TIMEOUT_MULTIPLIER`-scaled runs.
+
+**Repro:** Run `cargo test --test uds_concurrent_dispatch` while the host is under load (e.g. full parallel `cargo test`, coverage instrumentation, or a busy CI runner). The test intermittently failed its fixed `elapsed < 500ms` wall-clock assertion on the fast `workspace.list` response even though dispatch concurrency was working correctly.
+
+**Root cause:** The test asserted concurrency via fixed wall-clock budgets (`elapsed < 500ms` for the fast response, hardcoded `read_json` timeouts) that did not honor the `INTENTD_TEST_TIMEOUT_MULTIPLIER` scaling used by the rest of the suite, so host load or instrumentation slowdowns tripped the latency budget spuriously. The `worker_threads = 2` runtime cap made the test additionally sensitive to scheduling stalls.
+
+**Status:** fixed ([intent-hq/intentd#324](https://github.com/intent-hq/intentd/pull/324), 2026-07-22) — concurrency is now proven by response ordering (fast id=2 `workspace.list` must arrive before slow id=1 `host.exec`) instead of wall-clock latency; all read budgets and the slow sleep scale via `common::test_timeout()` so the multiplier is honored; the `worker_threads = 2` cap is removed. Verified 10/10 in isolation, under full parallel `cargo test`, and with `INTENTD_TEST_TIMEOUT_MULTIPLIER=3`.
+
+---
 
 ### STAB-167 (2026-07-21, area: intentd shutdown / agent_manager, severity: P1)
 
