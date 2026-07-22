@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a bug in intentd, cloudlands-fe, ios, or docs/tooling
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected vs actual
+      description: What did you expect to happen, and what happened instead?
+    validations:
+      required: true
+  - type: checkboxes
+    id: component
+    attributes:
+      label: Component
+      description: >
+        Check all that apply. Checkboxes do not apply labels automatically —
+        a triager will add the matching label (`component:intentd`,
+        `component:fe`, `component:ios`, `docs`).
+      options:
+        - label: intentd (Rust backend daemon)
+        - label: cloudlands-fe (Electron + SvelteKit desktop frontend)
+        - label: ios (SwiftUI companion app)
+        - label: docs / tooling
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: Per the taxonomy in docs/README.md
+      options:
+        - P0 — crash, data-loss, or corruption; blocks shipping to external users
+        - P1 — broken feature; app still usable but with significant workaround required
+        - P2 — papercut; annoying but does not block workflows
+    validations:
+      required: true
+  - type: checkboxes
+    id: agent-filed
+    attributes:
+      label: Agent-filed
+      options:
+        - label: This issue was filed by an AI agent (a triager will add the `agent-filed` label)
