@@ -3214,6 +3214,10 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 
 **Group-wake format:** The aggregated wake is a single agent turn delivered to the parent, containing a `[WORKSPACE EVENTS]` summary block listing all children's completion reports. Each child's report line: `**{child_name}** (agent-{id}) completed. Report: {completion_report_text}`. After delivery, the group row is pruned.
 
+#### Completion-watch persistence
+
+**One-shot completion watches survive restarts.** Parent→child completion watches (registered by `agent.delegate` auto-watch, `agent.wakeOrCreate`, and the chief-only MCP `ws.app.agents.waitFor` binding) are persisted in the `completion_watch` SQLite table via best-effort async write-through, and deleted when the watch fires, is cancelled, or expires. At daemon startup, surviving rows are rehydrated into the in-memory registry: rows whose parent agent is gone (or whose delegation group already settled, or whose leak-guard deadline elapsed) are pruned; each remaining watch's child is then reconciled against current agent state, so a child that completed / failed / was deleted while the daemon was down delivers a synthetic completion wake immediately instead of leaving the parent waiting forever. `ws.app.agents.waitFor` runs the same reconciliation at registration time, so waiting on an already-settled target wakes the caller right away. No RPC surface changes: the watches remain visible via `agent.getSubscriptions` and removable via `agent.cancelSubscriptions`; the subscription registry itself is daemon-level, so chief-workspace (`__chief__`) parents can hold watches on children in any workspace (non-chief parents remain scoped to their own workspace).
+
 #### `serve --resume-all` CLI flag
 
 `intentd serve --resume-all` is a headless deployment flag that automatically resumes all interrupted agents at startup without waiting for the `agent.resolveInterrupted` RPC.
