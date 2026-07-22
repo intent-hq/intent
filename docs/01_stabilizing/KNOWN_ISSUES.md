@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-169 (as of 2026-07-22)
+**Next available ID:** STAB-170 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-169 (2026-07-22, area: cloudlands-fe queued event-wake rows, severity: P2)
+
+Queued event-wake rows in the chat queued-messages bar labeled every non-agent wake as a bare "Workspace events", dropping the event details the EventWakeupBanner divider shows for the same wake.
+
+**Repro:** Subscribe an agent to non-agent workspace events (e.g. `file:*`, `task:*`, `note:*`) and let events queue while the agent is busy. The queued row rendered the generic label "Workspace events" with no categories, no count, and no preview for legacy no-metadata wakes — while the banner divider for the same wake showed "file changes" etc. Regression from the compact queued wake rows in [intent-hq/cloudlands-fe#178](https://github.com/intent-hq/cloudlands-fe/pull/178), whose `eventWakeSummary()` only understood `agent:idle`/`agent:created` events.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#230](https://github.com/intent-hq/cloudlands-fe/pull/230), 2026-07-22) — summary/categorization logic extracted into a shared `event-wake-summary.ts` util used by both QueuedMessageList and EventWakeupBanner; non-agent wakes now get category labels (e.g. "file changes · task updates"), unknown types fall back to an "N workspace events" count, and legacy no-metadata wakes show a truncated first-event-line preview.
+
+---
 
 ### STAB-168 (2026-07-21, area: intentd tests / uds_concurrent_dispatch, severity: P2)
 
