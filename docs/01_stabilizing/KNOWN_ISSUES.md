@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-171 (as of 2026-07-22)
+**Next available ID:** STAB-173 (as of 2026-07-22; STAB-171 is reserved by other in-flight work and will be filed separately)
 
 ## Intake Convention
 
@@ -19,13 +19,23 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
+
+The onboarding flow's Setup Script dialog did not detect the repo-committed `.intent/config.json` `setupScript`, unlike the New Workspace dialog — first-run users never saw the "From repo config" entry and got the generic template instead.
+
+**Repro:** On a fresh install, go through onboarding and select a local project whose repo has a committed `.intent/config.json` with a `setupScript`. The Setup Script dialog showed no "From repo config" entry and did not pre-fill the repo's script, while the New Workspace dialog (`CompactWorkspaceInitializer.svelte`) for the same repo detected and pre-filled it.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#235](https://github.com/intent-hq/cloudlands-fe/pull/235), 2026-07-22) — onboarding now probes the selected local repo via `fetchRepoConfigSetupScript` and applies `chooseDefaultSetupScript` with the same priority as the workspace dialog (repo config > last-used script > generic template), forwards the repo-config script to `SetupScriptModal` so "From repo config" renders, discards stale probe results on repo switch, and skips re-saving an unedited repo-config script to the saved-scripts store.
+
+---
+
 ### STAB-170 (2026-07-22, area: intentd/model-discovery, severity: P1)
 
 With an MCP server registered in `~/.codex/config.toml` (auggie `--mcp --mcp-auto-workspace`), every daemon codex `models.list` probe spawned a throwaway `codex-acp` that honored the user's codex config and started the auggie MCP server — which immediately indexes the workspace (heavy CPU). Failed probes were not cached and not single-flighted, and the MCP children escaped process-group reaping, producing an orphaned codex-acp/auggie CPU storm on each `make dev`.
 
 **Repro:** Register auggie as an MCP server in `~/.codex/config.toml` (`command = ".../auggie"`, `args = ["--mcp", "--mcp-auto-workspace"]`), then run `make dev`. Observed: on startup the FE calls daemon `models.list`, and every call (including concurrent ones) spawned a fresh codex-acp ACP probe; each probe's codex-acp started the auggie MCP server, whose workspace indexing blew the 15s probe cap, so the probe kept failing — and since only successful probes were cached (no negative caching) and there was no single-flight coalescing, every subsequent `models.list` spawned another. On timeout, `killpg` on the probe's process group never reached auggie (it runs as its own process-group leader), so codex-acp/auggie survived orphaned (ppid 1) and kept churning CPU, with a surviving codex-acp respawning auggie repeatedly when MCP init failed under load.
 
-**Status:** fixed ([intent-hq/intentd#328](https://github.com/intent-hq/intentd/pull/328), [intent-hq/intentd#329](https://github.com/intent-hq/intentd/pull/329), 2026-07-22) — #328 isolates the codex probe from the user's codex config by pointing `CODEX_HOME` at a throwaway probe-scoped config dir, so probes no longer start user-configured MCP servers; #329 single-flights all providers' `models.list` fetches and adds a 60s negative cache (falling back to last-good then the static default list), so failing probes no longer respawn per call. A descendant-reap backstop for probe children that escape the process group is in progress (reap backstop PR pending).
+**Status:** fixed ([intent-hq/intentd#328](https://github.com/intent-hq/intentd/pull/328), [intent-hq/intentd#329](https://github.com/intent-hq/intentd/pull/329), [intent-hq/intentd#332](https://github.com/intent-hq/intentd/pull/332), 2026-07-22) — #328 isolates the codex probe from the user's codex config by pointing `CODEX_HOME` at a throwaway probe-scoped config dir, so probes no longer start user-configured MCP servers; #329 single-flights all providers' `models.list` fetches and adds a 60s negative cache (falling back to last-good then the static default list), so failing probes no longer respawn per call; #332 adds the descendant-reap backstop — probe teardown snapshots the child's descendant pids before killing and SIGTERM → grace → SIGKILL sweeps any survivors that escape the process group, so codex-acp/auggie descendants can no longer outlive the probe.
 
 ---
 
