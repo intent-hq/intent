@@ -12,8 +12,8 @@ submodules:
 - `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
-The engineering spec lives in `docs/00_initial_porting/IMPLEMENTATION_SPEC.md`; see
-`docs/README.md` for how the porting documents relate.
+The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
+`docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
 ## Commit & PR Workflow
 
@@ -55,23 +55,11 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 
 ## Breadcrumbs (initial porting) — **CONCLUDED**
 
-The **`00_initial_porting`** effort is complete as of 2026-07-13.
-`docs/00_initial_porting/BREADCRUMBS.md` is now **frozen** as a historical record. No
-new breadcrumb entries should be added to that file.
-
-The policy was:
-- **When**: whenever you complete a meaningful unit of porting work (a crate, a method or
-  group of methods, a transport/persistence change, a submodule bump).
-- **What**: append a dated entry to the changelog, newest first. Keep it concise — what
-  changed, which crates/methods were touched, and the resulting `packages/intentd` HEAD.
-  Also update the "Current submodule HEAD" and "Implemented surface" sections when they
-  change, and move items out of "Deferred / planned" as they ship.
-- **Accuracy**: never overstate. Only list surface that is actually implemented; everything
-  else stays under deferred/planned.
-
-Breadcrumb edits were docs-only and followed the same conventional-commit / PR conventions
-(using a `docs:` commit). They typically shipped in the monorepo PR that bumped the
-submodule, so the recorded HEAD matched the gitlink.
+The initial porting effort is complete as of 2026-07-13, and its chronicle (implementation
+spec, porting-era protocol, and the frozen breadcrumbs progress log) has been removed from
+the tree — the original documents remain available in git history. The durable content
+lives on in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`. Do not add new breadcrumb
+entries; progress is tracked via GitHub issues and PRs.
 
 ## Filing Issues
 
