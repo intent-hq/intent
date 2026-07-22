@@ -3,12 +3,12 @@
 ---
 **EFFORT CLOSED AS OF 2026-07-13**
 
-This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted Cloudlands stack (`intentd` + `cloudlands-fe`), which now builds the next version of itself. See [docs/01_stabilizing/](../01_stabilizing/) for ongoing stabilization work.
+This file is now **frozen** as a historical record. The initial port is complete — development has moved onto the self-hosted Cloudlands stack (`intentd` + `cloudlands-fe`), which now builds the next version of itself. Ongoing work is tracked as [GitHub issues](https://github.com/intent-hq/monorepo/issues) (see [docs/README.md](../README.md) for how the stabilization phase concluded).
 ---
 
-A frozen historical record of the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail that documents how the port progressed; no further appends will be made. New work is tracked in [docs/01_stabilizing/](../01_stabilizing/).
+A frozen historical record of the **initial port of Intent's backend to a headless Rust daemon** (`intentd`). This is the durable trail that documents how the port progressed; no further appends will be made. New work is tracked as [GitHub issues](https://github.com/intent-hq/monorepo/issues).
 
-See also: [IMPLEMENTATION_SPEC.md](./IMPLEMENTATION_SPEC.md) (target architecture), [PROTOCOL.md](./PROTOCOL.md) (wire contract), and the root [AGENTS.md](../../AGENTS.md) (workflow + concluded breadcrumb policy, superseded by KNOWN_ISSUES.md tracking for stabilization).
+See also: [IMPLEMENTATION_SPEC.md](./IMPLEMENTATION_SPEC.md) (target architecture), [PROTOCOL.md](./PROTOCOL.md) (wire contract), and the root [AGENTS.md](../../AGENTS.md) (workflow + concluded breadcrumb policy, superseded by GitHub-issues tracking).
 
 ## Goal
 
@@ -129,9 +129,9 @@ The initial port is complete. **Self-hosting cutover achieved**: the 00_initial_
 
 **Implemented surface summary:** 218 JSON-RPC request methods + 1 server-initiated notification over UDS and WSS, backed by SQLite — full CRUD across workspace/note/task/comment/agent domains; the recent-repository registry; event query/aggregation and snapshot+delta subscriptions; local git operations (status/stage/commit/agentCommit/pull/discard); GitHub PR linking and the full `pr.*` + `github.*` + `linear.*` + `sentry.*` surfaces; code-review change-tracking, metrics, and accept-changes orchestration; ripgrep/symbol-backed search across files/notes/messages/events; interactive terminals and managed scripts on a unified PTY host; settings persistence with secret redaction; specialist + rules CRUD; MCP-server lifecycle management (stdio only); workspace-file CRUD; note primitives; cross-workspace sibling reads; client-callable `browser.exec` reverse RPC; the full ACP orchestration layer with agent session persistence, live MCP spawn-wiring, and a per-agent-type tool denylist; workspace activity/attention status model; locality detection and remote-only mitigations (`forward.*` tunnels, `host.openExternal` reverse RPC); data migration (`intentd import`) and event retention sweeps; and a hermetic mock ACP provider + E2E transport/lifecycle suite. The daemon serves both UDS and WSS transports with bearer-token auth, origin allow-list, TLS fingerprint pinning, mDNS discovery, single-instance enforcement, idle agent reaping, CLI control (`intentd serve/status/stop/doctor`), and launchd/systemd daemonization. The FE `make dev` sidecar connects over UDS and resolves the binary reliably; workspace reads cut over to daemon `workspace.list`/`workspace.get`. See the "Implemented surface so far" section for the full catalog.
 
-**Unresolved deferrals carried into 01_stabilizing:** Transport panic-safety via `catch_unwind`, and general stabilization/hardening work. All known issues and planned follow-ups are documented in `docs/01_stabilizing/KNOWN_ISSUES.md`.
+**Unresolved deferrals carried into 01_stabilizing:** Transport panic-safety via `catch_unwind`, and general stabilization/hardening work. All known issues and planned follow-ups were documented in `docs/01_stabilizing/KNOWN_ISSUES.md` (since retired; open items migrated to [GitHub issues](https://github.com/intent-hq/monorepo/issues)).
 
-This file is now frozen as a historical record. Future work is tracked in `docs/01_stabilizing/`.
+This file is now frozen as a historical record. Future work is tracked as [GitHub issues](https://github.com/intent-hq/monorepo/issues).
 
 ---
 
