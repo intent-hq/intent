@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-182 (as of 2026-07-22)
+**Next available ID:** STAB-183 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-182 (2026-07-22, area: cloudlands-fe browser-mock transport envelope, severity: P2)
+
+The browser-only dev profiles (`dev:web` / `dev:renderer` without `VITE_INTENTD_WS_URL`) crashed at boot: `BrowserMock` answered the `backend:*` transport channels with raw data (or nothing), but `electron-ipc-transport.ts` unwraps those responses as the `BackendResult` envelope (`{ ok: true, result }` / `{ ok: false, error }`), so every `backendRequest` threw an unhandled `BackendError` — including `event.query`, which took down `MainLayout` via its error boundary.
+
+**Repro:** Run `pnpm run dev:web` (no `VITE_INTENTD_WS_URL`) and open the app in a browser. Observed: `BackendError` thrown from `unwrap()` in `electron-ipc-transport.ts` for boot-time calls (`workspace.list`, `events.subscribe`, `event.query`, …) and the MainLayout error boundary tripping.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#249](https://github.com/intent-hq/cloudlands-fe/pull/249), 2026-07-22) — `BrowserMock` now answers `backend:request`/`backend:subscribe`/`backend:unsubscribe` with the `BackendResult` envelope (`{ ok: true, result }` / `{ ok: false, error }`) including boot-method mocks, and `backend:get-status` returns the bare status shape, with regression tests in `browser-mock.test.ts`.
+
+---
 
 ### STAB-181 (2026-07-22, area: cloudlands-fe model picker, severity: P2)
 
