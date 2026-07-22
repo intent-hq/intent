@@ -28,8 +28,16 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 staging=$(mktemp -d)
 trap 'rm -rf "$staging"' EXIT
 
+# Reject unsafe member paths (absolute or with ".." components) before
+# extracting, and do not honor archived ownership/permissions — the payload
+# modes are set explicitly by the install calls below.
+if tar -tJf "$tarball" | grep -E '^/|(^|/)\.\.(/|$)' >/dev/null; then
+  echo "error: unsafe member path in $tarball" >&2
+  exit 1
+fi
+
 mkdir "$staging/extract"
-tar -xJf "$tarball" -C "$staging/extract"
+tar -xJf "$tarball" -C "$staging/extract" --no-same-owner --no-same-permissions
 binary=$(find "$staging/extract" -type f -name intentd | head -n1)
 if [[ -z "$binary" ]]; then
   echo "error: no intentd binary found in $tarball" >&2
