@@ -4,8 +4,8 @@
 > (`packages/intentd`). Companion document: [PROTOCOL.md](./PROTOCOL.md) — the
 > wire-protocol reference (transport, JSON-RPC envelope, method catalog,
 > events). This page records the durable architecture and dependency rules;
-> the historical porting spec lives in
-> [00_initial_porting/IMPLEMENTATION_SPEC.md](./00_initial_porting/IMPLEMENTATION_SPEC.md).
+> the historical porting spec (IMPLEMENTATION_SPEC.md) has been removed from
+> the tree and remains available in git history.
 
 ## System overview
 
