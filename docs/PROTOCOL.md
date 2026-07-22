@@ -41,7 +41,7 @@ The method surface is enforced by golden tests in `crates/intent-transport/src/c
 
 ### 1.1 Connection URL
 
-The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable) exposing a single WebSocket endpoint:
+The backend runs a dedicated **HTTPS server bound to `0.0.0.0`** (LAN-reachable) exposing a single WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws
