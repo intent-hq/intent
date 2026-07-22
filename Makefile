@@ -2,13 +2,14 @@
 #
 # Three postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,
-#      serving UDS + TCP (`--listen both --insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
+#      serving UDS + insecure TCP (`--insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
 #      (reachable from loopback and LAN). Pairs with `make run-fe` (whose dev default
 #      is `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
 #   2. `make release-daemon` — occasional "debug the release app with its own
-#      state" seat. intentd on the real data dir, `LISTEN=uds` by default and
-#      no `--insecure`, so it never binds $(DEV_TCP_PORT) or collides with the
-#      dev seat.
+#      state" seat. intentd on the real data dir, UDS-always and no
+#      `--insecure`, so it never binds $(DEV_TCP_PORT) or collides with the
+#      dev seat (the WSS listener starts only if the persisted
+#      `server.wsApi.enabled` setting is true).
 #   3. `make run-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
 #
@@ -51,11 +52,6 @@ DEV_PORT ?= 5190
 # Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
 # actually sees the default/override in the child environment.
 export DEV_PORT
-
-# Transport for `release-daemon`. Defaults to `uds` (UDS only) so the release
-# seat can never race the dev seat for $(DEV_TCP_PORT). Override for the
-# TCP+UDS or TCP-only postures, e.g. `make release-daemon LISTEN=both`.
-LISTEN ?= uds
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
@@ -135,23 +131,24 @@ dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, 
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
-	# `--listen both --insecure` serves the local UDS socket AND a plain ws://
-	# listener on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth
-	# — matches the FE's dev default and the iOS simulator/hardware seat.
+	# `--insecure` serves the local UDS socket AND a plain ws:// listener on
+	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — matches
+	# the FE's dev default and the iOS simulator/hardware seat.
 	# The daemon fails fast if $(DEV_TCP_PORT) is already bound.
 	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
-		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen both --insecure
+		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --insecure
 
-release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on real data dir, LISTEN=uds by default, no --insecure
+release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on real data dir, UDS-always, no --insecure
 	# Runs intentd against its DEFAULT data dir (no dev override): Config::resolve picks
 	# $$HOME/Library/Application Support/intentd on macOS for the socket + SQLite DB.
-	# LISTEN defaults to `uds` so this seat is UDS-only and does not bind a TCP
-	# port at all. Pass `LISTEN=both` or `LISTEN=tcp` to add the WSS listener on
-	# intentd's default TCP port (5181 unless INTENTD_TCP_PORT is set); the
-	# daemon fails fast if that port is already bound (e.g. by `make dev-daemon`
-	# on the same 5181). No `--insecure`: the TCP listener, when enabled, serves
-	# wss:// with TLS + bearer auth as the packaged app expects.
-	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen $(LISTEN)
+	# The UDS listener always serves; the secure WSS listener starts only when
+	# the persisted `server.wsApi.enabled` setting is true (config.toml or the
+	# runtime toggle), on `server.wsApi.port` (5181 unless INTENTD_TCP_PORT is
+	# set); the daemon fails fast if that port is already bound (e.g. by
+	# `make dev-daemon` on the same 5181). No `--insecure`: the WSS listener,
+	# when enabled, serves wss:// with TLS + bearer auth as the packaged app
+	# expects.
+	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve
 
 run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
@@ -236,6 +233,8 @@ ios-info: ## Print how to point the iOS app at the local dev daemon
 	@echo "  in insecure mode)."
 	@echo ""
 	@echo "  For the secure/Bonjour pairing posture (TLS + bearer auth + QR/mDNS),"
-	@echo "  run intentd WITHOUT '--insecure' and with INTENTD_DISCOVERY=1, e.g."
-	@echo "    INTENTD_DISCOVERY=1 cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --listen both"
+	@echo "  run intentd WITHOUT '--insecure', enable the WSS listener via the"
+	@echo "  'server.wsApi.enabled' setting (config.toml or runtime toggle), and set"
+	@echo "  INTENTD_DISCOVERY=1, e.g."
+	@echo "    INTENTD_DISCOVERY=1 cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve"
 	@echo "  then use the iOS 'Scan QR Code' or 'Find on Network' flows."

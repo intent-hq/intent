@@ -102,7 +102,7 @@ make clean      # remove build artifacts
 # Option 2 — Two-terminal mode (daemon + FE separate):
 #   Run the daemon and FE in separate terminals. Useful for daemon debugging.
 #
-#   # Terminal 1 — dev daemon: isolated data dir under .dev/intentd, --listen both --insecure
+#   # Terminal 1 — dev daemon: isolated data dir under .dev/intentd, UDS + insecure TCP (--insecure)
 #   make dev-daemon
 #
 #   # Terminal 2 — Electron + SvelteKit frontend (packages/cloudlands-fe);

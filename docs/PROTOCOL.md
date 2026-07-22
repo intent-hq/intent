@@ -48,11 +48,11 @@ wss://<host>:<port>/ws
 ```
 
 - **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.3) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.port`.
-- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make run-intentd` uses it by default) and logs a prominent startup warning.
+- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
 
-> Unix-domain socket: The daemon also supports a UDS transport for the local-first default. The JSON-RPC envelope, method catalog, and event semantics are **identical** across UDS and TCP/TLS — only the listener differs.
+> Unix-domain socket: The daemon **always** serves a UDS transport as the local-first default; the TCP/WSS listener is optional and toggled at runtime by the `server.wsApi.enabled` setting (the former `server.listenMode` setting and `--listen` serve flag are retired). The JSON-RPC envelope, method catalog, and event semantics are **identical** across UDS and TCP/TLS — only the listener differs. `system.status` reports a derived `listenMode` field (`"both"` while the WSS listener is up, `"uds"` otherwise) reflecting the live listener state.
 
 ### 1.2 TLS & fingerprint pinning
 
@@ -1219,7 +1219,7 @@ persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup f
 For TOML-backed paths, `settings.get` (and each `settings.list`
 entry) carries an additive `origin` field naming the layer the effective value came from:
 `"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
-boot by a startup flag / env var, e.g. `--listen`, `INTENTD_TCP_PORT`). Secrets and the opaque
+boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
 `model.workspaceOverrides`, `permissions.rules`, `userRules` / `workspaceRules`,
 `endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
@@ -1236,7 +1236,7 @@ the overriding flag ("overridden by startup flag …").
 - **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. `model.workspaceOverrides` shares this wire surface but is an opaque machine-state blob (SQLite-backed, no `origin` field — see above).
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
-- **Server / transport (new in intentd):** `server.listenMode` (`uds`|`tcp`), `server.socketPath`,`server.bindAddress`, `server.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS).
+- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port`, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS). The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
