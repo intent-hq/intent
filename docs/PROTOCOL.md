@@ -685,6 +685,19 @@ Event types follow the pattern `<category>:<action>`. Common categories:
 - **`goal:*`** — goal tracking events
 - **`github:*`** — GitHub auth surface: `github:auth-changed` carries `data = { status: "authorized" | "expired" | "denied" | "error" | "revoked" }` on device-flow terminal transitions and `github.revoke`; global (empty `workspaceId`), never carries a token or code
 
+### 7.5 Interrupted Partial-Turn Persistence
+
+On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessage`, or `agent.sendMessage` / `agent.sendToTask` called with the request parameter `priority: "interrupt"` — the daemon persists the streamed-so-far partial assistant message **before** emitting the terminal `agent:stream:end`. The partial turn's content blocks are written to the transcript under the assistant `messageId` minted at turn start (the same id carried by the live `agent:stream:chunk` events, and from which the `chat.subscribe` synthetic block ids are derived as `{messageId}:{blockIndex}` — see `docs/00_initial_porting/PROTOCOL.md` §7.1), tagged on the message row with:
+
+- `metadata.interrupted: true`
+- `metadata.stopReason: "interrupted"`
+
+This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
+
+**Consequence for `chat.subscribe` (the terminal reconcile of `docs/00_initial_porting/PROTOCOL.md` §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
+
+Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
+
 ---
 
 ## 8. Error Codes

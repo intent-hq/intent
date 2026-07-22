@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-176 (as of 2026-07-22)
+**Next available ID:** STAB-177 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,16 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-176 (2026-07-22, area: agent streaming / chat.subscribe, severity: P1)
+
+Interrupting a streaming agent (Stop button or ⌘Enter interrupt send) immediately hid all in-flight deltas — the partial assistant output vanished from the chat.
+
+**Repro:** While an agent is streaming a turn, interrupt it via Stop or ⌘Enter. Observed: every streamed-so-far block disappears the moment the interrupt lands. Root cause: the daemon aborted the turn worker without flushing the live-turn slot, so no partial assistant row was persisted; the `chat.subscribe` terminal reconcile after `agent:stream:end` re-read a transcript without the streamed message and wiped the live blocks via `removedIds`.
+
+**Status:** fixed ([intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336), [intent-hq/cloudlands-fe#242](https://github.com/intent-hq/cloudlands-fe/pull/242), [intent-hq/cloudlands-fe#243](https://github.com/intent-hq/cloudlands-fe/pull/243), 2026-07-22) — intentd#336 snapshots the live-turn slot before aborting the turn worker and flushes the partial assistant message under the turn's minted `messageId` with `metadata.interrupted = true` + `metadata.stopReason = "interrupted"` **before** emitting `agent:stream:end` (same convention as the graceful-shutdown flush; no-op for empty partials), so the terminal reconcile keeps the streamed blocks instead of erasing them. cloudlands-fe#242/#243 add regression tests: interrupted deltas stay visible with the Stopped indicator, and stop-button state dispatches don't erase the in-flight partial. The convention is documented in `docs/PROTOCOL.md` §7.5.
+
+---
 
 ### STAB-175 (2026-07-22, area: cloudlands-fe overlays/keyboard, severity: P2)
 
