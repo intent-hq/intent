@@ -566,7 +566,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 
 | Method | Params | Result |
 | --- | --- | --- |
-| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
+| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
 | comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, suggestionOriginal?, suggestionProposed? | { ok, ... } |
@@ -586,6 +586,23 @@ markers scrubbed from the persisted content and the comment is flipped to
 `isOrphaned: true`. Comments in the wire `Comment` shape carry an optional
 `isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
 `false` explicitly when a previously-orphaned comment heals).
+
+**Tolerant anchoring + actionable errors.** `comment.add` first attempts an
+exact substring match of `searchContext` against the note markdown. When no
+exact occurrence exists, it retries against a *plaintext projection* of the
+markdown (heading/list/blockquote markers, emphasis/code delimiters, link
+syntax — keeping link text — HTML comments including existing anchor markers,
+and all whitespace stripped, with a byte map back to the source), so anchors
+derived from an editor's rendered plain text (e.g. tiptap `textBetween`, which
+joins blocks with no separator) anchor correctly onto the formatted source.
+Uniqueness rules are identical on both paths: an ambiguous `searchContext` or
+`commentTarget` is rejected. All anchoring failures (context not found /
+ambiguous, target not in context / ambiguous) and the empty-field validations
+(`comment`, `searchContext`, `commentTarget`, invalid `authorType`) return
+`-32602` with a descriptive message, **not** `-32603 "Internal error"`. The
+optional `authorType` param sets the persisted comment's `authorType`
+(defaulting `author` to `"User"` / `"Agent"` accordingly when absent);
+omitting it keeps the backward-compatible `agent` default.
 
 **`comment.*` extensions (new in intentd — additive; do not change the ported count of 5).** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
