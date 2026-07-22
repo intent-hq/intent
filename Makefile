@@ -7,9 +7,11 @@
 #      is `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
 #   2. `make release-daemon` — occasional "debug the release app with its own
 #      state" seat. intentd on the real data dir, UDS-always and no
-#      `--insecure`, so it never binds $(DEV_TCP_PORT) or collides with the
-#      dev seat (the WSS listener starts only if the persisted
-#      `server.wsApi.enabled` setting is true).
+#      `--insecure`. No TCP port is bound unless the persisted
+#      `server.wsApi.enabled` setting is true, in which case the secure WSS
+#      listener binds `server.wsApi.port` (default 5181 — the same as
+#      $(DEV_TCP_PORT)); if the dev seat already holds it, the bind failure
+#      is non-fatal and UDS keeps serving.
 #   3. `make run-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
 #
@@ -144,8 +146,9 @@ release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on
 	# The UDS listener always serves; the secure WSS listener starts only when
 	# the persisted `server.wsApi.enabled` setting is true (config.toml or the
 	# runtime toggle), on `server.wsApi.port` (5181 unless INTENTD_TCP_PORT is
-	# set); the daemon fails fast if that port is already bound (e.g. by
-	# `make dev-daemon` on the same 5181). No `--insecure`: the WSS listener,
+	# set). A WSS bind failure at boot is non-fatal (e.g. when `make dev-daemon`
+	# already holds 5181): the daemon logs a warning and keeps serving UDS;
+	# toggle `server.wsApi.enabled` to retry. No `--insecure`: the WSS listener,
 	# when enabled, serves wss:// with TLS + bearer auth as the packaged app
 	# expects.
 	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve

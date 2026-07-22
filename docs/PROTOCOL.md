@@ -47,7 +47,7 @@ The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable)
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5181` (fixed, fail-fast). The listener binds this exact port; if it is already in use the daemon exits non-zero with the OS bind error (no port walking, no same-port backoff). Clients still SHOULD discover the port via mDNS (§1.3) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
+- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD discover the port via mDNS (§1.3) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
 - **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
