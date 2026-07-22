@@ -523,7 +523,7 @@ After the sweep completes, `agent.listInterrupted` returns an empty list.
 
 ### 6.7 `models.list` Per-Provider Catalog (v2.0 additions)
 
-`models.list` (porting-era §5.30) accepts two additive **optional** parameters. With both omitted the request and response schemas are unchanged from the ported contract: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog) with its 5-minute in-memory success cache, returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId`.
+`models.list` (§5.30 of the porting-era protocol, `docs/00_initial_porting/PROTOCOL.md`) accepts two additive **optional** parameters. With both omitted the required keys of the ported contract are unchanged: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog), returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId` — though the optional `stale` / `warning` fields may now appear on probe-failure degradation (see the legacy-path bullet below).
 
 **Request:**
 
@@ -548,12 +548,13 @@ After the sweep completes, `agent.listInterrupted` returns an empty list.
 
 **Semantics:**
 
-- **Generic per-provider cache.** Requests with a `providerId` go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. an adapter version pin such as `CLAUDE_AGENT_ACP_VERSION`); a pin bump invalidates cached entries automatically.
+- **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
 - **`forceRefresh: true`** skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
 - **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
+- **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
 - **Registered sources:** seven providers are registered — `auggie` (CLI discovery, as above); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); and `opencode` (native CLI discovery). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
 - **Unknown/unregistered `providerId`** degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
-- **Legacy path with `forceRefresh`.** Without `providerId`, `forceRefresh: true` skips the legacy in-memory cache read and awaits a fresh auggie probe; on probe failure it serves the last-good cached list labeled `stale: true` + `warning` (same contract as the per-provider path), falling back to the static catalog only when no last-good list exists. The response omits the `providerId` field (legacy shape) but may still carry the optional `stale` / `warning` fields on this fallback path. Note the legacy in-memory cache and the persisted per-provider cache are separate; `providerId: "auggie"` and the no-`providerId` path may diverge within a TTL window.
+- **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
 - **Errors:** `-32603` only on internal failure; probe/CLI failures degrade as described above.
 
 ---
