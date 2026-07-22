@@ -1066,7 +1066,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > registry). When no client is connected at all the call fails fast with `-32603` and
 > `browser.exec: no client connected` so the agent surfaces the same class of failure a
 > closed channel already produces. This is a deliberate stopgap ahead of an explicit
-> target-selection surface (REV-2 / §16 client identity): "sticky first" needs no wire
+> target-selection surface (§5.17 client identity): "sticky first" needs no wire
 > change and is trivially observable, but it does not distinguish overlapping clients.
 > Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
 > caller's own connection.
@@ -1357,7 +1357,7 @@ in the bullet under this table).
   the daemon can enforce the same lexical within-workspace containment guard that `file.*` uses;
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
   workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
-  stay on `script.*` and `terminal.*` (§5.8, §12) — `host.exec` is one-shot only.
+  stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
 - `host.execStream` is the **streaming/interactive** counterpart for FE surfaces (e.g.
   `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
   something neither the buffered `host.exec` nor the PTY-mangling `terminal.*` nor the
