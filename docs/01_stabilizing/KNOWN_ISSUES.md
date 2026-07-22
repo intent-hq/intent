@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-175 (as of 2026-07-22)
+**Next available ID:** STAB-183 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,100 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-182 (2026-07-22, area: cloudlands-fe browser-mock transport envelope, severity: P2)
+
+The browser-only dev profiles (`dev:web` / `dev:renderer` without `VITE_INTENTD_WS_URL`) crashed at boot: `BrowserMock` answered the `backend:*` transport channels with raw data (or nothing), but `electron-ipc-transport.ts` unwraps those responses as the `BackendResult` envelope (`{ ok: true, result }` / `{ ok: false, error }`), so every `backendRequest` threw an unhandled `BackendError` — including `event.query`, which took down `MainLayout` via its error boundary.
+
+**Repro:** Run `pnpm run dev:web` (no `VITE_INTENTD_WS_URL`) and open the app in a browser. Observed: `BackendError` thrown from `unwrap()` in `electron-ipc-transport.ts` for boot-time calls (`workspace.list`, `events.subscribe`, `event.query`, …) and the MainLayout error boundary tripping.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#249](https://github.com/intent-hq/cloudlands-fe/pull/249), 2026-07-22) — `BrowserMock` now answers `backend:request`/`backend:subscribe`/`backend:unsubscribe` with the `BackendResult` envelope (`{ ok: true, result }` / `{ ok: false, error }`) including boot-method mocks, and `backend:get-status` returns the bare status shape, with regression tests in `browser-mock.test.ts`.
+
+---
+
+### STAB-181 (2026-07-22, area: cloudlands-fe model picker, severity: P2)
+
+Selecting a provider's own "Default (recommended)" model in the model picker snapped the trigger label back to the auggie default model instead of showing the chosen provider's default.
+
+**Repro:** New Workspace modal → open the model picker → pick Anthropic Claude Code → choose "Default (recommended)". Observed: the trigger label snaps back to the auggie default (e.g. "Claude Fable 5") while the checkmark stays on the Claude Code row.
+
+**Root cause:** `hasExplicitModel` in `ModelPicker.svelte` treated any parsed `modelId === 'default'` as "no selection", over-matching compound ids like `claude-code:default` — so a provider-prefixed default selection was discarded and the trigger label fell back to the auggie default. The `'default'` sentinel originated in cloudlands-fe PR #6 (`ba7b8255`), before provider-prefixed compound ids existed.
+
+**Expected:** Only the bare `'default'` sentinel means "no explicit selection"; a provider-prefixed `*:default` id is an explicit model choice and the trigger label reflects the selected provider's default.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#248](https://github.com/intent-hq/cloudlands-fe/pull/248), 2026-07-22) — `hasExplicitModel` now treats only the bare `'default'` id as no-selection, so compound `*:default` ids render as explicit selections; regression test covers the trigger label for a provider-prefixed default.
+
+---
+
+### STAB-180 (2026-07-22, area: settings / providers, severity: P1)
+
+The "Pi needs the pi-mcp-adapter package" warning in the provider selector never cleared — even with the adapter installed — and its Install button was a no-op.
+
+**Repro:** With the `pi` CLI and `pi-mcp-adapter` installed, open the provider selector. Observed: the "Pi needs the pi-mcp-adapter package" warning still shows. Click Install: nothing happens.
+
+**Root cause:** In the desktop build, renderer IPC routes through `src/shared/ipc-mock-router.ts`, and the `pi:check-mcp-adapter` / `pi:install-mcp-adapter` channels sat in `UNBRIDGED_INVOKE_ALLOWLIST` as hard-coded values: check always resolved `false` (warning never cleared) and install resolved a shaped failure with a stale `npm i -g pi-mcp-adapter` hint (Install button a no-op). Neither channel ever reached the daemon.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#245](https://github.com/intent-hq/cloudlands-fe/pull/245), 2026-07-22) — a new renderer seeder (`pi-mcp-bridge-seeder.ts`) bridges both channels to real daemon probes via `host.findBinary` + `host.exec` (check: `pi list` matching `pi-mcp-adapter` lines; install: `pi install npm:pi-mcp-adapter`), mirroring the main-process `pi-resolver.ts` semantics. Both hard-coded allowlist entries are removed and the stale `npm i -g` hint is gone; failures (missing CLI, timeout, non-zero exit, RPC rejection) degrade honestly. Wire-contract tests cover check/install across all failure modes.
+
+---
+
+### STAB-179 (2026-07-22, area: provider availability / onboarding, severity: P1)
+
+Grok and Pi always showed "Log in" on the Welcome screen even when the user was authenticated with those CLIs.
+
+**Repro:** Authenticate the `grok` and/or `pi` CLIs, then open the Welcome screen's provider selector. Observed: Grok and Pi render with a "Log in" affordance regardless of actual auth state.
+
+**Root cause:** The FE's provider availability service only ran auth probes for a subset of providers (auggie, claude-code, codex, opencode); `grok` and `pi` never had an auth probe path, so their `authenticated` verdict was never populated and the UI treated them as logged out.
+
+**Status:** fixed ([intent-hq/intentd#339](https://github.com/intent-hq/intentd/pull/339), [intent-hq/cloudlands-fe#247](https://github.com/intent-hq/cloudlands-fe/pull/247), 2026-07-22) — intentd#339 adds a daemon-owned `host.providerAuthStatus` RPC covering all probe-able providers (auggie, claude-code, codex, opencode, droid, grok, pi) with per-provider probes, a 60s TTL cache with single-flighting, and `force` to bypass the cache read (documented in `docs/PROTOCOL.md` §6.2). cloudlands-fe#247 migrates every FE-side auth check onto the RPC — aggregate paths take one sweep, single rechecks send `{ providerId, force: true }`, wire `null` folds to unknown, and the FE never runs auth-check commands via `host.exec` anymore — so Grok and Pi now report real auth state.
+
+---
+
+### STAB-178 (2026-07-22, area: cloudlands-fe agent deletion / rehydration, severity: P1)
+
+Deleting an agent showed the undo toast but the agent reappeared in the list moments later — any agent event that triggered a list rehydrate during the 15s undo window resurrected the soft-hidden session.
+
+**Repro:** Delete an agent (undo toast shown), then have any agent event land during the 15s undo window (e.g. another agent's lifecycle event triggering `hydrateWorkspaceAgents`, an `ensureAgentSession` refetch, a transcript load, or the boot seeder). Observed: the deleted agent reappears in the agent list even though the user deleted it.
+
+**Root cause:** Agent deletion is soft-hide-then-commit — the session is hidden locally and the wire `agent.delete` is deferred until the undo window elapses, so the daemon still returns the agent from `agent.list` / `agent.get` during the window. The rehydration paths never consulted the pending-deletion registry (a module-level map private to `agent-mutation-service.ts`), so they re-upserted the deleted agent into the store.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#246](https://github.com/intent-hq/cloudlands-fe/pull/246), 2026-07-22) — the pending-deletions registry is extracted into a shared util (`pending-agent-deletions.ts`; the mutation service still owns the set/remove lifecycle) and every rehydration path now consults `isAgentDeletionPending()`: `hydrateWorkspaceAgents` and the boot seeder filter pending agents out of `agent.list` responses, and `ensureAgentSession` / `loadChatTranscript` no-op while a deletion is pending. Undo still restores the agent. Regression tests added alongside each guard (83/83 pass across the 5 touched suites).
+
+---
+
+### STAB-177 (2026-07-22, area: intentd comment.add anchoring + cloudlands-fe comment UX, severity: P1)
+
+Adding a comment on formatted or multi-paragraph note text from the editor failed with an opaque "Failed to add comment / Internal error" toast, with nothing in the daemon log or FE console.
+
+**Repro:** In the note editor, select formatted text (heading/bold/link text, or any selection whose ±50-char context spans a block boundary) and add a comment. Observed: toast "Failed to add comment / Internal error"; no daemon or FE log output.
+
+**Root cause:** The FE builds the anchor params (`searchContext`/`commentTarget`) from tiptap's rendered *plain text* (`doc.textBetween`), which strips markdown syntax and joins blocks with no separator, while the daemon's `find_and_anchor_text` did an **exact substring search over the note's markdown source** — so most real selections never matched and failed as `Error::Internal("Could not find the search context in the document.")`. The router maps every `Error::Internal` to `-32603` with the hardcoded message "Internal error" (the real cause goes to `error.data`), the FE surfaced only `error.message`, and the daemon logged nothing for the failed RPC.
+
+**Status:** fixed ([intent-hq/intentd#341](https://github.com/intent-hq/intentd/pull/341), [intent-hq/intentd#342](https://github.com/intent-hq/intentd/pull/342), [intent-hq/cloudlands-fe#241](https://github.com/intent-hq/cloudlands-fe/pull/241), 2026-07-22) — intentd#341: when the exact search fails, anchoring falls back to a plaintext projection of the markdown (offset-mapped back to source, identical uniqueness/ambiguity rules); anchoring/validation failures now return `-32602` with the descriptive message instead of `-32603 "Internal error"`; `comment.add` failures emit a `tracing::warn!`; and a new optional `authorType` param (`"user"` | `"agent"`, default `"agent"`) persists who authored the comment. intentd#342 documents `authorType` in the MCP `workspace_api` tool docs. cloudlands-fe#241: generic `-32603 "Internal error"` mutation toasts now fold in the `error.data` detail, and editor-driven `comment.add` sends `authorType: "user"`. Landed in the monorepo via [#443](https://github.com/intent-hq/monorepo/pull/443)/[#445](https://github.com/intent-hq/monorepo/pull/445) (intentd bumps + PROTOCOL §5.3 update) and [#442](https://github.com/intent-hq/monorepo/pull/442) (cloudlands-fe bump including #241).
+
+---
+
+### STAB-176 (2026-07-22, area: agent streaming / chat.subscribe, severity: P1)
+
+Interrupting a streaming agent (Stop button or ⌘Enter interrupt send) immediately hid all in-flight deltas — the partial assistant output vanished from the chat.
+
+**Repro:** While an agent is streaming a turn, interrupt it via Stop or ⌘Enter. Observed: every streamed-so-far block disappears the moment the interrupt lands. Root cause: the daemon aborted the turn worker without flushing the live-turn slot, so no partial assistant row was persisted; the `chat.subscribe` terminal reconcile after `agent:stream:end` re-read a transcript without the streamed message and wiped the live blocks via `removedIds`.
+
+**Status:** fixed ([intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336), [intent-hq/cloudlands-fe#242](https://github.com/intent-hq/cloudlands-fe/pull/242), [intent-hq/cloudlands-fe#243](https://github.com/intent-hq/cloudlands-fe/pull/243), 2026-07-22) — intentd#336 snapshots the live-turn slot before aborting the turn worker and flushes the partial assistant message under the turn's minted `messageId` with `metadata.interrupted = true` + `metadata.stopReason = "interrupted"` **before** emitting `agent:stream:end` (same convention as the graceful-shutdown flush; no-op for empty partials), so the terminal reconcile keeps the streamed blocks instead of erasing them. cloudlands-fe#242/#243 add regression tests: interrupted deltas stay visible with the Stopped indicator, and stop-button state dispatches don't erase the in-flight partial. The convention is documented in `docs/PROTOCOL.md` §7.5.
+
+---
+
+### STAB-175 (2026-07-22, area: cloudlands-fe overlays/keyboard, severity: P2)
+
+Pressing Escape with the RepoSelector dropdown open inside the New Workspace dialog closed the whole dialog instead of just the dropdown.
+
+**Repro:** Open the New Workspace dialog, click the repository selector to open its dropdown, press Escape. Observed: the entire dialog closed while the dropdown was still open.
+
+**Root cause:** The RepoSelector dropdown had no global Escape handling of its own (its window-capture listener only intercepts Enter), so the hosting modal's escape-layer stack entry (from STAB-171's fix) was topmost and consumed Escape, closing the whole dialog.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#244](https://github.com/intent-hq/cloudlands-fe/pull/244), 2026-07-22) — RepoSelector now registers an escape layer while its dropdown is open, so Escape closes only the dropdown in LIFO order. The PR also ships the broader migration flagged as follow-up under STAB-171: all remaining global Escape-to-dismiss listeners (`Modal.svelte`, `dropdown-menu`, `SidebarContextMenu`, `ContextPickerButton`, `Drawer`, `KeyboardShortcutsCheatSheet`, `DirectoryPickerModal`, `ContextPickerModal`, `CreateAgentSection`, `AddContextSection`, `CommentsSidebar`, `MermaidRenderer`, `MermaidBlockNodeView`, `TerminalSidebar`) moved onto `pushEscapeLayer`, layer callbacks may return `false` to decline handling (preserving focused-input semantics), and dispatch is throw-safe (event consumed unless explicitly declined, even if a callback throws). Regression test covers dropdown-then-dialog LIFO dismissal plus per-component Escape suites.
+
+---
 
 ### STAB-174 (2026-07-22, area: intentd/model-catalog, severity: P1)
 
@@ -47,7 +141,7 @@ Pressing Escape with the image lightbox open on top of the New Workspace dialog 
 
 **Repro:** Open the New Workspace dialog, attach an image, open the lightbox, press Escape. Observed: the dialog closed instead of the lightbox. Root cause: both overlays registered window capture-phase Escape `keydown` listeners; for listeners on the same target and phase, dispatch order is registration order, so the modal's older listener won.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. Follow-up: `Modal.svelte` still has its own legacy capture-phase Escape listener and should be migrated to the layer stack.
+**Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. The follow-up migration of `Modal.svelte` and the remaining global Escape listeners shipped in [intent-hq/cloudlands-fe#244](https://github.com/intent-hq/cloudlands-fe/pull/244) (see STAB-175).
 ---
 
 ### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
