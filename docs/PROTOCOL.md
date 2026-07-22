@@ -39,7 +39,7 @@ The method surface is enforced by golden tests in `crates/intent-transport/src/c
 
 ### 1.1 Connection URL
 
-The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable) exposing asingle WebSocket endpoint:
+The backend runs a dedicated **HTTPS server bound to **`0.0.0.0` (LAN-reachable) exposing a single WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws
@@ -56,13 +56,13 @@ wss://<host>:<port>/ws
 
 The server generates a **self-signed** EC (P-256) certificate on first start, persists it under the app's data directory (`ws-cert.pem` / `ws-key.pem`), and reuses it across restarts (10-year validity). Because it is self-signed, **clients pin the certificate** rather than relying on a CA:
 
-- The server exposes a **SHA-256 fingerprint**, colon-separated uppercase hex(e.g. `AB:CD:EF:...`), computed over the DER body of the cert.
-- Certificate SANs include `localhost`, `127.0.0.1`, `::1`, and every non-internal IPv4 addresson the host (LAN, Tailscale, etc.), so connecting by hostname or LAN IP validates against the SAN.
+- The server exposes a **SHA-256 fingerprint**, colon-separated uppercase hex (e.g. `AB:CD:EF:...`), computed over the DER body of the cert.
+- Certificate SANs include `localhost`, `127.0.0.1`, `::1`, and every non-internal IPv4 address on the host (LAN, Tailscale, etc.), so connecting by hostname or LAN IP validates against the SAN.
 - Clients should **pin the fingerprint** (obtained out-of-band during pairing, or from the mDNSTXT record `fp=` below) and reject any cert whose fingerprint does not match.
 
 ### 1.3 mDNS / Bonjour discovery
 
-When discovery is enabled the server advertises a Bonjour/DNS-SD service so mobile/LAN clients canauto-discover the running instance:
+When discovery is enabled the server advertises a Bonjour/DNS-SD service so mobile/LAN clients can auto-discover the running instance:
 
 - **Service type:** `_intent-ws._tcp`
 - **Service name:** `Intent on <hostname>`

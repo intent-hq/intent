@@ -12,8 +12,8 @@ persistence, transports, and the ACP agent runtime.
 
 **[PROTOCOL.md](./PROTOCOL.md)** is the **canonical, versioned wire contract** between
 Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). It
-specifies protocol v2.0 (frozen as of 2026-07-14), covering transport, authentication,
-JSON-RPC 2.0 envelope rules, the complete method catalog (280 dispatchable names), event
+is the living protocol v2.0 specification, covering transport, authentication,
+JSON-RPC 2.0 envelope rules, the complete method catalog, event
 subscriptions, and error codes. The detailed wire contract from the porting era has been
 merged in, making this the single canonical spec. The method surface is enforced by
 golden tests in the `intent-transport` crate.
