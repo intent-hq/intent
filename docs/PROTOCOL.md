@@ -14,7 +14,7 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
 6. [Method Catalog](#6-method-catalog)
    - 6.1 [Router Methods](#61-router-methods-262-total)
-   - 6.2 [Fast-Path Methods](#62-fast-path-methods-29-total)
+   - 6.2 [Fast-Path Methods](#62-fast-path-methods-30-total)
    - 6.3 [Method Aliases](#63-method-aliases-2-total)
    - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
    - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
@@ -219,18 +219,18 @@ Returns commit history with attribution and workspace boundary information.
 
 ## 6. Method Catalog
 
-The API exposes **293 dispatchable method names** across the following categories:
+The API exposes **294 dispatchable method names** across the following categories:
 
 - **Router methods:** 262 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 29 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 30 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 293 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 294 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`)
 
-**Total:** 293 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 294 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields `-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires `workspaceId` (see §4.6) and may return `-32603 Internal error` if the underlying service throws.
 
@@ -346,11 +346,11 @@ terminal.create, terminal.getBuffer, terminal.kill, terminal.list, terminal.read
 
 workspace.archive, workspace.cleanup, workspace.create, workspace.delete, workspace.detectProjectType, workspace.dismissAttention, workspace.duplicate, workspace.findRepositories, workspace.generateSetupScript, workspace.get, workspace.getContext, workspace.getSetupScript, workspace.getTokenUsage, workspace.getUiContext, workspace.initializeRepository, workspace.list, workspace.markSeen, workspace.restore, workspace.saveSetupScript, workspace.unarchive, workspace.update, workspace.updateContext, workspace.updateUiContext
 
-### 6.2 Fast-Path Methods (29 total)
+### 6.2 Fast-Path Methods (30 total)
 
-The following 29 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 30 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, system.shutdown, system.status
 
 **UDS-only method:** `system.shutdown` is only available on the Unix-domain socket transport. `system.status` is available on both UDS and WSS transports.
 
@@ -394,6 +394,28 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 - Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd token`, so all pairing surfaces stay consistent.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available.
+
+#### `host.providerAuthStatus`
+
+Daemon-owned provider auth probes: reports whether each CLI-backed agent provider is authenticated, so clients consume verdicts instead of orchestrating auth-check commands themselves.
+
+**Request:** `{ "providerId": "grok", "force": true }` — both parameters optional. `providerId` scopes the sweep to a single provider; an unknown `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
+
+**Response:**
+
+```json
+{
+  "providers": [
+    { "id": "auggie", "authenticated": true },
+    { "id": "claude-code", "authenticated": false },
+    { "id": "grok", "authenticated": null }
+  ]
+}
+```
+
+- Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`. With `providerId`, the `providers` array contains only that provider.
+- `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed.
+- Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
 
 ### 6.3 Method Aliases (2 total)
 
@@ -718,7 +740,7 @@ The daemon uses the following JSON-RPC 2.0 error codes:
 
 ## Summary
 
-**Protocol v2.0** exposes **293 dispatchable method names** (262 router methods + 29 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 293 dispatchable names AND are also issued daemon→client on remote connections.
+**Protocol v2.0** exposes **294 dispatchable method names** (262 router methods + 30 fast-path methods + 2 aliases) and **1 notification** (`events.event`). The protocol also defines **4 reverse RPCs** (`browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication`) — these 4 names are dual-role: they are counted within the 294 dispatchable names AND are also issued daemon→client on remote connections.
 
 The method surface is frozen and enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift causes CI failure with the instruction to update the catalog, this document, and bump the protocol version.
 
