@@ -523,7 +523,7 @@ After the sweep completes, `agent.listInterrupted` returns an empty list.
 
 ### 6.7 `models.list` Per-Provider Catalog (v2.0 additions)
 
-`models.list` (porting-era §5.30) accepts two additive **optional** parameters. With both omitted the request and response schemas are unchanged from the ported contract: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog), returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId`.
+`models.list` (§5.30 of the porting-era protocol, `docs/00_initial_porting/PROTOCOL.md`) accepts two additive **optional** parameters. With both omitted the required keys of the ported contract are unchanged: the auggie catalog (`auggie model list --json` → plain-text fallback → static `PROVIDER_MODEL_TIERS` catalog), returning `{ models: ModelInfo[], source: "auggie" | "static" }` and no `workspaceId` — though the optional `stale` / `warning` fields may now appear on probe-failure degradation (see the legacy-path bullet below).
 
 **Request:**
 
