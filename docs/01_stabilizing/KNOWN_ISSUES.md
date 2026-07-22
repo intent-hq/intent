@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-175 (as of 2026-07-22)
+**Next available ID:** STAB-176 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-175 (2026-07-22, area: cloudlands-fe overlays/keyboard, severity: P2)
+
+Pressing Escape with the RepoSelector dropdown open inside the New Workspace dialog closed the whole dialog instead of just the dropdown.
+
+**Repro:** Open the New Workspace dialog, click the repository selector to open its dropdown, press Escape. Observed: the entire dialog closed while the dropdown was still open.
+
+**Root cause:** The RepoSelector dropdown had no global Escape handling of its own (its window-capture listener only intercepts Enter), so the hosting modal's escape-layer stack entry (from STAB-171's fix) was topmost and consumed Escape, closing the whole dialog.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#244](https://github.com/intent-hq/cloudlands-fe/pull/244), 2026-07-22) — RepoSelector now registers an escape layer while its dropdown is open, so Escape closes only the dropdown in LIFO order. The PR also ships the broader migration flagged as follow-up under STAB-171: all remaining global Escape-to-dismiss listeners (`Modal.svelte`, `dropdown-menu`, `SidebarContextMenu`, `ContextPickerButton`, `Drawer`, `KeyboardShortcutsCheatSheet`, `DirectoryPickerModal`, `ContextPickerModal`, `CreateAgentSection`, `AddContextSection`, `CommentsSidebar`, `MermaidRenderer`, `MermaidBlockNodeView`, `TerminalSidebar`) moved onto `pushEscapeLayer`, layer callbacks may return `false` to decline handling (preserving focused-input semantics), and dispatch is throw-safe (event consumed unless explicitly declined, even if a callback throws). Regression test covers dropdown-then-dialog LIFO dismissal plus per-component Escape suites.
+
+---
 
 ### STAB-174 (2026-07-22, area: intentd/model-catalog, severity: P1)
 
@@ -47,7 +59,7 @@ Pressing Escape with the image lightbox open on top of the New Workspace dialog 
 
 **Repro:** Open the New Workspace dialog, attach an image, open the lightbox, press Escape. Observed: the dialog closed instead of the lightbox. Root cause: both overlays registered window capture-phase Escape `keydown` listeners; for listeners on the same target and phase, dispatch order is registration order, so the modal's older listener won.
 
-**Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. Follow-up: `Modal.svelte` still has its own legacy capture-phase Escape listener and should be migrated to the layer stack.
+**Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. The follow-up migration of `Modal.svelte` and the remaining global Escape listeners shipped in [intent-hq/cloudlands-fe#244](https://github.com/intent-hq/cloudlands-fe/pull/244) (see STAB-175).
 ---
 
 ### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
