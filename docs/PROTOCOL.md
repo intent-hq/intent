@@ -1,7 +1,6 @@
 # Intent Backend — JSON-RPC Protocol v2.0
 
-**Protocol Version:** `2.0`  
-**Status:** Frozen as of 2026-07-14
+**Protocol Version:** `2.0`**Status:** Frozen as of 2026-07-14
 
 This document specifies the wire contract between Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). The protocol surface is frozen at v2.0 and enforced by golden tests in the `intent-transport` crate.
 
@@ -13,17 +12,15 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 4. [Message Envelope (JSON-RPC 2.0)](#4-message-envelope-json-rpc-20)
 5. [Heartbeat & Lifecycle](#5-heartbeat--lifecycle)
 6. [Method Catalog](#6-method-catalog)
-   - 6.1 [Router Methods](#61-router-methods-262-total)
-   - 6.2 [Fast-Path Methods](#62-fast-path-methods-30-total)
-   - 6.3 [Method Aliases](#63-method-aliases-2-total)
-   - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
-   - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
-   - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
-   - 6.7 [`models.list` Per-Provider Catalog](#67-modelslist-per-provider-catalog-v20-additions)
+  - 6.1 [Router Methods](#61-router-methods-262-total)
+  - 6.2 [Fast-Path Methods](#62-fast-path-methods-30-total)
+  - 6.3 [Method Aliases](#63-method-aliases-2-total)
+  - 6.4 [Server→Client Notifications](#64-serverclient-notifications-1-total)
+  - 6.5 [Client-Served Reverse RPCs](#65-client-served-reverse-rpcs-4-total)
+  - 6.6 [Interrupted-Agent Resumption](#66-interrupted-agent-resumption-v20-additions)
+  - 6.7 `models.list`[ Per-Provider Catalog](#67-modelslist-per-provider-catalog-v20-additions)
 7. [Events & Subscriptions](#7-events--subscriptions)
 8. [Error Codes](#8-error-codes)
-
----
 
 ## 1. Protocol Version & Compatibility
 
@@ -31,8 +28,8 @@ This document specifies the wire contract between Intent clients (desktop, iOS, 
 
 The protocol version is advertised in two places:
 
-- **`client.hello`** response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block.
-- **`system.status`** response: `{ protocolVersion: "2.0", ... }`
+- `client.hello` response: `{ protocolVersion: "2.0", server: { protocolVersion: "2.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block.
+- `system.status` response: `{ protocolVersion: "2.0", ... }`
 
 ### Compatibility Policy
 
@@ -40,8 +37,6 @@ The protocol version is advertised in two places:
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "update `catalog.rs` + `docs/PROTOCOL.md` and bump the protocol version."
-
----
 
 ## 2. Transport
 
@@ -81,8 +76,6 @@ When discovery is enabled, the server advertises a Bonjour/DNS-SD service:
   - `hostname` — `os.hostname()`
   - `fp` — the TLS cert SHA-256 fingerprint (for pinning)
 
----
-
 ## 3. Authentication
 
 ### 3.1 Bearer Token on Upgrade
@@ -103,8 +96,6 @@ Browser-origin upgrades are gated to prevent cross-origin attacks; native client
 
 - **Allowed:** missing/empty `Origin` (native iOS/CLI clients), `file://` (Electron renderer), loopback hosts (`localhost`, `127.0.0.1`, `[::1]`), and the host's own hostname / `.local` form.
 - **Rejected** (`403`): `Origin: null` (sandboxed/`data:` contexts) and any other cross-origin host.
-
----
 
 ## 4. Message Envelope (JSON-RPC 2.0)
 
@@ -139,7 +130,7 @@ All application messages are **JSON-RPC 2.0** text frames.
 
 ### 4.4 Notifications (No Response)
 
-A request **without an `id` member** is a notification: the server processes it and returns nothing. Note the distinction required by JSON-RPC 2.0:
+A request **without an **`id`** member** is a notification: the server processes it and returns nothing. Note the distinction required by JSON-RPC 2.0:
 
 - `id` **absent** → notification → no response is ever sent (even on error / unknown method).
 - `id: null` **present** → a normal request that **must** receive a response.
@@ -153,8 +144,6 @@ The server processes **one JSON-RPC object per WebSocket text frame**. JSON-RPC 
 ### 4.6 `workspaceId` Scoping
 
 Most methods operate within a workspace. `workspaceId` is read from `params.workspaceId`, falling back to a connection-level context value if the transport provides one. If neither is present, the method returns `-32602 "workspaceId is required"`. Workspace/repo/specialist/global methods (e.g., `workspace.list`, `repo.list`, `specialist.list`, `agent.getModels`) do not require it.
-
----
 
 ## 5. Heartbeat & Lifecycle
 
@@ -214,8 +203,6 @@ Returns commit history with attribution and workspace boundary information.
 1. Prefer merge-base of HEAD with `origin/<baseRef>` or `<baseRef>` (rebase-resilient)
 2. Fall back to `baseCommitSha` if it is a valid ancestor of HEAD
 3. Return `null` if neither resolves
-
----
 
 ## 6. Method Catalog
 
@@ -366,8 +353,8 @@ The `system.status` result includes two **optional** self-process resource field
 }
 ```
 
-- **`cpuPercent`** uses the raw `sysinfo` convention: `100` = one full core, so values **may exceed 100** on multicore systems (not normalized to total capacity). The first sample after daemon startup **may read `0`** before a usage baseline is established.
-- **`memoryBytes`** is the daemon process RSS in bytes.
+- `cpuPercent` uses the raw `sysinfo` convention: `100` = one full core, so values **may exceed 100** on multicore systems (not normalized to total capacity). The first sample after daemon startup **may read **`0` before a usage baseline is established.
+- `memoryBytes` is the daemon process RSS in bytes.
 - Both fields are **additive and optional**; clients must tolerate their absence and degrade gracefully.
 - **Versioning:** these fields shipped within protocol **v2.0** — the daemon still advertises `protocolVersion: "2.0"`. They add optional response fields to an existing method without changing the method surface (the golden-test-enforced catalog is unchanged), so no version bump was made; clients must detect them by **presence**, not by protocol version.
 
@@ -421,14 +408,14 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 
 The daemon accepts these 2 alias forms and dispatches them to their canonical counterparts. The wire accepts both, but the canonical name is the documented form.
 
-- **`git.diff`** → `git.diffs`
-- **`git.log`** → `git.commits`
+- `git.diff` → `git.diffs`
+- `git.log` → `git.commits`
 
 ### 6.4 Server→Client Notifications (1 total)
 
 The daemon sends the following notification (unsolicited, no request `id`) to connected clients:
 
-- **`events.event`** — event notification envelope (see §7)
+- `events.event` — event notification envelope (see §7)
 
 ### 6.5 Client-Served Reverse RPCs (4 total)
 
@@ -436,12 +423,10 @@ These methods are client-callable triggers whose real work happens on the connec
 
 These 4 method names are **dual-role**: they appear in the dispatchable method catalog (§6.1 or §6.2) AND are also issued daemon→client as reverse RPCs on remote connections.
 
-- **`browser.exec`** — browser automation (Chrome DevTools)
-- **`host.openExternal`** — open a URL in the default browser
-- **`host.openInEditor`** — open a file or directory in the user's editor
-- **`host.pickApplication`** — prompt the user to select an application
-
----
+- `browser.exec` — browser automation (Chrome DevTools)
+- `host.openExternal` — open a URL in the default browser
+- `host.openInEditor` — open a file or directory in the user's editor
+- `host.pickApplication` — prompt the user to select an application
 
 ### 6.6 Interrupted-Agent Resumption (v2.0 additions)
 
@@ -452,6 +437,7 @@ The following methods manage agent resumption across daemon restarts. When `inte
 **Request:** `{}` (no parameters)
 
 **Response:**
+
 ```json
 {
   "agents": [
@@ -468,6 +454,7 @@ The following methods manage agent resumption across daemon restarts. When `inte
 ```
 
 Returns pending interrupted agents across all workspaces. Each `InterruptedAgent` includes:
+
 - `agentId`, `workspaceId` — session and workspace IDs
 - `workspaceName`, `agentName` — joined from workspace/agent-session tables (may be empty if session deleted after interruption)
 - `prevStatus` — the agent's status before interruption (`active`, `processing`, or `waiting`)
@@ -478,6 +465,7 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 #### `agent.resolveInterrupted`
 
 **Request:**
+
 ```json
 {
   "resume": ["agent-abc123"],
@@ -486,12 +474,14 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 ```
 
 **Validation rules:**
+
 - `resume` and `abandon` are **optional** parameters.
 - When present, each must be an **array of strings** (non-array → `-32602 "resume/abandon must be an array"`; non-string element → `-32602 "resume[i]/abandon[i] must be a string"`).
 - `null` is treated as non-array and rejected with `-32602`.
 - At least one of `resume` or `abandon` **does not** need to be present; both can be absent or empty arrays (no-op).
 
 **Response:**
+
 ```json
 {
   "resumed": ["agent-abc123"],
@@ -501,10 +491,12 @@ Rows with `resolution='pending'` survive multiple restarts (idempotent capture).
 ```
 
 Resolves interrupted agents:
+
 - **Resume:** Atomically marks row `resolved='resumed'` (claim-first), re-registers parent completion watches (if delegated), delivers a continuation message (`"You were interrupted because the harness shut down. You now have a chance to continue the work — review your last steps and pick up where you left off."`) via `agent.sendMessage`. Delivery lazily respawns the ACP provider and resumes via `session/load` (with `session/new` recreate fallback). If any post-claim step fails, the row is reset to `pending` (resolution=NULL) to restore retryability, and the error is returned.
 - **Abandon:** Marks row `resolved='abandoned'`, appends a system-role interruption message (text block with `meta.kind="interruption"`: `"This conversation was interrupted because intentd restarted. The agent's in-flight work was terminated."`), emits `agent:message` + `agent:updated` events.
 
 **Errors:**
+
 - An agent ID appearing in both `resume` and `abandon` → `-32602 "Agent id X appears in both resume and abandon"`
 - Unknown or already-resolved IDs land in the `failed` array: `{ agentId, error }` (error string describes the failure reason)
 
@@ -520,7 +512,7 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 
 #### Delegation-Group Persistence
 
-**`after_all` groups survive restarts.** When a parent delegates children with `waitMode: "after_all"`, the delegation group is persisted in the `delegation_group` SQLite table. At daemon startup, the heal sweep rehydrates all sealed groups and re-registers the aggregated-wake delivery watch. Resumed grouped children automatically re-enroll in their persisted group; when all children complete, the daemon delivers exactly one aggregated wake to the parent containing all children's reports.
+`after_all`** groups survive restarts.** When a parent delegates children with `waitMode: "after_all"`, the delegation group is persisted in the `delegation_group` SQLite table. At daemon startup, the heal sweep rehydrates all sealed groups and re-registers the aggregated-wake delivery watch. Resumed grouped children automatically re-enroll in their persisted group; when all children complete, the daemon delivers exactly one aggregated wake to the parent containing all children's reports.
 
 **Durable-before-observable:** Child completions are recorded durably in `delegation_group` **before** the `agent:idle` event publishes. A daemon kill between completion and event delivery cannot lose completion state — the resumed child's completion is already persisted when the daemon restarts.
 
@@ -535,6 +527,7 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 **Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes.
 
 **Logged output:**
+
 - `INFO`: `--resume-all: enumerating interrupted agents`
 - `INFO`: `--resume-all: resuming interrupted agents` (with `count` field)
 - `INFO`: `--resume-all: resumed agent` (per success; includes `agent_id`, `workspace`)
@@ -556,7 +549,7 @@ After the sweep completes, `agent.listInterrupted` returns an empty list.
 }
 ```
 
-**Response (with `providerId`):**
+**Response (with **`providerId`**):**
 
 ```jsonc
 {
@@ -571,19 +564,17 @@ After the sweep completes, `agent.listInterrupted` returns an empty list.
 **Semantics:**
 
 - **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
-- **`forceRefresh: true`** skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
+- `forceRefresh: true` skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
 - **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
 - **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
 - **Registered sources:** seven providers are registered — `auggie` (CLI discovery, as above); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); and `opencode` (native CLI discovery). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
-- **Unknown/unregistered `providerId`** degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
+- **Unknown/unregistered **`providerId` degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
 - **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
 - **Errors:** `-32603` only on internal failure; probe/CLI failures degrade as described above.
 
----
-
 ## 7. Events & Subscriptions
 
-Clients subscribe to events via the **`events.subscribe`** method (fast-path, not routed). The server sends matching events as **`events.event`** notifications (no request `id`).
+Clients subscribe to events via the `events.subscribe` method (fast-path, not routed). The server sends matching events as `events.event` notifications (no request `id`).
 
 ### 7.1 `events.subscribe`
 
@@ -652,7 +643,7 @@ Subscriptions are **per-connection** and do **not** survive reconnects. On disco
 
 ### 7.3 `events.event` Notification
 
-The daemon sends **`events.event`** notifications (no request `id`) to subscribed clients:
+The daemon sends `events.event` notifications (no request `id`) to subscribed clients:
 
 ```json
 {
@@ -691,21 +682,21 @@ The daemon sends **`events.event`** notifications (no request `id`) to subscribe
 
 Event types follow the pattern `<category>:<action>`. Common categories:
 
-- **`agent:*`** — agent lifecycle (created, updated, renamed, deleted, idle, stream:*, failed, etc.)
-- **`workspace:*`** — workspace changes (created, updated, deleted, activity-changed, attention-changed, etc.)
-- **`note:*`** — note mutations (created, updated, changed, deleted, etc.)
-- **`task:*`** — task updates (status-changed, agent-linked, agent-unlinked, etc.)
-- **`file:*`** — file system changes (created, modified, deleted, etc.)
-- **`git:*`** — git operations (commit, stage, push, pull, clone:progress, clone:done, etc.)
-- **`terminal:*`** — terminal activity (created, output, closed, etc.)
-- **`comment:*`** — comment lifecycle (added, resolved, deleted, etc.)
-- **`pr:*`** — pull request events (created, merged, checks-updated, etc.)
-- **`search:*`** — search results (result, done, etc.)
-- **`sandbox:*`** — sandbox lifecycle (created, merged, etc.)
-- **`mcp:*`** — MCP server status changes (status-changed, etc.)
-- **`spec:*`** — spec note events
-- **`goal:*`** — goal tracking events
-- **`github:*`** — GitHub auth surface: `github:auth-changed` carries `data = { status: "authorized" | "expired" | "denied" | "error" | "revoked" }` on device-flow terminal transitions and `github.revoke`; global (empty `workspaceId`), never carries a token or code
+- `agent:*` — agent lifecycle (created, updated, renamed, deleted, idle, stream:*, failed, etc.)
+- `workspace:*` — workspace changes (created, updated, deleted, activity-changed, attention-changed, etc.)
+- `note:*` — note mutations (created, updated, changed, deleted, etc.)
+- `task:*` — task updates (status-changed, agent-linked, agent-unlinked, etc.)
+- `file:*` — file system changes (created, modified, deleted, etc.)
+- `git:*` — git operations (commit, stage, push, pull, clone:progress, clone:done, etc.)
+- `terminal:*` — terminal activity (created, output, closed, etc.)
+- `comment:*` — comment lifecycle (added, resolved, deleted, etc.)
+- `pr:*` — pull request events (created, merged, checks-updated, etc.)
+- `search:*` — search results (result, done, etc.)
+- `sandbox:*` — sandbox lifecycle (created, merged, etc.)
+- `mcp:*` — MCP server status changes (status-changed, etc.)
+- `spec:*` — spec note events
+- `goal:*` — goal tracking events
+- `github:*` — GitHub auth surface: `github:auth-changed` carries `data = { status: "authorized" | "expired" | "denied" | "error" | "revoked" }` on device-flow terminal transitions and `github.revoke`; global (empty `workspaceId`), never carries a token or code
 
 ### 7.5 Interrupted Partial-Turn Persistence
 
@@ -716,27 +707,23 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessa
 
 This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
 
-**Consequence for `chat.subscribe` (the terminal reconcile of `docs/00_initial_porting/PROTOCOL.md` §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
+**Consequence for **`chat.subscribe`** (the terminal reconcile of **`docs/00_initial_porting/PROTOCOL.md`** §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
 
 Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
-
----
 
 ## 8. Error Codes
 
 The daemon uses the following JSON-RPC 2.0 error codes:
 
 | Code | Meaning | Description |
-|------|---------|-------------|
-| `-32700` | Parse error | Invalid JSON was received by the server. |
-| `-32600` | Invalid Request | The JSON sent is not a valid Request object. |
-| `-32601` | Method not found | The method does not exist / is not available. |
-| `-32602` | Invalid params | Invalid method parameter(s). The `message` field provides details (e.g., `"Missing required parameter: noteId"`). |
-| `-32603` | Internal error | Internal JSON-RPC error. The `error.data` field may carry the original internal error message. |
+| --- | --- | --- |
+| -32700 | Parse error | Invalid JSON was received by the server. |
+| -32600 | Invalid Request | The JSON sent is not a valid Request object. |
+| -32601 | Method not found | The method does not exist / is not available. |
+| -32602 | Invalid params | Invalid method parameter(s). The message field provides details (e.g., "Missing required parameter: noteId"). |
+| -32603 | Internal error | Internal JSON-RPC error. The error.data field may carry the original internal error message. |
 
 **Domain-specific errors** (e.g., "workspace not found", "agent already running") return `-32603` with a descriptive `message` rather than custom error codes. The `message` field is the canonical error text; clients should display it to users.
-
----
 
 ## Summary
 
