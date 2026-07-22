@@ -102,7 +102,7 @@ make clean      # remove build artifacts
 # Option 2 — Two-terminal mode (daemon + FE separate):
 #   Run the daemon and FE in separate terminals. Useful for daemon debugging.
 #
-#   # Terminal 1 — dev daemon: isolated data dir under .dev/intentd, --listen both --insecure
+#   # Terminal 1 — dev daemon: isolated data dir under .dev/intentd, UDS + insecure TCP (--insecure)
 #   make dev-daemon
 #
 #   # Terminal 2 — Electron + SvelteKit frontend (packages/cloudlands-fe);
@@ -110,9 +110,10 @@ make clean      # remove build artifacts
 #   make run-fe
 #
 # Occasional "debug the release app with its own state" variant: run intentd
-# against its default (real) data dir over UDS only, no TCP listener bound:
+# against its default (real) data dir (UDS always on; the secure WSS listener
+# starts only if the persisted `server.wsApi.enabled` setting is true):
 #
-#   make release-daemon                                      # UDS only on the real data dir
+#   make release-daemon                                      # real data dir, no --insecure
 #   INTENTD_SOCKET=~/Library/Application\ Support/intentd/intentd.sock make run-fe
 #
 # `make run-intentd` is a deprecated alias for `make release-daemon`.
