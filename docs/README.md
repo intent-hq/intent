@@ -39,31 +39,37 @@ In short: the **spec** was the target architecture, the **00_initial_porting/PRO
 is the porting-era contract that was reproduced, and the **breadcrumbs** are the frozen
 record of how the port progressed. The **canonical, versioned wire contract** is now
 [docs/PROTOCOL.md](./PROTOCOL.md) (protocol v2.0). Current work is tracked in
-[docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md).
+[GitHub issues](https://github.com/intent-hq/monorepo/issues).
 
 **Self-hosting cutover achieved**: the 00_initial_porting effort was built entirely with
 the reference app (`augmentcode/intent`); as of 2026-07-13, development moves onto the
 Intent stack (`intentd` + `cloudlands-fe`) — the IDE now builds the next version of
 itself.
 
-## `01_stabilizing/`
+## `01_stabilizing/` — **CONCLUDED**
 
-Documents for the **ongoing stabilization and hardening phase**, post-initial-port.
-Development now happens on the self-hosted Intent stack (`intentd` + `cloudlands-fe`),
-which now builds the next version of itself.
+The **stabilization and hardening phase** ran post-initial-port as file-based issue
+tracking (`STABILIZATION.md` + `KNOWN_ISSUES.md`) while development moved onto the
+self-hosted Intent stack (`intentd` + `cloudlands-fe`). The phase concluded on
+2026-07-22: all open items were migrated to
+[GitHub issues](https://github.com/intent-hq/monorepo/issues) and the directory was
+removed. Bugs are now filed directly as GitHub issues on `intent-hq/monorepo`.
 
-- **[STABILIZATION.md](./01_stabilizing/STABILIZATION.md)** — the **dogfooding process**:
-  how bugs are discovered, filed, triaged, fixed, and closed; fix conventions; and the
-  exit criteria for public release readiness.
-- **[KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md)** — the **live issue tracker**:
-  all open bugs discovered during self-hosting, with severity (P0/P1/P2), repro steps,
-  and status. Agents update this file when bugs are found or resolved, following the
-  conventional-commit conventions in AGENTS.md.
+Durable conventions carried forward from that phase:
+
+- **Severity taxonomy** for triage:
+  - **P0** — crash, data-loss, or corruption; blocks shipping to external users
+  - **P1** — broken feature; app still usable but with significant workaround required
+  - **P2** — papercut; annoying but does not block workflows
+- **Regression coverage** expected with each fix:
+  - **intentd**: `make check` + `make test` green
+  - **cloudlands-fe**: `pnpm run check` + `pnpm vitest run` green
+  - **ios**: build + test targets passing
 
 ## Workflow
 
-For the agent commit/PR workflow and stabilization issue tracking, see the root
-[AGENTS.md](../AGENTS.md). The Known Issues tracker at
-[docs/01_stabilizing/KNOWN_ISSUES.md](./01_stabilizing/KNOWN_ISSUES.md) is the live
-progress record; breadcrumbs in [docs/00_initial_porting/](./00_initial_porting/) are
-frozen historical records from the concluded initial-porting effort.
+For the agent commit/PR workflow and issue tracking, see the root
+[AGENTS.md](../AGENTS.md). Bugs and open work are tracked as
+[GitHub issues](https://github.com/intent-hq/monorepo/issues); breadcrumbs in
+[docs/00_initial_porting/](./00_initial_porting/) are frozen historical records from
+the concluded initial-porting effort.
