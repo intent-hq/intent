@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-173 (as of 2026-07-22)
+**Next available ID:** STAB-174 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -19,6 +19,18 @@ Each issue entry includes:
 
 ## Fixed Issues
 
+### STAB-173 (2026-07-22, area: cloudlands-fe agent creation / specialist picker, severity: P1)
+
+Creating an agent from the + tab specialist picker (e.g. "PR Shepherd") produced a session whose specialist never persisted — the chat header/welcome fell back to "General" after the daemon-canonical refetch, even though the tab name was correct.
+
+**Repro:** Click the + tab, pick a specialist (e.g. PR Shepherd), and create the agent. Observed: the optimistic session initially shows the specialist, but once the canonical `AgentLite` refetch replaces it, the chat welcome shows "General" — the daemon persisted the session with no specialist.
+
+**Root cause:** The picker path only carried the specialist inside `agent.create` `metadata` (`handleCreateAgentWithSpecialist` → `metadata: { specialist }`), and `agent-factory.ts#createInBackend` never set the request's top-level `specialist` field — so `LiveAgentsClient` never emitted the wire `specialistId` param. Per PROTOCOL §5.5, the daemon reads `specialistId` from top-level params only; `metadata.specialist` is not harvested.
+
+**Status:** fixed ([intent-hq/cloudlands-fe#239](https://github.com/intent-hq/cloudlands-fe/pull/239), 2026-07-22) — `createInBackend` lifts `agent.metadata?.specialist` onto `AgentCreateRequest.specialist`, which `LiveAgentsClient` maps to wire `specialistId` (omitted when absent, so the no-specialist path is unchanged); also covers `handleRunAgentForNote`. Regression tests upgraded to the wire-level `MockBackendTransport` fixture, asserting `agent.create` params include `specialistId` when a specialist is chosen and omit it when not.
+
+---
+
 ### STAB-171 (2026-07-22, area: cloudlands-fe overlays/keyboard, severity: P2)
 
 Pressing Escape with the image lightbox open on top of the New Workspace dialog closed the dialog instead of the lightbox.
@@ -26,7 +38,6 @@ Pressing Escape with the image lightbox open on top of the New Workspace dialog 
 **Repro:** Open the New Workspace dialog, attach an image, open the lightbox, press Escape. Observed: the dialog closed instead of the lightbox. Root cause: both overlays registered window capture-phase Escape `keydown` listeners; for listeners on the same target and phase, dispatch order is registration order, so the modal's older listener won.
 
 **Status:** fixed ([intent-hq/cloudlands-fe#234](https://github.com/intent-hq/cloudlands-fe/pull/234), 2026-07-22) — introduced an escape-layer stack (`src/lib/utils/escapeLayers.ts`): overlays register a layer while open and a single shared capture-phase listener dispatches Escape only to the topmost layer (calling `stopImmediatePropagation()` to suppress unmigrated same-target listeners); `NewSpaceModal` and `ImageLightbox` migrated, with unit + regression tests. Follow-up: `Modal.svelte` still has its own legacy capture-phase Escape listener and should be migrated to the layer stack.
-
 ---
 
 ### STAB-172 (2026-07-22, area: cloudlands-fe onboarding / setup scripts, severity: P2)
