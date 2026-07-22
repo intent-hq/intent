@@ -957,7 +957,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace — otherwise the underlyingservice throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below), **and `pr.capabilities`** (v2.1), which reports the active provider's capability flags before any PR exists (see below).
+All `pr.*` methods require an active pull request on the workspace — otherwise the underlying service throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below), **and `pr.capabilities`** (v2.1), which reports the active provider's capability flags before any PR exists (see below).
 
 > Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
