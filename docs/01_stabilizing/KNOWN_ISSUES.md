@@ -2,7 +2,7 @@
 
 Live issue tracker for the **01_stabilizing** self-hosting phase.
 
-**Next available ID:** STAB-177 (as of 2026-07-22)
+**Next available ID:** STAB-178 (as of 2026-07-22)
 
 ## Intake Convention
 
@@ -18,6 +18,18 @@ Each issue entry includes:
 ---
 
 ## Fixed Issues
+
+### STAB-177 (2026-07-22, area: intentd comment.add anchoring + cloudlands-fe comment UX, severity: P1)
+
+Adding a comment on formatted or multi-paragraph note text from the editor failed with an opaque "Failed to add comment / Internal error" toast, with nothing in the daemon log or FE console.
+
+**Repro:** In the note editor, select formatted text (heading/bold/link text, or any selection whose ±50-char context spans a block boundary) and add a comment. Observed: toast "Failed to add comment / Internal error"; no daemon or FE log output.
+
+**Root cause:** The FE builds the anchor params (`searchContext`/`commentTarget`) from tiptap's rendered *plain text* (`doc.textBetween`), which strips markdown syntax and joins blocks with no separator, while the daemon's `find_and_anchor_text` did an **exact substring search over the note's markdown source** — so most real selections never matched and failed as `Error::Internal("Could not find the search context in the document.")`. The router maps every `Error::Internal` to `-32603` with the hardcoded message "Internal error" (the real cause goes to `error.data`), the FE surfaced only `error.message`, and the daemon logged nothing for the failed RPC.
+
+**Status:** fixed ([intent-hq/intentd#341](https://github.com/intent-hq/intentd/pull/341), [intent-hq/intentd#342](https://github.com/intent-hq/intentd/pull/342), [intent-hq/cloudlands-fe#241](https://github.com/intent-hq/cloudlands-fe/pull/241), 2026-07-22) — intentd#341: when the exact search fails, anchoring falls back to a plaintext projection of the markdown (offset-mapped back to source, identical uniqueness/ambiguity rules); anchoring/validation failures now return `-32602` with the descriptive message instead of `-32603 "Internal error"`; `comment.add` failures emit a `tracing::warn!`; and a new optional `authorType` param (`"user"` | `"agent"`, default `"agent"`) persists who authored the comment. intentd#342 documents `authorType` in the MCP `workspace_api` tool docs. cloudlands-fe#241: generic `-32603 "Internal error"` mutation toasts now fold in the `error.data` detail, and editor-driven `comment.add` sends `authorType: "user"`. Landed in the monorepo via [#443](https://github.com/intent-hq/monorepo/pull/443)/[#445](https://github.com/intent-hq/monorepo/pull/445) (intentd bumps + PROTOCOL §5.3 update) and [#442](https://github.com/intent-hq/monorepo/pull/442) (cloudlands-fe bump including #241).
+
+---
 
 ### STAB-176 (2026-07-22, area: agent streaming / chat.subscribe, severity: P1)
 
