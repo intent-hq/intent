@@ -45,10 +45,10 @@ Releases. Until then, you can [build it from source](#build-from-source).
 ## Build from source
 
 ```sh
-git clone --recursive https://github.com/intent-hq/monorepo.git
+git clone https://github.com/intent-hq/monorepo.git
 cd monorepo
-# If already cloned without --recursive:
-git submodule update --init --recursive
+# Init the public submodules (packages/ios is currently private):
+git submodule update --init --recursive packages/intentd packages/cloudlands-fe
 
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo test --workspace
