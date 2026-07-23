@@ -3484,6 +3484,23 @@ blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name,
 metadata:{ toolKind, status } }`) and, once the same call completes **with** output, a `tool_result`
 block (`{ type, id, tool_use_id, output, is_error }`).
 
+**Standalone proposal-resource block.** When a completed tool's `output` array contains a
+well-formed proposal resource item — `{ type: "resource", resource: { mimeType:
+"application/vnd.intent.proposal+json", text: "<proposal JSON>", … } }` with `text` a string —
+the daemon **additionally** appends a standalone `resource` content block right after the
+`tool_result`, echoing the output item verbatim with the stable block id stamped on
+(`{ type: "resource", id: "{messageId}:{index}", resource: {…} }`). The resource item stays in
+`tool_result.output` untouched. This lets the FE render a `ProposalCard` from a top-level block
+without digging through tool output. Both the persisted transcript (`record_tool`) and the live
+delta stream (`tool_delta`, which predicts the block id at `tool_result` index + 1, self-healing
+via `removedIds` on a misprediction) derive the block from the same helpers
+(`crates/intent-services/src/tool_block.rs::find_proposal_resource` /
+`build_proposal_resource_block`), preserving the byte-for-byte snapshot/delta invariant.
+Malformed items (wrong MIME, missing or non-string `text`) and non-array outputs are ignored —
+no standalone block is emitted. The lift is gated on `status: "completed"` only: a tool that
+ends in `error` never surfaces a standalone proposal block, even if its output still carries the
+resource item.
+
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
 live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
