@@ -19,9 +19,9 @@ The daemon embeds:
 
 - A **JSON-RPC router** serving the full method catalog (see `PROTOCOL.md`),
   reusing one set of **service** implementations across every transport.
-- An **ACP client** that spawns provider CLIs (auggie, claude-code, codex,
-  cortex, droid, opencode) over piped stdio and multiplexes many concurrent
-  agent sessions.
+- An **ACP client** that spawns provider CLIs (auggie, claude-code, codex, … —
+  see the `intent-providers` registry for the full set) over piped stdio and
+  multiplexes many concurrent agent sessions.
 - An **MCP server** exposed *back to* the agents so an agent can call the same
   workspace API the FE uses (`note.*`, `task.*`, `agent.delegate`, …) — the
   agent→BE callback loop.
