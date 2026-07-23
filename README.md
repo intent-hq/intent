@@ -28,7 +28,7 @@ daemon as thin clients.
 ```sh
 brew tap intent-hq/homebrew-tap
 brew install intentd
-brew services start intentd   # start now and at every login
+brew services start intentd   # start now and at login (launchd on macOS, systemd on Linux)
 ```
 
 The Intent desktop app auto-detects and connects to the brew-managed daemon.
