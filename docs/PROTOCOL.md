@@ -1623,6 +1623,13 @@ save today, and calls `drafts.clear` on send.
 are never returned to a different `clientId`. A future opt-in **shared-draft** (collaborative)
 mode is noted but **out of scope for v1**.
 
+**Opaque keys & reserved sentinels.** `workspaceId` / `agentId` are **opaque draft keys** — the
+daemon never validates them against live workspaces or agents. The FE reserves the sentinel pair
+**`"__new-workspace__"` / `"__initializer__"`** for the New Workspace modal's pre-creation draft
+(no workspace/agent exists yet); it is per-client like any other draft and the FE clears it on
+successful `workspace.create`. The `__…__` form cannot collide with real IDs (daemon-generated
+workspace slugs are lowercase alphanumerics + hyphens).
+
 **`draft:changed` event — no text leakage.** `drafts.set` / `drafts.clear` emit
 `draft:changed { workspaceId, agentId, clientId, hasDraft }` (§6.5). The payload deliberately
 **omits the draft text** — it lets other clients optionally show a "someone is composing"
