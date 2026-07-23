@@ -2659,14 +2659,17 @@ wire returns the **flattened `SentryIssueResult`** — the exact shape the FE's 
 fields are **omitted** from the JSON.
 
 **Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
-returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items,
-nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the
-`github.*` list reads, etc.), every Sentry arm returns a **bare result** — either a bare object
-(`sentry.authStatus`) or a bare array (`sentry.listIssues`, `sentry.searchIssues`) — there is
-**no `{ items, nextToken }` envelope and no cursor** (parity with the non-paginated `linear.*`
-reads such as `linear.listTeams` / `linear.listProjects`; note `linear.listIssues` /
-`linear.searchIssues` have since adopted the cursor envelope, §5.28). Absent (`None`) optional
-fields are **omitted** from the JSON.
+returned). The two issue reads — `sentry.listIssues` and `sentry.searchIssues` — are
+**cursor-paginated** per the §5.5 conventions (parity with `linear.listIssues` /
+`linear.searchIssues`, §5.28): they accept an optional **opaque base64** `nextToken` (the
+token echoed by a previous page; a malformed token degrades to the first page, matching the
+`github.*` reads) and return a `{ issues: SentryIssueResult[], nextToken: string|null }`
+envelope where `nextToken` is an opaque base64 string when another page exists and an
+explicit `null` on the last page. The underlying Sentry `Link`-header page cursor is a
+server-side detail clients MUST treat as opaque. Every other Sentry arm returns a **bare
+result** — either a bare object (`sentry.authStatus`, `sentry.getIssue`, the P2 writes) or a
+bare array (`sentry.listProjects`) — with **no envelope and no cursor**. Absent (`None`)
+optional fields are **omitted** from the JSON.
 Errors reuse the §9 conventions: missing/invalid params → `-32602` (e.g. `sentry.searchIssues`
 requires `query`, otherwise `Missing required parameter: query`; an invalid `status` not in
 `unresolved`|`resolved`|`ignored`|`all` → `Invalid params: status must be one of: unresolved,
@@ -2685,12 +2688,13 @@ configured"), and any other Sentry/service failure → `-32603` with a descripti
 `status` maps to a typed `is:<status>` clause **server-side**;
 `query` is forwarded verbatim as the Sentry search string.
 `sentry.listIssues` backs the FE's `fetchIssues`; `sentry.searchIssues` backs the FE's
-`searchIssues`. Both return the flattened `SentryIssueResult[]` directly.
+`searchIssues`. Both return the paginated `{ issues, nextToken }` envelope (see Conventions
+above): pass the returned `nextToken` back as a param to fetch the next page.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit? | SentryIssueResult[] — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`) |
-| sentry.searchIssues | query (req — missing → `-32602`), project?, limit? | SentryIssueResult[] — full-text issue search |
+| sentry.listIssues | project?, status?: "unresolved"\|"resolved"\|"ignored"\|"all" (default "unresolved"; any other value → `-32602`), query?, limit?, nextToken? | { issues: SentryIssueResult[], nextToken } — issues matching the typed `is:<status>` clause (combined with optional `project` slug and free-text `query`); `nextToken` is an opaque base64 string when another page exists, else `null` |
+| sentry.searchIssues | query (req — missing → `-32602`), project?, limit?, nextToken? | { issues: SentryIssueResult[], nextToken } — full-text issue search, same cursor semantics |
 | sentry.getIssue | id \| shortId (one required — UUID/numeric `id` or `WEB-1`-style `shortId`; both missing → `-32602`) | SentryIssueResult — one flattened issue |
 
 #### Projects (P1)
@@ -2768,24 +2772,26 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 ```json
 // → unresolved issues across the org (typed `is:unresolved` clause, no NL prompt)
 { "jsonrpc":"2.0","id":71,"method":"sentry.listIssues","params":{ "status":"unresolved","limit":50 } }
-// ← response (flattened SentryIssueResult[]; absent optionals omitted)
-{ "jsonrpc":"2.0","id":71,"result":[
+// ← response ({ issues, nextToken }; absent optionals omitted; `nextToken` is an
+//   opaque base64 string when another page exists — pass it back to fetch the next page)
+{ "jsonrpc":"2.0","id":71,"result":{ "issues":[
   { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
     "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
     "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
     "type":"TypeError","filename":"src/app.ts",
-    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ],
+  "nextToken":"eyJjIjoiMDoxMDA6MCJ9" } }
 ```
 
 ```json
-// → full-text issue search (forwarded verbatim as the Sentry search string)
-{ "jsonrpc":"2.0","id":72,"method":"sentry.searchIssues","params":{ "query":"TypeError","limit":20 } }
-// ← response
-{ "jsonrpc":"2.0","id":72,"result":[
+// → full-text issue search (next page via the returned token)
+{ "jsonrpc":"2.0","id":72,"method":"sentry.searchIssues","params":{ "query":"TypeError","limit":20,"nextToken":"eyJjIjoiMDoxMDA6MCJ9" } }
+// ← response (last page → explicit `nextToken: null`)
+{ "jsonrpc":"2.0","id":72,"result":{ "issues":[
   { "id":"1","shortId":"WEB-1","title":"TypeError: foo is not a function","status":"unresolved",
     "level":"error","count":"12","userCount":3,"firstSeen":"2026-01-01T00:00:00Z",
     "lastSeen":"2026-01-02T00:00:00Z","projectName":"Web","projectSlug":"web",
-    "url":"https://sentry.io/organizations/acme/issues/1/" } ] }
+    "url":"https://sentry.io/organizations/acme/issues/1/" } ], "nextToken":null } }
 ```
 
 ```json
