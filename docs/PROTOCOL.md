@@ -47,8 +47,8 @@ When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note be
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD discover the port via mDNS (§1.3) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
-- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped and mDNS discovery disabled; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
+- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD obtain the port from the pairing payload (`pairing.getInfo` / `server.pairingInfo` — see the §5 fast-path catalog) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
+- **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
 
@@ -60,22 +60,7 @@ The server generates a **self-signed** EC (P-256) certificate on first start, pe
 
 - The server exposes a **SHA-256 fingerprint**, colon-separated uppercase hex (e.g. `AB:CD:EF:...`), computed over the DER body of the cert.
 - Certificate SANs include `localhost`, `127.0.0.1`, `::1`, and every non-internal IPv4 address on the host (LAN, Tailscale, etc.), so connecting by hostname or LAN IP validates against the SAN.
-- Clients should **pin the fingerprint** (obtained out-of-band during pairing, or from the mDNSTXT record `fp=` below) and reject any cert whose fingerprint does not match.
-
-### 1.3 mDNS / Bonjour discovery
-
-When discovery is enabled the server advertises a Bonjour/DNS-SD service so mobile/LAN clients can auto-discover the running instance:
-
-- **Service type:** `_intent-ws._tcp`
-- **Service name:** `Intent on <hostname>`
-- **Port:** the bound WSS port.
-- **TXT record keys:**
-  - `version` — `"1"`
-  - `path` — `"/ws"`
-  - `hostname` — `os.hostname()`
-  - `fp` — the TLS cert SHA-256 fingerprint (present when a cert exists; used for pinning)
-
-A client resolves the service, reads `fp` for pinning, and connects to `wss://<resolved-host>:<port>/ws`.
+- Clients should **pin the fingerprint** (obtained out-of-band during pairing — the pairing payload carries it as `fp=`) and reject any cert whose fingerprint does not match.
 
 ## 2. Authentication
 
@@ -100,7 +85,7 @@ Browser-origin upgrades are gated to prevent cross-origin attacks; native client
 
 ### 2.3 Where the token lives
 
-The token, the API-enabled flag, and the discovery-enabled flag are persisted in the daemon's settings store. Clients obtain the token out-of-band via a pairing flow (the daemon surfaces token + fingerprint together — see also `pairing.getInfo` in the §5 fast-path catalog). An operator can run `intentd token` to print the current bearer token and TLS certificate fingerprint together for pairing (and `intentd token --rotate` to regenerate the token).
+The token and the API-enabled flag are persisted in the daemon's settings store. Clients obtain the token out-of-band via a pairing flow (the daemon surfaces token + fingerprint together — see also `pairing.getInfo` in the §5 fast-path catalog). An operator can run `intentd token` to print the current bearer token and TLS certificate fingerprint together for pairing (and `intentd token --rotate` to regenerate the token).
 
 ## 3. Message Envelope (JSON-RPC 2.0)
 
@@ -1236,7 +1221,7 @@ the overriding flag ("overridden by startup flag …").
 - **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. `model.workspaceOverrides` shares this wire surface but is an opaque machine-state blob (SQLite-backed, no `origin` field — see above).
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
-- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`,`server.discovery.enabled` (mDNS). The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
+- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`env`|`gh-cli`|`explicit`), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support). Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
@@ -1367,7 +1352,7 @@ in the bullet under this table).
 | host.execStream.cancel | client → daemon | requestId (req) | { ok: true, cancelled: bool } — reap a live stream's process group (idempotent on unknown ids) |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
-  reports and the mDNS TXT record (§1.3), so a client can gate UI **before** connecting. When
+  reports, so a client can gate UI **before** connecting. When
   `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
 - `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
   frontend, not the daemon** (reverse RPCs — the *daemon* sends the JSON-RPC `request` and the
@@ -3641,7 +3626,7 @@ For mutations, optimistically apply locally, send the request, and reconcile whe
 ### 10.4 Minimal client session walkthrough
 
 ```text
-1.  resolve _intent-ws._tcp  → host:port, fp=AB:CD:...        (mDNS, §1.3)
+1.  pair via QR / manual entry → host:port, fp=AB:CD:..., token   (pairing.getInfo, §5)
 2.  WSS connect wss://host:port/ws  (pin fp)                  (§1.2)
         Authorization: Bearer <token>                        (§2.1)
 3.  → events.subscribe { eventTypes:["agent:*","note:*","task:*"], workspaceId:"ws-abc" }
