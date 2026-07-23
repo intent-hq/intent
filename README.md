@@ -31,7 +31,9 @@ brew install intentd
 brew services start intentd   # start now and on startup (launchd on macOS, systemd on Linux)
 ```
 
-The Intent desktop app auto-detects and connects to the brew-managed daemon.
+The Intent desktop app connects to an already-running daemon such as this
+brew-managed one when configured to; it can also spawn its own bundled
+`intentd` (sidecar mode).
 
 ### GitHub Releases
 
