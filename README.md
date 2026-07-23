@@ -23,23 +23,36 @@ daemon as thin clients.
 
 ## Install
 
+Installing `intentd` installs the **sitter** — a small self-updating shim,
+itself named `intentd`, that downloads the latest real daemon from GitHub
+Releases, keeps it updated (it checks at startup and every 12–24 hours),
+forwards all CLI arguments to it, and respawns it if it crashes. The sitter
+tracks the stable channel by default; pass `--sitter-channel beta` (or set
+`INTENTD_CHANNEL=beta`) to track beta.
+
 ### Homebrew (macOS & Linux)
 
 ```sh
 brew tap intent-hq/homebrew-tap
 brew install intentd
-brew services start intentd   # start now and on startup (launchd on macOS, systemd on Linux)
+brew services start intentd   # runs `intentd serve --resume-all` now and on startup
 ```
 
 The Intent desktop app connects to an already-running daemon such as this
 brew-managed one when configured to; it can also spawn its own bundled
 `intentd` (sidecar mode).
 
-### GitHub Releases
+### Debian/Ubuntu
 
-Prebuilt `intentd` binaries — macOS, Linux, and Windows archives, `.deb`
-packages, and shell/PowerShell installers — are published on the
+`.deb` packages ship the sitter with a systemd user unit that runs
+`intentd serve --resume-all`; download them from the sitter releases on the
 [intentd releases page](https://github.com/intent-hq/intentd/releases).
+
+### Direct download
+
+Prebuilt sitter archives for macOS, Linux, and Windows are published on the
+intentd repo's
+[`sitter-latest` release](https://github.com/intent-hq/intentd/releases/tag/sitter-latest).
 
 The desktop app is not yet packaged for download; it will ship via GitHub
 Releases. Until then, you can [build it from source](#build-from-source).
