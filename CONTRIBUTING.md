@@ -6,7 +6,7 @@ Thanks for your interest in Intent!
 
 <!-- This section states the current posture. When the project opens up to
      external pull requests, update this section only — the rest of this
-     document already describes the workflow contributions will follow. -->
+     document already describes the workflow that contributions will follow. -->
 
 Development happens in the `intent-hq` repositories at high velocity, largely
 driven by AI agents working against a shared workflow. At launch, the public
