@@ -47,7 +47,7 @@ When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note be
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD obtain the port from the pairing payload (`pairing.getInfo` / `server.pairingInfo` — see the §5 fast-path catalog) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
+- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD obtain the port from the QR/manual pairing payload (rendered on the daemon host via the local-only `pairing.getInfo`, §5, or `intentd token`) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
 - **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
@@ -3639,7 +3639,7 @@ For mutations, optimistically apply locally, send the request, and reconcile whe
 ### 10.4 Minimal client session walkthrough
 
 ```text
-1.  pair via QR / manual entry → host:port, fp=AB:CD:..., token   (pairing.getInfo, §5)
+1.  pair via QR / manual entry → host:port, fp=AB:CD:..., token   (pairing payload, §2.3)
 2.  WSS connect wss://host:port/ws  (pin fp)                  (§1.2)
         Authorization: Bearer <token>                        (§2.1)
 3.  → events.subscribe { eventTypes:["agent:*","note:*","task:*"], workspaceId:"ws-abc" }
