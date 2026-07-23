@@ -7,6 +7,10 @@ Please report security vulnerabilities **privately** through
 — the single tracker for all Intent components. Do **not** open a public issue
 or pull request for a security problem.
 
+If the advisory form is not available (for example, private vulnerability
+reporting has not yet been enabled on the repository), contact the maintainers
+privately rather than disclosing publicly.
+
 This applies to all three components:
 
 - `intentd` — Rust backend daemon
