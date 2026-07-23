@@ -2663,8 +2663,10 @@ returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ 
 nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the
 `github.*` list reads, etc.), every Sentry arm returns a **bare result** — either a bare object
 (`sentry.authStatus`) or a bare array (`sentry.listIssues`, `sentry.searchIssues`) — there is
-**no `{ items, nextToken }` envelope and no cursor** (parity with `linear.*`; cursor pagination
-is not part of this phase). Absent (`None`) optional fields are **omitted** from the JSON.
+**no `{ items, nextToken }` envelope and no cursor** (parity with the non-paginated `linear.*`
+reads such as `linear.listTeams` / `linear.listProjects`; note `linear.listIssues` /
+`linear.searchIssues` have since adopted the cursor envelope, §5.28). Absent (`None`) optional
+fields are **omitted** from the JSON.
 Errors reuse the §9 conventions: missing/invalid params → `-32602` (e.g. `sentry.searchIssues`
 requires `query`, otherwise `Missing required parameter: query`; an invalid `status` not in
 `unresolved`|`resolved`|`ignored`|`all` → `Invalid params: status must be one of: unresolved,
