@@ -2359,12 +2359,16 @@ so the rewire is zero-FE-change: nested Linear relations (`team` / `state` / `as
 (`None`) optional fields are **omitted** from the JSON.
 
 **Conventions.** All list-style reads take an optional `limit` (a cap on the number of items
-returned). Unlike the uniform-pagination reads elsewhere in the catalog (the `{ items, nextToken }` envelope used by `agent.getConversation`, `event.query`, `git.commits`, the `github.*` list reads, etc.), every Linear arm returns a **bare result** —
-either a bare object (`linear.authStatus`, `linear.viewer`, `linear.getIssue`) or a bare array
-(`linear.listIssues`, `linear.searchIssues`, `linear.listTeams`, `linear.listWorkflowStates`,
-`linear.listProjects`, `linear.listLabels`) — there is **no `{ items, nextToken }` envelope and no
-cursor** (the consumed Linear surface is small and bounded; cursor pagination is not part of this
-phase). Absent (`None`) optional fields are **omitted** from the JSON. Errors reuse the §9
+returned). The two issue reads — `linear.listIssues` and `linear.searchIssues` — are
+**cursor-paginated**: they accept an optional opaque `nextToken` (the cursor from a previous
+page, threaded server-side as the Linear GraphQL `after` cursor) and return a
+`{ issues: LinearIssueResult[], nextToken?: string }` envelope where `nextToken` (Linear's
+`pageInfo.endCursor`) is present **only when another page exists** — omitted on the last page.
+Every other Linear arm returns a **bare result** — either a bare object (`linear.authStatus`,
+`linear.viewer`, `linear.getIssue`) or a bare array (`linear.listTeams`,
+`linear.listWorkflowStates`, `linear.listProjects`, `linear.listLabels`) — with **no envelope and
+no cursor** (those catalogs are small and bounded). Absent (`None`) optional fields are
+**omitted** from the JSON. Errors reuse the §9
 conventions: missing/invalid params → `-32602` (e.g. `linear.getIssue` requires `id` **or**
 `identifier`, otherwise `Missing required parameter: id`); a key that is **absent or fails the
 `viewer` probe** ("not configured"), and any other Linear/service failure → `-32603` with a
@@ -2380,15 +2384,16 @@ descriptive `message` (e.g. `"Linear is not configured."`). There are **no** cus
 
 `filter` maps to a typed Linear GraphQL filter **server-side**.
 `linear.listIssues` backs the FE's `fetchMyIssues`; `linear.searchIssues`
-backs the FE's `searchIssues`. Both return the flattened `LinearIssueResult[]` directly.
+backs the FE's `searchIssues`. Both return the paginated `{ issues, nextToken? }` envelope
+(see Conventions above): pass the returned `nextToken` back as a param to fetch the next page.
 `linear.getIssue` resolves a single flattened `LinearIssueResult` by UUID `id` **or** `ENG-123`-style
 `identifier` (the engine picks the lookup mode by string shape); it is not consumed by the FE today
 but completes the read surface.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit? | LinearIssueResult[] — the authenticated viewer's issues for the typed `filter` |
-| linear.searchIssues | query (req), limit? | LinearIssueResult[] — full-text issue search |
+| linear.listIssues | filter?: "assigned"\|"created"\|"subscribed"\|"team"\|"all" (default "assigned"), limit?, nextToken? | { issues: LinearIssueResult[], nextToken? } — the authenticated viewer's issues for the typed `filter`; `nextToken` present only when another page exists |
+| linear.searchIssues | query (req), limit?, nextToken? | { issues: LinearIssueResult[], nextToken? } — full-text issue search, same cursor semantics |
 | linear.getIssue | id \| identifier (one required — UUID `id` or `ENG-123`-style `identifier`) | LinearIssueResult — one flattened issue |
 
 #### Viewer & catalogs
@@ -2484,20 +2489,22 @@ interface LinearLabel {         // linear.listLabels entry
 ```json
 // → issues assigned to the authenticated viewer (typed filter, no NL prompt)
 { "jsonrpc":"2.0","id":55,"method":"linear.listIssues","params":{ "filter":"assigned","limit":50 } }
-// ← response (flattened LinearIssueResult[]; absent optionals omitted)
-{ "jsonrpc":"2.0","id":55,"result":[
+// ← response ({ issues, nextToken? }; absent optionals omitted; `nextToken`
+//   present only when another page exists — pass it back to fetch the next page)
+{ "jsonrpc":"2.0","id":55,"result":{ "issues":[
   { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","state":"In Progress",
     "teamName":"Engineering","teamKey":"ENG","priority":2,"assignee":"Ada Lovelace",
-    "labels":["bug"],"url":"https://linear.app/acme/issue/ENG-123" } ] }
+    "labels":["bug"],"url":"https://linear.app/acme/issue/ENG-123" } ],
+  "nextToken":"b64cursor" } }
 ```
 
 ```json
-// → full-text issue search
-{ "jsonrpc":"2.0","id":56,"method":"linear.searchIssues","params":{ "query":"widget","limit":20 } }
-// ← response
-{ "jsonrpc":"2.0","id":56,"result":[
+// → full-text issue search (next page via the returned cursor)
+{ "jsonrpc":"2.0","id":56,"method":"linear.searchIssues","params":{ "query":"widget","limit":20,"nextToken":"b64cursor" } }
+// ← response (last page → `nextToken` omitted)
+{ "jsonrpc":"2.0","id":56,"result":{ "issues":[
   { "id":"a1b2","identifier":"ENG-123","title":"Fix the widget","teamKey":"ENG",
-    "url":"https://linear.app/acme/issue/ENG-123" } ] }
+    "url":"https://linear.app/acme/issue/ENG-123" } ] } }
 ```
 
 ```json
