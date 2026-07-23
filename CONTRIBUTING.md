@@ -4,17 +4,22 @@ Thanks for your interest in Intent!
 
 ## Contribution posture
 
-Intent is developed in the open, but active development currently happens at high
-velocity inside this repository and its component repositories, largely driven by
-AI agents working against a shared workflow. To keep review overhead manageable:
+<!-- This section states the current posture. When the project opens up to
+     external pull requests, update this section only — the rest of this
+     document already describes the workflow that contributions will follow. -->
 
-- **Issues are welcome.** Bug reports and feature requests are the most valuable
-  way to contribute right now — please file them on
+Development happens in the `intent-hq` repositories at high velocity, largely
+driven by AI agents working against a shared workflow. At launch, the public
+repository is a **read-only snapshot mirror** of that development.
+
+- **Bug reports and feature requests are very welcome.** Please file them via
+  the [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose) on
   [intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues), the single
   tracker for all components.
-- **External pull requests are deferred for now.** Unsolicited PRs may be closed
-  with thanks. If you want to work on something, open an issue first so we can
-  discuss it — we expect to open up to external PRs as the project matures.
+- **External pull requests are not being accepted yet.** PRs will be closed
+  with thanks. We expect this posture to change post-launch as the project
+  matures — if you want to work on something in the meantime, open an issue so
+  we can discuss it.
 
 The rest of this document describes how changes flow through the repositories, so
 that issue discussions and any future contributions match the project's workflow.
