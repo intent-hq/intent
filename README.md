@@ -101,6 +101,35 @@ cross-cutting docs, tooling, and CI; the code lives in the component repos:
 | `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop app |
 | `packages/ios` | [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app (private) |
 
+## Network & privacy
+
+Intent is local-first: all state lives on your machine, and the stack ships
+**no telemetry, analytics, or crash reporting**. Network access is limited to
+update checks against public GitHub Releases and actions you take yourself:
+
+- **Desktop app auto-updates** — the packaged app checks for and downloads
+  updates from GitHub Releases on
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases).
+- **intentd sitter self-update** — the sitter (see [Install](#install))
+  downloads the daemon and checks the channel manifests published on the
+  [intentd releases page](https://github.com/intent-hq/intentd/releases).
+- **Auggie binary download (on demand)** — installing the Auggie CLI from the
+  desktop app downloads the pre-built binary from the latest public release of
+  [augmentcode/auggie](https://github.com/augmentcode/auggie).
+- **Provider sign-ins (user-initiated)** — signing in to a coding-agent
+  provider (Auggie, Claude Code, Codex, OpenCode, Droid, Grok) runs that
+  provider's own CLI sign-in flow; each provider CLI talks to its own vendor
+  service when you sign in.
+- **User-configured integrations** — connecting GitHub (OAuth device flow or
+  personal access token), Linear (API key), or Sentry calls the respective
+  service's API with credentials you provide. Sentry is opt-in in two places:
+  the desktop app talks to the sentry.io API when you connect a Sentry
+  account, and the daemon's Sentry integration uses an API token you
+  configure. Nothing is sent to any of these services unless you connect them.
+
+Coding agents you run are external programs and may access the network
+according to their own provider's behavior.
+
 ## Community
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — bug reports and feature requests are
