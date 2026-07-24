@@ -712,7 +712,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
