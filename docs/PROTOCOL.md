@@ -1235,7 +1235,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 These are **historical/aggregate read** helpers — distinct from live streaming (§6). Each requires`workspaceId`.
 
 > **Retention.** Persisted events are pruned by the daemon's retention loop: the high-volume
-> ephemeral families (`agent:stream:*`, `file:*`, `terminal:data`, `host:exec:*`) per the
+> ephemeral families (`agent:stream:*`, `file:*`, `terminal:data`, `script:output`, `host:exec:*`) per the
 > stream-retention window (`events.streamRetentionHours` setting, default **72h**; `0` disables
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
 > fixed **24h TTL**. Historical reads only see rows within these windows;
