@@ -1155,7 +1155,7 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
 `get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
-(`.augment/specialists/`) overrides **user** (`~/.augment/specialists/`) overrides **bundled** — and
+(`.intent/specialists/`) overrides **user** (`~/.intent/specialists/`) overrides **bundled** — and
 `scope` selects which tier a write targets (`bundled` is read-only). `list`/`get` return the
 resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
@@ -1170,9 +1170,9 @@ non-existent or `bundled` definition → `-32602`.
   watched tier, the daemon re-resolves the specialist set for the affected workspace(s) (user-tier
   changes affect all open workspaces; project-tier changes are workspace-scoped), compares the
   newly-resolved set against the cached specialist set, and emits `specialists:changed` (§6.5) only
-  if the resolved set actually changed (500ms debounce per workspace). Bundled/embedded tiers are
-  static and unwatched. Clients should re-fetch via `specialist.list` on the event to refresh the
-  specialist roster.
+  if the resolved set actually changed (500ms debounce per workspace). The bundled tier (including
+  its compile-time embedded floor) is static and unwatched. Clients should re-fetch via
+  `specialist.list` on the event to refresh the specialist roster.
 
 ```json
 // → request — author a project-scoped specialist
@@ -1183,7 +1183,7 @@ non-existent or `bundled` definition → `-32602`.
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "specialist":{
   "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"high",
-  "source":"project","path":".augment/specialists/reviewer.md" } } }
+  "source":"project","path":".intent/specialists/reviewer.md" } } }
 ```
 
 ### 5.12 `settings.*`
@@ -3331,7 +3331,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | settings (new in intentd) | settings:changed | Emitted after settings.update (§5.12). data = { changes: [{ path, value }] }; sensitive values are redacted. |
 | github (new in intentd) | github:auth-changed | Terminal transitions of the GitHub auth surface (§5.27). data = { status: "authorized"\|"expired"\|"denied"\|"error"\|"revoked" } — device-flow outcomes from the daemon's background poll, plus `revoked` from `github.revoke`. Global (no `workspaceId`, like `settings:changed`); never carries a token or code. |
 | skills (new in intentd) | skills:changed | Emitted when the discovered skill set changes for a workspace. The daemon watches the 5 scan roots (user p1-3 + project p4-5) via `notify` watchers; when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the set actually changed. User-tier changes (p1-3) affect all workspaces; project-tier changes (p4-5) are workspace-scoped. data = { workspaceId }. Clients should re-fetch via `skill.list` (§5.34) to refresh the skill roster. |
-| specialists (new in intentd) | specialists:changed | Emitted when the resolved specialist set changes for a workspace. The daemon watches the user (`~/.intent/specialists/`) and project (`<workspace>/.intent/specialists/`) tiers via `notify` watchers; when a specialist file is created/modified/deleted, the daemon re-resolves the specialist set for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the resolved set actually changed. User-tier changes affect all open workspaces (a change in `~/.intent/specialists/` emits one event per open workspace); project-tier changes are workspace-scoped. Bundled/embedded tiers are static and unwatched. Actor: system. data = { workspaceId }. Clients should re-fetch via `specialist.list` (§5.11) to refresh the specialist roster. |
+| specialists (new in intentd) | specialists:changed | Emitted when the resolved specialist set changes for a workspace. The daemon watches the user (`~/.intent/specialists/`) and project (`<workspace>/.intent/specialists/`) tiers via `notify` watchers; when a specialist file is created/modified/deleted, the daemon re-resolves the specialist set for affected workspace(s) (500ms debounce), compares against the cached set, and emits this event only if the resolved set actually changed. User-tier changes affect all open workspaces (a change in `~/.intent/specialists/` emits one event per open workspace); project-tier changes are workspace-scoped. The bundled tier (including its compile-time embedded floor) is static and unwatched. Actor: system. data = { workspaceId }. Clients should re-fetch via `specialist.list` (§5.11) to refresh the specialist roster. |
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
