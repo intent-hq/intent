@@ -153,18 +153,18 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **296 dispatchable method names** across the following categories:
+The API exposes **298 dispatchable method names** across the following categories:
 
 - **Router methods:** 263 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 31 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 33 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 296 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 298 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 296 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 298 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.35) carry each method's parameter and result contract.
 
@@ -202,15 +202,15 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-### Fast-path methods (31 total)
+### Fast-path methods (33 total)
 
-The following 31 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 33 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, system.importLegacy, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.importLegacy, system.shutdown, system.status
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
-**UDS-only methods:** `system.shutdown` and `system.importLegacy` (v2.2) are only available on the Unix-domain socket transport (a remote WSS/TCP caller of `system.importLegacy` is rejected with `-32001`). `system.status` is available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below).
+**UDS-only methods:** `system.shutdown` and `system.importLegacy` (v2.2) are only available on the Unix-domain socket transport (a remote WSS/TCP caller of `system.importLegacy` is rejected with `-32001`). `system.status` is available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
 #### `drafts.*` — draft attachments (additive, optional)
 
@@ -293,6 +293,41 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 - Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd token`, so all pairing surfaces stay consistent.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available.
+
+#### `server.pairingInfo` (local-only)
+
+Returns the raw pairing/connection material — bearer token, TLS cert fingerprint, WSS port, and local addresses — so local clients can construct a remote connection or display pairing details. Unlike `pairing.getInfo`, it returns the component fields without the `intent://pair` URI envelope.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```json
+{
+  "token": "abab...",
+  "certFingerprint": "AA:BB:...",
+  "port": 5181,
+  "path": "/ws",
+  "localIps": ["192.168.1.10", "10.0.0.5"],
+  "hostname": "my-mac.local"
+}
+```
+
+- `token` is the long-lived bearer token (64 hex chars, §2.1); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§1.2).
+- `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
+- `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
+- **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
+
+#### `server.rotateToken` (local-only)
+
+Regenerates the bearer token (invalidating the previous one for new connections) and returns the updated pairing info.
+
+**Request:** `{}` (no parameters)
+
+**Response:** same shape as `server.pairingInfo`, with `token` set to the newly generated value.
+
+- Rotation is rejected with `-32602 "cannot rotate token: INTENTD_AUTH_TOKEN is set (token is fixed by env)"` when the token is pinned via the `INTENTD_AUTH_TOKEN` environment variable.
+- **Local-only:** same `-32001` gating as `server.pairingInfo`.
 
 #### `host.providerAuthStatus`
 
@@ -3711,7 +3746,7 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. |
 | -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
-| -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `system.shutdown`, or `system.importLegacy`, §5). |
+| -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, or `system.importLegacy`, §5). |
 
 The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict) and `-32001` (Unauthorized, local-only guard); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
 
