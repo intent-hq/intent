@@ -117,7 +117,7 @@ update checks against public GitHub Releases and actions you take yourself:
   desktop app downloads the pre-built binary from the latest public release of
   [augmentcode/auggie](https://github.com/augmentcode/auggie).
 - **Provider sign-ins (user-initiated)** — signing in to a coding-agent
-  provider (Auggie, Claude Code, Codex, OpenCode, Droid, Grok) runs that
+  provider (Auggie, Claude Code, Codex, OpenCode, Droid, Grok, Pi) runs that
   provider's own CLI sign-in flow; each provider CLI talks to its own vendor
   service when you sign in.
 - **User-configured integrations** — connecting GitHub (OAuth device flow or
