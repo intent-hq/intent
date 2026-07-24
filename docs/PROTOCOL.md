@@ -798,6 +798,15 @@ optional `authorType` param on `comment.add` **and** `comment.respond` sets
 the persisted comment's `authorType` (defaulting `author` to `"User"` /
 `"Agent"` accordingly when absent); omitting it keeps the backward-compatible
 `agent` default, and an invalid value is rejected with `-32602`.
+`comment.getThread` and `comment.resolveThread` apply the same missing-id
+validation: providing neither `threadId` nor `commentId` is rejected with
+`-32602` ("Either threadId or commentId must be provided"), and
+`comment.list`'s filter validations — a non-ISO-8601 `since`, an `authorType`
+other than `user`/`agent`, and a `status` other than `open`/`resolved`/
+`pending` — are likewise `-32602` (monorepo#649). Lookup failures are **not**
+caller-input errors and stay `-32603`: an unknown `commentId` ("Comment not
+found: …") or unknown `threadId` ("Thread not found: …") on
+`comment.getThread`/`comment.resolveThread` returns `-32603 Internal error`.
 
 **Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
