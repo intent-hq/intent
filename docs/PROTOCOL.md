@@ -3520,12 +3520,26 @@ the daemon **additionally** appends a standalone `resource` content block right 
 without digging through tool output. Both the persisted transcript (`record_tool`) and the live
 delta stream (`tool_delta`, which predicts the block id at `tool_result` index + 1, self-healing
 via `removedIds` on a misprediction) derive the block from the same helpers
-(`crates/intent-services/src/tool_block.rs::find_proposal_resource` /
+(`crates/intent-services/src/tool_block.rs::lift_proposal_resource` /
 `build_proposal_resource_block`), preserving the byte-for-byte snapshot/delta invariant.
-Malformed items (wrong MIME, missing or non-string `text`) and non-array outputs are ignored —
+Malformed items (wrong MIME, missing or non-string `text`) are ignored —
 no standalone block is emitted. The lift is gated on `status: "completed"` only: a tool that
 ends in `error` never surfaces a standalone proposal block, even if its output still carries the
 resource item.
+
+*Collapsed-output fallback.* Some providers (e.g. auggie) do not echo the MCP content-item
+array in `rawOutput`: they flatten the daemon's dual text+resource items into a single
+`{ "output": "<stringified first text item>" }` object, dropping the resource item entirely.
+When the tool output is **not** an array, the daemon falls back to recovering the proposal from
+that collapsed string: the candidate (from `output.output` or a bare string output) is
+size-capped (256 KiB), parsed as JSON, and accepted only when it is indistinguishable from the
+daemon's own `ws.app.proposal.show` echo — an object with `ok: true` and a `proposal` passing
+the bindings' canonical validation (known `kind`, non-empty `preview.title`, object `payload`;
+the guards verify *shape*, not *provenance*). The resource item is then rebuilt with the
+bindings' own helpers (`intent-proposal://{kind}/{encoded id}` URI, name from `preview.title`,
+compact proposal JSON as `text`), so the standalone block is identical to the array path.
+Ordinary collapsed tool outputs never pass the guards, and the `tool_result`'s `output` stays
+the collapsed object untouched.
 
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
