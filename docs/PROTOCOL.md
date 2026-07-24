@@ -1095,10 +1095,11 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > canonicalisation, §5.1), so review workspaces created *for* a PR link it via `baseRef`.
 > Discovery (and relink-after-merge) queries by the workspace's own branch head first —
 > branch match takes precedence — then falls back to one open-PR query per baseRef
-> candidate; when several PRs match, the highest PR number wins. A stale link is cleared
-> only on a **positive mismatch against both** branch and baseRef: the linked PR's head ref
-> is known, at least one of the workspace's `branch` / `baseRef` is known, and neither
-> matches — unknown inputs never unlink. This intentionally deviates from the FE guard
+> candidate (the raw stored `baseRef` plus, when it differs, its known-remote-prefix-
+> stripped remainder); when several PRs match, the highest PR number wins. A stale link is
+> cleared only on a **positive mismatch**: the linked PR's head ref is known, at least one
+> of the workspace's `branch` / `baseRef` is known, and every known field fails to match —
+> unknown inputs never unlink. This intentionally deviates from the FE guard
 > (which only cleared a stale link when the workspace's own branch was present): a
 > branch-less workspace whose `baseRef` positively mismatches the linked PR's head **does**
 > unlink. Ineligible workspaces (remote, archived, without a repo, or — when no PR is
