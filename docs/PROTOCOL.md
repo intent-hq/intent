@@ -3541,11 +3541,15 @@ resource item.
 array in `rawOutput`: they flatten the daemon's dual text+resource items into a single
 `{ "output": "<stringified first text item>" }` object, dropping the resource item entirely.
 When the tool output is **not** an array, the daemon falls back to recovering the proposal from
-that collapsed string: the candidate (from `output.output` or a bare string output) is
-size-capped (256 KiB), parsed as JSON, and accepted only when it is indistinguishable from the
-daemon's own `ws.app.proposal.show` echo — an object with `ok: true` and a `proposal` passing
-the bindings' canonical validation (known `kind`, non-empty `preview.title`, object `payload`;
-the guards verify *shape*, not *provenance*). The resource item is then rebuilt with the
+that collapsed string: the candidate is the nested `output` field inside the `tool_result`
+block's `output` (i.e. `tool_result.output.output`), or `tool_result.output` itself when it is
+a bare string. The fallback is **shape-based, not tool-scoped**: it applies to any completed
+tool's collapsed output, with no filtering on tool name or other provenance signal. Acceptance
+is gated purely on validation: the candidate string is size-capped (256 KiB), must parse as a
+JSON object with `ok: true`, and its `proposal` must pass the bindings' canonical validation
+(known `kind`, non-empty `preview.title`, object `payload`) — the same checks
+`ws.app.proposal.show` applies before emitting, so any accepted payload is indistinguishable
+from the daemon's own echo. The resource item is then rebuilt with the
 bindings' own helpers (`intent-proposal://{kind}/{encoded id}` URI, name from `preview.title`,
 compact proposal JSON as `text`), so the standalone block is identical to the array path.
 Ordinary collapsed tool outputs never pass the guards, and the `tool_result`'s `output` stays
