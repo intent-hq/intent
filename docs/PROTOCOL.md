@@ -1086,10 +1086,24 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 
 > **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
-> (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
+> (discovery, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
-> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
-> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring.
+> that path — the RPC adds no duplicate emission. The matching rule is **branch OR baseRef**:
+> a PR matches a workspace when its head ref equals the workspace's own `branch`, or when it
+> matches the workspace's `baseRef` (raw equality, plus the known-remote-prefix-stripped
+> remainder for legacy rows persisted before write-side canonicalisation — see `baseRef`
+> canonicalisation, §5.1), so review workspaces created *for* a PR link it via `baseRef`.
+> Discovery (and relink-after-merge) queries by the workspace's own branch head first —
+> branch match takes precedence — then falls back to one open-PR query per baseRef
+> candidate; when several PRs match, the highest PR number wins. A stale link is cleared
+> only on a **positive mismatch against both** branch and baseRef: the linked PR's head ref
+> is known, at least one of the workspace's `branch` / `baseRef` is known, and neither
+> matches — unknown inputs never unlink. This intentionally deviates from the FE guard
+> (which only cleared a stale link when the workspace's own branch was present): a
+> branch-less workspace whose `baseRef` positively mismatches the linked PR's head **does**
+> unlink. Ineligible workspaces (remote, archived, without a repo, or — when no PR is
+> linked — with neither a branch nor a baseRef) return `outcome: "skipped"` rather than
+> erroring.
 > Unlike the usual omitted-when-absent (`skip_serializing_if`) convention, `prNumber` /
 > `prUrl` / `prStatus` are always present and serialize as literal `null` when no PR is
 > linked after the refresh; `pullRequests` is always an array (possibly empty). An unknown
