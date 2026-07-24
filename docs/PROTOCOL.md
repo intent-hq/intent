@@ -744,7 +744,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 
 | Method | Params | Result |
 | --- | --- | --- |
-| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
+| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
 | comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
@@ -764,6 +764,18 @@ markers scrubbed from the persisted content and the comment is flipped to
 `isOrphaned: true`. Comments in the wire `Comment` shape carry an optional
 `isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
 `false` explicitly when a previously-orphaned comment heals).
+
+**Note rewrite visibility (monorepo#638).** Because `comment.add` rewrites the
+note markdown (anchor-marker insertion is an `update_note` that bumps the
+note's `rev`), the result echoes the authoritative post-rewrite revision as
+`noteRev`, and the daemon publishes a `note:updated` change event (§6.5, with
+the usual `{ noteId, title, action: "update" }` payload) in addition to
+`comment:added` — so subscribed clients refresh their cached note/rev instead
+of hitting a spurious conflict on their next versioned write. The note rewrite
+and the comment insertion commit atomically in one store transaction: a
+failure can never leave anchor markers embedded in the note with no comment
+row. An idempotent replay returns the cached `noteRev` and emits neither
+event.
 
 **Tolerant anchoring + actionable errors.** `comment.add` first attempts an
 exact substring match of `searchContext` against the note markdown. When no
