@@ -24,7 +24,17 @@ The daemon embeds:
   multiplexes many concurrent agent sessions.
 - An **MCP server** exposed *back to* the agents so an agent can call the same
   workspace API the FE uses (`note.*`, `task.*`, `agent.delegate`, …) — the
-  agent→BE callback loop.
+  agent→BE callback loop. Every agent gets its **own** bridge address so tool
+  calls are attributable to the calling agent. How the bridge reaches the
+  provider CLI is a per-provider capability in the `intent-providers` registry
+  — four delivery mechanisms today: a `--mcp-config` temp file (auggie), an
+  `OPENCODE_CONFIG_CONTENT` env `mcp` block (opencode), ACP `session/new`
+  `mcpServers` (claude-code, codex, droid, grok), and — for pi, which has no
+  native MCP support and whose pi-acp adapter drops `session/new`
+  `mcpServers` — a per-agent wrapper script (set as `PI_ACP_PI_COMMAND`) that
+  launches pi with a bundled extension (`pi -e`); the extension connects to
+  the agent's bridge via `INTENTD_MCP_BRIDGE_ADDR` from the inherited
+  environment and registers the workspace tools through `pi.registerTool`.
 - A **provider-agnostic source-control** client (the `SourceControl` trait;
   `GitHubSourceControl` via octocrab) for PR/issue/review/check-run/mergeability.
 - An optional **context engine** abstraction whose only current implementation
