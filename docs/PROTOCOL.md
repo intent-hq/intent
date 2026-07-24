@@ -777,7 +777,11 @@ Uniqueness rules are identical on both paths: an ambiguous `searchContext` or
 `commentTarget` is rejected. All anchoring failures (context not found /
 ambiguous, target not in context / ambiguous) and the empty-field validations
 (`comment`, `searchContext`, `commentTarget`, invalid `authorType`) return
-`-32602` with a descriptive message, **not** `-32603 "Internal error"`. The
+`-32602` with a descriptive message, **not** `-32603 "Internal error"`.
+`comment.respond`'s caller-input checks follow the same rule: missing
+`threadId`/`commentId` (at least one is required), an empty/whitespace-only
+`comment`, and `type: "suggestion"` without both `suggestionOriginal` and
+`suggestionProposed` are all rejected with `-32602`. The
 optional `authorType` param on `comment.add` **and** `comment.respond` sets
 the persisted comment's `authorType` (defaulting `author` to `"User"` /
 `"Agent"` accordingly when absent); omitting it keeps the backward-compatible
