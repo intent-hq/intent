@@ -712,7 +712,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { ok, ... } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId?/commentId?, type?, author?, suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
@@ -743,9 +743,10 @@ Uniqueness rules are identical on both paths: an ambiguous `searchContext` or
 ambiguous, target not in context / ambiguous) and the empty-field validations
 (`comment`, `searchContext`, `commentTarget`, invalid `authorType`) return
 `-32602` with a descriptive message, **not** `-32603 "Internal error"`. The
-optional `authorType` param sets the persisted comment's `authorType`
-(defaulting `author` to `"User"` / `"Agent"` accordingly when absent);
-omitting it keeps the backward-compatible `agent` default.
+optional `authorType` param on `comment.add` **and** `comment.respond` sets
+the persisted comment's `authorType` (defaulting `author` to `"User"` /
+`"Agent"` accordingly when absent); omitting it keeps the backward-compatible
+`agent` default, and an invalid value is rejected with `-32602`.
 
 **Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
