@@ -113,8 +113,8 @@ build-intentd: ensure-intentd-submodule
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
-clippy: ensure-intentd-submodule ## cargo clippy -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace -- -D warnings
+clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
+	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
