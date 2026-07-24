@@ -510,8 +510,19 @@ whose workers are still draining or whose completion watches are still firing:
   process from the LRU registry;
 - drop the session's live-turn slot and pending message-queue entry in
   `Services` (both are `HashMap::remove` calls, not a drain);
-- drop the workspace's `agent_subscriptions` entry (completion watches and
-  delegation groups are workspace-scoped, so the whole map row goes at once).
+- sweep the daemon-global subscription registry: completion watches whose
+  **parent** session lives in the deleted workspace and delegation groups
+  anchored there are dropped outright. Cross-workspace watches (a `__chief__`
+  parent elsewhere watching a child here) are instead **consumed
+  deterministically**: per swept session the daemon delivers the synthetic
+  `agent:deleted` completion directly and synchronously (not via the bus, and
+  before the store cascade removes the `agent_session` rows) — waking the chief
+  parent exactly once and recording grouped children as deleted — then
+  backstop-sweeps any surviving watch whose `child_workspace_id` is the deleted
+  workspace (in-memory entries and persisted `completion_watch` rows), so no
+  watch can reference the deleted workspace as child afterwards. Each parent
+  affected by the backstop sweep gets a refreshed `agent:subscriptions-changed`
+  (§6.5) so clients converge on the shrunken watch set without polling.
 
 Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
 the last chance to unlink the workspace-scoped state, so recovery beats a panic.
@@ -1086,10 +1097,25 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 
 > **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
-> (discovery by head branch, status update, stale-link clearing, relink-after-merge), so any
+> (discovery, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
-> that path — the RPC adds no duplicate emission. Ineligible workspaces (remote, archived,
-> without a repo, or without a branch) return `outcome: "skipped"` rather than erroring.
+> that path — the RPC adds no duplicate emission. The matching rule is **branch OR baseRef**:
+> a PR matches a workspace when its head ref equals the workspace's own `branch`, or when it
+> matches the workspace's `baseRef` (raw equality, plus the known-remote-prefix-stripped
+> remainder for legacy rows persisted before write-side canonicalisation — see `baseRef`
+> canonicalisation, §5.1), so review workspaces created *for* a PR link it via `baseRef`.
+> Discovery (and relink-after-merge) queries by the workspace's own branch head first —
+> branch match takes precedence — then falls back to one open-PR query per baseRef
+> candidate (the raw stored `baseRef` plus, when it differs, its known-remote-prefix-
+> stripped remainder); when several PRs match, the highest PR number wins. A stale link is
+> cleared only on a **positive mismatch**: the linked PR's head ref is known, at least one
+> of the workspace's `branch` / `baseRef` is known, and every known field fails to match —
+> unknown inputs never unlink. This intentionally deviates from the FE guard
+> (which only cleared a stale link when the workspace's own branch was present): a
+> branch-less workspace whose `baseRef` positively mismatches the linked PR's head **does**
+> unlink. Ineligible workspaces (remote, archived, without a repo, or — when no PR is
+> linked — with neither a branch nor a baseRef) return `outcome: "skipped"` rather than
+> erroring.
 > Unlike the usual omitted-when-absent (`skip_serializing_if`) convention, `prNumber` /
 > `prUrl` / `prStatus` are always present and serialize as literal `null` when no PR is
 > linked after the refresh; `pullRequests` is always an array (possibly empty). An unknown
