@@ -313,7 +313,7 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
 }
 ```
 
-- `token` is the long-lived bearer token (64 hex chars, §3); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§2).
+- `token` is the long-lived bearer token (64 hex chars, §2.1); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§1.2).
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
 - `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
