@@ -510,8 +510,19 @@ whose workers are still draining or whose completion watches are still firing:
   process from the LRU registry;
 - drop the session's live-turn slot and pending message-queue entry in
   `Services` (both are `HashMap::remove` calls, not a drain);
-- drop the workspace's `agent_subscriptions` entry (completion watches and
-  delegation groups are workspace-scoped, so the whole map row goes at once).
+- sweep the daemon-global subscription registry: completion watches whose
+  **parent** session lives in the deleted workspace and delegation groups
+  anchored there are dropped outright. Cross-workspace watches (a `__chief__`
+  parent elsewhere watching a child here) are instead **consumed
+  deterministically**: per swept session the daemon delivers the synthetic
+  `agent:deleted` completion directly and synchronously (not via the bus, and
+  before the store cascade removes the `agent_session` rows) — waking the chief
+  parent exactly once and recording grouped children as deleted — then
+  backstop-sweeps any surviving watch whose `child_workspace_id` is the deleted
+  workspace (in-memory entries and persisted `completion_watch` rows), so no
+  watch can reference the deleted workspace as child afterwards. Each parent
+  affected by the backstop sweep gets a refreshed `agent:subscriptions-changed`
+  (§6.5) so clients converge on the shrunken watch set without polling.
 
 Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
 the last chance to unlink the workspace-scoped state, so recovery beats a panic.
