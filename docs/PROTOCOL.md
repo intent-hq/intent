@@ -261,7 +261,7 @@ Runs the daemon's legacy workspace import over RPC — the same engine behind th
 }
 ```
 
-- `imported` / `updated` / `skipped` count workspaces; `notes`, `comments`, `agents`, `assets` are total rows/files imported across all workspaces.
+- `imported` / `updated` / `skipped` count workspaces; `notes`, `comments`, `assets` are total rows/files imported across all workspaces, and `agents` counts imported agent **sessions**.
 - `skipSummary` lists the first **20** skipped workspaces as `{ id, reason }`.
 - `compatibilityFailures` is `true` when any workspace was skipped for a non-operational reason (unreadable/unparseable `workspace.json`, missing id, etc.). Operational skips — `already in DB` and transient `update failed:` / `insert failed:` / `lookup failed:` — do not count.
 - `markerWritten` reports whether the first-boot completion marker was (re)written after this run. The marker is **not** written when compatibility failures occur, so the first-boot hook stays armed to retry; explicit CLI/RPC runs are not gated by the marker either way.
