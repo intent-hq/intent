@@ -1287,9 +1287,14 @@ resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-3
 non-existent or `bundled` definition → `-32602`.
 
 - **SpecialistDef** — `{ id, name, description, modelTier?: "low"|"medium"|"high", prompt?,
-  source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the **winning** tier
-  and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit` the body
-  carries the authored fields and `scope` chooses the target tier.
+  hidden?: boolean, source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the
+  **winning** tier and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit`
+  the body carries the authored fields and `scope` chooses the target tier.
+- **`hidden?`** — optional boolean sourced from `hidden: true` in the specialist file's
+  frontmatter; emitted only when true (absent ⇒ not hidden) and round-tripped by
+  `create`/`edit`. Hidden specialists stay in `list`/`get` results — clients filter them out of
+  specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
+  Behavior). The bundled `chief-of-staff` is flagged hidden.
 - The daemon watches the user (`~/.intent/specialists/`) and project
   (`<workspace>/.intent/specialists/`) tiers (using `notify` watchers, the same infrastructure as
   workspace `file:changed` events); when a specialist file is created/modified/deleted under a
