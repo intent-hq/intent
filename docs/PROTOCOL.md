@@ -1290,10 +1290,14 @@ non-existent or `bundled` definition → `-32602`.
   hidden?: boolean, source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the
   **winning** tier and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit`
   the body carries the authored fields and `scope` chooses the target tier.
-- **`hidden?`** — optional boolean sourced from `hidden: true` in the specialist file's
-  frontmatter; emitted only when true (absent ⇒ not hidden) and round-tripped by
-  `create`/`edit`. On `create`/`edit` the spec's `hidden` is authoritative: omitting it (or
-  sending `hidden: false`) clears the flag — both are accepted and normalized to not-hidden.
+- **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
+  frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
+  lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
+  **explicitly** sets `hidden: false` — a file that omits the key inherits the lower tiers'
+  effective value. Emitted on `list`/`get` only when the resolved value is true (absent ⇒ not
+  hidden). On `create`/`edit` an explicit `hidden: true`/`false` is written verbatim and an
+  omitted `hidden` writes no key (the resolved value then inherits); explicit `hidden: false`
+  in a user/project file is the opt-out that unhides.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
