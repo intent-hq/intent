@@ -25,10 +25,12 @@ daemon as thin clients.
 
 Installing `intentd` installs the **sitter** — a small self-updating shim,
 itself named `intentd`, that downloads the latest real daemon from GitHub
-Releases, keeps it updated (it checks at startup and every 12–24 hours),
-forwards all CLI arguments to it, and respawns it if it crashes. The sitter
-tracks the stable channel by default; pass `--sitter-channel beta` (or set
-`INTENTD_CHANNEL=beta`) to track beta.
+Releases, forwards all CLI arguments to it, and respawns it if it crashes.
+Update checks run only for `intentd serve` (at startup and every 12–24
+hours); one-shot subcommands (e.g. `intentd doctor`) run the installed
+daemon as-is and fail fast with guidance if none is installed yet. The
+sitter tracks the stable channel by default; pass `--sitter-channel beta`
+(or set `INTENTD_CHANNEL=beta`) to track beta.
 
 ### Homebrew (macOS & Linux)
 
