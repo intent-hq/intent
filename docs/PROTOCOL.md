@@ -2146,7 +2146,14 @@ of each prompt turn, the `PromptResponse.usage` report (via the agent-client-pro
 daemon persists that snapshot per session with **REPLACE semantics** (each report replaces the
 session's previous snapshot — reports are never summed), mapping ACP `cachedReadTokens` →
 `cacheReadTokens` and `cachedWriteTokens` → `cacheCreationTokens`, then immediately re-aggregates
-per agent and per model and writes the durable `tokenUsage` field on the `Workspace`. A
+per agent and per model and writes the durable `tokenUsage` field on the `Workspace`.
+**Usage survives ACP session recreation:** when the resume-impossible fallback swaps in a fresh
+ACP session id (a failed `session/load` → `session/new` recreate), the outgoing session's
+cumulative snapshot is folded into a daemon-internal per-agent **baseline** (saturating sum) and
+the snapshot is cleared, atomically with the id swap — the recreated session's cumulative reports
+restart from zero, so per-agent effective totals are **baseline + snapshot**. The baseline is
+internal accounting only (never on the wire; `TokenUsage` shapes are unchanged), and the legacy
+per-message **message-sum fallback** applies only when both baseline and snapshot are absent. A
 daemon-internal periodic **scan** (300 s cadence) is demoted to a **reconciliation fallback** for
 sessions the live path cannot see (providers without end-of-turn usage reports / legacy
 per-message metadata); a reconciliation recount that comes back all-zero **never regresses** a
