@@ -68,16 +68,17 @@ workflow dispatch.
 
 ### cloudlands-fe
 
-- The intentd sidecar version is pinned in `intentd.version`. Bump it via PR and verify
-  with `node scripts/fetch-sidecar.cjs`.
+- The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
+  root (`packages/cloudlands-fe/` in this monorepo). Bump it via PR and verify by running
+  `node scripts/fetch-sidecar.cjs` from that directory.
 - release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
   publishes to `intent-hq/cloudlands-releases`.
 - Stable: dispatch `release-stable.yml` with the `version` input.
 
 ### Coordinated Release Ordering
 
-intentd release → promote intentd stable → FE pin-bump PR → FE release → promote FE
-stable → monorepo submodule bump PR.
+intentd release → promote intentd stable → cloudlands-fe pin-bump PR → cloudlands-fe
+release → promote cloudlands-fe stable → monorepo submodule bump PR.
 
 ### Gotchas
 
@@ -87,7 +88,7 @@ stable → monorepo submodule bump PR.
   authoritative check is `intentdVersion` in the published release's
   `release-manifest.json`.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
-  landed via follow-up release PR #520).
+  landed via follow-up release PR intentd#520).
 
 ## Breadcrumbs (initial porting) — **CONCLUDED**
 
