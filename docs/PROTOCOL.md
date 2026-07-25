@@ -2134,7 +2134,10 @@ per agent and per model and writes the durable `tokenUsage` field on the `Worksp
 daemon-internal periodic **scan** (300 s cadence) is demoted to a **reconciliation fallback** for
 sessions the live path cannot see (providers without end-of-turn usage reports / legacy
 per-message metadata); a reconciliation recount that comes back all-zero **never regresses** a
-stored non-zero live tally to zero. Only the **read** and its change event cross the wire —
+stored non-zero live tally to zero **while agent-session rows still exist** (the racing-sweep
+guard). When the workspace has no sessions left (all deleted), an all-zero recount is legitimate
+and writes through — clients must not assume `tokenUsage` can never drop back to zero. Only the
+**read** and its change event cross the wire —
 neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsage` requires
 `workspaceId`.
 
