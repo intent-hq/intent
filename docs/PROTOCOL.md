@@ -125,7 +125,7 @@ All application messages are **JSON-RPC 2.0** text frames. The handler is transp
 { "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "Missing required parameter: noteId" } }
 ```
 
-`error.data` is optional and carries extra context (e.g. the original internal error message for`-32603`). See §9 for the code table.
+`error.data` is optional and carries extra context — the original internal error message for`-32603`, or a structured machine-readable payload (e.g. the `-32005` conflict object, or the`workspace.create` base-ref failure data). See §9 for the code table.
 
 ### 3.4 Notifications (no response)
 
@@ -429,7 +429,8 @@ slugified `repositoryName` (basename fallback) — checked out on the workspace 
 any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
 local state. The returned `Workspace` carries `worktreePath`, `baseCommitSha` (the
 checked-out tip), and `checkoutMode` (`"worktree"` here; see the CoW note below). An
-unresolvable `baseRef` on a valid repo fails with `-32602`.
+unresolvable `baseRef` on a valid repo fails with `-32602` carrying the
+`base-ref-unresolvable` `error.data` payload (§9).
 Provisioning is skipped — prior row-only behavior — for `skipIsolation: true`
 (canonical name; `skipWorktree` is accepted as a deprecated alias, either set ⇒ direct
 mode), `isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or
@@ -3927,7 +3928,7 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32700 | Parse error | Body is not valid JSON. Always answered (id null), even for would-be notifications. |
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
-| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. |
+| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. A `workspace.create` failure from an unresolvable base ref keeps this code and its human message but adds `error.data = { "code": "base-ref-unresolvable", "baseRef": "<the ref>" }` so clients detect the condition from `data.code` instead of parsing the message (§5.1 worktree provisioning). |
 | -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, or `system.importLegacy`, §5). |
