@@ -62,7 +62,7 @@ packages/intentd/               # cargo workspace root
     ├── intent-acp/             # ACP client, session multiplexing, agent→BE MCP server
     ├── intent-providers/       # provider registry, launch arg/env assembly
     ├── intent-sourcecontrol/   # SourceControl trait + GitHubSourceControl (octocrab)
-    ├── intent-git/             # git wrappers + worktree create/lock
+    ├── intent-git/             # git wrappers + worktree/CoW-checkout create/lock
     ├── intent-context/         # ContextEngine trait + auggie impl
     ├── intent-pty/             # unified PTY host: terminals + scripts, scrollback, attach
     ├── intent-search/          # BE-owned search: ripgrep-equivalent content/path search
@@ -98,7 +98,7 @@ bus — never on the transport or on each other directly.
 | intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
 | intent-providers | ProviderConfig registry, arg/env builder, model-tier table, capability/quirks | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
-| intent-git | status/stage/commit/branches, worktree create + lock | core |
+| intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `copyfile(COPYFILE_CLONE)`, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
 | intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
@@ -106,6 +106,35 @@ bus — never on the transport or on each other directly.
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
 | intent-transport | UDS/TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
+
+## Workspace checkouts & agent sandboxes (CoW)
+
+Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
+(sandboxes). Architectural split of responsibilities:
+
+- **Provisioning (`workspace.create` / `workspace.duplicate`).** `intent-services`
+  owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
+  (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe of the
+  workspaces root, then a standalone clone of the whole repository directory
+  (`intent_git::cow_checkout::provision_cow_checkout`), failing loudly when the
+  filesystem is unsupported (no silent worktree fallback). Both paths run under the
+  per-repository worktree lock. `workspace.duplicate` applies the same matrix when
+  provisioning the copy's checkout. The setting is consulted **only** at
+  provisioning time; the persisted `checkoutMode` is immutable per workspace.
+- **Deletion.** `workspace.delete`'s git-metadata phase is checkout-mode aware: a
+  worktree checkout gets registration prune + guarded branch delete + rename to a
+  trash path, while a CoW checkout — a standalone clone with no registration in the
+  source repo — goes through `intent_git::worktree::detach_checkout_dir`, which only
+  renames the directory to a trash path (filesystem work, never opens a repository).
+  The recursive removal of the trash directory runs in the background outside the
+  lock in both modes.
+- **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
+  resolving the **sandbox source** from the workspace's checkout mode: direct-mode
+  workspaces clone from the user's repository folder; CoW-checkout workspaces clone
+  from the **workspace checkout** — and the merge-back on agent completion targets
+  that same directory (agent commits land in the workspace's own checkout, never the
+  user's repo folder). Worktree-mode workspaces are ineligible (agents share the
+  checkout).
 
 ## Dependency-direction rules
 
