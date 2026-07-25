@@ -762,7 +762,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
@@ -822,6 +822,18 @@ other than `user`/`agent`, and a `status` other than `open`/`resolved`/
 caller-input errors and stay `-32603`: an unknown `commentId` ("Comment not
 found: …") or unknown `threadId` ("Thread not found: …") on
 `comment.getThread`/`comment.resolveThread` returns `-32603 Internal error`.
+
+**Reply anchoring (monorepo#729).** Only **root** comments carry an
+authoritative `anchor` / `anchorText`: `comment.add` embeds the anchor markers
+and persists the anchor on the root it creates. Replies created via
+`comment.respond` anchor through their thread — `threadId` / `parentId` — and
+never independently, so the persisted reply has no anchor and the wire
+`Comment` shape **omits** the `anchor` and `anchorText` keys (both fields are
+optional on the wire). Clients resolving a thread's position in the document
+must read the thread root's anchor (the FE's anchor reconciliation already
+does exactly this). Replies stored before this contract change may still carry
+a legacy clone of the parent's anchor; clients must treat any reply anchor as
+non-authoritative.
 
 **Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
@@ -1244,7 +1256,11 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
 > fixed **24h TTL**. Historical reads only see rows within these windows;
 > lifecycle/note/task/workspace events are not swept. The loop also reclaims freed pages via
-> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases.
+> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases. Legacy databases
+> created with `auto_vacuum=NONE` are converted automatically: the daemon's write connection
+> sets `PRAGMA auto_vacuum=INCREMENTAL` at connect (inert on an existing NONE-mode file by
+> itself), and a one-time `VACUUM` at daemon startup rebuilds the file to apply it, so space
+> reclamation applies to all databases.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -3470,7 +3486,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`). No `path` field (never emitted). |
 | line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. **Transient / broadcast-only** (same publish path as `agent:stream:chunk`): never persisted to the event table, so it is invisible to `event.query` / §5.10 historical reads — the durable snapshot lives in `note_line_attribution` and is served by `note.lineAttribution.load` (§5.2.1). |
 | task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
-| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta. `agent:idle` data is enriched with `agentName` (so subscribers don't fall back to a generic "Agent" label), `isBackground` (boolean, sourced from the session's persisted `is_background` flag — the same flag served as `metadata.isBackground` on `agent.list`/`agent.get`, §5.5 — so subscribers such as iOS notification routing can branch on it without a follow-up `agent.get`), and — when the child persisted one via `agent.reportToParent` — the completion `report`; the enrichment is emitted from both the turn-end idle and the STAB-28 interrupt-path synthetic idle, and a session-read failure is swallowed (the event still fires with the base payload, enrichment fields absent) |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (one-shot removal, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
@@ -3581,7 +3597,7 @@ production emit site** today and are reserved for future use.
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, content, streamId? } |
+| complete or error | agent:stream:end | { agentId, stopReason?, messageId? } — normal completion (`agent_session.rs` `run_prompt_turn`) and mid-turn failure (`publish_terminal_failure_events`) both emit `{ agentId }` **only**; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
 `ALL_EVENT_TYPES`, but the backend does **not** emit them today:
@@ -3600,7 +3616,7 @@ transcript) over reconstructing turn state from the firehose.
 Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design (`{ agentId }`); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
@@ -3755,11 +3771,18 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessa
 - `metadata.interrupted: true`
 - `metadata.stopReason: "interrupted"`
 
-This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
+This is the same convention as the graceful-shutdown flush of an in-flight turn.
+
+**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and mid-turn-failure terminal emits carry neither field.
+
+**Pre-first-token stop (zero-output flush).** When nothing has streamed yet (no content blocks), whether a row is persisted — and therefore whether the terminal `agent:stream:end` carries `messageId` — depends on the interrupt path:
+
+- **`messageId` guaranteed — plain `agent.stop` on the keep-alive interrupt path with a live-turn slot.** When a live ACP session exists to cancel (connection + `acpSessionId`) AND the turn has registered its live-turn slot (the worker reached prompt dispatch), a plain `agent.stop` persists a synthetic **empty** interrupted assistant row (`contentBlocks: []`, `metadata.interrupted: true`, `metadata.stopReason: "interrupted"`) so the transcript durably records the stop, and the terminal `agent:stream:end` carries that row's `messageId`. This is the **only** pre-first-token case that persists a row.
+- **`messageId` absent — everything else.** No row is persisted when: (a) no live-turn slot exists yet (the stop landed during turn startup — spawn / `initialize` / `session/new` / `session/load` — before the worker registered the turn; the emit still carries `stopReason: "interrupted"` but no `messageId`); (b) the stop takes the hard-kill fallback (no live connection or no `acpSessionId` — that path never flushes); (c) the interrupt comes from an **interrupt-priority send** (`agent.sendMessage` / `agent.sendToTask` with `priority: "interrupt"`) or the **graceful-shutdown capture**, which keep the zero-output flush as a **no-op** (STAB-114) so the original user message is re-queued with no phantom empty row blocking it.
 
 **Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
 
-Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
+Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); no method-surface change (additive semantics within protocol v2.0).
 
 ## 8. Permission Flow
 
