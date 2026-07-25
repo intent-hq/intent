@@ -600,10 +600,16 @@ repository/worktree fields, …) are
 **`cowSupported` / `checkoutMode` (new in intentd).** `cowSupported` is a BE-derived
 machine-capability flag: a cached CoW-reflink probe of the **workspaces root**
 filesystem, computed on every path that returns a `Workspace` on the wire — `true` /
-`false` for a supported/unsupported filesystem, omitted when the probe cannot run (no
-workspaces root). It reports the machine's capability independent of how the specific
-workspace was provisioned; the FE gates the `workspace.cowIsolation` opt-in toggle
-(§5.12) on it. `checkoutMode` (`"worktree" | "cow"`, lowercase on the wire) records how
+`false` for a supported/unsupported filesystem, omitted when the probe cannot run (the
+probe creates a missing workspaces root rather than omitting). It reports the machine's
+capability independent of how the specific workspace was provisioned; the FE gates the
+`workspace.cowIsolation` opt-in toggle (§5.12) on it. **Caveat — root-scoped, not
+repo-scoped:** provisioning itself probes from the *repository directory* into the
+workspaces root (§5.1), so a repository on a *different* filesystem than the workspaces
+root (reflinks cannot cross filesystems) can still fail `workspace.create` with the
+fail-loud `-32603` even when `cowSupported` is `true`; `cowSupported` is a toggle-gating
+advisory, not a per-repository guarantee. `checkoutMode` (`"worktree" | "cow"`,
+lowercase on the wire) records how
 `workspace.create` provisioned this workspace's checkout (§5.1) and is omitted for rows
 without a daemon-provisioned checkout (skip-isolation/direct, remote, caller-supplied
 `worktreePath`, non-git repository paths, pre-existing rows).
