@@ -53,6 +53,42 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
   green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
   `make check` and `make test`, which run those checks against `packages/intentd`.
 
+## Release Process
+
+Releases are per-component and channel-based: merging a release PR publishes to **beta**;
+**stable** is a promotion of an existing release (no new build), triggered by a manual
+workflow dispatch.
+
+### intentd
+
+- release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
+  cargo-dist builds the artifacts, and the beta manifest publishes automatically.
+- Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
+  verify `stable.json` on the `channel-stable` release.
+
+### cloudlands-fe
+
+- The intentd sidecar version is pinned in `intentd.version`. Bump it via PR and verify
+  with `node scripts/fetch-sidecar.cjs`.
+- release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
+  publishes to `intent-hq/cloudlands-releases`.
+- Stable: dispatch `release-stable.yml` with the `version` input.
+
+### Coordinated Release Ordering
+
+intentd release → promote intentd stable → FE pin-bump PR → FE release → promote FE
+stable → monorepo submodule bump PR.
+
+### Gotchas
+
+- release-please does **not** refresh the release PR for `chore` commits (their changelog
+  sections are hidden), so a sidecar pin bump never appears in the release PR
+  diff/changelog. The tag is cut on the merge commit whose tree contains the pin; the
+  authoritative check is `intentdVersion` in the published release's
+  `release-manifest.json`.
+- Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
+  landed via follow-up release PR #520).
+
 ## Breadcrumbs (initial porting) — **CONCLUDED**
 
 The initial porting effort is complete as of 2026-07-13, and its chronicle (implementation
