@@ -55,9 +55,19 @@ DEV_PORT ?= 5190
 # actually sees the default/override in the child environment.
 export DEV_PORT
 
+# Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
+# deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
+# days in this worktree's intentd, and `sweep-all` does the same across every
+# sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
+# live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
+# (`cargo install cargo-sweep`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
+# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
+WORKSPACES_DIR ?= $(HOME)/intent/workspaces
+SWEEP_DAYS ?= 3
+
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
+	sweep sweep-all dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
 
 all: build
 
@@ -128,6 +138,36 @@ clean: ## Remove cargo build artifacts (packages/intentd/target)
 
 clean-dev: ## Wipe the dev-seat state dir (.dev/)
 	rm -rf "$(CURDIR)/.dev"
+
+# `sweep` deliberately has no ensure-intentd-submodule prerequisite:
+# initializing the submodule just to sweep a target/ dir that cannot exist yet
+# would be overkill, so it short-circuits with a friendly no-op instead.
+sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
+	@command -v cargo-sweep >/dev/null 2>&1 || { \
+		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		exit 1; \
+	}
+	@if [ -d "$(INTENTD_DIR)/target" ]; then \
+		cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS); \
+	else \
+		echo "[sweep] nothing to sweep — $(INTENTD_DIR)/target does not exist"; \
+	fi
+
+sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
+	@command -v cargo-sweep >/dev/null 2>&1 || { \
+		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		exit 1; \
+	}
+	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR); do \
+		[ -d "$$dir" ] || continue; \
+		if [ -d "$$dir/target" ]; then \
+			echo "[sweep-all] sweeping $$dir"; \
+			(cd "$$dir" && cargo sweep --time $(SWEEP_DAYS)) \
+				|| echo "[sweep-all] WARNING: sweep failed in $$dir — continuing"; \
+		else \
+			echo "[sweep-all] skipping $$dir (no target/ dir)"; \
+		fi; \
+	done
 
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
