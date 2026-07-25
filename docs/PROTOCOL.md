@@ -747,8 +747,12 @@ see §5.2 version-history extensions).
 **Recompute lifecycle.** Every content-changing `note.*` mutation schedules a debounced
 recompute (5 s, mirroring `LineAttributionService.DEBOUNCE_MS`). A fresh mutation cancels
 any pending timer so a burst of writes coalesces into one persist + one
-`line-attribution:updated` emit (§6.5). Persistence is one row per note in
-`note_line_attribution` (SQLite migration `0028_note_line_attribution.sql`), upserted on
+`line-attribution:updated` emit (§6.5). The emit is **transient / broadcast-only**
+(published through the same transient path as `agent:stream:chunk`, §7): it is never
+written to the event table, so it does not appear in `event.query` or the other §5.10
+historical reads (migration `0052_delete_line_attribution_events.sql` deletes legacy rows
+on existing installs). The durable state remains the `note_line_attribution` row —
+one row per note (SQLite migration `0028_note_line_attribution.sql`), upserted on
 each recompute so the read path is O(1) and survives restart. `note.delete` cascades.
 
 ### 5.3 `comment.*`
@@ -1287,9 +1291,20 @@ resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-3
 non-existent or `bundled` definition → `-32602`.
 
 - **SpecialistDef** — `{ id, name, description, modelTier?: "low"|"medium"|"high", prompt?,
-  source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the **winning** tier
-  and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit` the body
-  carries the authored fields and `scope` chooses the target tier.
+  hidden?: boolean, source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the
+  **winning** tier and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit`
+  the body carries the authored fields and `scope` chooses the target tier.
+- **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
+  frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
+  lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
+  **explicitly** sets `hidden: false` — a file that omits the key inherits the lower tiers'
+  effective value. Emitted on `list`/`get` only when the resolved value is true (absent ⇒ not
+  hidden). On `create`/`edit` an explicit `hidden: true`/`false` is written verbatim and an
+  omitted `hidden` writes no key (the resolved value then inherits); explicit `hidden: false`
+  in a user/project file is the opt-out that unhides.
+  Hidden specialists stay in `list`/`get` results — clients filter them out of
+  specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
+  Behavior). The bundled `chief-of-staff` is flagged hidden.
 - The daemon watches the user (`~/.intent/specialists/`) and project
   (`<workspace>/.intent/specialists/`) tiers (using `notify` watchers, the same infrastructure as
   workspace `file:changed` events); when a specialist file is created/modified/deleted under a
@@ -3441,7 +3456,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | --- | --- | --- |
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`). No `path` field (never emitted). |
-| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
+| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. **Transient / broadcast-only** (same publish path as `agent:stream:chunk`): never persisted to the event table, so it is invisible to `event.query` / §5.10 historical reads — the durable snapshot lives in `note_line_attribution` and is served by `note.lineAttribution.load` (§5.2.1). |
 | task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
