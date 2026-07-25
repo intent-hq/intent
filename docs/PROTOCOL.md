@@ -1292,7 +1292,9 @@ non-existent or `bundled` definition → `-32602`.
   the body carries the authored fields and `scope` chooses the target tier.
 - **`hidden?`** — optional boolean sourced from `hidden: true` in the specialist file's
   frontmatter; emitted only when true (absent ⇒ not hidden) and round-tripped by
-  `create`/`edit`. Hidden specialists stay in `list`/`get` results — clients filter them out of
+  `create`/`edit`. On `create`/`edit` the spec's `hidden` is authoritative: omitting it (or
+  sending `hidden: false`) clears the flag — both are accepted and normalized to not-hidden.
+  Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
 - The daemon watches the user (`~/.intent/specialists/`) and project
