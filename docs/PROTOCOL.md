@@ -2212,7 +2212,11 @@ of each prompt turn, the `PromptResponse.usage` report (via the agent-client-pro
 daemon persists that snapshot per session with **REPLACE semantics** (each report replaces the
 session's previous snapshot — reports are never summed), mapping ACP `cachedReadTokens` →
 `cacheReadTokens` and `cachedWriteTokens` → `cacheCreationTokens`, then immediately re-aggregates
-per agent and per model and writes the durable `tokenUsage` field on the `Workspace`.
+per agent and per model and writes the durable `tokenUsage` field on the `Workspace`. The
+turn-end bookkeeping is **detached** from the turn itself — it never delays the terminal
+`agent:stream:end`, and bookkeeping for the same agent is ordered across turns — so a client
+reading `workspace.getTokenUsage` immediately after `agent:stream:end` may briefly see the
+previous tally; rely on `workspace:tokenUsage-changed` (§6.5) to observe the update.
 **Usage survives ACP session recreation:** when the resume-impossible fallback swaps in a fresh
 ACP session id (a failed `session/load` → `session/new` recreate), the outgoing session's
 cumulative snapshot is folded into a daemon-internal per-agent **baseline** (saturating sum) and
