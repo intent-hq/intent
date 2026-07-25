@@ -3569,7 +3569,7 @@ production emit site** today and are reserved for future use.
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, content, streamId? } |
+| complete or error | agent:stream:end | { agentId, content, streamId?, stopReason?, messageId? } — on the **user-interrupt path** (§7.2) the terminal emit additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row); normal-completion and mid-turn-failure emits are unchanged (`{ agentId }` only, no `stopReason`/`messageId`) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
 `ALL_EVENT_TYPES`, but the backend does **not** emit them today:
@@ -3588,7 +3588,7 @@ transcript) over reconstructing turn state from the firehose.
 Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloadsare identical by design; the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
@@ -3743,11 +3743,18 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessa
 - `metadata.interrupted: true`
 - `metadata.stopReason: "interrupted"`
 
-This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
+This is the same convention as the graceful-shutdown flush of an in-flight turn.
+
+**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and mid-turn-failure terminal emits carry neither field.
+
+**Pre-first-token stop (zero-output flush).** When nothing has streamed yet (no content blocks), the flush behavior depends on the interrupt path:
+
+- **Plain `agent.stop`** persists a synthetic **empty** interrupted assistant row (`contentBlocks: []`, `metadata.interrupted: true`, `metadata.stopReason: "interrupted"`) so the transcript durably records the stop, and the terminal `agent:stream:end` carries that row's `messageId`.
+- **Interrupt-priority sends** (`agent.sendMessage` / `agent.sendToTask` with `priority: "interrupt"`) and the **graceful-shutdown capture** keep the zero-output flush as a **no-op** (STAB-114): the original user message is re-queued with no phantom empty row blocking it.
 
 **Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
 
-Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
+Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); no method-surface change (additive semantics within protocol v2.0).
 
 ## 8. Permission Flow
 
