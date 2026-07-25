@@ -153,22 +153,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **298 dispatchable method names** across the following categories:
+The API exposes **299 dispatchable method names** across the following categories:
 
-- **Router methods:** 263 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 264 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 33 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 298 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 299 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 298 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 299 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.35) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.36) carry each method's parameter and result contract.
 
-### Router methods by namespace (263 total)
+### Router methods by namespace (264 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -196,6 +196,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
 | specialist | 5 | create, delete, edit, get, list |
+| stats | 1 | getUsage |
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | workspace | 23 | archive, cleanup, create, delete, detectProjectType, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, unarchive, update, updateContext, updateUiContext |
@@ -3486,6 +3487,70 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 **Execution:** After the daemon is fully up (services wired, event bus live, RPC servers listening), a background task enumerates the interrupted set and calls the resume service operation for each pending agent. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup.
 
 **Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes. After the sweep completes, `agent.listInterrupted` returns an empty list.
+
+### 5.36 Agentic usage stats — `stats.getUsage`
+
+The backend owns global **agentic usage stats** (the usage-stats cards). Recording is
+daemon-internal: usage aggregates **across all workspaces** into hourly UTC buckets, one row per
+UTC hour + normalized model name. At the end of each prompt turn the daemon folds in the turn's
+**token delta** (the difference between consecutive cumulative end-of-turn snapshots, clamped ≥ 0
+per counter — never the raw cumulative report), a `runs` increment (**runs** = completed prompt
+turns) and the turn's wall-clock duration MAX'd into the bucket's longest-run counter; agent
+**session starts** and agent-attributed **lines added/deleted** (manual/user edits are excluded)
+accrue into the same buckets as they happen. Model ids are normalized to one canonical display
+name so the same model reached via different hosts lands in one row (`claude-opus-4-8`,
+`anthropic/claude-opus-4.8-20260115`, and `Opus 4.8` all → `"Opus 4.8"`; unrecognized ids pass
+through, blank → `"unknown"`). This store is independent of the change metrics (§5.20) and token
+usage (§5.23) surfaces — clearing those never touches usage stats. Only the **read** crosses the
+wire — recording has no RPC (§6.8). `stats.getUsage` is global: it takes **no** `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| stats.getUsage | period (req): "24h" \| "month" \| "year"; key: "YYYY-MM" (req for month) \| "YYYY" (req for year), ignored for 24h; tzOffsetMinutes: integer, minutes east of UTC, default 0, must be within ±840 | UsageStats — -32602 on a bad period/key/tzOffsetMinutes |
+
+**Timezone semantics** — buckets are stored as UTC hour floors. For `month`/`year` periods each
+bucket is shifted by `tzOffsetMinutes` before period filtering and hour-of-day / month grouping,
+so results reflect the client's local calendar. The `24h` period is an **absolute rolling
+window** — the trailing 24 hourly UTC buckets ending at the current hour — unaffected by
+`tzOffsetMinutes` except that per-bucket hour labels are rendered in local time.
+
+**UsageStats** — `{ totals: UsageTotals, runs, sessions, longestRunMs, linesAdded, linesDeleted,
+byModel: ByModelEntry[], byHourOfDay: HourEntry[24], byMonth: MonthEntry[12],
+availablePeriods: { months: string[], years: string[] } }`, where **UsageTotals** is the four
+consumption counters `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`:
+
+- **totals / runs / sessions / longestRunMs / linesAdded / linesDeleted** — period rollups:
+  the four token counters, completed prompt turns, agent sessions started, the longest single
+  turn in milliseconds (MAX), and agent-attributed line churn.
+- **byModel** — `{ model, runs } & UsageTotals` per normalized model name, sorted descending by
+  total tokens (ties break on model name ascending).
+- **byHourOfDay** — exactly **24** entries of `{ hour } & UsageTotals`. For `month`/`year`:
+  local hours of day in order (`hour` = 0–23). For `24h`: the 24 trailing hourly buckets in
+  **chronological order** (oldest first), each labelled with its local-time `hour`.
+- **byMonth** — exactly **12** entries of `{ month } & UsageTotals` (`month` = 1–12) covering
+  the period's whole local year, independent of the (possibly narrower) month filter; zeroed
+  for `24h`.
+- **availablePeriods** — the distinct local `"YYYY-MM"` months and `"YYYY"` years that have any
+  recorded usage, sorted ascending, computed over **all** rows regardless of the requested
+  period (drives the FE period picker).
+
+Empty periods return zeroed shapes — zero totals, empty `byModel`, 24 zeroed hours, 12 zeroed
+months — never an error.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":94,"method":"stats.getUsage","params":{ "period":"month","key":"2026-07","tzOffsetMinutes":-420 } }
+// ← response (arrays elided to the interesting entries)
+{ "jsonrpc":"2.0","id":94,"result":{
+  "totals":{ "inputTokens":130,"outputTokens":45,"cacheReadTokens":0,"cacheCreationTokens":0 },
+  "runs":3,"sessions":1,"longestRunMs":9000,"linesAdded":10,"linesDeleted":3,
+  "byModel":[
+    { "model":"Opus 4.8","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0 },
+    { "model":"Sonnet 5","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
+  "byHourOfDay":[ { "hour":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 24 entries … */ ],
+  "byMonth":[ { "month":1,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 12 entries … */ ],
+  "availablePeriods":{ "months":["2026-06","2026-07"],"years":["2026"] } } }
+```
 
 ## 6. Events & Subscriptions
 
