@@ -371,7 +371,7 @@ These methods are client-callable triggers whose real work happens on the connec
 
 > **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed (see §5.22). See §6.8.
 
-> **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
+> **Internal, not wire (Integrations & Ops).** Token/credit **usage accounting** runs **inside the daemon**: usage is tallied **live** at ACP turn end from `PromptResponse.usage`, with a periodic **reconciliation scan** as fallback (§5.23); clients never trigger either — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
 
 > Deprecated aliases. agent.subscribe/agent.unsubscribe and event.subscribe/event.unsubscribe exist in the method map but are not the canonical WebSocket subscription surface. For live event streaming use the bridge methods events.subscribe / events.unsubscribe (note the plural events.), handled directly by the server before the dispatcher — see §6. The agent./event.* variants create internal/agent-style subscriptions and do not wire a WebSocket client up to events.event notifications. (A bare `{ workspaceId }` `agent.subscribe` frame instead routes to the agent collection channel — see §6.9.)
 
@@ -2124,10 +2124,22 @@ unbounded and rotate independently of the config surface.
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage`
 
-The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
-usage per agent and per model and writes the durable `tokenUsage` field on the `Workspace`; only the
-**read** and its change event cross the wire — the scan job itself has **no** RPC (§6.8).
-`workspace.getTokenUsage` requires `workspaceId`.
+The backend owns token/credit **usage accounting**. Usage is sourced **live from ACP**: at the end
+of each prompt turn, the `PromptResponse.usage` report (via the agent-client-protocol
+`unstable_end_turn_token_usage` feature flag) carries the session's **cumulative** counters; the
+daemon persists that snapshot per session with **REPLACE semantics** (each report replaces the
+session's previous snapshot — reports are never summed), mapping ACP `cachedReadTokens` →
+`cacheReadTokens` and `cachedWriteTokens` → `cacheCreationTokens`, then immediately re-aggregates
+per agent and per model and writes the durable `tokenUsage` field on the `Workspace`. A
+daemon-internal periodic **scan** (300 s cadence) is demoted to a **reconciliation fallback** for
+sessions the live path cannot see (providers without end-of-turn usage reports / legacy
+per-message metadata); a reconciliation recount that comes back all-zero **never regresses** a
+stored non-zero live tally to zero **while agent-session rows still exist** (the racing-sweep
+guard). When the workspace has no sessions left (all deleted), an all-zero recount is legitimate
+and writes through — clients must not assume `tokenUsage` can never drop back to zero. Only the
+**read** and its change event cross the wire —
+neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsage` requires
+`workspaceId`.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -2138,13 +2150,13 @@ byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the four consumption counters
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
-the RFC-3339 timestamp of the last internal scan (`null` before the first scan). Updated values are
-pushed via `workspace:tokenUsage-changed` (§6.5).
+the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
+(`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
 
 ```json
 // → request
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
-// ← response (emitted again as workspace:tokenUsage-changed after each internal scan)
+// ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
   "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
   "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
@@ -3482,7 +3494,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
-| workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed by the internal scan job (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
+| workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with `isolation: "cow"` successfully provisions a CoW worktree sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository. `sandbox:created` → data { workspaceId, sandboxId, sandboxPath, sandboxBranch, agentId } where `sandboxId` is the unique sandbox identifier, `sandboxPath` is the absolute filesystem path to the worktree clone, `sandboxBranch` is the ephemeral branch name (`sandbox/<uuid>`), and `agentId` is the delegated agent assigned to the sandbox. `sandbox:merged` → data { workspaceId, agentId, canonicalHead } where `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
