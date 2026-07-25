@@ -762,7 +762,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
@@ -822,6 +822,18 @@ other than `user`/`agent`, and a `status` other than `open`/`resolved`/
 caller-input errors and stay `-32603`: an unknown `commentId` ("Comment not
 found: …") or unknown `threadId` ("Thread not found: …") on
 `comment.getThread`/`comment.resolveThread` returns `-32603 Internal error`.
+
+**Reply anchoring (monorepo#729).** Only **root** comments carry an
+authoritative `anchor` / `anchorText`: `comment.add` embeds the anchor markers
+and persists the anchor on the root it creates. Replies created via
+`comment.respond` anchor through their thread — `threadId` / `parentId` — and
+never independently, so the persisted reply has no anchor and the wire
+`Comment` shape **omits** the `anchor` and `anchorText` keys (both fields are
+optional on the wire). Clients resolving a thread's position in the document
+must read the thread root's anchor (the FE's anchor reconciliation already
+does exactly this). Replies stored before this contract change may still carry
+a legacy clone of the parent's anchor; clients must treat any reply anchor as
+non-authoritative.
 
 **Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
