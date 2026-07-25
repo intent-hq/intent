@@ -1256,7 +1256,11 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
 > fixed **24h TTL**. Historical reads only see rows within these windows;
 > lifecycle/note/task/workspace events are not swept. The loop also reclaims freed pages via
-> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases.
+> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases. Legacy databases
+> created with `auto_vacuum=NONE` are converted automatically: the daemon's write connection
+> sets `PRAGMA auto_vacuum=INCREMENTAL` at connect (inert on an existing NONE-mode file by
+> itself), and a one-time `VACUUM` at daemon startup rebuilds the file to apply it, so space
+> reclamation applies to all databases.
 
 | Method | Params | Result |
 | --- | --- | --- |
