@@ -51,6 +51,9 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
 DEV_TCP_PORT ?= 5181
 DEV_PORT ?= 5190
+# Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
+# actually sees the default/override in the child environment.
+export DEV_PORT
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
@@ -61,9 +64,6 @@ DEV_PORT ?= 5190
 # or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
-# Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
-# actually sees the default/override in the child environment.
-export DEV_PORT
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
@@ -139,12 +139,19 @@ clean: ## Remove cargo build artifacts (packages/intentd/target)
 clean-dev: ## Wipe the dev-seat state dir (.dev/)
 	rm -rf "$(CURDIR)/.dev"
 
+# `sweep` deliberately has no ensure-intentd-submodule prerequisite:
+# initializing the submodule just to sweep a target/ dir that cannot exist yet
+# would be overkill, so it short-circuits with a friendly no-op instead.
 sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
 	@command -v cargo-sweep >/dev/null 2>&1 || { \
 		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS)
+	@if [ -d "$(INTENTD_DIR)/target" ]; then \
+		cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS); \
+	else \
+		echo "[sweep] nothing to sweep — $(INTENTD_DIR)/target does not exist"; \
+	fi
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
 	@command -v cargo-sweep >/dev/null 2>&1 || { \
@@ -152,6 +159,7 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 		exit 1; \
 	}
 	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR); do \
+		[ -d "$$dir" ] || continue; \
 		if [ -d "$$dir/target" ]; then \
 			echo "[sweep-all] sweeping $$dir"; \
 			(cd "$$dir" && cargo sweep --time $(SWEEP_DAYS)) \
