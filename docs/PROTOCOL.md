@@ -371,7 +371,7 @@ These methods are client-callable triggers whose real work happens on the connec
 
 > **Internal, not wire (Agent Ecosystem).** Rule **injection** — assembling the system prompt from workspace files (`AGENTS.md` / `CLAUDE.md` / `.augment/guidelines.md` / `.augment/rules/*.md`), specialization rules, and user overrides — runs **inside the backend** as agents start; only the `rules.*` read/edit methods (§5.21) cross the wire. Per-agent-type tool **denylisting** is likewise internal enforcement — there is **no** `agent.getAvailableTools` RPC. Long-term agent **memories** are an internal context source consumed by the agent runtime; no `memories.*` wire surface is exposed (see §5.22). See §6.8.
 
-> **Internal, not wire (Integrations & Ops).** The periodic **usage/credit scan job** that tallies token usage per agent and per model runs **inside the daemon** on a timer; clients never trigger it — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
+> **Internal, not wire (Integrations & Ops).** Token/credit **usage accounting** runs **inside the daemon**: usage is tallied **live** at ACP turn end from `PromptResponse.usage`, with a periodic **reconciliation scan** as fallback (§5.23); clients never trigger either — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
 
 > Deprecated aliases. agent.subscribe/agent.unsubscribe and event.subscribe/event.unsubscribe exist in the method map but are not the canonical WebSocket subscription surface. For live event streaming use the bridge methods events.subscribe / events.unsubscribe (note the plural events.), handled directly by the server before the dispatcher — see §6. The agent./event.* variants create internal/agent-style subscriptions and do not wire a WebSocket client up to events.event notifications. (A bare `{ workspaceId }` `agent.subscribe` frame instead routes to the agent collection channel — see §6.9.)
 
@@ -386,8 +386,8 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
-| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. -32602 if not found. |
-| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. -32602 if not found. |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -599,17 +599,19 @@ repository/worktree fields, …) are
 
 **`cowSupported` / `checkoutMode` (new in intentd).** `cowSupported` is a BE-derived
 machine-capability flag: a cached CoW-reflink probe of the **workspaces root**
-filesystem, computed on every path that returns a `Workspace` on the wire — `true` /
-`false` for a supported/unsupported filesystem, omitted when the probe cannot run (the
-probe creates a missing workspaces root rather than omitting). It reports the machine's
-capability independent of how the specific workspace was provisioned; the FE gates the
-`workspace.cowIsolation` opt-in toggle (§5.12) on it. **Caveat — root-scoped, not
-repo-scoped:** provisioning itself probes from the *repository directory* into the
-workspaces root (§5.1), so a repository on a *different* filesystem than the workspaces
-root (reflinks cannot cross filesystems) can still fail `workspace.create` with the
-fail-loud `-32603` even when `cowSupported` is `true`; `cowSupported` is a toggle-gating
-advisory, not a per-repository guarantee. `checkoutMode` (`"worktree" | "cow"`,
-lowercase on the wire) records how
+filesystem (the probe creates a missing root rather than omitting), filled by the
+aggregate-enrichment step on the `workspace.list` / `workspace.get` read paths —
+`true` / `false` for a supported/unsupported filesystem, omitted when the probe cannot
+run or exceeds the per-call budget (write-path responses such as `workspace.create` /
+`update` / `archive` build the row without this enrichment, so clients read it off the
+list/get poll). It reports the machine's capability independent of how the specific
+workspace was provisioned; the FE gates the `workspace.cowIsolation` opt-in toggle
+(§5.12) on it. **Caveat — root-scoped, not repo-scoped:** provisioning probes from the
+*repository directory* into the workspaces root (§5.1), so a repository on a different
+filesystem than the workspaces root (reflinks cannot cross filesystems) can still fail
+`workspace.create` with the fail-loud `-32603` even when `cowSupported` is `true`;
+`cowSupported` is a toggle-gating advisory, not a per-repository guarantee.
+`checkoutMode` (`"worktree" | "cow"`, lowercase on the wire) records how
 `workspace.create` provisioned this workspace's checkout (§5.1) and is omitted for rows
 without a daemon-provisioned checkout (skip-isolation/direct, remote, caller-supplied
 `worktreePath`, non-git repository paths, pre-existing rows).
@@ -807,8 +809,12 @@ see §5.2 version-history extensions).
 **Recompute lifecycle.** Every content-changing `note.*` mutation schedules a debounced
 recompute (5 s, mirroring `LineAttributionService.DEBOUNCE_MS`). A fresh mutation cancels
 any pending timer so a burst of writes coalesces into one persist + one
-`line-attribution:updated` emit (§6.5). Persistence is one row per note in
-`note_line_attribution` (SQLite migration `0028_note_line_attribution.sql`), upserted on
+`line-attribution:updated` emit (§6.5). The emit is **transient / broadcast-only**
+(published through the same transient path as `agent:stream:chunk`, §7): it is never
+written to the event table, so it does not appear in `event.query` or the other §5.10
+historical reads (migration `0052_delete_line_attribution_events.sql` deletes legacy rows
+on existing installs). The durable state remains the `note_line_attribution` row —
+one row per note (SQLite migration `0028_note_line_attribution.sql`), upserted on
 each recompute so the read path is O(1) and survives restart. `note.delete` cascades.
 
 ### 5.3 `comment.*`
@@ -818,7 +824,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey? | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
@@ -878,6 +884,18 @@ other than `user`/`agent`, and a `status` other than `open`/`resolved`/
 caller-input errors and stay `-32603`: an unknown `commentId` ("Comment not
 found: …") or unknown `threadId` ("Thread not found: …") on
 `comment.getThread`/`comment.resolveThread` returns `-32603 Internal error`.
+
+**Reply anchoring (monorepo#729).** Only **root** comments carry an
+authoritative `anchor` / `anchorText`: `comment.add` embeds the anchor markers
+and persists the anchor on the root it creates. Replies created via
+`comment.respond` anchor through their thread — `threadId` / `parentId` — and
+never independently, so the persisted reply has no anchor and the wire
+`Comment` shape **omits** the `anchor` and `anchorText` keys (both fields are
+optional on the wire). Clients resolving a thread's position in the document
+must read the thread root's anchor (the FE's anchor reconciliation already
+does exactly this). Replies stored before this contract change may still carry
+a legacy clone of the parent's anchor; clients must treat any reply anchor as
+non-authoritative.
 
 **Thread resolution.** One additional method addresses an entire thread by `threadId` **or** `commentId`. Emits the `comment:resolved` event (§6.5).
 
@@ -1302,7 +1320,11 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
 > fixed **24h TTL**. Historical reads only see rows within these windows;
 > lifecycle/note/task/workspace events are not swept. The loop also reclaims freed pages via
-> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases.
+> bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases. Legacy databases
+> created with `auto_vacuum=NONE` are converted automatically: the daemon's write connection
+> sets `PRAGMA auto_vacuum=INCREMENTAL` at connect (inert on an existing NONE-mode file by
+> itself), and a one-time `VACUUM` at daemon startup rebuilds the file to apply it, so space
+> reclamation applies to all databases.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -2182,10 +2204,29 @@ unbounded and rotate independently of the config surface.
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage`
 
-The backend owns token/credit **usage accounting**. A daemon-internal periodic **scan job** tallies
-usage per agent and per model and writes the durable `tokenUsage` field on the `Workspace`; only the
-**read** and its change event cross the wire — the scan job itself has **no** RPC (§6.8).
-`workspace.getTokenUsage` requires `workspaceId`.
+The backend owns token/credit **usage accounting**. Usage is sourced **live from ACP**: at the end
+of each prompt turn, the `PromptResponse.usage` report (via the agent-client-protocol
+`unstable_end_turn_token_usage` feature flag) carries the session's **cumulative** counters; the
+daemon persists that snapshot per session with **REPLACE semantics** (each report replaces the
+session's previous snapshot — reports are never summed), mapping ACP `cachedReadTokens` →
+`cacheReadTokens` and `cachedWriteTokens` → `cacheCreationTokens`, then immediately re-aggregates
+per agent and per model and writes the durable `tokenUsage` field on the `Workspace`.
+**Usage survives ACP session recreation:** when the resume-impossible fallback swaps in a fresh
+ACP session id (a failed `session/load` → `session/new` recreate), the outgoing session's
+cumulative snapshot is folded into a daemon-internal per-agent **baseline** (saturating sum) and
+the snapshot is cleared, atomically with the id swap — the recreated session's cumulative reports
+restart from zero, so per-agent effective totals are **baseline + snapshot**. The baseline is
+internal accounting only (never on the wire; `TokenUsage` shapes are unchanged), and the legacy
+per-message **message-sum fallback** applies only when both baseline and snapshot are absent. A
+daemon-internal periodic **scan** (300 s cadence) is demoted to a **reconciliation fallback** for
+sessions the live path cannot see (providers without end-of-turn usage reports / legacy
+per-message metadata); a reconciliation recount that comes back all-zero **never regresses** a
+stored non-zero live tally to zero **while agent-session rows still exist** (the racing-sweep
+guard). When the workspace has no sessions left (all deleted), an all-zero recount is legitimate
+and writes through — clients must not assume `tokenUsage` can never drop back to zero. Only the
+**read** and its change event cross the wire —
+neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsage` requires
+`workspaceId`.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -2196,13 +2237,13 @@ byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
 **TokenUsageTotals** is the four consumption counters
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
-the RFC-3339 timestamp of the last internal scan (`null` before the first scan). Updated values are
-pushed via `workspace:tokenUsage-changed` (§6.5).
+the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
+(`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
 
 ```json
 // → request
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
-// ← response (emitted again as workspace:tokenUsage-changed after each internal scan)
+// ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
   "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
   "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
@@ -3514,15 +3555,15 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | --- | --- | --- |
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`). No `path` field (never emitted). |
-| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. |
+| line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. **Transient / broadcast-only** (same publish path as `agent:stream:chunk`): never persisted to the event table, so it is invisible to `event.query` / §5.10 historical reads — the durable snapshot lives in `note_line_attribution` and is served by `note.lineAttribution.load` (§5.2.1). |
 | task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
-| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta. `agent:idle` data is enriched with `agentName` (so subscribers don't fall back to a generic "Agent" label), `isBackground` (boolean, sourced from the session's persisted `is_background` flag — the same flag served as `metadata.isBackground` on `agent.list`/`agent.get`, §5.5 — so subscribers such as iOS notification routing can branch on it without a follow-up `agent.get`), and — when the child persisted one via `agent.reportToParent` — the completion `report`; the enrichment is emitted from both the turn-end idle and the STAB-28 interrupt-path synthetic idle, and a session-read failure is swallowed (the event still fires with the base payload, enrichment fields absent) |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (one-shot removal, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
 | agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
 | agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint — the pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. The `init` phase's ACP `initialize` request has a **dedicated timeout, default 30s** (overridable via `INTENTD_ACP_INITIALIZE_TIMEOUT_MS`, positive integer ms) so slow provider cold starts under host load don't fail the spawn; all other ACP requests keep the generic 5s default. |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
-| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta (Option::is_none fields omitted); :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task — the per-repository lock is held only for the git-metadata phase (registration prune + rename to a trash path + guarded branch delete), and the recursive removal runs after the lock is released. |
+| workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta — untouched (Option::is_none) fields are omitted, but a field may also carry an explicit JSON `null` to signal a clear (the same omitted = untouched / `null` = clear / present = set tri-state as the §5.1 explicit-null-clear contract). `workspace.archive` / `workspace.unarchive` (§5.1) emit the full applied delta on this same type (no dedicated event): archive → `changes: { archived: true, status: "Archived", archivedAt: <ts> }` (`<ts>` = the persisted ISO timestamp); unarchive → `changes: { archived: false, status: "Active", archivedAt: null }` (explicit JSON `null` so clients clear the field). `updatedAt` is intentionally omitted from the delta by convention; :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task — the per-repository lock is held only for the git-metadata phase (registration prune + rename to a trash path + guarded branch delete), and the recursive removal runs after the lock is released. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
 | pr (new in intentd) | pr:linked, pr:updated, pr:unlinked | Emitted **only on change** by the background / on-demand PR refresh. Self-sufficient payloads: `pr:linked` → `{ workspaceId, prNumber, prUrl, prStatus, activePullRequest, pullRequests }`, `pr:updated` → `{ workspaceId, prNumber, prStatus, activePullRequest, pullRequests }`, `pr:unlinked` → `{ workspaceId }`. `pullRequests` is the daemon-owned `PullRequestInfo[]` list (every refreshed/discovered/created PR upserted by number, merged/closed PRs retained) so clients can render the full per-branch PR list without a refetch; it is always an array on the wire (`[]` when empty, never `null`). |
@@ -3540,7 +3581,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
-| workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed by the internal scan job (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
+| workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with effective `isolation: "cow"` successfully provisions a CoW sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.merge`). `sandbox:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
@@ -3627,7 +3668,7 @@ production emit site** today and are reserved for future use.
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, content, streamId? } |
+| complete or error | agent:stream:end | { agentId, stopReason?, messageId? } — normal completion (`agent_session.rs` `run_prompt_turn`) and mid-turn failure (`publish_terminal_failure_events`) both emit `{ agentId }` **only**; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
 `ALL_EVENT_TYPES`, but the backend does **not** emit them today:
@@ -3646,7 +3687,7 @@ transcript) over reconstructing turn state from the firehose.
 Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to`agent:stream:end` — there is exactly one terminal event per stream. Today the payloads areidentical by design; a client treats `stream:end` as "this turn is done" and then re-fetches theauthoritative transcript via `agent.getConversation` if it needs the final, persisted message.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design (`{ agentId }`); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
@@ -3801,11 +3842,18 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessa
 - `metadata.interrupted: true`
 - `metadata.stopReason: "interrupted"`
 
-This is the same convention as the graceful-shutdown flush of an in-flight turn. The flush is a no-op when the partial has no content blocks (nothing streamed yet).
+This is the same convention as the graceful-shutdown flush of an in-flight turn.
+
+**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and mid-turn-failure terminal emits carry neither field.
+
+**Pre-first-token stop (zero-output flush).** When nothing has streamed yet (no content blocks), whether a row is persisted — and therefore whether the terminal `agent:stream:end` carries `messageId` — depends on the interrupt path:
+
+- **`messageId` guaranteed — plain `agent.stop` on the keep-alive interrupt path with a live-turn slot.** When a live ACP session exists to cancel (connection + `acpSessionId`) AND the turn has registered its live-turn slot (the worker reached prompt dispatch), a plain `agent.stop` persists a synthetic **empty** interrupted assistant row (`contentBlocks: []`, `metadata.interrupted: true`, `metadata.stopReason: "interrupted"`) so the transcript durably records the stop, and the terminal `agent:stream:end` carries that row's `messageId`. This is the **only** pre-first-token case that persists a row.
+- **`messageId` absent — everything else.** No row is persisted when: (a) no live-turn slot exists yet (the stop landed during turn startup — spawn / `initialize` / `session/new` / `session/load` — before the worker registered the turn; the emit still carries `stopReason: "interrupted"` but no `messageId`); (b) the stop takes the hard-kill fallback (no live connection or no `acpSessionId` — that path never flushes); (c) the interrupt comes from an **interrupt-priority send** (`agent.sendMessage` / `agent.sendToTask` with `priority: "interrupt"`) or the **graceful-shutdown capture**, which keep the zero-output flush as a **no-op** (STAB-114) so the original user message is re-queued with no phantom empty row blocking it.
 
 **Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
 
-Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); no method-surface change (additive persistence semantics within protocol v2.0).
+Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); no method-surface change (additive semantics within protocol v2.0).
 
 ## 8. Permission Flow
 

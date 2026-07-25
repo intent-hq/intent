@@ -114,10 +114,12 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
 
 - **Provisioning (`workspace.create` / `workspace.duplicate`).** `intent-services`
   owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
-  (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe of the
-  workspaces root, then a standalone clone of the whole repository directory
+  (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe from the
+  repository directory into the workspace dir (`intent_git::cow_probe(&repo_dir,
+  &ws_dir)`), then a standalone clone of the whole repository directory
   (`intent_git::cow_checkout::provision_cow_checkout`), failing loudly when the
-  filesystem is unsupported (no silent worktree fallback). Both paths run under the
+  filesystem is unsupported (no silent worktree fallback; the separate root→root
+  probe backing the `cowSupported` aggregate is advisory only). Both paths run under the
   per-repository worktree lock. `workspace.duplicate` applies the same matrix when
   provisioning the copy's checkout. The setting is consulted **only** at
   provisioning time; the persisted `checkoutMode` is immutable per workspace.
