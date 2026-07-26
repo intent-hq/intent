@@ -2440,7 +2440,9 @@ contract: an optional `limit` (default **50**, max **200**) plus an opaque `next
 in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
 missing/invalid params and "not found" (404) lookups → `-32602`; a token that is absent or fails
 `GET /user`, and any other GitHub/service failure → `-32603` with a descriptive `message`
-(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
+(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes. One documented
+exception to the 404→`-32602` rule: `github.repoConfig.get` folds every 404 (missing file, repo,
+or ref) into the success shape `{ config: null, exists: false }` — see the method row below.
 
 #### Repos & branches
 
@@ -2450,7 +2452,7 @@ missing/invalid params and "not found" (404) lookups → `-32602`; a token that 
 | github.repos.search | query (req), limit?, nextToken? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
 | github.repos.get | owner (req), repo (req) | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
 | github.branches.list | owner (req), repo (req), limit?, nextToken? | { branches: string[], nextToken? } — **remote** branch names (`GET /repos/{owner}/{repo}/branches`) |
-| github.repoConfig.get | owner (req), repo (req), ref? | { config: RepoConfig \| null, exists: boolean } — the repo's `.intent/config.json` fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.intent/config.json`, no clone; `ref` defaults to the default branch). A missing file (or missing repo/ref) → `{ config: null, exists: false }`; a present but invalid/mis-shaped file folds **tolerantly** to `{ config: {}, exists: true }` (mirrors the `repoConfig.get` §5.33 parse semantics) — never an error. Same camelCase `RepoConfig` shape as §5.33, unknown keys preserved (v2.4) |
+| github.repoConfig.get | owner (req), repo (req), ref? | { config: RepoConfig \| null, exists: boolean } — the repo's `.intent/config.json` fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.intent/config.json`, no clone; `ref` defaults to the default branch). A missing file (or missing repo/ref) → `{ config: null, exists: false }` — an **explicit exception** to the namespace's 404→`-32602` convention above: all 404s are graceful "no config" outcomes, never errors (transport/auth failures still surface as `-32603` like the other `github.*` methods). A present but invalid/mis-shaped file folds **tolerantly** to `{ config: {}, exists: true }` (mirrors the `repoConfig.get` §5.33 parse semantics). Same camelCase `RepoConfig` shape as §5.33, unknown keys preserved (v2.4) |
 
 #### Auth & identity
 
