@@ -849,6 +849,33 @@ markers scrubbed from the persisted content and the comment is flipped to
 `isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
 `false` explicitly when a previously-orphaned comment heals).
 
+**Overlapping ranges + phantom-marker scrub (intentd#541).** Overlapping
+comment ranges are allowed: a `comment.add` target span may contain other
+comments' `<!--anchor:…-->` markers, producing interleaved pairs
+(`a:start … b:start … a:end … b:end`) that are valid note content — each
+comment's own id still pins its markers, and interleaved anchors stay
+healthy. The add embeds the raw span (contained markers intact, in place)
+back between the new pair, while the STORED `anchorText` / `anchorBefore` /
+`anchorAfter` fields are stripped of all `<!--anchor:…-->` substrings —
+markers are stripped from the full prefix/suffix before the 50-character
+context window is taken, so a marker adjacent to the span cannot leak a
+clipped fragment — and raw marker text never appears in comment rows. The
+recovery pass additionally scrubs **phantom markers**: after the per-comment
+classification above, any UUID-format marker whose id has no live
+(non-orphaned) comment row — an id with no comment row at all, or markers
+left behind by a row already flagged `isOrphaned` — is removed from the
+persisted content, so a polluted note self-heals on its next content-changing
+`note.*` mutation. `comment.add` runs the same scrub on the fetched note
+content before matching, so phantom debris can never block a new comment; the
+cleaned content persists only as part of the add's atomic note rewrite (a
+failed add changes nothing — no separate rev bump). Non-UUID
+marker-lookalikes (documentation literals such as
+`<!--anchor:{id}:start-->`) are ordinary user content: commentable, and never
+scrubbed. This is also why a client-supplied `commentId` must be a
+**canonical hyphenated** UUID — the scrub only recognizes canonical ids
+inside markers, so a looser spelling would mint markers the recovery pass
+could never classify or clean up.
+
 **Note rewrite visibility (monorepo#638).** Because `comment.add` rewrites the
 note markdown (anchor-marker insertion is an `update_note` that bumps the
 note's `rev`), the result echoes the authoritative post-rewrite revision as
