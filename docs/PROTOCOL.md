@@ -3551,8 +3551,9 @@ the first-writer's stamp). For `month`/`year` periods, period filtering, hour-of
 grouping, and `availablePeriods` follow that recorded stamp, so "1pm" means 1pm on the daemon's
 machine **at the moment the activity was recorded** — immune to later DST transitions or
 timezone moves. Rows whose stamp columns are NULL (written while the daemon's local offset was
-indeterminate; pre-migration rows are backfilled) or malformed fall back to shifting
-`bucket_utc` by `tzOffsetMinutes`. The `24h` period is an **absolute rolling window** — the
+indeterminate; pre-migration rows are backfilled from `bucket_utc` using the timezone in effect
+at migration time) or malformed fall back to shifting `bucket_utc` by `tzOffsetMinutes`. The
+`24h` period is an **absolute rolling window** — the
 trailing 24 hourly UTC buckets ending at the current hour — unaffected by `tzOffsetMinutes`
 except that per-bucket hour labels are rendered in local time.
 
