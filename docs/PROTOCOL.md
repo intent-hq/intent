@@ -3959,7 +3959,8 @@ in `ask()` call order. The block echoes the canonical attachment item:
 ```
 
 `resource.name` is the question's `header`; the URI reuses the daemon-minted attachment nonce.
-The `text` payload is:
+`resource.text` is a **JSON-serialized string** (like every `resource.text`, it is a string field
+holding compact JSON — not an embedded JSON object); decoded, the payload is:
 
 ```json
 {
@@ -3994,11 +3995,14 @@ persisted message via `agent.getConversation`.
 question and may call it multiple times in a turn (each call queues one attachment). Deliberate
 deviation from the rest of `ws.app.*`: the binding is **not chief-gated** — any workspace agent
 may ask (the sibling `ws.app.*` subnamespaces remain chief-only). Hard validation (the call fails
-with a descriptive tool-error string; nothing is queued): missing/non-object question argument,
-missing/empty `question` or `header` (after trim), missing/non-array `options`, fewer than 2
-options, or any option with a missing/empty `label`. There are **no hard upper caps** — the
-~4-questions-per-turn and 2–4-options guidance is soft advice that lives **only** in the tool
-description and is never enforced. The call also fails outside a live agent turn (no
+with a descriptive tool-error string; nothing is queued): the single params object
+(`{ question, header, options, ... }`) missing or not a JSON object, missing/empty `question` or
+`header` (after trim), missing/non-array `options`, fewer than 2 options, or any option with a
+missing/empty `label`. Validation imposes **no upper caps** — the ~4-questions-per-turn and
+2–4-options guidance is soft advice that lives **only** in the tool description and is never
+enforced — though the turn-attachment registry retains at most 32 attachments per agent, silently
+evicting the oldest (asks beyond that still return `{ ok: true }` but the earliest questions are
+dropped from the turn-end drain). The call also fails outside a live agent turn (no
 turn-attachment registry or caller agent wired).
 
 *Answers are plain text — an FE convention, not a wire feature.* The FE presents the turn's
