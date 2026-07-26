@@ -30,7 +30,7 @@ Update checks run only for `intentd serve` (at startup and every 12–24
 hours); one-shot subcommands (e.g. `intentd doctor`) run the installed
 daemon as-is and fail fast with guidance if none is installed yet. The
 sitter tracks the stable channel by default; `intentd sitter channel beta`
-durably pins beta in `<data-dir>/sitter/config.toml` (add `--redownload` to
+durably pins beta in `<data_dir>/sitter/config.toml` (add `--redownload` to
 install that channel's version immediately — also the downgrade path — then
 `intentd restart` to activate it in place). Per-launch `--sitter-channel` /
 `INTENTD_CHANNEL` overrides take precedence over the pin.
