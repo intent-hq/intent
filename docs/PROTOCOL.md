@@ -452,10 +452,11 @@ directory (OS reflink primitives — macOS `copyfile(COPYFILE_CLONE)`, Linux
 (`node_modules`, `target`, …) into the checkout for free; inside the clone the workspace
 `branch` is created + checked out from the same `baseRef` resolution order as above,
 tracked files are hard-reset to that base, untracked files are preserved, and the row
-persists `checkoutMode: "cow"`. When the probe reports Unsupported (or errors), the
-create **fails** with `-32603` ("CoW isolation is enabled but the filesystem does not
-support CoW cloning — disable workspace.cowIsolation or move the workspaces root to a
-supported filesystem") — there is **no silent fallback to a worktree checkout**. Because
+persists `checkoutMode: "cow"`. When the probe reports Unsupported (or errors) — e.g.
+the repository lives on a different volume than the workspaces root, since reflinks
+cannot cross filesystems — the create **falls back to the linked-worktree path**
+(`checkoutMode: "worktree"`, normal worktree provisioning) with a logged warning
+instead of failing: `workspace.cowIsolation` is a preference, not a guarantee. Because
 a CoW checkout is a standalone clone, `workspace.delete`'s git-metadata phase skips the
 worktree-registration prune and the source-repo branch-delete guard (the workspace
 branch lives only inside the clone); the checkout is still renamed to a trash path and
@@ -467,12 +468,12 @@ branch named for the new id (uniquified against the source repo's local and
 remote-tracking branches), using the **same decision matrix as `workspace.create`**:
 `workspace.cowIsolation` off ⇒ linked worktree (`checkoutMode: "worktree"`); on ⇒ CoW
 probe from the repository directory to `<root>/<newId>` — supported ⇒ standalone CoW
-clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **fails** with
-the same `-32603` message as create (**no silent worktree fallback**). Provisioning is
-skipped for remote / skip-isolation sources and for a `repositoryPath` that is not a
-local git repository. Unlike the fail-loud CoW probe, an ordinary provisioning failure
-is logged and swallowed (FE parity — "continue without worktree"): the row persists
-without `worktreePath`/`checkoutMode`.
+clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **falls back to
+a linked worktree** with a logged warning (same fallback semantics as create).
+Provisioning is skipped for remote / skip-isolation sources and for a `repositoryPath`
+that is not a local git repository. An ordinary provisioning failure is logged and
+swallowed (FE parity — "continue without worktree"): the row persists without
+`worktreePath`/`checkoutMode`.
 
 **`checkoutMode` is immutable.** `workspace.cowIsolation` is consulted **only** at
 provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
@@ -613,9 +614,10 @@ list/get poll). It reports the machine's capability independent of how the speci
 workspace was provisioned; the FE gates the `workspace.cowIsolation` opt-in toggle
 (§5.12) on it. **Caveat — root-scoped, not repo-scoped:** provisioning probes from the
 *repository directory* into the workspaces root (§5.1), so a repository on a different
-filesystem than the workspaces root (reflinks cannot cross filesystems) can still fail
-`workspace.create` with the fail-loud `-32603` even when `cowSupported` is `true`;
-`cowSupported` is a toggle-gating advisory, not a per-repository guarantee.
+filesystem than the workspaces root (reflinks cannot cross filesystems) can still land
+`workspace.create` on the worktree-fallback path (`checkoutMode: "worktree"`, §5.1)
+even when `cowSupported` is `true`; `cowSupported` is a toggle-gating advisory, not a
+per-repository guarantee.
 `checkoutMode` (`"worktree" | "cow"`, lowercase on the wire) records how
 `workspace.create` provisioned this workspace's checkout (§5.1) and is omitted for rows
 without a daemon-provisioned checkout (skip-isolation/direct, remote, caller-supplied
