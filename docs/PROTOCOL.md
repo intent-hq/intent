@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v2.2
+# Intent Backend — JSON-RPC Protocol v2.3
 
-**Protocol Version:** `2.2`
+**Protocol Version:** `2.3`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `2.2`
+**Version:** `2.3`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). No existing method changed shape in either bump.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see §5.1 and the fast-path notes). No existing method changed shape in any of these bumps.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "2.2", server: { protocolVersion: "2.2", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "2.2", ... }`
+- `client.hello` response: `{ protocolVersion: "2.3", server: { protocolVersion: "2.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.3", ... }`
 
 ### Compatibility Policy
 
@@ -153,22 +153,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **299 dispatchable method names** across the following categories:
+The API exposes **300 dispatchable method names** across the following categories:
 
-- **Router methods:** 264 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 265 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 33 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 299 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 300 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 299 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 300 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.36) carry each method's parameter and result contract.
 
-### Router methods by namespace (264 total)
+### Router methods by namespace (265 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -197,6 +197,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | skill | 1 | list |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 1 | getUsage |
+| system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | workspace | 23 | archive, cleanup, create, delete, detectProjectType, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, unarchive, update, updateContext, updateUiContext |
@@ -212,6 +213,17 @@ browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscri
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
 **UDS-only methods:** `system.shutdown` and `system.importLegacy` (v2.2) are only available on the Unix-domain socket transport (a remote WSS/TCP caller of `system.importLegacy` is rejected with `-32001`). `system.status` is available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
+
+**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
+
+```json
+// → request
+{ "jsonrpc": "2.0", "id": 1, "method": "system.capabilities", "params": {} }
+// ← response
+{ "jsonrpc": "2.0", "id": 1, "result": { "cowSupported": true } }
+```
+
+- `cowSupported?: boolean` — the cached CoW-reflink probe of the **workspaces root** filesystem, the same probe that fills `Workspace.cowSupported` (§5.1): `true`/`false` when the probe ran, **omitted** (never `null`) when it could not run — clients detect by presence. Because it is workspace-independent, the FE gates the `workspace.cowIsolation` opt-in toggle (§5.12) on this method rather than reading `cowSupported` off a hydrated workspace payload.
 
 #### `drafts.*` — draft attachments (additive, optional)
 
@@ -1949,7 +1961,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.2"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.3"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -1961,18 +1973,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.3",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"2.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.3","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.3",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"2.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.3","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
