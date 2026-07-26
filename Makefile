@@ -172,12 +172,17 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
+	@echo "[dev-daemon] INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--insecure` serves the local UDS socket AND a plain ws:// listener on
 	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — matches
 	# the FE's dev default and the iOS simulator/hardware seat.
 	# The daemon fails fast if $(DEV_TCP_PORT) is already bound.
+	# INTENTD_LEGACY_IMPORT_ROOTS="" disables the legacy import hook: the dev
+	# seat starts with a fresh $(DEV_DATA_DIR) DB, so first boot would otherwise
+	# scan the shared ~/intent/workspaces root.
 	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
+		INTENTD_LEGACY_IMPORT_ROOTS="" \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --insecure
 
 release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on real data dir, UDS-always, no --insecure
@@ -236,6 +241,9 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#   INTENTD_DATA_DIR=$(DEV_DATA_DIR) — the isolated dev data dir; keeps the
 	#     sidecar off the packaged app's real data dir and pairs with the UDS
 	#     socket at $(DEV_DATA_DIR)/intentd.sock (resolveSocketPath in the same file).
+	#   INTENTD_LEGACY_IMPORT_ROOTS="" — disables the legacy import hook: the dev
+	#     seat starts with a fresh $(DEV_DATA_DIR) DB, so the sidecar's first boot
+	#     would otherwise scan the shared ~/intent/workspaces root.
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
@@ -243,9 +251,11 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
 	@echo "[dev]   INTENTD_DATA_DIR=$(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock)"
+	@echo "[dev]   INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
 	cd $(FE_DIR) && INTENTD_SIDECAR=1 \
 		INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
+		INTENTD_LEGACY_IMPORT_ROOTS="" \
 		pnpm run dev
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
