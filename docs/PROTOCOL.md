@@ -3704,7 +3704,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel` and the `agent.reportToParent` completion-report persist; the `agent` collection channel maps it to an `updated` delta. `agent:idle` data is enriched with `agentName` (so subscribers don't fall back to a generic "Agent" label), `isBackground` (boolean, sourced from the session's persisted `is_background` flag — the same flag served as `metadata.isBackground` on `agent.list`/`agent.get`, §5.5 — so subscribers such as iOS notification routing can branch on it without a follow-up `agent.get`), and — when the child persisted one via `agent.reportToParent` — the completion report, emitted under both `completionReport` (canonical; readers should prefer it) and `report` (legacy alias, kept for back-compat) with identical values; the enrichment is emitted from both the turn-end idle and the STAB-28 interrupt-path synthetic idle, and a session-read failure is swallowed (the event still fires with the base payload, enrichment fields absent). The immediate `agent.reportToParent` wake's `event_notification` metadata (§5.5) carries the same dual keys on its `events[0].data` |
 | agent (messaging) | agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call |  |
 | agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (one-shot removal, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
-| agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 |
+| agent (streaming) | agent:stream:start, agent:stream:chunk, agent:stream:content-blocks, agent:stream:message, agent:stream:tool_use, agent:stream:tool_result, agent:stream:end | see §7 — `agent:stream:start` is emitted **only** for agent-initiated (harness-wake) turns (§6.6) |
 | agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint — the pre-first-token status line. Emitted **before the first `agent:stream:chunk`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:chunk` or terminal `agent:stream:end` / `agent:failed`. The `init` phase's ACP `initialize` request has a **dedicated timeout, default 30s** (overridable via `INTENTD_ACP_INITIALIZE_TIMEOUT_MS`, positive integer ms) so slow provider cold starts under host load don't fail the spawn; all other ACP requests keep the generic 5s default. |
 | agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message |  |
 | workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta — untouched (Option::is_none) fields are omitted, but a field may also carry an explicit JSON `null` to signal a clear (the same omitted = untouched / `null` = clear / present = set tri-state as the §5.1 explicit-null-clear contract). `workspace.archive` / `workspace.unarchive` (§5.1) emit the full applied delta on this same type (no dedicated event): archive → `changes: { archived: true, status: "Archived", archivedAt: <ts> }` (`<ts>` = the persisted ISO timestamp); unarchive → `changes: { archived: false, status: "Active", archivedAt: null }` (explicit JSON `null` so clients clear the field). `updatedAt` is intentionally omitted from the delta by convention; :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task — the per-repository lock is held only for the git-metadata phase (registration prune + rename to a trash path + guarded branch delete), and the recursive removal runs after the lock is released. |
@@ -3729,9 +3729,47 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with effective `isolation: "cow"` successfully provisions a CoW sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.merge`). `sandbox:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
-### 6.6 Batching window
+### 6.6 Turn/event lifecycle & batching window
 
-`events.subscribe` accepts a `batchWindow` hint on the deprecated `agent.*`/`event.*` aliases; thecanonical bridge delivers each accepted event **individually** as it is accepted (no server-sidecoalescing on the WS bridge). Clients that need coalescing should debounce on their side, keyed by`event.type` + the relevant id in `data`.
+**Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`
+(`agent.sendMessage`, queue drain, wake delivery) emits **no** explicit start event — the client
+infers turn start from the user-row `agent:message` / `agent:user-message:sent` echo and the
+first `agent:stream:chunk`. The turn streams `agent:stream:chunk` / `agent:tool:call` under the
+assistant `messageId` minted at turn start, persists the assistant transcript row, emits exactly
+one terminal `agent:stream:end`, then `agent:idle` (subject to the existing ready-to-send
+suppression).
+
+**Agent-initiated (harness-wake) turns** *(new in intentd —
+[intent-hq/monorepo#855](https://github.com/intent-hq/monorepo/issues/855))*. A provider harness
+can self-wake the agent — e.g. a harness background worker finishing (the wake trigger observed
+in [intent-hq/monorepo#851](https://github.com/intent-hq/monorepo/issues/851)) — and stream a
+full turn of ACP `session/update`s with **no** daemon `session/prompt` in flight. The daemon
+recognizes the out-of-turn burst as an **implicit agent-initiated turn** instead of letting it
+buffer and flush into the next user turn:
+
+- **Trigger.** A per-agent idle-notification listener consumes the notification channel whenever
+  no prompt turn holds it (it stays disengaged during prompt turns and during the `session/load`
+  resume-replay drain — replay bursts are still discarded, no change there). On the first
+  out-of-turn `session/update` it claims the per-agent single-flight turn slot and mints an
+  assistant `messageId`.
+- **Start signal.** The turn opens with `agent:stream:start`
+  `{ agentId, messageId, reason: "harness-wake" }` — emitted **only** for agent-initiated turns
+  (§7); prompt turns are unchanged.
+- **Streaming.** The same event family as a prompt turn follows: `agent:stream:chunk` /
+  `agent:tool:call` under that `messageId`, with the live-turn slot open so a mid-turn
+  `chat.subscribe` (§7.1) synthesizes structured blocks normally.
+- **Finalization (quiescence).** A wake turn has no `session/prompt` future to resolve, so it
+  finalizes on quiescence — a fixed settle window (~2 s) with no further notifications — or
+  immediately when a prompt turn needs the receiver (finalize-then-handoff, never interleave).
+  Finalization persists the assistant transcript row (skipped when the burst produced no
+  blocks), emits exactly one terminal `agent:stream:end`, then `agent:idle` with the existing
+  suppression rules.
+- **Racing user sends.** A user send arriving while a wake turn is active takes the existing
+  busy-agent queue path (`agent.sendMessage` → `queued: true`, §5.5) and streams only after the
+  wake turn's `agent:stream:end` — never interleaved. `priority: "interrupt"` / `agent.stop`
+  tears the implicit turn down like any in-flight turn, flushing the partial row per §7.2.
+
+**Batching window.** `events.subscribe` accepts a `batchWindow` hint on the deprecated `agent.*`/`event.*` aliases; thecanonical bridge delivers each accepted event **individually** as it is accepted (no server-sidecoalescing on the WS bridge). Clients that need coalescing should debounce on their side, keyed by`event.type` + the relevant id in `data`.
 
 ### 6.7 Event-design rule: self-sufficient payloads *(new in intentd)*
 
@@ -3802,7 +3840,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 
 Agent assistant output is delivered as the `agent:stream:*` event family (subscribe with`events.subscribe(["agent:stream:*"])`, optionally scoped by `workspaceId`). The backend maps aprovider's streaming signals to these canonical event types.
 
-The backend currently emits **three** signals in production; the remaining `agent:stream:*`
+The backend currently emits **four** signals in production; the remaining `agent:stream:*`
 event types are defined as constants (and registered in `ALL_EVENT_TYPES`) but have **no
 production emit site** today and are reserved for future use.
 
@@ -3810,6 +3848,7 @@ production emit site** today and are reserved for future use.
 
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
+| turn start (agent-initiated turns **only**) | agent:stream:start | { agentId, messageId, reason: "harness-wake" } — emitted when the daemon opens an **implicit agent-initiated turn** for an out-of-turn `session/update` burst (§6.6; [intent-hq/monorepo#855](https://github.com/intent-hq/monorepo/issues/855)). `messageId` is the assistant messageId minted for the wake turn (the same id carried by the turn's `agent:stream:chunk` / `agent:tool:call` events and the persisted assistant row). `reason` is `"harness-wake"` — the only value today. **Prompt (user-initiated) turns never emit this event**: its absence is the normal case, not an error |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, stopReason?, messageId?, trailingBlocks? } — the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained. The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`. The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) still emits `{ agentId }` only; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) |
@@ -3819,7 +3858,6 @@ production emit site** today and are reserved for future use.
 
 | Event type | intended meaning |
 | --- | --- |
-| agent:stream:start | stream start |
 | agent:stream:content-blocks | structured blocks (e.g. thinking / tool-call) |
 | agent:stream:message | assistant message |
 | agent:stream:tool_use | tool call |
@@ -3831,6 +3869,7 @@ transcript) over reconstructing turn state from the firehose.
 Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
+- **Agent-initiated turns.** A stream may begin with **no user send**: `agent:stream:start { agentId, messageId, reason: "harness-wake" }` announces an implicit agent-initiated turn (§6.6). Clients should open the same streaming UI as a user-initiated turn — spinner/busy state, active Stop/interrupt, autoscroll, live transcript — just with no user message row above it. A send racing an active wake turn auto-queues via the normal busy path and streams after the wake turn's `agent:stream:end`.
 - **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch. A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
@@ -4244,7 +4283,7 @@ For mutations, optimistically apply locally, send the request, and reconcile whe
     → agent.list     { workspaceId:"ws-abc" }   ← { agents }
 5.  → agent.sendMessage { workspaceId, agentId:"agent-123", content:"Fix the build", messageId:"m1" }
     ← { success:true, queued:false, messageId:"m1" }         (§5.5)
-6.  ← events.event agent:stream:start  / :chunk* / :tool_use / :tool_result / :end   (§7)
+6.  ← events.event agent:stream:chunk* / agent:tool:call / agent:stream:end   (§7; agent:stream:start only on agent-initiated turns, §6.6)
 7.  → agent.getConversation { agentId:"agent-123" }  ← { messages, ... }   (reconcile, §10.1)
 8.  (permission prompt, if any) ← request_permission → respond selected/allow_once  (§8)
 9.  on disconnect: reconnect, re-auth, repeat from step 3.   (§4)
