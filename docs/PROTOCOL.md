@@ -2438,11 +2438,11 @@ are normalized to camelCase: `html_url → htmlUrl`, `created_at → createdAt`,
 **(req)** PR/issue number where applicable). Reads that paginate follow the uniform pagination
 contract: an optional `limit` (default **50**, max **200**) plus an opaque `nextToken` cursor echoed
 in the result (`nextToken: null` when there are no further pages). Errors reuse the §9 conventions:
-missing/invalid params and "not found" (404) lookups → `-32602`; a token that is absent or fails
-`GET /user`, and any other GitHub/service failure → `-32603` with a descriptive `message`
-(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes. One documented
-exception to the 404→`-32602` rule: `github.repoConfig.get` folds every 404 (missing file, repo,
-or ref) into the success shape `{ config: null, exists: false }` — see the method row below.
+missing/invalid params and "not found" (404) lookups → `-32602` **unless a method row documents a
+graceful null/exists result** (e.g. `github.repos.get` → `{ repo: null }`, `github.repoConfig.get`
+→ `{ config: null, exists: false }`); a token that is absent or fails `GET /user`, and any other
+GitHub/service failure → `-32603` with a descriptive `message`
+(e.g. `"GitHub is not configured."`). There are **no** custom numeric codes.
 
 #### Repos & branches
 
