@@ -3812,7 +3812,7 @@ production emit site** today and are reserved for future use.
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, stopReason?, messageId? } — normal completion (`agent_session.rs` `run_prompt_turn`) and mid-turn failure (`publish_terminal_failure_events`) both emit `{ agentId }` **only**; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) |
+| complete or error | agent:stream:end | { agentId, stopReason?, messageId?, trailingBlocks? } — the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained. The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`. The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) still emits `{ agentId }` only; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
 `ALL_EVENT_TYPES`, but the backend does **not** emit them today:
@@ -3831,7 +3831,7 @@ transcript) over reconstructing turn state from the firehose.
 Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate astream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with `chunk` text; the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design (`{ agentId }`); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live "Stopped" indicator without a transcript re-fetch. A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch. A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists.
 - **Dedup.** The same agent output is also persisted; the live `agent:stream:chunk` text is*incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or onreconnect) call `agent.getConversation` rather than reconstructing solely from chunks. Usermessages echo cross-client as `agent:user-message:sent` (carrying a stable `messageId`) so otherclients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with`priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately —duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and aninterrupt landing during turn startup queues keep-alive instead of preempting),`agent.queueMessage` to explicitly enqueue, or `agent.forceMessage` to interrupt the currentstream and deliver immediately. `agent.stop` cancels an in-flight stream.
 
@@ -3997,7 +3997,11 @@ holding compact JSON — not an embedded JSON object); decoded, the payload is:
 Because the drain happens at turn finalization (before the message persists), question blocks are
 **not** emitted live mid-turn: `chat.subscribe` subscribers receive them in the terminal reconcile
 frame (as `added` blocks with the stable `{messageId}:{blockIndex}` ids), and they are on the
-persisted message via `agent.getConversation`.
+persisted message via `agent.getConversation`. Firehose consumers get live delivery at turn end:
+the terminal `agent:stream:end` carries the drained blocks as `trailingBlocks` (plus the turn's
+`messageId` — §7 emitted-events table; [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)),
+so a client that finalizes the in-flight message from accumulated chunks can append them
+immediately instead of waiting for a transcript re-fetch.
 
 *The `ws.app.question.ask` binding.* JS signature
 `ws.app.question.ask({ question, header, options, explanation?, multiSelect? })` →
@@ -4037,6 +4041,14 @@ context to correlate). Do **not** add daemon-side inspection, parsing, or correl
 answers — the format is an FE↔model convention and the daemon is deliberately not a party to it.
 Any later user message supersedes the questions; the FE derives pending vs. answered purely from
 "does a user message exist after the question-bearing assistant message".
+
+*Rendering surface — wizard only (an FE convention).* Question blocks are surfaced exclusively via
+the composer-area wizard: they are **never** rendered as transcript cards, whether pending or
+resolved. This is an explicit contrast with proposal resource blocks, which legitimately render as
+in-transcript cards. The question blocks themselves **are** persisted (they are durable trailing
+blocks of the assistant message, §7) — they are merely never given a transcript-card rendering;
+the **visible** in-transcript record of a Q&A exchange is the user's flattened `Q:`/`A:` reply
+message ([cloudlands-fe#424](https://github.com/intent-hq/cloudlands-fe/pull/424)).
 
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
@@ -4087,7 +4099,7 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.forceMessa
 
 This is the same convention as the graceful-shutdown flush of an in-flight turn.
 
-**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and mid-turn-failure terminal emits carry neither field.
+**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and error-terminated turn emits never carry `stopReason`, but they **do** carry `messageId` (when the turn persisted an assistant message) and `trailingBlocks` (when §7.1 `AtTurnEnd` blocks were drained — the drain deliberately runs on the error path too; §7, [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)). The interrupt emit itself never carries `trailingBlocks`: the `AtTurnEnd` registry is **not** drained on the interrupt path — pending entries wait for the next turn's drain or the registry TTL — so there are no persisted trailing blocks for the event to mirror.
 
 **Pre-first-token stop (zero-output flush).** When nothing has streamed yet (no content blocks), whether a row is persisted — and therefore whether the terminal `agent:stream:end` carries `messageId` — depends on the interrupt path:
 
