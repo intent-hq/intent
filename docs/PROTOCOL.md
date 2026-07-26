@@ -499,7 +499,16 @@ before branch naming and worktree provisioning, reusing the streaming `git.clone
 pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
 else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
 `.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
-with `-32603`. Progress streams as `git:clone:progress` frames and terminates in exactly
+with `-32603`. A leading `~` / `~/` in the caller-supplied `clonePath` or
+`repositoryPath` expands to the daemon user's home directory before the existing-repo
+check, clone targeting, and persistence (`~user` forms pass through unchanged) — git
+would otherwise treat the tilde as a literal `./~` directory, which fails on the
+packaged sidecar's read-only cwd. The persisted `repositoryPath` is always the
+post-expansion value (identical to the input whenever expansion does not apply).
+Expansion is best-effort: it is `/`-separated only, and when the daemon cannot resolve
+a home directory from its environment it is a no-op — the verbatim tilde path is then
+used as-is, so the clone fails as before (and per the clone-failure rule below, no row
+is persisted). Progress streams as `git:clone:progress` frames and terminates in exactly
 one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
 failure fails the whole `workspace.create` (no row persisted, no `workspace:created`).
 On success the checkout becomes the workspace's `repositoryPath` and, when the URL
@@ -1154,7 +1163,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
 | git.numstat | workspaceId (req), staged?: boolean, baseRef?, baseCommitSha?, targetRef? (default `HEAD`), paths?: string[] | `[{ filePath, additions, deletions }]` — per-file added/deleted line counts, returned as a **bare array**. When a branch base is supplied (`baseRef` and/or `baseCommitSha`), the counts come from the committed two-dot `<boundary>..<targetRef>` range (branch-boundary resolution below) and `staged` is ignored; otherwise the working tree is counted, tracked files only: `staged: true` → HEAD→index, `staged: false` → index→workdir, `staged` omitted → HEAD→workdir. `paths` filters the result to the given worktree-relative paths. An unresolvable boundary, and unknown/remote/non-repo workspaces, degrade to `[]`, never a JSON-RPC error |
 | git.branchDiff | workspaceId (req), baseRef? / baseCommitSha? (at least one req, else `-32602`), targetRef? (default `HEAD`), paths?: string[] | `[{ file, chunks: [], oldContent, newContent }]` — committed branch-base diff, returned as a **bare array**: one entry per changed file in the two-dot `<boundary>..<targetRef>` range (branch-boundary resolution below), carrying the full file contents at the boundary (`oldContent`) and at `targetRef` (`newContent`) so the FE branch-base viewer renders the diff from the two contents alone (parity with the legacy `batchedGitBranchBaseDiff`). `chunks` is always an empty array — the branch-base consumer ignores it. A path missing at a ref yields empty content on that side (`git.showFile` semantics: added files → empty `oldContent`, deleted files → empty `newContent`). `paths` filters the result to the given worktree-relative paths. An unresolvable boundary (including an unresolvable `targetRef`), and unknown/remote/non-repo workspaces, degrade to `[]`; git failures while reading the file contents (repository IO) → `-32603` |
-| git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
+| git.clone | url (req), parentDir (req), targetName?, requestId? | { requestId, targetPath } — **streaming**: returns the ack promptly and pushes `git:clone:progress` frames followed by a terminal `git:clone:done` (§6.5). A leading `~` / `~/` in `parentDir` expands to the daemon user's home directory (`~user` forms pass through unchanged; expansion is best-effort — when the daemon cannot resolve a home directory the path passes through verbatim); the ack's `targetPath` always carries the post-expansion path. `targetName` defaults to the URL basename (with `.git` stripped); rejected if it contains a path separator or would escape `parentDir`. `-32602` on missing/invalid params; `-32603` when the target path already exists or the event bus is not wired. |
 
 **Branch-boundary resolution (`git.numstat`, `git.branchDiff`).** Both methods resolve the diff boundary the same way, and the daemon owns it (clients never compute a merge-base). When `baseRef` is set, the boundary is the **merge-base** of `targetRef` and the base branch — a bare branch name (no `/`) tries `origin/<baseRef>` first, then the local ref; a name containing `/` is tried verbatim. When `baseRef` is absent or fails to resolve, `baseCommitSha` is used **verbatim** as the boundary, but only when it is an ancestor of (or equal to) `targetRef`. If neither yields a boundary — including an unresolvable `targetRef` — the result is `[]`, never a JSON-RPC error.
 
@@ -1631,6 +1640,7 @@ in the bullet under this table).
 | host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
+| host.listDirectory | client → daemon | path? | { path, parent, home, entries: [{ name, path, isDirectory, isGitRepo }] } — directory listing for the FE directory picker. `path` defaults to the daemon-host home when absent/empty, and a leading `~` / `~/` is **expanded to the daemon-host home on the daemon** (`~user` forms pass through verbatim) — so clients may send a raw typed `~/sub` even when they have no `home` to expand against (monorepo#824). `home` is always present (never null/omitted): it is the daemon-host home, falling back to `/` when no home can be resolved from the environment — the defaulted `path` and `~` expansion then resolve against `/` too. The returned `path`/`parent`/entry paths are always fully expanded; `parent` is `null` at the filesystem root; entries include hidden files (the FE filters), sorted directories-first then by name. IO failures surface as `-32603` |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 | host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
 | host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
@@ -3791,7 +3801,7 @@ production emit site** today and are reserved for future use.
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
-| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
+| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, stopReason?, messageId? } — normal completion (`agent_session.rs` `run_prompt_turn`) and mid-turn failure (`publish_terminal_failure_events`) both emit `{ agentId }` **only**; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
@@ -3864,7 +3874,7 @@ frame):
 `crates/intent-services/src/tool_block.rs::build_tool_use_block` — so seq-0 and every subsequent
 delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 `"sub-agent-explore: Explore the AI agent system…"`) rather than the raw tool name the model
-invoked; the real name is derived **once**, at `session/update` mapping time
+invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
 Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
@@ -3878,6 +3888,19 @@ has it alongside `name` for fallback rendering when raw args are missing (auggie
 sends `raw_input: null`); a `Null` `input` is coerced to `{}` so the marker can attach, while
 non-object non-null inputs (arrays / scalars) pass through verbatim (the FE still has `title`
 in the event).
+
+**Sparse `tool_call_update` merge/backfill.** ACP providers send sparse `tool_call_update`
+notifications (e.g. a status-only `completed` frame) in which absent fields map to an empty
+`title` and `Null` `input`. These do **not** wipe earlier data: for a **known** `toolCallId`,
+the daemon backfills the sparse event fields (`title`/`toolName`/`toolKind`/`input`) from the
+per-call transcript state **before** the `agent:tool:call` event is published, and non-empty
+update fields refresh the persisted `tool_use` block — a non-empty `title` refreshes
+`input._acpTitle` (and `block.name` when the newly derived name is non-empty), a non-null
+`input` replaces the block input (re-attaching the freshest title), and `status` always
+patches. The live `tool_delta` block therefore stays byte-identical to the persisted one — the
+byte-parity invariant above is maintained. The STAB-124 drop is unchanged: an update whose
+`toolCallId` was never seen this turn is still dropped, never synthesized into a new block.
+([intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551))
 
 **Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
 blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,
