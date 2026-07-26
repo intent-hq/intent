@@ -3544,11 +3544,18 @@ wire — recording has no RPC (§6.8). `stats.getUsage` is global: it takes **no
 | --- | --- | --- |
 | stats.getUsage | period (req): "24h" \| "month" \| "year"; key: "YYYY-MM" (req for month) \| "YYYY" (req for year), ignored for 24h; tzOffsetMinutes: integer, minutes east of UTC, default 0, must be within ±840 | UsageStats — -32602 on a bad period/key/tzOffsetMinutes |
 
-**Timezone semantics** — buckets are stored as UTC hour floors. For `month`/`year` periods each
-bucket is shifted by `tzOffsetMinutes` before period filtering and hour-of-day / month grouping,
-so results reflect the client's local calendar. The `24h` period is an **absolute rolling
-window** — the trailing 24 hourly UTC buckets ending at the current hour — unaffected by
-`tzOffsetMinutes` except that per-bucket hour labels are rendered in local time.
+**Timezone semantics** — buckets are stored as UTC hour floors alongside a **local wall-clock
+stamp** (`local_date` `"YYYY-MM-DD"` / `local_hour` 0–23) captured from the daemon's system
+timezone when the bucket row is first inserted (later writes folding into the same bucket keep
+the first-writer's stamp). For `month`/`year` periods, period filtering, hour-of-day / month
+grouping, and `availablePeriods` follow that recorded stamp, so "1pm" means 1pm on the daemon's
+machine **at the moment the activity was recorded** — immune to later DST transitions or
+timezone moves. Rows whose stamp columns are NULL (written while the daemon's local offset was
+indeterminate; pre-migration rows are backfilled from `bucket_utc` using the timezone in effect
+at migration time) or malformed fall back to shifting `bucket_utc` by `tzOffsetMinutes`. The
+`24h` period is an **absolute rolling window** — the trailing 24 hourly UTC buckets ending at
+the current hour — unaffected by `tzOffsetMinutes` except that per-bucket hour labels are
+rendered in local time.
 
 **UsageStats** — `{ totals: UsageTotals, runs, sessions, longestRunMs, linesAdded, linesDeleted,
 byModel: ByModelEntry[], byHourOfDay: HourEntry[24], byMonth: MonthEntry[12],
