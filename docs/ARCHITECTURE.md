@@ -126,6 +126,15 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   per-repository worktree lock. `workspace.duplicate` applies the same matrix when
   provisioning the copy's checkout. The setting is consulted **only** at
   provisioning time; the persisted `checkoutMode` is immutable per workspace.
+- **Capability surface.** The root→root probe is cached per workspaces root by the
+  shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
+  `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
+  paths (PROTOCOL §5.1), and workspace-independently via the `system.capabilities`
+  router method (protocol 2.3) — `{ cowSupported?: boolean }`, present when the
+  probe ran, omitted otherwise. The FE gates the `workspace.cowIsolation` settings
+  toggle on the capability RPC, so the toggle works with no workspace loaded;
+  workspace payload consumers (e.g. isolation-mode resolution) still read the
+  per-workspace aggregate.
 - **Deletion.** `workspace.delete`'s git-metadata phase is checkout-mode aware: a
   worktree checkout gets registration prune + guarded branch delete + rename to a
   trash path, while a CoW checkout — a standalone clone with no registration in the
