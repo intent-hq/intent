@@ -3788,7 +3788,7 @@ production emit site** today and are reserved for future use.
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | text token(s) | agent:stream:chunk | { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } — incremental assistant text, enriched with the §7.1 block-identity fields (`messageId`/`blockIndex`/`blockId`/`blockType`) |
-| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
+| tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
 | complete or error | agent:stream:end | { agentId, stopReason?, messageId? } — normal completion (`agent_session.rs` `run_prompt_turn`) and mid-turn failure (`publish_terminal_failure_events`) both emit `{ agentId }` **only**; the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) |
 
 **Reserved / not currently emitted** — the following constants exist and are registered in
@@ -3861,7 +3861,7 @@ frame):
 `crates/intent-services/src/tool_block.rs::build_tool_use_block` — so seq-0 and every subsequent
 delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 `"sub-agent-explore: Explore the AI agent system…"`) rather than the raw tool name the model
-invoked; the real name is derived **once**, at `session/update` mapping time
+invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
 Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
@@ -3875,6 +3875,19 @@ has it alongside `name` for fallback rendering when raw args are missing (auggie
 sends `raw_input: null`); a `Null` `input` is coerced to `{}` so the marker can attach, while
 non-object non-null inputs (arrays / scalars) pass through verbatim (the FE still has `title`
 in the event).
+
+**Sparse `tool_call_update` merge/backfill.** ACP providers send sparse `tool_call_update`
+notifications (e.g. a status-only `completed` frame) in which absent fields map to an empty
+`title` and `Null` `input`. These do **not** wipe earlier data: for a **known** `toolCallId`,
+the daemon backfills the sparse event fields (`title`/`toolName`/`toolKind`/`input`) from the
+per-call transcript state **before** the `agent:tool:call` event is published, and non-empty
+update fields refresh the persisted `tool_use` block — a non-empty `title` refreshes
+`input._acpTitle` (and `block.name` when the newly derived name is non-empty), a non-null
+`input` replaces the block input (re-attaching the freshest title), and `status` always
+patches. The live `tool_delta` block therefore stays byte-identical to the persisted one — the
+byte-parity invariant above is maintained. The STAB-124 drop is unchanged: an update whose
+`toolCallId` was never seen this turn is still dropped, never synthesized into a new block.
+([intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551))
 
 **Tool blocks.** The channel tails the single `agent:tool:call` event and synthesizes TS-shaped
 blocks matching the persisted transcript: a `tool_use` block (`{ type, id, name, input, toolCallId,
