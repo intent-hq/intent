@@ -3942,6 +3942,88 @@ compact proposal JSON as `text`), so the standalone block is identical to the ar
 Ordinary collapsed tool outputs never pass the guards, and the `tool_result`'s `output` stays
 the collapsed object untouched.
 
+**Standalone question-resource blocks (`AtTurnEnd`, [monorepo#732](https://github.com/intent-hq/monorepo/issues/732)).**
+The second resource MIME type is `application/vnd.intent.question+json` — structured clarifying
+questions an agent asks mid-task via the MCP `ws.app.question.ask` binding. Unlike the proposal
+lift (which attaches at the registering call's `tool_result`), question attachments use the
+`AtTurnEnd` policy: every question asked during a turn is drained when the turn finalizes and
+appended as a trailing `resource` content block on the **same final persisted assistant message**,
+in `ask()` call order. The block echoes the canonical attachment item:
+
+```json
+{ "type": "resource", "resource": {
+    "uri": "intent-question://tar-3f9c2a81d0b4",
+    "name": "Auth method",
+    "mimeType": "application/vnd.intent.question+json",
+    "text": "<question JSON>" } }
+```
+
+`resource.name` is the question's `header`; the URI reuses the daemon-minted attachment nonce.
+The `text` payload is:
+
+```json
+{
+  "attachmentId": "tar-3f9c2a81d0b4",
+  "header": "Auth method",
+  "question": "Which authentication method should the new endpoint use?",
+  "explanation": "optional longer context shown expandable",
+  "options": [
+    { "label": "OAuth", "description": "Standard OAuth 2.0 flow" },
+    { "label": "API key", "description": "Static key in header" }
+  ],
+  "multiSelect": false
+}
+```
+
+- `attachmentId` is the minted `tar-` nonce (the same id in the `intent-question://` URI).
+- `header` and `question` are required, trimmed, non-empty strings.
+- `explanation` is optional; absent/blank values are **omitted** from the payload (never `null`).
+- `options` is `[{ label, description? }]` — `label` required non-empty (trimmed); `description`
+  optional, omitted when blank. A free-form "Other" answer is always offered by the FE and is
+  **never** listed as an option.
+- `multiSelect` is always present, defaulting to `false`.
+
+Because the drain happens at turn finalization (before the message persists), question blocks are
+**not** emitted live mid-turn: `chat.subscribe` subscribers receive them in the terminal reconcile
+frame (as `added` blocks with the stable `{messageId}:{blockIndex}` ids), and they are on the
+persisted message via `agent.getConversation`.
+
+*The `ws.app.question.ask` binding.* JS signature
+`ws.app.question.ask({ question, header, options, explanation?, multiSelect? })` →
+`{ ok: true, attachmentId, message }`. **One question per call** — the model calls it once per
+question and may call it multiple times in a turn (each call queues one attachment). Deliberate
+deviation from the rest of `ws.app.*`: the binding is **not chief-gated** — any workspace agent
+may ask (the sibling `ws.app.*` subnamespaces remain chief-only). Hard validation (the call fails
+with a descriptive tool-error string; nothing is queued): missing/non-object question argument,
+missing/empty `question` or `header` (after trim), missing/non-array `options`, fewer than 2
+options, or any option with a missing/empty `label`. There are **no hard upper caps** — the
+~4-questions-per-turn and 2–4-options guidance is soft advice that lives **only** in the tool
+description and is never enforced. The call also fails outside a live agent turn (no
+turn-attachment registry or caller agent wired).
+
+*Answers are plain text — an FE convention, not a wire feature.* The FE presents the turn's
+questions sequentially and flattens **all** answers into ONE ordinary plain-text user message sent
+via the normal `agent.sendMessage` path: blank-line-separated `Q:`/`A:` pairs, multi-select answers
+comma-joined, free-form replies prefixed `(Other) `, skipped questions reported as `(skipped)`:
+
+```text
+Q: Which authentication method should the new endpoint use?
+A: OAuth
+
+Q: Which database?
+A: (Other) Use both, key for internal
+
+Q: Deploy target?
+A: (skipped)
+```
+
+There is **no** `messageMetadata`, no answer ids, and **no daemon-side answer intake**: the daemon
+persists and delivers the text verbatim as a completely ordinary user message (the model has the
+context to correlate). Do **not** add daemon-side inspection, parsing, or correlation of these
+answers — the format is an FE↔model convention and the daemon is deliberately not a party to it.
+Any later user message supersedes the questions; the FE derives pending vs. answered purely from
+"does a user message exist after the question-bearing assistant message".
+
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
 live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
