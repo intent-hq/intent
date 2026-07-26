@@ -828,7 +828,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 
 | Method | Params | Result |
 | --- | --- | --- |
-| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-UUID value or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
+| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-canonical-UUID value (only the hyphenated 8-4-4-4-12 form is accepted; e.g. the 32-hex simple form is rejected) or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
 | comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
@@ -872,9 +872,9 @@ failed add changes nothing — no separate rev bump). Non-UUID
 marker-lookalikes (documentation literals such as
 `<!--anchor:{id}:start-->`) are ordinary user content: commentable, and never
 scrubbed. This is also why a client-supplied `commentId` must be a
-**canonical hyphenated** UUID — the scrub only recognizes canonical ids
-inside markers, so a looser spelling would mint markers the recovery pass
-could never classify or clean up.
+**canonical hyphenated** UUID — the phantom scrub only recognizes canonical
+ids inside markers, so a looser spelling would mint markers the scrub could
+never recognize or clean up once the comment row is gone.
 
 **Note rewrite visibility (monorepo#638).** Because `comment.add` rewrites the
 note markdown (anchor-marker insertion is an `update_note` that bumps the
