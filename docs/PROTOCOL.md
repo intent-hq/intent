@@ -452,10 +452,11 @@ directory (OS reflink primitives — macOS `copyfile(COPYFILE_CLONE)`, Linux
 (`node_modules`, `target`, …) into the checkout for free; inside the clone the workspace
 `branch` is created + checked out from the same `baseRef` resolution order as above,
 tracked files are hard-reset to that base, untracked files are preserved, and the row
-persists `checkoutMode: "cow"`. When the probe reports Unsupported (or errors), the
-create **fails** with `-32603` ("CoW isolation is enabled but the filesystem does not
-support CoW cloning — disable workspace.cowIsolation or move the workspaces root to a
-supported filesystem") — there is **no silent fallback to a worktree checkout**. Because
+persists `checkoutMode: "cow"`. When the probe reports Unsupported (or errors) — e.g.
+the repository lives on a different volume than the workspaces root, since reflinks
+cannot cross filesystems — the create **falls back to the linked-worktree path**
+(`checkoutMode: "worktree"`, normal worktree provisioning) with a logged warning
+instead of failing: `workspace.cowIsolation` is a preference, not a guarantee. Because
 a CoW checkout is a standalone clone, `workspace.delete`'s git-metadata phase skips the
 worktree-registration prune and the source-repo branch-delete guard (the workspace
 branch lives only inside the clone); the checkout is still renamed to a trash path and
@@ -467,12 +468,12 @@ branch named for the new id (uniquified against the source repo's local and
 remote-tracking branches), using the **same decision matrix as `workspace.create`**:
 `workspace.cowIsolation` off ⇒ linked worktree (`checkoutMode: "worktree"`); on ⇒ CoW
 probe from the repository directory to `<root>/<newId>` — supported ⇒ standalone CoW
-clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **fails** with
-the same `-32603` message as create (**no silent worktree fallback**). Provisioning is
-skipped for remote / skip-isolation sources and for a `repositoryPath` that is not a
-local git repository. Unlike the fail-loud CoW probe, an ordinary provisioning failure
-is logged and swallowed (FE parity — "continue without worktree"): the row persists
-without `worktreePath`/`checkoutMode`.
+clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **falls back to
+a linked worktree** with a logged warning (same fallback semantics as create).
+Provisioning is skipped for remote / skip-isolation sources and for a `repositoryPath`
+that is not a local git repository. An ordinary provisioning failure is logged and
+swallowed (FE parity — "continue without worktree"): the row persists without
+`worktreePath`/`checkoutMode`.
 
 **`checkoutMode` is immutable.** `workspace.cowIsolation` is consulted **only** at
 provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
@@ -613,9 +614,10 @@ list/get poll). It reports the machine's capability independent of how the speci
 workspace was provisioned; the FE gates the `workspace.cowIsolation` opt-in toggle
 (§5.12) on it. **Caveat — root-scoped, not repo-scoped:** provisioning probes from the
 *repository directory* into the workspaces root (§5.1), so a repository on a different
-filesystem than the workspaces root (reflinks cannot cross filesystems) can still fail
-`workspace.create` with the fail-loud `-32603` even when `cowSupported` is `true`;
-`cowSupported` is a toggle-gating advisory, not a per-repository guarantee.
+filesystem than the workspaces root (reflinks cannot cross filesystems) can still land
+`workspace.create` on the worktree-fallback path (`checkoutMode: "worktree"`, §5.1)
+even when `cowSupported` is `true`; `cowSupported` is a toggle-gating advisory, not a
+per-repository guarantee.
 `checkoutMode` (`"worktree" | "cow"`, lowercase on the wire) records how
 `workspace.create` provisioned this workspace's checkout (§5.1) and is omitted for rows
 without a daemon-provisioned checkout (skip-isolation/direct, remote, caller-supplied
@@ -826,7 +828,7 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 
 | Method | Params | Result |
 | --- | --- | --- |
-| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-UUID value or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
+| comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-canonical-UUID value (only the hyphenated 8-4-4-4-12 form is accepted; e.g. the 32-hex simple form is rejected) or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
 | comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
 | comment.getThread | noteId (req), threadId? or commentId? | { thread } |
 | comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
@@ -846,6 +848,33 @@ markers scrubbed from the persisted content and the comment is flipped to
 `isOrphaned: true`. Comments in the wire `Comment` shape carry an optional
 `isOrphaned: bool` field (omitted when unset, `true` for orphaned comments,
 `false` explicitly when a previously-orphaned comment heals).
+
+**Overlapping ranges + phantom-marker scrub (intentd#541).** Overlapping
+comment ranges are allowed: a `comment.add` target span may contain other
+comments' `<!--anchor:…-->` markers, producing interleaved pairs
+(`a:start … b:start … a:end … b:end`) that are valid note content — each
+comment's own id still pins its markers, and interleaved anchors stay
+healthy. The add embeds the raw span (contained markers intact, in place)
+back between the new pair, while the STORED `anchorText` / `anchorBefore` /
+`anchorAfter` fields are stripped of all `<!--anchor:…-->` substrings —
+markers are stripped from the full prefix/suffix before the 50-character
+context window is taken, so a marker adjacent to the span cannot leak a
+clipped fragment — and raw marker text never appears in comment rows. The
+recovery pass additionally scrubs **phantom markers**: after the per-comment
+classification above, any UUID-format marker whose id has no live
+(non-orphaned) comment row — an id with no comment row at all, or markers
+left behind by a row already flagged `isOrphaned` — is removed from the
+persisted content, so a polluted note self-heals on its next content-changing
+`note.*` mutation. `comment.add` runs the same scrub on the fetched note
+content before matching, so phantom debris can never block a new comment; the
+cleaned content persists only as part of the add's atomic note rewrite (a
+failed add changes nothing — no separate rev bump). Non-UUID
+marker-lookalikes (documentation literals such as
+`<!--anchor:{id}:start-->`) are ordinary user content: commentable, and never
+scrubbed. This is also why a client-supplied `commentId` must be a
+**canonical hyphenated** UUID — the phantom scrub only recognizes canonical
+ids inside markers, so a looser spelling would mint markers the scrub could
+never recognize or clean up once the comment row is gone.
 
 **Note rewrite visibility (monorepo#638).** Because `comment.add` rewrites the
 note markdown (anchor-marker insertion is an `update_note` that bumps the
