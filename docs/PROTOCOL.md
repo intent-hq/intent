@@ -499,7 +499,8 @@ before branch naming and worktree provisioning, reusing the streaming `git.clone
 pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
 else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
 `.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
-with `-32603`. A leading `~` / `~/` in the caller-supplied `clonePath` or
+with `-32602` and `error.data = { code: "destination-exists-non-empty", detail }`
+(clone failure taxonomy, §9). A leading `~` / `~/` in the caller-supplied `clonePath` or
 `repositoryPath` expands to the daemon user's home directory before the existing-repo
 check, clone targeting, and persistence (`~user` forms pass through unchanged) — git
 would otherwise treat the tilde as a literal `./~` directory, which fails on the
@@ -510,7 +511,14 @@ a home directory from its environment it is a no-op — the verbatim tilde path 
 used as-is, so the clone fails as before (and per the clone-failure rule below, no row
 is persisted). Progress streams as `git:clone:progress` frames and terminates in exactly
 one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
-failure fails the whole `workspace.create` (no row persisted, no `workspace:created`).
+failure fails the whole `workspace.create` (no row persisted, no `workspace:created`)
+with a classified error from the clone failure taxonomy (§9): the numeric code is
+`-32602` for user-fixable inputs (`path-invalid`, `destination-exists-non-empty`) or
+`-32603` otherwise (`auth-required`, `network`, `clone-failed`), `error.message` is
+`workspace.create clone failed (<category>): <detail>`, and
+`error.data = { code: "<category>", detail }` where `detail` is the tail of git's
+stderr with any `user[:pass]@` credential fragments redacted — clients render the
+detail instead of a bare "Internal error" and key behavior off `error.data.code`.
 On success the checkout becomes the workspace's `repositoryPath` and, when the URL
 carries an `owner/name` pair (`github.com/OWNER/REPO(.git)?` on https or ssh), the
 daemon best-effort derives `repositoryOwner`/`repositoryName` from it when the caller
@@ -1168,6 +1176,8 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 **Branch-boundary resolution (`git.numstat`, `git.branchDiff`).** Both methods resolve the diff boundary the same way, and the daemon owns it (clients never compute a merge-base). When `baseRef` is set, the boundary is the **merge-base** of `targetRef` and the base branch — a bare branch name (no `/`) tries `origin/<baseRef>` first, then the local ref; a name containing `/` is tried verbatim. When `baseRef` is absent or fails to resolve, `baseCommitSha` is used **verbatim** as the boundary, but only when it is an ancestor of (or equal to) `targetRef`. If neither yields a boundary — including an unresolvable `targetRef` — the result is `[]`, never a JSON-RPC error.
 
 **Streaming `git.clone`.** Long-running clones cannot use the buffered `host.exec` (§5.14) — the FE animates a progress bar as objects arrive. `git.clone` mirrors the `search.*` streaming shape (§5.15 / §6.5): the method returns `{ requestId, targetPath }` immediately and the daemon spawns `git clone --progress` with a piped stderr, parses the canonical phases (`starting` → `counting` → `compressing` → `receiving` → `resolving` → `checkout` → `complete`) into `git:clone:progress` frames, and emits a terminal `git:clone:done` when the child exits, times out (5 min hard cap), or fails to spawn. `GIT_LFS_SKIP_SMUDGE=1` is preserved so a missing/unreachable LFS object never fails the clone. The `url` is used only at spawn time; neither the URL nor the environment ever appears in the streamed payloads, and any `user:pass@` credential fragment in stderr is redacted before it surfaces on the `git:clone:done { error }` frame.
+
+**Clone credential injection (private HTTPS github.com repos).** For an HTTPS `github.com` URL, the daemon resolves the stored GitHub token per `sourceControl.github.tokenSource` (§7.3: secrets store → env → `gh` CLI for `auto`) and offers it to the child git as a github.com-scoped credential helper appended via `-c` — configured helpers still win, matching the `git.pull`/fetch chain. The token travels to the child through an environment variable only: it never appears in argv (process listings), persisted git config, logs, streamed payloads, or error surfaces. SSH and non-GitHub URLs skip token resolution entirely. Applies to both `git.clone` and the `workspace.create` clone orchestration (§5.1). A failed clone's `git:clone:done` frame carries an optional machine-readable `errorCode` (clone failure taxonomy, §9.1) alongside the human-readable `error`; `errorCode` is present only when the failure was classified.
 
 ```json
 // → request
@@ -3709,7 +3719,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
-| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error? }`; `error` is present iff `ok == false` and never carries the source URL or credentials. |
+| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
 | script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
@@ -4160,12 +4170,33 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32700 | Parse error | Body is not valid JSON. Always answered (id null), even for would-be notifications. |
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
-| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. A `workspace.create` failure from an unresolvable base ref keeps this code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation). |
-| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. |
+| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. A `workspace.create` failure from an unresolvable base ref keeps this code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation). User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this code — see the clone failure taxonomy below. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, or `system.importLegacy`, §5). |
 
 The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict) and `-32001` (Unauthorized, local-only guard); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
+
+### 9.1 Clone failure taxonomy (`workspace.create`)
+
+A failed clone/provisioning step in `workspace.create` (§5.1 clone orchestration) is classified into a typed error instead of a generic internal error (monorepo#826). The envelope is always:
+
+- `error.message` — `workspace.create clone failed (<category>): <detail>`
+- `error.data` — `{ "code": "<category>", "detail": "<detail>" }`
+
+where `detail` is a human-readable cause: the tail of `git clone`'s stderr (bounded, ~4 KiB) with any `user[:pass]@` credential fragments in URL-like substrings redacted to `***@`. Tokens never reach the wire. The categories (`error.data.code`) and their numeric codes:
+
+| data.code | Numeric | When |
+| --- | --- | --- |
+| path-invalid | -32602 | The clone destination path is missing/malformed (e.g. `clonePath` resolves to no file name) or not creatable (permission denied, read-only filesystem, could-not-create-work-tree). User-fixable: correct the path and retry. |
+| destination-exists-non-empty | -32602 | The clone target already exists and is not an empty directory (detected pre-clone or reported by git). User-fixable: choose a different destination. |
+| auth-required | -32603 | The remote rejected the clone for lack of credentials ("Authentication failed", "could not read Username … terminal prompts disabled", "Permission denied (publickey)", "Invalid username or password"). Shared with the credential-injection auth classification (monorepo#825). |
+| repo-not-found | -32603 | The remote reports the repository does not exist ("Repository not found", HTTP 404). With credential injection in play (monorepo#825), GitHub also answers 404/not-found for private repos the presented token cannot see. |
+| access-denied | -32603 | The remote refused access to an existing repository (HTTP 403, "access denied"). |
+| network | -32603 | The remote could not be reached: DNS ("Could not resolve host"), connect ("Connection refused", "Network is unreachable"), timeout (including the daemon's own clone timeout), or truncated transfer ("early EOF", "remote end hung up unexpectedly"). |
+| clone-failed | -32603 | Any other clone failure; `detail` still carries the sanitized stderr tail. |
+
+Only these `data.code` values are a stable contract; clients must exact-match them and treat unknown codes as `clone-failed`. Classification is best-effort prose matching over git's stderr — the `detail` is authoritative for display, the `code` for behavior. The classified categories are shared with the streaming `git.clone` surface: a failed `git:clone:done` frame carries the same category string as `data.errorCode` when classification succeeded (§5.6, §6.5).
 
 ## 10. Thin-Client Guidance
 
