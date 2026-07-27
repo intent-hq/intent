@@ -149,7 +149,21 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   from the **workspace checkout** — and the merge-back on agent completion targets
   that same directory (agent commits land in the workspace's own checkout, never the
   user's repo folder). Worktree-mode workspaces are ineligible (agents share the
-  checkout).
+  checkout). **Provisioning is asynchronous** relative to `agent.delegate`
+  (PROTOCOL §5.5): the delegate path registers a per-agent settlement gate
+  (`Services::begin_sandbox_provisioning`), spawns the clone in a background task,
+  and returns `effectiveIsolation: "pending"` immediately — a large clone can take
+  tens of seconds, which previously starved the `workspace_api` MCP budget. The
+  background half settles the outcome onto the child's session (sandbox fields +
+  `sandbox:created` event) and releases the gate via a drop guard, so it settles
+  even on panic. The child's turn worker awaits the gate
+  (`await_sandbox_provisioning`) **before its first ACP spawn**, so the child never
+  spawns against a half-copied sandbox. Fallback semantics are unchanged: on
+  reflink-unsupported filesystems or provisioning failure the child runs in shared
+  mode (log-only; no sandbox fields, no event). A delete race is discarded: when
+  `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
+  missing/soft-deleted and removes the sandbox directory (best-effort deleting the
+  store record too) instead of persisting fields or emitting the event.
 
 ## Local models: the unsloth provider
 
