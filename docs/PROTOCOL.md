@@ -23,7 +23,7 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 **Version:** `2.5`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see §5.1 and the fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884). No existing method changed shape in any of these bumps.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see §5.1 and the fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). No existing method changed shape in any of these bumps.
 
 The protocol version is advertised in two places:
 
@@ -153,22 +153,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **301 dispatchable method names** across the following categories:
+The API exposes **304 dispatchable method names** across the following categories:
 
-- **Router methods:** 266 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 33 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 268 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 301 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 304 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 301 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 304 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.36) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.37) carry each method's parameter and result contract.
 
-### Router methods by namespace (266 total)
+### Router methods by namespace (268 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -200,6 +200,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
+| unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | workspace | 23 | archive, cleanup, create, delete, detectProjectType, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
@@ -3700,6 +3701,70 @@ hours, 12 zeroed months — never an error.
   "byHourOfDay":[ { "hour":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 24 entries … */ ],
   "byMonth":[ { "month":1,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 12 entries … */ ],
   "availablePeriods":{ "months":["2026-06","2026-07"],"years":["2026"] } } }
+```
+
+### 5.37 Managed Unsloth server — `unsloth.status` / `unsloth.stop` *(v2.5)*
+
+The daemon owns a **singleton managed Unsloth server** (the `unsloth` CLI process plus the
+`llama-server` child it spawns, which holds the model weights) backing every `unsloth`-provider
+agent (model catalog §5.30; startup progress surfaces as the repeated `launch`-phase
+`agent:stream:status` events, §6.5). These two router methods expose observability and control
+over it. Both are **daemon-global**: they take no params and no `workspaceId` (like
+`system.capabilities`), and are available on both UDS and WSS.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| unsloth.status | — (empty `{}`) | `{ running: boolean, repoId?, port?, pid?, uptimeSecs?, phase?, cpuPercent?, memoryBytes?, attachedAgentCount? }` |
+| unsloth.stop | — (empty `{}`) | `{ stopped: boolean }` — `stopped: false` means nothing was running (a **no-op result**, never an error) |
+
+**`unsloth.status`** — a point-in-time snapshot of the managed server. With a server up,
+`running: true` and the other fields are present:
+
+- `repoId` — full HF repo id currently served (or being started), e.g.
+  `"unsloth/gemma-3-27b-it-GGUF"` (the compound model id is `unsloth:<repoId>`, §5.30).
+- `port` — port the managed server listens on (default `8888`); `pid` — OS pid of the server
+  child (omitted when unknown).
+- `uptimeSecs` — seconds since the server child was spawned.
+- `phase` — coarse startup phase: `"starting"`, `"minting"`, `"loading"`, or `"ready"`.
+- `cpuPercent` / `memoryBytes` — resource usage sampled at snapshot time and **summed across the
+  server's whole process tree** (root plus descendants — the `llama-server` child holds the
+  model weights, so the tree total is what matters for capacity planning). `cpuPercent` follows
+  the raw `sysinfo` convention (100 = one full core) and is `0.0` when the pid is unknown or the
+  sample failed.
+- `attachedAgentCount` — the number of currently-tracked agents spawned with the `unsloth`
+  provider, counted **regardless of `running`** (a stopped-but-attached state is possible
+  mid-restart). When no server is up the result degrades to
+  `{ running: false, attachedAgentCount }`; a daemon whose agent manager is not attached
+  (composition-root wiring — e.g. a bare test harness, or a daemon that has never spawned any
+  agent infrastructure) reports exactly `{ "running": false }`.
+
+Status reads never block behind an in-flight startup: the snapshot is served from a lock-free
+identity mirror, so `unsloth.status` stays responsive even during a minutes-long first-use model
+download. A dead-and-reaped server child reports as `running: false`, never as a stale identity.
+
+**`unsloth.stop`** — gracefully terminates the managed server and its **whole process tree** if
+one is running; an in-flight startup is aborted within about one probe tick rather than leaving
+the stop blocked behind the startup window. `stopped: true` means a server (or in-flight
+startup) was actually torn down. Stopping is **safe while agents are attached** — the daemon
+neither blocks nor warns; a client that wants an "N agents are still using this server"
+confirmation should check `unsloth.status`'s `attachedAgentCount` first. A later
+`unsloth`-provider spawn simply starts the server again.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":97,"method":"unsloth.status","params":{} }
+// ← response (server up)
+{ "jsonrpc":"2.0","id":97,"result":{
+  "running":true,"repoId":"unsloth/gemma-3-27b-it-GGUF","port":8888,"pid":48113,
+  "uptimeSecs":312,"phase":"ready","cpuPercent":184.2,"memoryBytes":17179869184,
+  "attachedAgentCount":2 } }
+// ← response (no server running; agent manager attached)
+{ "jsonrpc":"2.0","id":97,"result":{ "running":false,"attachedAgentCount":0 } }
+
+// → request
+{ "jsonrpc":"2.0","id":98,"method":"unsloth.stop","params":{} }
+// ← response
+{ "jsonrpc":"2.0","id":98,"result":{ "stopped":true } }
 ```
 
 ## 6. Events & Subscriptions
