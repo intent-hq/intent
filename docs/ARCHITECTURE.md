@@ -164,9 +164,9 @@ pieces:
   `unsloth run --model <repo>:<quant> --disable-tools -p <port>` (quant
   auto-picked mirroring the CLI's `--gguf-variant` defaults: `UD-Q4_K_XL` for
   `unsloth/*` repos, else `Q4_K_M`), waits for the HTTP surface, then probes
-  the authed `/models` endpoint until the model is loaded (the server requires
-  auth even on `/models`, so a 401/403 during probing is expected warmup —
-  up-but-not-ready — not a credential failure; the model-ready window is
+  the authed `/v1/models` endpoint until the model is loaded (the server
+  requires auth even on `/v1/models`, so a 401/403 during probing is expected
+  warmup — up-but-not-ready — not a credential failure; the model-ready window is
   generous because first use can mean a multi-GB download, with progress
   surfaced as `agent:stream:status` launch-phase events — PROTOCOL §6.5). The server is reused while it serves
   the requested repo, killed + respawned on model switch or a dead child, and
@@ -175,8 +175,9 @@ pieces:
   `unsloth` binary degrades gracefully: the spawn fails with an install hint
   (`InvalidInput`, so the message survives the JSON-RPC envelope).
 - **Endpoint injection.** The daemon mints the opencode auth material via
-  `unsloth start opencode --no-launch` and reads the generated `opencode.json`
-  (baseURL, apiKey, per-model token limits); `build_provider_env` then injects
+  `unsloth start opencode --no-launch --model <repo>` and reads the generated
+  `opencode.json` (baseURL, apiKey, per-model token limits);
+  `build_provider_env_with_unsloth` then injects
   a custom OpenAI-compatible `provider.unsloth-studio` block (the id Unsloth
   itself generates; `npm: "@ai-sdk/openai-compatible"`) plus `model` /
   `small_model` defaults and an optional `compaction` block into
