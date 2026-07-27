@@ -3581,7 +3581,8 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 
 The backend owns global **agentic usage stats** (the usage-stats cards). Recording is
 daemon-internal: usage aggregates **across all workspaces** into hourly UTC buckets, one row per
-UTC hour + normalized model name. At the end of each prompt turn the daemon folds in the turn's
+UTC hour + normalized model name + resolved agent-provider id. At the end of each prompt turn
+the daemon folds in the turn's
 **token delta** (the difference between consecutive cumulative end-of-turn snapshots, clamped ≥ 0
 per counter — never the raw cumulative report), a `runs` increment (**runs** = completed prompt
 turns) and the turn's wall-clock duration MAX'd into the bucket's longest-run counter; agent
@@ -3611,15 +3612,22 @@ the current hour — unaffected by `tzOffsetMinutes` except that per-bucket hour
 rendered in local time.
 
 **UsageStats** — `{ totals: UsageTotals, runs, sessions, longestRunMs, linesAdded, linesDeleted,
-byModel: ByModelEntry[], byHourOfDay: HourEntry[24], byMonth: MonthEntry[12],
-availablePeriods: { months: string[], years: string[] } }`, where **UsageTotals** is the four
-consumption counters `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`:
+byModel: ByModelEntry[], byProvider: ByProviderEntry[], byHourOfDay: HourEntry[24],
+byMonth: MonthEntry[12], availablePeriods: { months: string[], years: string[] } }`, where
+**UsageTotals** is the four consumption counters `{ inputTokens, outputTokens, cacheReadTokens,
+cacheCreationTokens }`:
 
 - **totals / runs / sessions / longestRunMs / linesAdded / linesDeleted** — period rollups:
   the four token counters, completed prompt turns, agent sessions started, the longest single
   turn in milliseconds (MAX), and agent-attributed line churn.
 - **byModel** — `{ model, runs } & UsageTotals` per normalized model name, sorted descending by
   total tokens (ties break on model name ascending).
+- **byProvider** — `{ provider, runs } & UsageTotals` per resolved agent-provider id, sorted
+  descending by total tokens (ties break on provider id ascending). The wire carries **raw
+  provider ids** (`claude-code`, `codex`, `auggie`, …) — display-name mapping is a client
+  concern. Rows recorded before provider attribution existed (pre-migration) — and any usage
+  whose provider could not be resolved — aggregate under the id `"unknown"`; there is no
+  backfill.
 - **byHourOfDay** — exactly **24** entries of `{ hour } & UsageTotals`. For `month`/`year`:
   local hours of day in order (`hour` = 0–23). For `24h`: the 24 trailing hourly buckets in
   **chronological order** (oldest first), each labelled with its local-time `hour`.
@@ -3630,8 +3638,8 @@ consumption counters `{ inputTokens, outputTokens, cacheReadTokens, cacheCreatio
   recorded usage, sorted ascending, computed over **all** rows regardless of the requested
   period (drives the FE period picker).
 
-Empty periods return zeroed shapes — zero totals, empty `byModel`, 24 zeroed hours, 12 zeroed
-months — never an error.
+Empty periods return zeroed shapes — zero totals, empty `byModel` / `byProvider`, 24 zeroed
+hours, 12 zeroed months — never an error.
 
 ```json
 // → request
@@ -3643,6 +3651,9 @@ months — never an error.
   "byModel":[
     { "model":"Opus 4.8","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0 },
     { "model":"Sonnet 5","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
+  "byProvider":[
+    { "provider":"claude-code","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0 },
+    { "provider":"unknown","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
   "byHourOfDay":[ { "hour":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 24 entries … */ ],
   "byMonth":[ { "month":1,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 12 entries … */ ],
   "availablePeriods":{ "months":["2026-06","2026-07"],"years":["2026"] } } }
