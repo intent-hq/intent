@@ -160,7 +160,10 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   (`await_sandbox_provisioning`) **before its first ACP spawn**, so the child never
   spawns against a half-copied sandbox. Fallback semantics are unchanged: on
   reflink-unsupported filesystems or provisioning failure the child runs in shared
-  mode (log-only; no sandbox fields, no event).
+  mode (log-only; no sandbox fields, no event). A delete race is discarded: when
+  `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
+  missing/soft-deleted and removes the sandbox directory (best-effort deleting the
+  store record too) instead of persisting fields or emitting the event.
 
 ## Local models: the unsloth provider
 
