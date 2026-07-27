@@ -709,6 +709,29 @@ emitted as `null`, so absent simply yields a sparser card:
   `files` mirrors the on-demand source (empty array). Omitted entirely when the workspace has no git
   worktree or no changes.
 
+**Derived display status (`displayStatus`, new in intentd).** Alongside the card aggregates, the
+same `workspace.list` / `workspace.get` emit path enriches each `Workspace` with a BE-owned
+"current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
+**never persisted**. Wire values are the snake_case strings
+`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. The field is
+decoded as optional and **omitted when `taskStats` is not computable** (`skip_serializing_if`,
+e.g. a transient notes-read failure) rather than emitted as `null` — on a missing field clients
+fall back to their local derivation, so an aggregates-free response can never misreport
+`not_started` / `pr_*`. The "current cycle" precedence:
+
+1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most recently
+   updated open/draft entry in `pullRequests` — yields `pr_ready` (`mergeable == true` and not
+   draft) or `pr_open`.
+2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
+   (`inProgress > 0` or `completed > 0`), else `not_started`.
+3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests` entry) →
+   `pr_merged`.
+4. **All tasks complete** (`total > 0`, `completed == total`) → `complete`; else `not_started`.
+
+A merged PR in history never masks an open PR (step 1 scans `pullRequests` for open/draft
+entries) or open tasks (step 2 precedes the merged check). Transitions are pushed as
+`workspace:displayStatus-changed` (§6.5); the emit-path enrichment also seeds the in-memory
+baseline that event's recompute-and-compare runs against (a seed never emits).
 
 
 ```json
@@ -3756,6 +3779,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
+| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:created, sandbox:merged | Emitted when `agent.delegate` with effective `isolation: "cow"` successfully provisions a CoW sandbox (§5.5) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.merge`). `sandbox:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
@@ -3853,7 +3877,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 | --- | --- | --- | --- | --- |
 | `note.subscribe` / `note.unsubscribe` | note | per-workspace (`workspaceId` req — `-32602` if missing/empty) | array of `Note` entities (newest-first) | `note:created`/`updated`/`deleted` → `added`/`updated`/`removedIds` via a re-read of the entity. |
 | `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of `WorkspaceTask` entities | tails `task:status-changed`/`task:ready-tasks-changed`. |
-| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of `Workspace` entities visible to the connection, **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`. Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch). |
+| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of `Workspace` entities visible to the connection, **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`/`displayStatus-changed`. Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch). |
 | `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | array of `Comment` entities | tails `comment:added`/`resolved`. |
 | `agent.subscribe` / `agent.unsubscribe` (no `eventTypes`) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Likewise `agent.unsubscribe` without `workspaceId` is the channel form. |
 | `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty) | newest `agent.getConversation` page, plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
