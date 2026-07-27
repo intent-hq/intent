@@ -292,7 +292,10 @@ Resolves the daemon-managed GitHub credential for the `intentd git-credential` h
 **Response:**
 
 ```json
+// ← credential available
 { "credential": { "username": "x-access-token", "password": "gho_…" } }
+// ← no credential available (still a success response, not an error)
+{ "credential": null }
 ```
 
 - `credential` is `null` when no credential is available — the `sourceControl.github.exposeGitCredentialToChildren` setting is off, or no token resolves via the `sourceControl.github.tokenSource` chain. The two cases are deliberately indistinguishable on the wire.
