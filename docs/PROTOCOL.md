@@ -2341,8 +2341,11 @@ turn-end bookkeeping is **detached** from the turn itself — it never delays th
 `agent:stream:end`, and bookkeeping for the same agent is ordered across turns — so a client
 reading `workspace.getTokenUsage` immediately after `agent:stream:end` may briefly see the
 previous tally; rely on `workspace:tokenUsage-changed` (§6.5) to observe the update.
-**Usage survives ACP session recreation:** when the resume-impossible fallback swaps in a fresh
-ACP session id (a failed `session/load` → `session/new` recreate), the outgoing session's
+**Usage survives ACP session recreation:** when a `session/load` → `session/new` ACP session
+recreate swaps in a fresh ACP session id — whether via the resume-impossible fallback (a failed
+`session/load`), `agent.editAndRegenerate`'s forced recreate, or the `agent.retry`
+poisoned-session recreate ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940)) —
+the outgoing session's
 cumulative snapshot is folded into a daemon-internal per-agent **baseline** (saturating sum) and
 the snapshot is cleared, atomically with the id swap — the recreated session's cumulative reports
 restart from zero, so per-agent effective totals are **baseline + snapshot**. The baseline is
