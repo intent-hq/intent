@@ -28,7 +28,8 @@ The daemon embeds:
   calls are attributable to the calling agent. How the bridge reaches the
   provider CLI is a per-provider capability in the `intent-providers` registry
   — four delivery mechanisms today: a `--mcp-config` temp file (auggie), an
-  `OPENCODE_CONFIG_CONTENT` env `mcp` block (opencode), ACP `session/new`
+  `OPENCODE_CONFIG_CONTENT` env `mcp` block (opencode, and unsloth, which
+  rides the opencode binary — see "Local models" below), ACP `session/new`
   `mcpServers` (claude-code, codex, droid, grok), and — for pi, which has no
   native MCP support and whose pi-acp adapter drops `session/new`
   `mcpServers` — a per-agent wrapper script (set as `PI_ACP_PI_COMMAND`) that
@@ -149,6 +150,42 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   that same directory (agent commits land in the workspace's own checkout, never the
   user's repo folder). Worktree-mode workspaces are ineligible (agents share the
   checkout).
+
+## Local models: the unsloth provider
+
+The `unsloth` provider runs Unsloth GGUF models fully locally. It has no agent
+CLI of its own — the registry entry **rides the opencode binary** (`opencode
+acp`) as its ACP runtime, pointing it at a daemon-managed local server. Three
+pieces:
+
+- **Managed server (`services::unsloth_server::UnslothServerManager`).** The
+  daemon owns a singleton Unsloth server (one loaded model at a time — a
+  llama.cpp constraint): on the first spawn of an unsloth agent it runs
+  `unsloth run --model <repo>:<quant> --disable-tools -p <port>` (quant
+  auto-picked mirroring the CLI's `--gguf-variant` defaults: `UD-Q4_K_XL` for
+  `unsloth/*` repos, else `Q4_K_M`), waits for the HTTP surface, then probes
+  the authed `/models` endpoint until the model is loaded (401/403 means
+  up-but-not-ready; the model-ready window is generous because first use can
+  mean a multi-GB download, with progress surfaced as `agent:stream:status`
+  launch-phase events — PROTOCOL §6.5). The server is reused while it serves
+  the requested repo, killed + respawned on model switch or a dead child, and
+  killed on daemon shutdown — a shutdown latch aborts an in-flight startup at
+  its next probe tick, so shutdown never waits out a download. A missing
+  `unsloth` binary degrades gracefully: the spawn fails with an install hint
+  (`InvalidInput`, so the message survives the JSON-RPC envelope).
+- **Endpoint injection.** The daemon mints the opencode auth material via
+  `unsloth start opencode --no-launch` and reads the generated `opencode.json`
+  (baseURL, apiKey, per-model token limits); `build_provider_env` then injects
+  a custom OpenAI-compatible `provider.unsloth-studio` block (the id Unsloth
+  itself generates; `npm: "@ai-sdk/openai-compatible"`) plus `model` /
+  `small_model` defaults and an optional `compaction` block into
+  `OPENCODE_CONFIG_CONTENT` — the same env mechanism opencode's MCP block
+  already uses.
+- **Catalog.** The `unsloth` model-catalog source is an HTTP fetch of the
+  Hugging Face `unsloth` org's GGUF repos — one row per repo (never per
+  quant), ranked by downloads, fit-filtered against ~70% of total system RAM
+  via a parameter-count heuristic, with a `warning` reporting how many repos
+  were hidden (wire contract: PROTOCOL §5.30).
 
 ## Dependency-direction rules
 
