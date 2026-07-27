@@ -189,6 +189,64 @@ pieces:
   via a parameter-count heuristic, with a `warning` reporting how many repos
   were hidden (wire contract: PROTOCOL §5.30).
 
+## GitHub credential flow
+
+Wire contract: PROTOCOL.md — `system.gitCredential` fast-path (§5, v2.5),
+`github.*` auth model (§5.27), source-control settings keys (§5.12), clone
+credential injection (§5.6). One token, three consumption paths, one trust
+boundary:
+
+- **One stored token.** The GitHub token lands in the file-backed secrets
+  store (`~/intent/secrets.json`, `0600`) under account
+  `sourceControl.github.token`, written by the daemon-owned OAuth device flow
+  (`github.connect`) and deleted by `github.revoke`. Every consumer resolves
+  it through one chain (`intent_sourcecontrol::token::resolve`, per
+  `sourceControl.github.tokenSource`): `auto` (the default) tries secrets
+  store → `GITHUB_TOKEN`/`GH_TOKEN` env → `gh auth token`.
+- **Daemon-internal git ops** (clone/fetch/pull/push in `intent-git`): the
+  resolved token is offered to the spawned `git` as a github.com-scoped
+  credential helper built in-process (`intent_git::auth`). The helper config
+  entry contains no token bytes — the token travels only in the
+  `INTENT_GIT_GITHUB_TOKEN` environment variable of that one child, never on
+  argv. The entry is appended (via `-c` or `GIT_CONFIG_PARAMETERS`) after any
+  configured helpers, so the user's own helpers still win, and
+  `GIT_TERMINAL_PROMPT=0` turns a would-be credential prompt into a fast
+  error instead of a hang.
+- **Child spawns** (PTY terminals via `services::terminal_ops`, agent
+  provider processes via `services::agent_manager`): daemon-backed **helper
+  mode** — zero token bytes in the child environment. The spawn appends a
+  `credential.https://github.com.helper=!<intentd> git-credential` entry to
+  the child's `GIT_CONFIG_PARAMETERS` (inherited entries preserved, so
+  ambient user helpers keep winning); `<intentd>` is the running daemon's own
+  binary (`current_exe`, sh-quoted). An unresolvable binary path or the gate
+  being off simply yields no injection — a spawn never fails or blocks on it.
+- **The `intentd git-credential` helper** (hidden subcommand,
+  `crates/intentd/src/git_credential.rs`): speaks the line-oriented
+  git-credential protocol on stdin/stdout and answers only `get` for
+  `protocol=https` + `host=github.com`, fetching the credential from the
+  running daemon over the UDS `system.gitCredential` RPC on each invocation.
+  The RPC is UDS-only — a remote (TCP/WSS) caller is rejected with `-32001`,
+  so the credential never crosses the network. Every other case —
+  `store`/`erase`, other hosts, daemon not running, gate off, no token — is a
+  silent exit 0, letting git fall through to its remaining helpers/prompt
+  rules. The daemon audit-logs each grant/denial with the helper's
+  self-reported pid; the token value is never logged.
+- **Gating & revocation.** `sourceControl.github.exposeGitCredentialToChildren`
+  (boolean, default `true`) gates both the child-env injection and the
+  `system.gitCredential` grant. Children resolve on every `get` rather than
+  holding a token snapshot, so toggling the setting off or calling
+  `github.revoke` takes effect immediately — including in already-open
+  terminals.
+- **Security invariants.** The token never appears on argv or in logs; the
+  only environment carrying it is that of the daemon's own short-lived git
+  subprocesses (`INTENT_GIT_GITHUB_TOKEN`) — never a terminal or agent
+  process. It is never exported as `GITHUB_TOKEN`/`GH_TOKEN` (those keys stay
+  on the MCP child-env secret denylist, `intent_acp::mcp_env`, which is
+  unaffected by helper injection). The trust
+  boundary is the Unix-domain socket — same host, same user, filesystem
+  permissions — which is why the credential surface is deliberately absent
+  from WSS: remote clients drive git through the `git.*` RPCs instead.
+
 ## Dependency-direction rules
 
 ```text
