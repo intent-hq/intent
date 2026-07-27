@@ -1450,6 +1450,16 @@ non-existent or `bundled` definition → `-32602`.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
+- **Config scalars (`codingAgent` / `model` / `modelTier` / `agentType`)** — the four optional
+  config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
+  independently, across the tiers (embedded bundled floor → bundled dir → user → project): a
+  file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
+  value in a higher tier overrides it. An explicit **empty string** (`""`) clears the inherited
+  value — the string analogue of `hidden: false` — and `create`/`edit` write `key: ""` verbatim
+  so the explicit clear round-trips losslessly. `roleReminder` intentionally stays
+  **winner-takes-all** (not inherited): it is coupled to the prompt body (itself
+  winner-takes-all), so the derive-from-body fallback remains correct when a higher tier
+  rewrites the body.
 - The daemon watches the user (`~/.intent/specialists/`) and project
   (`<workspace>/.intent/specialists/`) tiers (using `notify` watchers, the same infrastructure as
   workspace `file:changed` events); when a specialist file is created/modified/deleted under a
