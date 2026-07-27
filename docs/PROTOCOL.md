@@ -1183,7 +1183,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.status | workspaceId (req) | { modified, staged, untracked, deleted, ... } |
 | git.stage | paths (req, CSV string or array) | { ok, paths } — staging ./*/--all is rejected (-32603) |
 | git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
-| git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } |
+| git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } — commit-set selection below |
 | git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
 | git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
 
@@ -1195,6 +1195,13 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 // ← response
 { "jsonrpc":"2.0","id":30,"result":{ "ok": true, "paths": ["src/a.ts","src/b.ts"] } }
 ```
+
+**`git.agentCommit` commit-set selection.** What lands in the commit depends on which of `files` / `userRequested` / the caller's agent context are present — the commit is always **pathspec-limited** to the selected set, so foreign pre-staged paths are never swept in:
+
+1. **Explicit `files`** — the listed paths are committed as-is (staged and committed regardless of prior index state).
+2. **No `files`, `userRequested: true`** — a user checkpoint: commits only the **already-staged** paths (plain `git commit` semantics); unstaged and untracked changes — including other agents' in-flight work — are left alone.
+3. **No `files`, agent-initiated** (an agent context is present) — commits only the paths the file-tracking attribution pipeline (§5.19) credits to the committing agent: `tracked_changes` rows at stage unstaged/staged for that `agentId`, **intersected with the actual worktree changes**. An empty attributed set commits nothing (`-32603` "No uncommitted changes found for this agent"). Post-commit, the committed paths' attribution rows advance unstaged/staged → committed, keeping the audit trail consistent.
+4. **No `files`, no `userRequested`, no agent context** — attribution is impossible, so the commit is **refused** (`-32603`) rather than sweeping the worktree.
 
 **Auto-commit on `agent:idle` (daemon-internal, not wire surface).** When an agent turn completes (`agent:idle` event) and the workspace has uncommitted changes with `git.autoCommit` enabled (and the session did not set `skip_auto_commit`), the daemon automatically generates a conventional-commit-formatted message via `agent.completeOnce` (§5.32) with the bundled `commit-message` instruction as system prompt. The prompt context includes: the uncommitted diff (truncated), recent commit subjects (for style mimicry), the repo-root `AGENTS.md` when present (truncated), and the task title / agent name as hints. The generated output is parsed for `<<<COMMIT_MESSAGE>>>` tags. On any generation failure, timeout, or malformed output, the daemon falls back to the deterministic subject chain (`taskTitle` → agent name → `"Agent changes"`) so auto-commit is never blocked or skipped because generation failed. The `agent.completeOnce` binary resolution order (§5.32 Execution) honors the `context.auggiePath` setting when set, ensuring hermetic e2e tests and explicit user config are respected. This internal auto-commit path has no wire RPC — clients only observe the resulting `git:commit` event (§6.5).
 
