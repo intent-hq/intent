@@ -3723,7 +3723,7 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
 - `repoId` — full HF repo id currently served (or being started), e.g.
   `"unsloth/gemma-3-27b-it-GGUF"` (the compound model id is `unsloth:<repoId>`, §5.30).
 - `port` — port the managed server listens on (default `8888`); `pid` — OS pid of the server
-  child (omitted when unknown).
+  child (`null` when unknown).
 - `uptimeSecs` — seconds since the server child was spawned.
 - `phase` — coarse startup phase: `"starting"`, `"minting"`, `"loading"`, or `"ready"`.
 - `cpuPercent` / `memoryBytes` — resource usage sampled at snapshot time and **summed across the
