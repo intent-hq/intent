@@ -1435,10 +1435,15 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
-- **SpecialistDef** — `{ id, name, description, modelTier?: "low"|"medium"|"high", prompt?,
-  hidden?: boolean, source: "project"|"user"|"bundled", path? }`. On `list`/`get`, `source` is the
-  **winning** tier and `path?` the file it resolved from (omitted for `bundled`); on `create`/`edit`
-  the body carries the authored fields and `scope` chooses the target tier.
+- **SpecialistDef** — `{ id, name, description, codingAgent?, model?,
+  modelTier?: "low"|"medium"|"high", roleReminder?, agentType?, prompt?, hidden?: boolean,
+  source: "project"|"user"|"bundled", path? }`. The optional scalars (`codingAgent`, `model`,
+  `modelTier`, `roleReminder`, `agentType`) are first-class **string** fields on the wire, not
+  frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
+  `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
+  `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
+  for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
+  target tier.
 - **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
   frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
   lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
@@ -1456,7 +1461,10 @@ non-existent or `bundled` definition → `-32602`.
   file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
   value in a higher tier overrides it. An explicit **empty string** (`""`) clears the inherited
   value — the string analogue of `hidden: false` — and `create`/`edit` write `key: ""` verbatim
-  so the explicit clear round-trips losslessly. `roleReminder` intentionally stays
+  so the explicit clear round-trips losslessly. A bare `key:` with no value (YAML `null`) is
+  parsed as an explicit empty string — the frontmatter parser takes the trimmed text after the
+  colon — so it **clears** exactly like `key: ""` (it is neither an omit nor an error).
+  `roleReminder` intentionally stays
   **winner-takes-all** (not inherited): it is coupled to the prompt body (itself
   winner-takes-all), so the derive-from-body fallback remains correct when a higher tier
   rewrites the body.
