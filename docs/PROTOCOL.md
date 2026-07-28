@@ -1521,7 +1521,12 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > the live stream (§6) and rehydrate current state from the owning resource, never from history)
 > per the stream-retention window (`events.streamRetentionHours` setting, default **72h**; `0` disables
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
-> fixed **24h TTL**. Historical reads only see rows within these windows; lifecycle/audit
+> fixed **6h TTL**. Additionally, the **persisted** `data_json` of an `agent:tool:call` event is
+> capped at **16 KiB**: an over-cap payload has its free-form fields (`output`, `input`,
+> `registeredAttachments`) replaced with `{ truncated: true, originalBytes, preview }` (preview =
+> first 2 KiB of the field's serialized JSON) before the row is written — the live broadcast (§6/§7)
+> always carries the FULL payload; only historical reads (`event.query`, §5.10) see the capped copy.
+> Historical reads only see rows within these windows; lifecycle/audit
 > families (`workspace:created`/`deleted`/`archived`, `agent:created`/`deleted`/`completed`/`failed`,
 > note/task/comment/git events, ...) are not swept. The loop also reclaims freed pages via
 > bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases. Legacy databases
