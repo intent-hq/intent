@@ -461,7 +461,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
 | workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
-| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name | { workspace: Workspace } |
+| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). -32602 if not found. |
@@ -713,11 +713,27 @@ each with a dedicated change event (§6.5) that carries the new value:
 **`status` wire form.** `Workspace.status` serializes as the PascalCase TS `WorkspaceStatus`
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
-`Workspace` fields (`statusMessage`, `baseRef`, `prUrl`, `prNumber`, `prStatus`,
-`activePullRequest`, `pullRequests`, `archivedAt`, `cowSupported`, `checkoutMode`,
+`Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
+`prStatus`, `activePullRequest`, `pullRequests`, `archivedAt`, `cowSupported`, `checkoutMode`,
 repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
+
+**`statusImageAssetId` (new in intentd, migration `0062`).** An agent-authored workspace
+status screenshot reference (intent-hq/monorepo#997). The value is a content-addressed
+asset id minted by the `note.saveAsset` machinery (§5.2); clients render it with
+`note.readAsset` / the `workspace-asset://` URL scheme. Agents set or clear it via the
+MCP `workspace_api` binding `ws.workspace.setStatusImage({ data, mimeType, originalName? }
+| null)` — the daemon stores the image bytes as an asset first, then points the workspace
+row at the resulting id (`null` clears; the binding errors when called against the
+virtual chief-of-staff **workspace** — the `WorkspaceId::is_chief()` guard, same as
+`archive`/`unarchive` — regardless of which agent or specialist calls it). On the wire,
+`workspace.update` accepts `statusImageAssetId: string | null` with the same three
+clearable forms as the PR fields below: **missing** leaves the stored value untouched,
+explicit **JSON `null`** clears it, and a **present string** sets it (a whitespace-only
+or empty string folds to a clear, and the delta carries the `null` clear signal). The
+`workspace:updated { changes }` delta (§6.5) preserves the distinction, and the field is
+omitted from `Workspace` payloads until an agent sets one.
 
 **`cowSupported` / `checkoutMode` (new in intentd).** `cowSupported` is a BE-derived
 machine-capability flag: a cached CoW-reflink probe of the **workspaces root**
