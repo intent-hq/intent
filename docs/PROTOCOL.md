@@ -1514,11 +1514,16 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 These are **historical/aggregate read** helpers — distinct from live streaming (§6). Each requires`workspaceId`.
 
 > **Retention.** Persisted events are pruned by the daemon's retention loop: the high-volume
-> ephemeral families (`agent:stream:*`, `file:*`, `terminal:data`, `script:output`, `host:exec:*`) per the
-> stream-retention window (`events.streamRetentionHours` setting, default **72h**; `0` disables
+> ephemeral families (`agent:stream:*`, `file:*`, `terminal:data`, `script:output`, `host:exec:*`)
+> and the high-churn state-notification families (`workspace:updated`, `draft:changed`,
+> `agent:status-changed`, `agent:idle`, `agent:subscriptions-changed`, `settings:changed`,
+> `workspace:tokenUsage-changed`, `agent:queue:updated` — exact types; consumers take these from
+> the live stream (§6) and rehydrate current state from the owning resource, never from history)
+> per the stream-retention window (`events.streamRetentionHours` setting, default **72h**; `0` disables
 > the sweep; `INTENTD_STREAM_RETENTION_HOURS` env override), and `agent:tool:call` rows on a
-> fixed **24h TTL**. Historical reads only see rows within these windows;
-> lifecycle/note/task/workspace events are not swept. The loop also reclaims freed pages via
+> fixed **24h TTL**. Historical reads only see rows within these windows; lifecycle/audit
+> families (`workspace:created`/`deleted`/`archived`, `agent:created`/`deleted`/`completed`/`failed`,
+> note/task/comment/git events, ...) are not swept. The loop also reclaims freed pages via
 > bounded `PRAGMA incremental_vacuum` on incremental-auto-vacuum databases. Legacy databases
 > created with `auto_vacuum=NONE` are converted automatically: the daemon's write connection
 > sets `PRAGMA auto_vacuum=INCREMENTAL` at connect (inert on an existing NONE-mode file by
