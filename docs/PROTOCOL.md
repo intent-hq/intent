@@ -3942,7 +3942,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 
 ## 6. Events & Subscriptions
 
-Live event streaming is the **canonical** way a thin client stays in sync. It uses twoserver-handled methods (the plural `events.` prefix) plus a server-pushed notification.
+Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification.
 
 ### 6.1 `events.subscribe`
 
