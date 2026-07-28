@@ -384,6 +384,40 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 - `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
 
+#### `host.providerDiscovery`
+
+Daemon-owned provider discovery: reports which CLI-backed agent providers are installed on the daemon host (binary resolution + npx fallback status), so clients render install state without probing `PATH` themselves.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```jsonc
+{
+  "providers": [
+    {
+      "id": "unsloth",
+      "displayName": "Unsloth",
+      "command": "opencode",
+      "installed": false,
+      "resolvedPath": "/usr/local/bin/opencode",  // optional — present when the primary binary resolved
+      "gatedOff": "requires env var SOME_VAR",     // optional — present when the provider is gated off
+      "hasNpxFallback": false,
+      "npxOnly": false,
+      "npxPackage": "@some/pkg",                   // optional — present for npx-only providers
+      "secondaryCommand": "unsloth",               // optional — dual-binary providers only
+      "secondaryResolved": false                   // optional — dual-binary providers only
+    }
+  ],
+  "npx": { "resolvedPath": "/usr/local/bin/npx", "version": "10.2.4", "versionOk": true }
+}
+```
+
+- `providers` carries one entry per registered provider, in registry order. `installed` reflects the daemon's binary resolution, which checks Intent-managed / native installer locations (e.g. `~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30).
+- **`secondaryCommand` / `secondaryResolved`** *(additive, monorepo#991)* — secondary-binary attribution for **dual-binary providers** (today only `unsloth`, which requires both `opencode` and `unsloth` on the daemon host). `secondaryCommand` names the required secondary CLI and `secondaryResolved` reports whether it resolved via the same discovery precedence as the primary — so when a dual-binary provider shows `installed: false`, clients can attribute the failure to the actually-missing binary instead of the primary `command`. The two fields are always emitted **together**, and are **omitted (never null)** for providers without a secondary requirement and for gated-off providers (gated providers are never probed, so no attribution exists). Clients detect by presence.
+- `gatedOff` is present (with a human-readable reason) only when the provider is feature-gated off; gated providers skip binary probing entirely.
+- `npx` reports the daemon's npx probe for npx-fallback providers: `resolvedPath` / `version` are `null` when npx is missing or the version probe fails, and `versionOk` is whether the resolved version meets the minimum requirement.
+
 ### Method aliases (2 total)
 
 The daemon accepts these 2 alias forms and dispatches them to their canonical counterparts. The wire accepts both, but the canonical name is the documented form.
