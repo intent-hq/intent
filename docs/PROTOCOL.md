@@ -1138,7 +1138,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
              "create":{"specialist":"implementor","provider":"acp/mock","metadata":{"custom":"field"},"skipAutoCommit":true} } }
 // ← response (new agent created; agent.create's rich result nested under `result`;
 //    callerAgentId present → SUB-1 auto-subscription fields subscriptionId/message)
-{ "jsonrpc":"2.0","id":22,"result":{ "ok": true, "agentId": "agent-new", "agentName": "Task: Deploy", "created": true, "action": "created_new", "taskTitle": "Deploy", "result": { "id": "agent-new", "text": "...", "backgrounded": true, "queued": false }, "subscriptionId": "sub-1718...-cd34", "message": "Created new agent \"agent-new\" for task \"Deploy\".\nContext message delivered.\nYou will be notified when the agent responds." } }
+{ "jsonrpc":"2.0","id":22,"result":{ "ok": true, "agentId": "agent-new", "agentName": "Task: Deploy", "created": true, "action": "created_new", "taskTitle": "Deploy", "result": { "id": "agent-new", "text": "...", "backgrounded": true, "queued": false }, "subscriptionId": "a1b2c3d4-...-cd34", "message": "Created new agent \"agent-new\" for task \"Deploy\".\nContext message delivered.\nYou will be notified when the agent responds." } }
 
 // → agent.wakeOrCreate: depth-guard rejection (delegationDepth >= MAX_DELEGATION_DEPTH)
 // ← { "jsonrpc":"2.0","id":23,"error":{ "code": -32602, "message": "agent.wakeOrCreate: delegation depth 2 exceeds MAX_DELEGATION_DEPTH (2)" } }
