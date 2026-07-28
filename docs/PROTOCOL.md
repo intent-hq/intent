@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v2.5
+# Intent Backend — JSON-RPC Protocol v2.6
 
-**Protocol Version:** `2.5`
+**Protocol Version:** `2.6`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `2.5`
+**Version:** `2.6`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see §5.1 and the fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). No existing method changed shape in any of these bumps.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see §5.1 and the fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. No existing method changed shape in any of these bumps.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "2.5", server: { protocolVersion: "2.5", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "2.5", ... }`
+- `client.hello` response: `{ protocolVersion: "2.6", server: { protocolVersion: "2.6", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.6", ... }`
 
 ### Compatibility Policy
 
@@ -153,22 +153,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **304 dispatchable method names** across the following categories:
+The API exposes **305 dispatchable method names** across the following categories:
 
-- **Router methods:** 268 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 269 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 304 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 305 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 304 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 305 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.37) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.38) carry each method's parameter and result contract.
 
-### Router methods by namespace (268 total)
+### Router methods by namespace (269 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -186,6 +186,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
 | pr | 14 | capabilities, createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch, waitForChanges |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
+| providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
 | repo | 2 | list, remove |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
@@ -2143,7 +2144,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.5"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.6"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2155,18 +2156,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.5",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.6",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"2.5","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.6","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.5",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.6",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"2.5","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.6","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -3870,6 +3871,74 @@ confirmation should check `unsloth.status`'s `attachedAgentCount` first. A later
 // ← response
 { "jsonrpc":"2.0","id":98,"result":{ "stopped":true } }
 ```
+
+### 5.38 Provider catalog — `providers.catalog` *(v2.6)*
+
+The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global**: no params and no `workspaceId` (like `system.capabilities`), available on both UDS and WSS. The data is **compiled into the daemon** — there is no cache or TTL; the result only changes when the daemon binary does.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```jsonc
+{
+  "providers": [
+    {
+      "id": "auggie",
+      "displayName": "Augment Auggie",
+      "shortName": "Auggie",
+      "command": "auggie",
+      "isDefault": true,
+      "canBeDisabled": true,
+      "loginCommandHint": "auggie login",           // optional
+      "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
+      "visible": true,
+      "modelTiers": { "fast": "haiku4.5", "balanced": "sonnet4.5", "smart": "opus4.7" }  // optional — static-tier providers only
+    },
+    {
+      "id": "claude-code",
+      "displayName": "Anthropic Claude Code",
+      "shortName": "Claude Code",
+      "command": "claude-agent-acp",
+      "isDefault": false,
+      "canBeDisabled": true,
+      "loginDocsUrl": "https://code.claude.com/docs/en/quickstart#step-2-log-in-to-your-account",  // optional
+      "visible": true,
+      "modelTiers": { "fast": "haiku", "balanced": "sonnet", "smart": "default" }
+    },
+    {
+      "id": "cortex",
+      "displayName": "Snowflake Cortex",
+      "shortName": "Cortex",
+      "command": "cortex-acp",
+      "isDefault": false,
+      "canBeDisabled": true,
+      "requiresFeatureCode": "cortex",              // optional — raw gating field passed through
+      "visible": false,                             // daemon-evaluated: a configured feature code default-denies
+      "modelTiers": { "fast": "claude-sonnet-4-5", "balanced": "claude-opus-4-5", "smart": "claude-opus-4-5" }
+    },
+    // ... one row per registered provider (opencode, unsloth, pi, droid, grok, ...) ...
+    {
+      "id": "mock",
+      "displayName": "Mock (E2E)",
+      "shortName": "Mock",
+      "command": "node",
+      "isDefault": false,
+      "canBeDisabled": true,
+      "requiresEnvVar": "MOCK_AGENT_SCRIPT_PATH",   // optional — raw gating field passed through
+      "visible": false                              // daemon-evaluated: env var absent in the daemon environment
+    }
+  ],
+  "defaultProviderId": "auggie"
+}
+```
+
+- `providers` carries **all** registered providers — gated-off rows included — one row per registry entry, in **registry order**. The order is informational, not a contract: clients must key rows by `id`, never by array position.
+- `command` is the registry's **logical CLI name** (the `ACP_PROVIDERS` `command` field, e.g. `claude-agent-acp` for `claude-code`) — provider metadata, **not** necessarily the binary the daemon spawns. Launch resolution belongs to `host.providerDiscovery` (§5.14), whose `command` reports what the daemon actually resolves and launches — so the two can differ: an npx-only provider like `claude-code` launches via `npx <npxPackage>` and reports `command: "npx"` there. Clients must not assume the values match across the two methods.
+- `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; the same gate `models.list` applies to `cortex`, §5.30). The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
+- The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`, `modelTiers`) are **omitted when unset, never null** — clients detect by presence.
+- `modelTiers` — the `{ fast, balanced, smart }` tier→model-id map — is present **only** for providers with a static tier table (`auggie`, `claude-code`, `codex`, `cortex`). Dynamic-model providers (`opencode`, `unsloth`, `pi`, `droid`, `grok`, `mock`) omit it; their models come from `models.list` (§5.30).
+- `defaultProviderId` mirrors the registry's `isDefault` entry (`auggie`).
 
 ## 6. Events & Subscriptions
 
