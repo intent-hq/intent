@@ -416,7 +416,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). -32602 if not found. |
@@ -467,7 +467,8 @@ unresolvable `baseRef` on a valid repo fails with `-32602` carrying the
 Provisioning is skipped — prior row-only behavior — for `skipIsolation: true`
 (canonical name; `skipWorktree` is accepted as a deprecated alias, either set ⇒ direct
 mode), `isRemote: true`, a caller-supplied `worktreePath`, a missing `repositoryPath`, or
-a `repositoryPath` that is not a local git repository. `workspace.update` follows the
+a `repositoryPath` that is not a local git repository (unless `isNewRepo: true`
+initializes it first — see new-repository initialization below). `workspace.update` follows the
 same rename: `skipIsolation` is the canonical param (deprecated alias `skipWorktree`),
 and the persisted column keeps its historical `skip_worktree` name
 (`Workspace.skipWorktree`) — the rename is wire-level only, no migration.
@@ -548,6 +549,28 @@ derives them from the local repository's `origin` remote URL (local git config r
 no network) when the remote is a GitHub URL (https or ssh forms, strict `github.com` host
 check); non-GitHub or missing remotes leave `repositoryOwner` unset. Caller-supplied
 values always win; `repositoryName` persists the path basename as a last resort when blank.
+
+**New-repository initialization (`workspace.create`, new in intentd).** When
+`isNewRepo: true` (optional boolean, default absent/`false`), `repositoryPath` is not
+already a local git repository, and no non-empty `githubUrl` is supplied — clone
+orchestration above takes precedence — the daemon initializes the directory as a git
+repository **before** branch naming and worktree provisioning, reusing the
+`workspace.initializeRepository` body: `mkdir -p`, `git init -b main`, seeded
+`.gitignore` + `README.md`, and an initial commit (git identity falls back to
+`Intent <intent@local>` when no global identity is configured), so downstream
+provisioning sees a real checkout. This is the FE's new-project flow (monorepo#962) —
+it eliminates the silent row-only workspace the legacy skip produced for non-git
+folders. `isNewRepo: true` with a missing/empty `repositoryPath` is rejected with
+`-32602` (`repositoryPath is required when isNewRepo is true`) rather than falling
+through to the row-only skip. An initialization failure fails the whole create
+pre-insert — no row persisted, no `workspace:created` — with `-32603`,
+`error.message = "Internal error"`, and the cause in
+`error.data` (`workspace.create: repository initialization failed: <detail>`, §9).
+`isNewRepo: true` on a path already carrying a git repository with a resolvable HEAD is
+a no-op; when `.git` exists but HEAD does not resolve (a previously failed init left the
+directory half-initialized), the init re-runs and completes it. Absent/`false` preserves
+the legacy behavior: a non-git `repositoryPath` skips provisioning and persists a
+row-only workspace (worktree-provisioning skip conditions above).
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
@@ -4380,7 +4403,7 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
 | -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. A `workspace.create` failure from an unresolvable base ref keeps this code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation). User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this code — see the clone failure taxonomy below. |
-| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. An `isNewRepo` repository-initialization failure in `workspace.create` (§5.1 new-repository initialization) keeps the bare "Internal error" message but carries the cause in `error.data` (`workspace.create: repository initialization failed: <detail>`). |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, `system.importLegacy`, or `system.gitCredential`, §5). |
 
