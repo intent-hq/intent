@@ -72,7 +72,9 @@ workflow dispatch.
   assets, the intentd repo's copy is unchanged — and the sitter fetches the mirror
   first with a coded fallback to intentd. `mirror-release.yml` (manual dispatch)
   backfills older releases. The mirror is temporary until intentd is open-sourced.
-  Sitter installers (Homebrew, `.deb`, `sitter-latest`) still ship from intentd itself.
+  Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
+  intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
+  formula, README curl commands) point at the mirror.
 
 ### cloudlands-fe
 

@@ -55,13 +55,22 @@ brew-managed one when configured to; it can also spawn its own bundled
 
 `.deb` packages ship the sitter with a systemd user unit that runs
 `intentd serve --resume-all`; download them from the sitter releases on the
-[intentd releases page](https://github.com/intent-hq/intentd/releases).
+public
+[intentd-releases page](https://github.com/intent-hq/intentd-releases/releases):
+
+```sh
+# On arm64, use intentd_arm64.deb in both commands.
+curl -fLO https://github.com/intent-hq/intentd-releases/releases/download/sitter-latest/intentd_amd64.deb
+sudo apt install ./intentd_amd64.deb
+# The package does not auto-enable the unit (it is per-user); start it at login with:
+systemctl --user enable --now intentd
+```
 
 ### Direct download
 
 Prebuilt sitter archives for macOS, Linux, and Windows are published on the
-intentd repo's
-[`sitter-latest` release](https://github.com/intent-hq/intentd/releases/tag/sitter-latest).
+public intentd-releases repo's
+[`sitter-latest` release](https://github.com/intent-hq/intentd-releases/releases/tag/sitter-latest).
 
 The desktop app is not yet packaged for download; it will ship via GitHub
 Releases. Until then, you can [build it from source](#build-from-source).
