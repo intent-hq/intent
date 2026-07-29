@@ -59,8 +59,9 @@ public
 [intentd-releases page](https://github.com/intent-hq/intentd-releases/releases):
 
 ```sh
+# On arm64, use intentd_arm64.deb in both commands.
 curl -fLO https://github.com/intent-hq/intentd-releases/releases/download/sitter-latest/intentd_amd64.deb
-sudo apt install ./intentd_amd64.deb   # arm64: intentd_arm64.deb
+sudo apt install ./intentd_amd64.deb
 ```
 
 ### Direct download
