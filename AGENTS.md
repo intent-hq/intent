@@ -65,6 +65,14 @@ workflow dispatch.
   cargo-dist builds the artifacts, and the beta manifest publishes automatically.
 - Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
   verify `stable.json` on the `channel-stable` release.
+- Daemon archives and channel manifests are **mirrored** to the public
+  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) repo
+  (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
+  absent). Manifests are dual-published — the mirror's copy points at the mirrored
+  assets, the intentd repo's copy is unchanged — and the sitter fetches the mirror
+  first with a coded fallback to intentd. `mirror-release.yml` (manual dispatch)
+  backfills older releases. The mirror is temporary until intentd is open-sourced.
+  Sitter installers (Homebrew, `.deb`, `sitter-latest`) still ship from intentd itself.
 
 ### cloudlands-fe
 
