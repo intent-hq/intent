@@ -62,6 +62,8 @@ public
 # On arm64, use intentd_arm64.deb in both commands.
 curl -fLO https://github.com/intent-hq/intentd-releases/releases/download/sitter-latest/intentd_amd64.deb
 sudo apt install ./intentd_amd64.deb
+# The package does not auto-enable the unit (it is per-user); start it at login with:
+systemctl --user enable --now intentd
 ```
 
 ### Direct download
