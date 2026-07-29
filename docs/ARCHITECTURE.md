@@ -155,7 +155,7 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   and returns `effectiveIsolation: "pending"` immediately — a large clone can take
   tens of seconds, which previously starved the `workspace_api` MCP budget. The
   background half settles the outcome onto the child's session (sandbox fields +
-  `sandbox:created` event) and releases the gate via a drop guard, so it settles
+  `sandbox:cow:created` event) and releases the gate via a drop guard, so it settles
   even on panic. The child's turn worker awaits the gate
   (`await_sandbox_provisioning`) **before its first ACP spawn**, so the child never
   spawns against a half-copied sandbox. Fallback semantics are unchanged: on
