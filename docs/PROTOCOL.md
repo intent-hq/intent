@@ -400,12 +400,13 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
       "id": "unsloth",
       "displayName": "Unsloth",
       "command": "opencode",
-      "installed": false,
+      "installed": true,
       "resolvedPath": "/usr/local/bin/opencode",  // optional — present when the primary binary resolved
       "hasNpxFallback": false,
       "npxOnly": false,
       "secondaryCommand": "unsloth",               // optional — dual-binary providers only
-      "secondaryResolved": false                   // optional — dual-binary providers only
+      "secondaryResolved": true,                   // optional — dual-binary providers only
+      "secondaryResolvedPath": "/Users/me/.unsloth/bin/unsloth"  // optional — present only when the secondary resolved
     },
     {
       "id": "claude-code",
@@ -424,7 +425,8 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
 
 - `providers` carries one entry per registered provider, in registry order. `installed` reflects the daemon's binary resolution, which checks Intent-managed / native installer locations (e.g. `~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30).
 - **`secondaryCommand` / `secondaryResolved`** *(additive, monorepo#991)* — secondary-binary attribution for **dual-binary providers** (today only `unsloth`, which requires both `opencode` and `unsloth` on the daemon host). `secondaryCommand` names the required secondary CLI and `secondaryResolved` reports whether it resolved via the same discovery precedence as the primary — so when a dual-binary provider shows `installed: false`, clients can attribute the failure to the actually-missing binary instead of the primary `command`. The two fields are always emitted **together**, and are **omitted (never null)** for providers without a secondary requirement and for gated-off providers (gated providers are never probed, so no attribution exists). Clients detect by presence.
-- `gatedOff` (optional string, not shown above) is present — with a human-readable reason — only when the provider is gated off (e.g. a required env var or feature code is missing). Gated providers skip binary probing entirely, so a gated entry never carries `resolvedPath`, `secondaryCommand`, or `secondaryResolved` and always reports `installed: false`.
+- **`secondaryResolvedPath`** *(additive, intentd#701)* — the secondary binary's resolved **absolute path** string, sitting alongside `secondaryCommand` / `secondaryResolved` on dual-binary provider entries. Present **only when the secondary resolved** (`secondaryResolved: true`); omitted (never null) when the secondary did not resolve or the provider has no secondary requirement.
+- `gatedOff` (optional string, not shown above) is present — with a human-readable reason — only when the provider is gated off (e.g. a required env var or feature code is missing). Gated providers skip binary probing entirely, so a gated entry never carries `resolvedPath`, `secondaryCommand`, `secondaryResolved`, or `secondaryResolvedPath` and always reports `installed: false`.
 - `npxOnly` is `true` for providers with no local-binary path at all (claude-code): they are launched via `npx <package>`, `installed` reflects npx resolution, and `resolvedPath` (when present) is the npx binary. `npxPackage` (the pinned package spec) is present **iff** `npxOnly` is `true`.
 - `hasNpxFallback` is `true` for providers that prefer a local binary but can fall back to an npx-launched adapter when the binary is absent — so a `hasNpxFallback: true` provider with `installed: false` may still be usable if the `npx` probe below reports `versionOk: true`.
 - `npx` reports the daemon's npx probe: `resolvedPath` is `null` when npx is not found; `version` is `null` when npx is missing **or** the version probe fails (a failed probe leaves `resolvedPath` set); `versionOk` is whether the resolved version meets the minimum requirement (`false` whenever `version` is `null`).
