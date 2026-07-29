@@ -24,8 +24,12 @@ daemon as thin clients.
 ## Install
 
 Installing `intentd` installs the **sitter** — a small self-updating shim,
-itself named `intentd`, that downloads the latest real daemon from GitHub
-Releases, forwards all CLI arguments to it, and respawns it if it crashes.
+itself named `intentd`, that downloads the latest real daemon from the public
+[intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
+mirror (falling back to the
+[intentd repo's own releases](https://github.com/intent-hq/intentd/releases)),
+forwards all CLI
+arguments to it, and respawns it if it crashes.
 Update checks run only for `intentd serve` (at startup and every 12–24
 hours); one-shot subcommands (e.g. `intentd doctor`) run the installed
 daemon as-is and fail fast with guidance if none is installed yet. The
@@ -117,7 +121,11 @@ update checks against public GitHub Releases and actions you take yourself:
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases).
 - **intentd sitter self-update** — the sitter (see [Install](#install))
   downloads the daemon and checks the channel manifests published on the
-  [intentd releases page](https://github.com/intent-hq/intentd/releases).
+  public
+  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
+  mirror, falling back to the
+  [intentd releases page](https://github.com/intent-hq/intentd/releases). The
+  mirror is temporary until the intentd repo is open-sourced.
 - **Auggie binary download (on demand)** — installing the Auggie CLI from the
   desktop app downloads the pre-built binary from the latest public release of
   [augmentcode/auggie](https://github.com/augmentcode/auggie).
