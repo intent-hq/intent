@@ -1524,8 +1524,13 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 
 These are **historical/aggregate read** helpers — distinct from live streaming (§6). Each requires`workspaceId`.
 
-> **Retention.** Persisted events are pruned by the daemon's retention loop: the high-volume
-> ephemeral families (`agent:stream:*`, `file:*`, `terminal:data`, `script:output`, `host:exec:*`)
+> **Retention.** The high-volume live-output chunk families (`terminal:data`, `script:output`,
+> `host:exec:stdout` / `host:exec:stderr`) are **transient / broadcast-only** (same publish path
+> as `agent:stream:chunk`, §7): they are never written to the event table, so §5.10 historical
+> reads never see them — replay comes from the owning buffer (`terminal.getBuffer` /
+> `script.output`), not from events. Persisted events are pruned by the daemon's retention
+> loop: the high-volume ephemeral families (`agent:stream:*`, `file:*`, plus rows of the
+> now-transient chunk families persisted by older daemon versions)
 > and the high-churn state-notification families (`workspace:updated`, `draft:changed`,
 > `agent:status-changed`, `agent:idle`, `agent:subscriptions-changed`, `settings:changed`,
 > `workspace:tokenUsage-changed`, `agent:queue:updated` — exact types; consumers take these from
@@ -1866,10 +1871,12 @@ in the bullet under this table).
   daemon publishes one bus frame per output chunk plus one terminal exit frame, all correlated
   by `requestId`:
   - `host:exec:stdout` — `{ requestId, chunk }` where `chunk` is base64-encoded so binary
-    output crosses the wire intact (mirrors `terminal:data.chunk`).
-  - `host:exec:stderr` — same shape as stdout, over the child's stderr.
+    output crosses the wire intact (mirrors `terminal:data.chunk`). **Transient /
+    broadcast-only** (same publish path as `agent:stream:chunk`, §7): never persisted,
+    invisible to `event.query` (§5.10).
+  - `host:exec:stderr` — same shape (and transience) as stdout, over the child's stderr.
   - `host:exec:exit` — terminal: `{ requestId, ok, exitCode?, timedOut?, cancelled? }`.
-    Emitted exactly once; subscribers unregister on receipt.
+    Emitted exactly once (durable); subscribers unregister on receipt.
   Callers pipe stdin two ways: an optional initial `stdin`/`stdinBase64` on the request itself
   (written to the child before any reader task starts) and follow-up `host.execStream.write
   { requestId, stdin?, stdinBase64?, eof? }` calls that append bytes and optionally close the
@@ -4037,8 +4044,8 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
 | git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `askpass-missing`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). |
-| terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. |
-| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. |
+| terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. `terminal:data` is **transient / broadcast-only** (same publish path as `agent:stream:chunk`, §7): never persisted, invisible to `event.query` (§5.10); scrollback replay uses `terminal.getBuffer`. `terminal:exit` stays durable and is emitted after the stream task has broadcast every data chunk, so exit never overtakes data. |
+| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
