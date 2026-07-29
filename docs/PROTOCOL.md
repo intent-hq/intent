@@ -2255,9 +2255,6 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
 
 | Method | Params | Result |
 | --- | --- | --- |
-| file-tracking.init | workspaceId (req) | { ok: true } — initializes/attaches the tracker for the workspace |
-| file-tracking.sync | workspaceId (req), force?: boolean (default false) | { success, … } — reconciles tracked changes against live git |
-| file-tracking.load | workspaceId (req) | { changes: TrackedChange[], truncated, totalCount } |
 | file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
 | file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
 | file-tracking.getLineStats | workspaceId (req) | { additions, deletions } — real-time totals across unstaged + staged + local commits |
