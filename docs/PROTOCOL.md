@@ -638,13 +638,16 @@ field is retired from all write paths (kept for wire compat and legacy read-only
 fallback only). After the config write, if an effective setup script exists (non-empty,
 resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
 daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
-`/bin/sh` with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
+`/bin/sh` (POSIX; on Windows, via a discovered Git-for-Windows `sh.exe` running the same
+POSIX wrapper, falling back to a `cmd.exe` `.cmd` wrapper that receives the script path
+through the `INTENT_SETUP_SCRIPT` env var) with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
 (the new worktree path), `BRANCH_NAME` (workspace branch), and `SOURCE_BRANCH`
 (baseRef when provided, empty string otherwise). Execution never fails workspace creation — errors are logged and
 surfaced. Script output is streamed to a workspace terminal named **"Setup Script"**
 (the PTY's daemon-tracked display name, surfaced by `terminal.list` — §5.9),
 consistent with other workspace terminals. The script runs through a POSIX-sh timing
-wrapper that appends a newline-prefixed completion summary to the scrollback —
+wrapper (the Windows `cmd.exe` fallback uses an equivalent `.cmd` wrapper) that appends
+a newline-prefixed completion summary to the scrollback —
 `Setup script completed in <N>s (exit code <C>)` on success,
 `Setup script failed in <N>s (exit code <C>)` on failure — preserving the script's
 exit code.
@@ -2533,12 +2536,15 @@ read-only fallback only). `detectProjectType` inspects manifest files to classif
 **Setup script execution:** When a workspace is created (`workspace.create`) and an effective
 setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
 fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
-provisioning in the worktree directory via `/bin/sh` with env vars `MAIN_CHECKOUT`
+provisioning in the worktree directory via `/bin/sh` (POSIX; on Windows, via a discovered
+Git-for-Windows `sh.exe` running the same POSIX wrapper, falling back to a `cmd.exe` `.cmd`
+wrapper that receives the script path through the `INTENT_SETUP_SCRIPT` env var) with env vars `MAIN_CHECKOUT`
 (repository root path), `WORKTREE_PATH` (the new worktree path), `BRANCH_NAME` (workspace
 branch), and `SOURCE_BRANCH` (baseRef when provided, empty string otherwise). Execution never fails workspace creation —
 errors are logged and surfaced. Script output is streamed to a workspace terminal named
 **"Setup Script"** (its daemon-tracked PTY display name in `terminal.list`, §5.9); a POSIX-sh
-timing wrapper appends a newline-prefixed `Setup script completed in <N>s (exit code <C>)` /
+timing wrapper (the Windows `cmd.exe` fallback uses an equivalent `.cmd` wrapper) appends a
+newline-prefixed `Setup script completed in <N>s (exit code <C>)` /
 `Setup script failed in <N>s (exit code <C>)` summary to the scrollback, preserving the
 script's exit code (§5.1).
 
@@ -3420,7 +3426,7 @@ default flag). Optional fields are omitted when the provider does not report the
 - `forceRefresh: true` skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
 - **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
 - **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
-- **Registered sources:** nine providers are registered — `auggie` (CLI discovery, below); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); `opencode` and `grok` (native CLI discovery — each binary is resolved from its native installer location first, `~/.opencode/bin/opencode` and `~/.grok/bin/grok` respectively, **ahead of** the `PATH` scan, so a daemon spawned with a minimal `PATH` — e.g. from a packaged app — still finds a natively installed CLI; `~` denotes the daemon's resolved home directory (`$HOME`), not shell expansion, and the resolution contract is POSIX-only, matching the daemon's supported platforms); and `unsloth` (HTTP fetch, below — no CLI/adapter probe). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
+- **Registered sources:** nine providers are registered — `auggie` (CLI discovery, below); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); `opencode` and `grok` (native CLI discovery — each binary is resolved from its native installer location first, `~/.opencode/bin/opencode` and `~/.grok/bin/grok` respectively, **ahead of** the `PATH` scan, so a daemon spawned with a minimal `PATH` — e.g. from a packaged app — still finds a natively installed CLI; `~` denotes the daemon's resolved home directory (`$HOME`, or `%USERPROFILE%` on Windows), not shell expansion; on Windows only runnable `.exe`/`.cmd`/`.bat` entry points are probed — never the bare extensionless name); and `unsloth` (HTTP fetch, below — no CLI/adapter probe). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
 - **The `unsloth` source** fetches the Hugging Face `unsloth` org's GGUF repos (`https://huggingface.co/api/models?author=unsloth&filter=gguf&limit=1000`, 10s timeout) and builds **one row per repo, never per quant**: `id` is the full HF repo id (e.g. `unsloth/gemma-3-27b-it-GGUF` — the compound model id is `unsloth:<repo-id>`), `name` is the bare repo name with the trailing `-GGUF` stripped, and `description` reports the HF download count (the ranking signal); rows are sorted by downloads, ties broken by `trendingScore`. **Memory-fit filtering:** the total parameter count is parsed from the repo name (dense `27B`; MoE `35B-A3B` uses the total `35B`), the footprint is estimated at ~0.6 bytes/param (Q4-class) + 1 GiB headroom, and repos estimated to exceed **~70% of total system RAM** — or whose size cannot be parsed — are dropped, with the existing `warning` field reporting the count (`unsloth: <n> repo(s) hidden (estimated to exceed available memory, or size unknown)`); when RAM detection is unavailable the filter is skipped entirely — every repo is served, including size-unknown ones, and no hidden-count `warning` is emitted. When the filter hides **every** repo (or the response parses to zero repos), the source degrades to the "no models reported" unavailable path — matching the opencode/grok convention — rather than serving an empty success, so an empty catalog is never cached as valid. No new wire fields — the result reuses the standard `{ models, source, stale?, warning? }` shape and cache semantics.
 - **Unknown/unregistered **`providerId` degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
 - **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
