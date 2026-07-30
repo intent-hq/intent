@@ -5,9 +5,83 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  # Burst pr-title to WarpBuild when more than this many Linux jobs are
+  # queued/running ahead of this run (see the route job). Bursted jobs
+  # don't carry the self-hosted+Linux labels and stop counting toward
+  # the depth, so the system naturally falls back to tinybox as it
+  # frees up.
+  LINUX_BURST_THRESHOLD: 2
+
 jobs:
+  # Decides where pr-title runs: the local tinybox runner normally, or a
+  # WarpBuild ephemeral runner when the tinybox queue is backed up. Runs
+  # on a small WarpBuild ephemeral runner so the burst decision is
+  # independent of the tinybox queue: a tinybox-pinned probe would queue
+  # behind the very backlog it measures (and deadlock entirely with
+  # tinybox offline). The probe fails open to tinybox on API errors; if
+  # the job itself fails (runner outage, timeout), pr-title is skipped
+  # and needs a re-run — a deliberate trade-off. Pattern ported from
+  # intent-hq/intentd#762.
+  route:
+    runs-on: warp-ubuntu-latest-x64-2x
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Reads the Actions queue; job-level so the other jobs don't inherit
+      # it. The probe (and the optional cross-repo CI_QUEUE_READ_TOKEN)
+      # runs on third-party WarpBuild ephemeral runners — an accepted
+      # trade-off.
+      actions: read
+    outputs:
+      utility_labels: ${{ steps.decide.outputs.utility_labels }}
+    steps:
+      - id: decide
+        uses: actions/github-script@v7
+        env:
+          THRESHOLD: ${{ env.LINUX_BURST_THRESHOLD }}
+        with:
+          # tinybox serves several repos on one runner slot, so the probe
+          # wants to size the queue across all of them — but the default
+          # GITHUB_TOKEN is repo-scoped and can only see this repo. Set the
+          # CI_QUEUE_READ_TOKEN secret (fine-grained PAT with actions:read
+          # on the sibling repos) to enable cross-repo counting; without
+          # it those repos are skipped and contribute 0.
+          github-token: ${{ secrets.CI_QUEUE_READ_TOKEN || github.token }}
+          script: |
+            const tinybox = ["self-hosted", "Linux", "X64"];
+            // pr-title is seconds-long; a 2x runner is plenty when bursting.
+            const utilityBurst = ["warp-ubuntu-latest-x64-2x"];
+            const threshold = parseInt(process.env.THRESHOLD || "2", 10);
+            // Count self-hosted Linux jobs that are queued or running in
+            // queued/in-progress runs: a running job occupies the single
+            // tinybox slot just as much as a queued one. WarpBuild jobs —
+            // including this route job — don't match the self-hosted+Linux
+            // label filter, so they never inflate the depth.
+            const owner = context.repo.owner;
+            const repos = ["intentd", "cloudlands-fe", "monorepo"];
+            let depth = 0;
+            for (const repo of repos) {
+              try {
+                for (const status of ["queued", "in_progress"]) {
+                  const runs = await github.rest.actions.listWorkflowRunsForRepo({ owner, repo, status, per_page: 20 });
+                  for (const run of runs.data.workflow_runs.filter(r => r.id !== context.runId).slice(0, 10)) {
+                    const jobs = await github.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: run.id, per_page: 100 });
+                    depth += jobs.data.jobs.filter(j => (j.status === "queued" || j.status === "in_progress") && j.labels.includes("self-hosted") && j.labels.includes("Linux")).length;
+                  }
+                }
+              } catch (e) {
+                core.info(`queue probe skipped ${repo}: ${e.message}`);
+              }
+            }
+            const useBurst = depth > threshold;
+            core.info(`linux queue depth=${depth} threshold=${threshold} burst=${useBurst}`);
+            core.setOutput("utility_labels", JSON.stringify(useBurst ? utilityBurst : tinybox));
+
   pr-title:
-    runs-on: [self-hosted, Linux, X64]
+    needs: route
+    runs-on: ${{ fromJSON(needs.route.outputs.utility_labels) }}
     if: github.event_name == 'pull_request'
     steps:
       - uses: amannn/action-semantic-pull-request@v6
