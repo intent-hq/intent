@@ -2,16 +2,10 @@
   "setupScript": "#!/bin/bash\n# Generic setup script\n# Available variables: $MAIN_CHECKOUT, $WORKTREE_PATH, $BRANCH_NAME, $SOURCE_BRANCH\n\n# Copy environment and config files\nfor file in .env .env.local .envrc .tool-versions; do\n  if [ -f \"$MAIN_CHECKOUT/$file\" ]; then\n    cp \"$MAIN_CHECKOUT/$file\" \"./$file\"\n    echo \"Copied $file\"\n  fi\ndone\n\necho \"Config files copied\"\n\n# Initialize required submodules (idempotent; Rust-workflow only)\nmake ensure-submodules",
   "scripts": [
     {
-      "name": "all",
-      "command": "make all",
+      "name": "build-intentd",
+      "command": "make build-intentd",
       "mode": "command",
-      "category": "other"
-    },
-    {
-      "name": "ensure-submodules",
-      "command": "make ensure-submodules",
-      "mode": "command",
-      "category": "other"
+      "category": "build"
     },
     {
       "name": "build",
@@ -20,20 +14,8 @@
       "category": "build"
     },
     {
-      "name": "build-intentd",
-      "command": "make build-intentd",
-      "mode": "command",
-      "category": "build"
-    },
-    {
-      "name": "fmt",
-      "command": "make fmt",
-      "mode": "command",
-      "category": "format"
-    },
-    {
-      "name": "clippy",
-      "command": "make clippy",
+      "name": "clean",
+      "command": "make clean",
       "mode": "command",
       "category": "other"
     },
@@ -44,10 +26,16 @@
       "category": "typecheck"
     },
     {
-      "name": "test",
-      "command": "make test",
+      "name": "clippy",
+      "command": "make clippy",
       "mode": "command",
-      "category": "test"
+      "category": "other"
+    },
+    {
+      "name": "ensure-submodules",
+      "command": "make ensure-submodules",
+      "mode": "command",
+      "category": "other"
     },
     {
       "name": "test-intentd",
@@ -56,8 +44,110 @@
       "category": "test"
     },
     {
-      "name": "clean",
-      "command": "make clean",
+      "name": "test",
+      "command": "make test",
+      "mode": "command",
+      "category": "test"
+    },
+    {
+      "name": "all",
+      "command": "make all",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "fmt",
+      "command": "make fmt",
+      "mode": "command",
+      "category": "format"
+    },
+    {
+      "name": "help",
+      "command": "make help",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ensure-intentd-submodule",
+      "command": "make ensure-intentd-submodule",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ensure-fe-submodule",
+      "command": "make ensure-fe-submodule",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ensure-ios-submodule",
+      "command": "make ensure-ios-submodule",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "clean-dev",
+      "command": "make clean-dev",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "sweep",
+      "command": "make sweep",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "sweep-all",
+      "command": "make sweep-all",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "dev-daemon",
+      "command": "make dev-daemon",
+      "mode": "service",
+      "category": "dev"
+    },
+    {
+      "name": "release-daemon",
+      "command": "make release-daemon",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "run-intentd",
+      "command": "make run-intentd",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "run-fe",
+      "command": "make run-fe",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "build-sidecar",
+      "command": "make build-sidecar",
+      "mode": "command",
+      "category": "build"
+    },
+    {
+      "name": "dev",
+      "command": "make dev",
+      "mode": "service",
+      "category": "dev"
+    },
+    {
+      "name": "ios-open",
+      "command": "make ios-open",
+      "mode": "command",
+      "category": "other"
+    },
+    {
+      "name": "ios-info",
+      "command": "make ios-info",
       "mode": "command",
       "category": "other"
     }
