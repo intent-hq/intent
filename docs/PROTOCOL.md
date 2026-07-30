@@ -4278,8 +4278,10 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 **Delta envelope.** Reuses the standard `{ added, updated, removedIds }` envelope with content blocks
 as the id-bearing entities. Each entity carries the **full current block** (not a text diff) plus a
-`{ agentId, messageId, role }` pointer (and `messageSeq` + `timestamp` on the authoritative terminal
-frame):
+`{ agentId, messageId, role }` pointer — `role` is the row's real role: `assistant` for the stream
+family, the persisted role (`user`/`system`/`tool`) for the non-assistant row deltas below — and
+`messageSeq` + `timestamp` on the authoritative frames (the terminal reconcile and the
+non-assistant row deltas):
 
 - `added` — a block's first appearance this turn (e.g. a text block's first chunk, or a `tool_use`).
 - `updated` — an existing block grown/changed, matched by `id` (e.g. each subsequent text chunk
@@ -4288,6 +4290,43 @@ frame):
   This is non-empty only for orphan self-heal: e.g. a trailing partial the durable turn dropped, or
   a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
   snapshot.
+
+**Non-assistant row deltas (`agent:message`, [intent-hq/intentd#747](https://github.com/intent-hq/intentd/pull/747)).**
+In addition to the `agent:stream:*` family and `agent:tool:call`, the channel tails the per-persist
+`agent:message` event (§6.5) — the forwarder's existing `sessionId == agentId` filter scopes it to
+the subscribed agent — so persisted **non-assistant** rows (`user`/`system`/`tool`: direct sends,
+queue drains, wake deliveries, model-change notices) surface as live deltas and subscribers render
+new user messages with **no refetch**:
+
+- **Assistant echoes emit nothing.** An `agent:message` whose `role` is `assistant` maps to no
+  frame — the live stream + terminal reconcile owns assistant content, and emitting here would
+  double-deliver — and costs no conversation read. The role is additionally re-resolved from the
+  persisted row (defense-in-depth): a row that reads back as `assistant` still emits nothing.
+- **Re-read, not payload.** The event payload is intentionally lean (`{ agentId, messageId,
+  role, … }` — the row content is durably persisted, not enriched onto the event), so the row is
+  re-read from the bounded newest `agent.getConversation` page — the same source the seq-0
+  snapshot and the terminal reconcile use — keeping the emitted blocks byte-consistent with a
+  fresh snapshot. Each persisted block arrives as an `added` entity carrying the row's **real**
+  `role` plus the authoritative `messageSeq`, `timestamp`, and `streamingComplete: true`. A
+  re-read miss (a `messageId` outside the newest page, or a read error) emits **no** frame.
+- **Stable ids under re-delivery.** Non-assistant rows may persist their blocks without an `id`;
+  the mapper stamps the stable synthetic `{messageId}:{index}` onto such blocks, so a re-delivered
+  event upserts the same blocks as `updated` instead of duplicating. Known follow-up
+  ([monorepo#1114](https://github.com/intent-hq/monorepo/issues/1114)): a fresh
+  `agent.getConversation` / seq-0 snapshot still serves those blocks **id-less** — serve-time
+  stamping is proposed there to close the snapshot/delta id-parity gap.
+- **Streaming state untouched.** The per-turn assistant accumulation state is neither consulted
+  nor mutated: a user row landing mid-turn (e.g. a queue drain landing right before the turn's
+  first chunk, or an interrupt-priority send) cannot corrupt the in-flight assistant blocks, and
+  user block ids never surface as orphan `removedIds` at the terminal reconcile.
+- **Not a terminal signal.** Because these entities carry `streamingComplete: true`, that flag
+  alone no longer identifies the turn's terminal reconcile frame — clients discriminate the
+  terminal frame on `role == "assistant"` (plus `streamingComplete`).
+
+Ordering: a direct send persists the user row (and publishes its `agent:message`) before the turn
+worker spawns, and a queue drain's persist likewise precedes the drained turn's chunks, so the
+user-row delta arrives **before** its own turn's assistant chunks. The emit is **not** ordered
+against the *previous* turn's terminal frames (independent async paths).
 
 **Synthesized `tool_use` block shape.** Both the persisted transcript (`record_tool` in
 `agent_session`) and the live delta stream (`tool_delta` in `intent-transport`) synthesize
@@ -4499,7 +4538,10 @@ delta — honoring `removedIds` — equals a fresh `agent.getConversation` snaps
 A block's first appearance arrives as `added` with the same `block.id`; each growth is an `updated`
 carrying the **full** block. A tool call arrives as an `added` `tool_use` block, then a `tool_result`
 block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
-with `streamingComplete:true` and any orphan ids in `removedIds`.
+with `streamingComplete:true` and any orphan ids in `removedIds`. A persisted non-assistant row
+(direct send, queue drain — the non-assistant row deltas above) arrives as `added` entities with no
+live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
+`streamingComplete:true` in a single frame.
 
 ### 7.2 Interrupted partial-turn persistence
 
