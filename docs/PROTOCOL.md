@@ -69,7 +69,10 @@ Inbound JSON-RPC messages are capped at **40 MiB** (`MAX_INBOUND_MESSAGE_BYTES =
 - **WSS:** the limit is enforced on both the WebSocket frame size and the total message size, and the connection is closed on violation. The daemon attempts to send a close frame with code **1009 (Message Too Big)** before terminating. Delivery of the close frame is best-effort: a single over-limit frame fails fast on the frame header (its payload is not buffered), and the connection teardown may race with the client's in-flight write, so the client may not observe the close frame; a fragmented message is rejected once its accumulated fragments exceed the cap (so up to the limit may be buffered before rejection), and in that case the client typically does receive the 1009 close frame.
 - **UDS:** the daemon replies with a `-32600` error (`id: null`, since the request was never parsed) and then closes the connection, without draining the rest of the oversized line.
 
-Outbound (server→client) messages are not subject to this limit.
+Outbound (server→client) frames are capped at the same size (`MAX_OUTBOUND_MESSAGE_BYTES = MAX_INBOUND_MESSAGE_BYTES`, 40 MiB — intentd#743; an unscoped `git.diffs` on a huge dirty worktree once produced a 277 MiB frame that HOL'd the connection writer for ~38s). The cap is enforced at two layers:
+
+- **RPC responses** are checked at router serialization time, where the request id is known: an over-cap response is replaced with a **`-32010`** error echoing the request id, so the client fails fast instead of hitting its RPC timeout on a silently dropped frame (§9).
+- **Non-response frames** (subscription pushes, `events.event` notifications) are dropped by the connection writer task with an error log — a last-resort backstop, identical on UDS and WSS.
 
 ## 2. Authentication
 
@@ -807,7 +810,9 @@ fully-qualified remote-tracking name reconstruct it as `origin/<baseRef>` locall
 `workspace.get` enrich each `Workspace` with the nested rollup objects the iOS coverflow cards
 read, computed fresh from live state on the emit path (never persisted). They are decoded as
 optional by iOS and each is **omitted when not computable** (`skip_serializing_if`) rather than
-emitted as `null`, so absent simply yields a sparser card:
+emitted as `null`, so absent simply yields a sparser card. Since intentd#743 only `taskStats`
+and `agentSummary` are actually attached on these read paths — `diffSummary` is **always
+omitted** (see its bullet below):
 
 - `taskStats: { total, completed, inProgress }` — ports the canonical `computeTaskStats`
   (`task-stats.ts`) over the spec-linked direct-child task notes: `cancelled` is excluded from
@@ -823,20 +828,24 @@ emitted as `null`, so absent simply yields a sparser card:
   `false` (the headless backend has no live stream state — `status` carries liveness, matching the
   `AgentLite` decision); `lastActivity` is the session `updatedAt`.
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
-  ports the on-demand `computeWorkspaceDiffSummary` (`workspace-summaries.ts`): `totalFiles` counts
-  changed-vs-`HEAD` (staged+unstaged) plus untracked files; line totals sum the tracked diff;
-  `files` mirrors the on-demand source (empty array). Omitted entirely when the workspace has no git
-  worktree or no changes.
+  **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
+  `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
+  workspace on every enrichment pass pinned the blocking pool on large workspace sets). The field
+  stays on the wire shape as optional for decoder compatibility; clients that need diff data fetch
+  it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
+  workspace payload.
 
 **Derived display status (`displayStatus`, new in intentd).** Alongside the card aggregates, the
-same `workspace.list` / `workspace.get` emit path enriches each `Workspace` with a BE-owned
+same `workspace.list` / `workspace.get` emit path — and the lite `workspace.subscribe` seq-0
+snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. The field is
-decoded as optional and **omitted when `taskStats` is not computable** (`skip_serializing_if`,
-e.g. a transient notes-read failure) rather than emitted as `null` — on a missing field clients
-fall back to their local derivation, so an aggregates-free response can never misreport
-`not_started` / `pr_*`. The "current cycle" precedence:
+`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. When
+present, the field is **authoritative**: clients render it as-is and must not re-derive the
+status locally. It is decoded as optional and **omitted when `taskStats` is not computable**
+(`skip_serializing_if`, e.g. a transient notes-read failure) rather than emitted as `null` —
+only on a missing field do clients fall back to their local derivation, so an aggregates-free
+response can never misreport `not_started` / `pr_*`. The "current cycle" precedence:
 
 1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most recently
    updated open/draft entry in `pullRequests` — yields `pr_ready` (`mergeable == true` and not
@@ -849,8 +858,9 @@ fall back to their local derivation, so an aggregates-free response can never mi
 
 A merged PR in history never masks an open PR (step 1 scans `pullRequests` for open/draft
 entries) or open tasks (step 2 precedes the merged check). Transitions are pushed as
-`workspace:displayStatus-changed` (§6.5); the emit-path enrichment also seeds the in-memory
-baseline that event's recompute-and-compare runs against (a seed never emits).
+`workspace:displayStatus-changed` (§6.5); the emit-path enrichment (both the enriched list/get
+path and the lite snapshot path) also seeds the in-memory baseline that event's
+recompute-and-compare runs against (a seed never emits).
 
 
 ```json
@@ -1317,7 +1327,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | git.branchStatus | repoPath (req), branchName (req) | { branch, currentBranch, isCurrentBranch, ahead, behind, hasUncommittedChanges } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:getBranchStatus` IPC |
 | git.pull | repoPath (req), branchName (req) | { ok, error? } — path-based like `git.getBranches` (same repoPath validation, see above); ports the legacy `git:pullBranch` IPC used by the workspace-create auto-pull. When `branchName` is not the checked-out branch, only `origin/<branchName>` is fetched (worktrees are created from the remote-tracking ref); when it is checked out, the equivalent of `git pull --rebase origin <branchName>` runs with auto-stash (dirty worktree stashed incl. untracked → rebase → stash popped; the stash entry is **kept** on a conflicted pop, git-CLI parity). After a successful pull, if `.gitmodules` exists, runs `git submodule update --init --recursive` (bounded 100s timeout) to sync submodule worktrees to updated gitlinks. Ordinary pull failures (conflicts, unreachable remote, stash-recovery problems, submodule sync timeout/failures) are a structured `{ ok: false, error }`, never a JSON-RPC error; `error` is omitted on success |
 | git.changes | workspaceId (req) | { files: FileStatus[] } — the same working-tree list as `git.status.files` |
-| git.diffs (alias git.diff) | workspaceId (req), path?, paths?: string[], staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir). `path` narrows to one file; `paths` narrows to a set of worktree-relative files. Both are literal pathspecs (no glob expansion), unioned when both are set, and applied daemon-side so the diff walk is pruned to the requested files; an empty/omitted narrowing set means the full tree |
+| git.diffs (alias git.diff) | workspaceId (req), path?, paths?: string[], staged? | per-file diff hunks (`staged: true` → HEAD→index; else index→workdir). `path` narrows to one file; `paths` narrows to a set of worktree-relative files. Both are literal pathspecs (no glob expansion), unioned when both are set, and applied daemon-side so the diff walk is pruned to the requested files; an empty/omitted narrowing set means the full tree. **Response budget (intentd#743):** a single file whose serialized hunks exceed **512 KiB** keeps its `path` but carries an empty `hunks` array; once the whole-response budget of **4 MiB** is spent, every further file is likewise emitted as a path-only entry with empty `hunks` — no entries are dropped and file order is preserved, so the client still sees the full changed-path set. Truncation is silent on the wire (daemon-side warn log only); a client that needs an empty-`hunks` file's content re-requests with `path`/`paths` scoped to it. Binary files also yield empty `hunks`, so empty hunks alone do not imply truncation |
 | git.commits (alias git.log) | workspaceId (req), limit?, nextToken? (or nested `page: { limit, continuationToken }`) | { items: CommitSummary[], nextToken? } — paginated reverse-chronological history; remote/non-repo workspaces return empty. **Metadata-only**: each `CommitSummary` is `{ hash, sha, author, email, date, message, agentId?, linkedNoteId? }` — `hash` is the canonical full commit hash (pass it as `git.commitDetails` `commitHash`), `sha` is its 7-char abbreviation for display, and `email` carries the same value `git.commitDetails` returns as `authorEmail` (both fields kept for legacy-client parity). The walk skips per-commit tree diffs, so `files` is omitted; fetch per-file data on demand via `git.commitDetails` |
 | git.commitDetails | workspaceId (req), commitHash (req) | { commitHash, author, authorEmail, date, message, files: string[], fileDetails: [{ path, additions, deletions }] } — metadata + per-file line stats for one commit (diff vs first parent; a root commit diffs against the empty tree). `commitHash` accepts anything revparse-able. `files` mirrors `fileDetails[].path` for callers that only want names. Unknown/remote/non-repo workspaces and unresolvable hashes degrade to the same shape with empty strings/arrays (echoing `commitHash`), never a JSON-RPC error; missing `commitHash` → `-32602`. This is the on-demand per-file read behind metadata-only commit lists (see CommitWithAttribution, §5.18) |
 | git.showFile | workspaceId (req), filePath (req), ref (req) | { content } — file content at `ref` (`git show <ref>:<path>` semantics; ports the legacy `git:show-file` IPC behind the diff viewers / PR section / commits timeline). `filePath` may be worktree-relative or absolute (absolute paths under the worktree are made relative); `ref` accepts anything revparse-able (commit hash, branch, `HEAD`, `<hash>^`, …) plus the index ref `":0"` (stage-0 index entry). A path missing at `ref` (e.g. a new file) → `{ content: "" }`, mirroring the legacy handler; unknown/remote/non-repo workspaces → `{ content: "" }` (the same empty fallback as the other `git.*` reads); an unresolvable `ref` → `-32603` |
@@ -4213,7 +4223,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 | --- | --- | --- | --- | --- |
 | `note.subscribe` / `note.unsubscribe` | note | per-workspace (`workspaceId` req — `-32602` if missing/empty) | array of `Note` entities (newest-first) | `note:created`/`updated`/`deleted` → `added`/`updated`/`removedIds` via a re-read of the entity. |
 | `task.subscribe` / `task.unsubscribe` | task | per-workspace (`workspaceId` req) | array of `WorkspaceTask` entities | tails `task:status-changed`/`task:ready-tasks-changed`. |
-| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of `Workspace` entities visible to the connection, **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`/`displayStatus-changed`. Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch). |
+| `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of **lite** `Workspace` projections visible to the connection (see notes), **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`/`displayStatus-changed`. Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch). **Lite seq-0 snapshot (intentd#743):** snapshot rows are store rows + live `activity` + the cheap status aggregates — each row carries `taskStats` (store-level counting query, no note-body hydration), `displayStatus` (same derivation as the enriched path; authoritative when present — clients must not re-derive, §5.1), and `cowSupported` (lifetime-cached probe), while the heavy `agentSummary` and `diffSummary` are **always omitted** (a stats-read failure degrades that row to absent `taskStats` + `displayStatus`, same as the enriched path). The omitted aggregates arrive via the enriched follow-ups: each delta upserts the full `workspace.get` projection (`agentSummary` present; `diffSummary` stays omitted everywhere, §5.1), and clients can call `workspace.get` directly. This keeps seq-0 at tens of KB instead of multi-MB (an enriched ~80-workspace snapshot was ~4.5 MiB and HOL'd the connection writer). |
 | `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | array of `Comment` entities | tails `comment:added`/`resolved`. |
 | `agent.subscribe` / `agent.unsubscribe` (no `eventTypes`) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Likewise `agent.unsubscribe` without `workspaceId` is the channel form. |
 | `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty) | newest `agent.getConversation` page, plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
@@ -4667,8 +4677,9 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. An `isNewRepo` repository-initialization failure in `workspace.create` (§5.1 new-repository initialization) keeps the bare "Internal error" message but carries the cause in `error.data` (`workspace.create: repository initialization failed: <detail>`). |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, `system.importLegacy`, or `system.gitCredential`, §5). |
+| -32010 | Oversized response | The serialized response to a successful request exceeded the outbound frame cap (`MAX_OUTBOUND_MESSAGE_BYTES`, 40 MiB — §1.3; intentd#743). The response is replaced at router serialization — where the request id is known — with this error echoing the id, so the client fails fast instead of hitting its RPC timeout on a silently dropped frame. `message` names the method and serialized size (`"response for <method> exceeds maximum outbound frame size: <n> bytes > <limit> bytes"`); `error.data = { code: "oversized-response", method, responseBytes, limit }`. Clients should re-request with narrower scope (e.g. path-scoped `git.diffs`, §5.6). The connection-writer cap remains a last-resort backstop for non-response frames (subscription pushes/events), which are dropped, never errored (§1.3). |
 
-The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict) and `-32001` (Unauthorized, local-only guard); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
+The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict), `-32001` (Unauthorized, local-only guard), and `-32010` (Oversized response); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
 
 ### 9.1 Clone failure taxonomy (`workspace.create`)
 
