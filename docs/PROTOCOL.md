@@ -4292,8 +4292,12 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 
 Agent assistant output is delivered as the `agent:stream:*` event family (subscribe with `events.subscribe(["agent:stream:*"])`, optionally scoped by `workspaceId`). Note that tool-call activity is emitted as `agent:tool:call`, which the `agent:stream:*` filter does **not** match — a client that wants the full live turn (text + tool calls) subscribes with `["agent:stream:*", "agent:tool:call"]`. The backend maps a provider's streaming signals to these canonical event types.
 
-The backend emits **four** streaming signals in production (plus the pre-first-token
-`agent:stream:status` startup hint, §6.5). The formerly reserved
+The backend emits the **four** streaming signals in the table below in production. A fifth
+event — the pre-first-token `agent:stream:status` startup hint (§6.5) — also matches the
+`agent:stream:*` subscription filter and arrives on the same subscription, so clients
+subscribing to the family should expect it on the wire too (it is documented in §6.5, not
+repeated in the table below; note the converse quirk that `agent:tool:call`, which **is** in
+the table, does *not* match the filter and must be subscribed explicitly). The formerly reserved
 `agent:stream:content-blocks` / `agent:stream:message` / `agent:stream:tool_use` /
 `agent:stream:tool_result` constants were never emitted and have been **removed** from the
 taxonomy and `ALL_EVENT_TYPES` ([intent-hq/intentd#756](https://github.com/intent-hq/intentd/pull/756)).
