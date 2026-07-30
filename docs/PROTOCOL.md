@@ -1241,8 +1241,9 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    `[WORKSPACE EVENTS]` wake (`… requests a discussion: <reason>` / `… reports a blocker:
    <reason>`) with `event_notification` metadata embedding the `agent:attention-requested`
    payload. The wake is immediate even for children in an undelivered `after_all` delegation
-   group (mirroring the immediate grouped-failure wake: the request is an alert the parent
-   must hear now, not at group settlement); the group's single aggregated wake still folds the
+   group — unlike a grouped child's completion report, which reaches the parent only inside
+   the group's single aggregated wake (`agent.reportToParent`, §5.5 table above), an attention
+   request is an alert the parent must hear now; the aggregated group wake still folds the
    attention request into that child's line as the record. Non-delegated callers have no
    parent to wake.
 
