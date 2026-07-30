@@ -112,20 +112,20 @@
     {
       "name": "release-daemon",
       "command": "make release-daemon",
-      "mode": "command",
-      "category": "other"
+      "mode": "service",
+      "category": "dev"
     },
     {
       "name": "run-intentd",
       "command": "make run-intentd",
-      "mode": "command",
-      "category": "other"
+      "mode": "service",
+      "category": "dev"
     },
     {
       "name": "run-fe",
       "command": "make run-fe",
-      "mode": "command",
-      "category": "other"
+      "mode": "service",
+      "category": "dev"
     },
     {
       "name": "build-sidecar",
