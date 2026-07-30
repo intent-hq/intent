@@ -840,12 +840,12 @@ same `workspace.list` / `workspace.get` emit path — and the lite `workspace.su
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. When
-present, the field is **authoritative**: clients render it as-is and must not re-derive the
-status locally. It is decoded as optional and **omitted when `taskStats` is not computable**
+`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. The field
+is **authoritative**: clients render it as-is and perform **no local derivation** (ios#59,
+cloudlands-fe#560). It is decoded as optional and **omitted when `taskStats` is not computable**
 (`skip_serializing_if`, e.g. a transient notes-read failure) rather than emitted as `null` —
-only on a missing field do clients fall back to their local derivation, so an aggregates-free
-response can never misreport `not_started` / `pr_*`. The "current cycle" precedence:
+when the field is absent or carries an unknown value, clients default the display to
+`not_started`. The "current cycle" precedence:
 
 1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most recently
    updated open/draft entry in `pullRequests` — yields `pr_ready` (`mergeable == true` and not
