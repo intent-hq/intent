@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v2.8
+# Intent Backend — JSON-RPC Protocol v2.9
 
-**Protocol Version:** `2.8`
+**Protocol Version:** `2.9`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `2.8`
+**Version:** `2.9`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. No existing method changed shape in any of these bumps.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. No existing method changed shape in any of these bumps.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "2.8", server: { protocolVersion: "2.8", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "2.8", ... }`
+- `client.hello` response: `{ protocolVersion: "2.9", server: { protocolVersion: "2.9", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.9", ... }`
 
 ### Compatibility Policy
 
@@ -156,22 +156,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **308 dispatchable method names** across the following categories:
+The API exposes **309 dispatchable method names** across the following categories:
 
-- **Router methods:** 272 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 273 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 308 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 309 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 308 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 309 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.38) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.39) carry each method's parameter and result contract.
 
-### Router methods by namespace (272 total)
+### Router methods by namespace (273 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
 | specialist | 5 | create, delete, edit, get, list |
-| stats | 1 | getUsage |
+| stats | 2 | getRateHistory (§5.39; v2.9, daemon-global — no `workspaceId`), getUsage |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
@@ -819,14 +819,17 @@ omitted** (see its bullet below):
   `total`, `complete` counts as `completed`, and `in_progress` + `review_required` count as
   `inProgress`. The renderer-only per-task `tasks` array is omitted.
 - `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
-  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding }`.
+  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding, parentAgentId? }`.
   This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
   `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
   the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
   `agentSummary?.agentIds ?? []`) and lists the same agents (same order) used to build `agents`.
   `status` carries the same wire strings as `agent.list`; `isStreaming`/`isResponding` are always
   `false` (the headless backend has no live stream state — `status` carries liveness, matching the
-  `AgentLite` decision); `lastActivity` is the session `updatedAt`.
+  `AgentLite` decision); `lastActivity` is the session `updatedAt`; `parentAgentId` (v2.9, additive)
+  is the delegating/spawning agent's id — the same session value surfaced as
+  `metadata.createdByAgentId` on `agent.get`/`agent.list` loads (§5.5) — **omitted** for root
+  agents, so clients can rebuild the delegation tree from the summary alone.
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
   **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
   `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
@@ -2306,7 +2309,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.8"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.9"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2318,18 +2321,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.8",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.9",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"2.8","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.9","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.8",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.9",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"2.8","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.9","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -4103,6 +4106,50 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`, `modelTiers`) are **omitted when unset, never null** — clients detect by presence.
 - `modelTiers` — the `{ fast, balanced, smart }` tier→model-id map — is present **only** for providers with a static tier table (`auggie`, `claude-code`, `codex`, `cortex`). Dynamic-model providers (`opencode`, `unsloth`, `pi`, `droid`, `grok`, `mock`) omit it; their models come from `models.list` (§5.30).
 - `defaultProviderId` mirrors the registry's `isDefault` entry (`auggie`).
+
+### 5.39 Token-rate history — `stats.getRateHistory` *(v2.9)*
+
+The backend owns a global **per-minute token-rate history** (the HUD TOK/MIN chart).
+Recording is daemon-internal and rides the same turn-end bookkeeping as the hourly usage
+stats (§5.36): at the end of each prompt turn the daemon folds the turn's clamped **token
+delta** — the identical delta that feeds `usage_stats_hourly`, never a raw cumulative
+snapshot — into a `usage_rate_minutely` row keyed by the RFC-3339 **UTC minute floor**
+(`"YYYY-MM-DDTHH:MM:00Z"`). Rates aggregate **across all workspaces**: there is
+deliberately no workspace / model / provider dimension. All-zero deltas are skipped. The
+table is capped by retention: an hourly reaper deletes buckets at or older than the
+**24h** cutoff (inclusive, so a boundary-aligned sweep still holds the cap), bounding it
+at ≤ 1440 rows. Only the **read** crosses the wire — recording has no RPC.
+`stats.getRateHistory` is global: it takes **no** `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| stats.getRateHistory | limit: integer 1–1440, default 60 — the number of trailing minute samples | `{ samples: RateSample[] }` — -32602 on a non-integer or out-of-range limit |
+
+**RateSample** — `{ bucketUtc, inputTokens, outputTokens, cacheReadTokens,
+cacheCreationTokens }`:
+
+- **samples** — exactly `limit` entries in **chronological order** (oldest first), one per
+  minute, ending at the **current UTC minute floor**. Minutes with no recorded activity
+  are **zero-filled**, so the array is always a gap-free minute-by-minute series; an empty
+  store returns all-zero samples, never an error.
+- **bucketUtc** — the sample's UTC minute floor (`"2026-07-30T14:07:00Z"`). Keys sort
+  lexicographically in chronological order.
+- The four token counters are the minute's accumulated per-turn deltas (same clamped-≥ 0
+  semantics as §5.36's UsageTotals).
+
+Note the trailing-window semantics: like §5.36's `24h` period this is an **absolute
+rolling window** ending at the current minute; there is no timezone parameter — samples
+are UTC and any local-time rendering is a client concern.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":95,"method":"stats.getRateHistory","params":{ "limit":3 } }
+// ← response
+{ "jsonrpc":"2.0","id":95,"result":{ "samples":[
+  { "bucketUtc":"2026-07-30T14:05:00Z","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 },
+  { "bucketUtc":"2026-07-30T14:06:00Z","inputTokens":7,"outputTokens":2,"cacheReadTokens":0,"cacheCreationTokens":0 },
+  { "bucketUtc":"2026-07-30T14:07:00Z","inputTokens":100,"outputTokens":40,"cacheReadTokens":20,"cacheCreationTokens":10 } ] } }
+```
 
 ## 6. Events & Subscriptions
 
