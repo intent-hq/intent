@@ -6,33 +6,31 @@ permissions:
   pull-requests: read
 
 env:
-  # Burst pr-title to WarpBuild when more than this many Linux jobs are
-  # queued/running ahead of this run (see the route job). Bursted jobs
-  # don't carry the self-hosted+Linux labels and stop counting toward
-  # the depth, so the system naturally falls back to tinybox as it
-  # frees up.
+  # Burst pr-title to a GitHub-hosted runner when more than this many
+  # Linux jobs are queued/running ahead of this run (see the route job).
+  # Bursted jobs don't carry the self-hosted+Linux labels and stop
+  # counting toward the depth, so the system naturally falls back to
+  # tinybox as it frees up.
   LINUX_BURST_THRESHOLD: 2
 
 jobs:
   # Decides where pr-title runs: the local tinybox runner normally, or a
-  # WarpBuild ephemeral runner when the tinybox queue is backed up. Runs
-  # on a small WarpBuild ephemeral runner so the burst decision is
-  # independent of the tinybox queue: a tinybox-pinned probe would queue
-  # behind the very backlog it measures (and deadlock entirely with
-  # tinybox offline). The probe fails open to tinybox on API errors; if
-  # the job itself fails (runner outage, timeout), pr-title is skipped
-  # and needs a re-run — a deliberate trade-off. Pattern ported from
+  # GitHub-hosted runner when the tinybox queue is backed up. Runs on a
+  # small GitHub-hosted runner so the burst decision is independent of
+  # the tinybox queue: a tinybox-pinned probe would queue behind the
+  # very backlog it measures (and deadlock entirely with tinybox
+  # offline). The probe fails open to tinybox on API errors; if the job
+  # itself fails (runner outage, timeout), pr-title is skipped and needs
+  # a re-run — a deliberate trade-off. Pattern ported from
   # intent-hq/intentd#762.
   route:
-    runs-on: warp-ubuntu-latest-x64-2x
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     timeout-minutes: 5
     permissions:
       contents: read
       # Reads the Actions queue; job-level so the other jobs don't inherit
-      # it. The probe (and the optional cross-repo CI_QUEUE_READ_TOKEN)
-      # runs on third-party WarpBuild ephemeral runners — an accepted
-      # trade-off.
+      # it.
       actions: read
     outputs:
       utility_labels: ${{ steps.decide.outputs.utility_labels }}
@@ -51,14 +49,14 @@ jobs:
           github-token: ${{ secrets.CI_QUEUE_READ_TOKEN || github.token }}
           script: |
             const tinybox = ["self-hosted", "Linux", "X64"];
-            // pr-title is seconds-long; a 2x runner is plenty when bursting.
-            const utilityBurst = ["warp-ubuntu-latest-x64-2x"];
+            // pr-title is seconds-long; a standard runner is plenty when bursting.
+            const utilityBurst = ["ubuntu-latest"];
             const threshold = parseInt(process.env.THRESHOLD || "2", 10);
             // Count self-hosted Linux jobs that are queued or running in
             // queued/in-progress runs: a running job occupies the single
-            // tinybox slot just as much as a queued one. WarpBuild jobs —
-            // including this route job — don't match the self-hosted+Linux
-            // label filter, so they never inflate the depth.
+            // tinybox slot just as much as a queued one. GitHub-hosted
+            // jobs — including this route job — don't match the
+            // self-hosted+Linux label filter, so they never inflate the depth.
             const owner = context.repo.owner;
             const repos = ["intentd", "cloudlands-fe", "monorepo"];
             let depth = 0;
