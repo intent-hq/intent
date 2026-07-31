@@ -4472,8 +4472,9 @@ partial sentence. `digest` is the parsed digest span, derived from the **unclipp
 its capture requires the closing `</agent_digest>` tag, so a fully-streamed digest surfaces
 immediately while an unclosed opener is stripped to end-of-text and a partial span never
 leaks. Both fields use the same extraction as the §5.5 `AgentLite` live-turn preview overlay
-([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786)), which clips
-identically mid-turn; each field is **omitted** (never an empty string) until derivable, so a
+([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786)), which mid-turn
+applies the same newline clipping to `lastAgentResponse` (and, likewise, none to `digest`);
+each field is **omitted** (never an empty string) until derivable, so a
 turn that has streamed no completed line / no digest yet carries neither and clients keep
 their previous preview. The content-bearing
 per-chunk payload lives on the **internal** `chat:stream:delta` event (§6.5), deliberately
