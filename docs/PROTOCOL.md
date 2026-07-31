@@ -1625,7 +1625,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
-| terminal.list | workspaceId (req) | bare array `[{ id, name, cwd, isExecutingCommand }]` — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
+| terminal.list | workspaceId (req) | bare array of live, interactive/list-visible PTYs `[{ id, name, cwd, isExecutingCommand }]`; script-owned PTYs are omitted because scripts have their own runtime UI, and naturally exited PTYs are omitted while retained scrollback remains available until release — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **`Setup Script`** for the workspace setup terminal, §5.1/§5.25), else the constant `Terminal`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `Terminal` defensively) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -1936,7 +1936,9 @@ the overriding flag ("overridden by startup flag …").
 > interactive methods below let a thin client open, drive, resize, and tear down PTYs that
 > run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
 > host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
-> (re)connect; multiple clients may attach to the same session. Each PTY may carry an
+> (re)connect; multiple clients may attach to the same session. Script-owned PTYs are not
+> returned by `terminal.list`; their output remains available through `script.output` and
+> direct buffer access by id. Each PTY may carry an
 > optional daemon-assigned display name (internal spawn metadata, e.g. `"Setup Script"`
 > for the workspace setup terminal — §5.1); `terminal.create` does **not** accept a name
 > parameter, and `terminal.list` (§5.9) surfaces the name with a `"Terminal"` fallback.
