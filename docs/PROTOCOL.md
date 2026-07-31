@@ -1233,7 +1233,7 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    normally; no retry affordance), and the request retires only when the agent next receives a
    **user-origin** delivery — `agent.sendMessage` (the FE/router front door),
    `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`, or a drained user-origin queue
-   entry (the same origin taxonomy as the question hold, this section). Automatic deliveries
+   entry (the same origin taxonomy as the §5.5 question hold). Automatic deliveries
    (A2A sends, parent/subscription wakes, `agent.sendToTask`, `agent.wakeOrCreate` context
    messages) do **NOT** retire it — their turns run with the request left pending. The
    user-origin turn-begin clear emits `agent:updated` with
