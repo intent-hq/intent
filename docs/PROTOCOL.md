@@ -843,27 +843,44 @@ same `workspace.list` / `workspace.get` emit path — and the lite `workspace.su
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"not_started" | "in_progress" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`. The field
-is **authoritative**: clients render it as-is and perform **no local derivation** (ios#59,
-cloudlands-fe#560). It is decoded as optional and **omitted when `taskStats` is not computable**
-(`skip_serializing_if`, e.g. a transient notes-read failure) rather than emitted as `null` —
-when the field is absent or carries an unknown value, clients default the display to
-`not_started`. The "current cycle" precedence:
+`"not_started" | "in_progress" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
+(`"idle"` new in intentd#793). The field is **authoritative**: clients render it as-is and
+perform **no local derivation** (ios#59, cloudlands-fe#560; the former FE sidebar
+running/idle grouping overlay is deleted, cloudlands-fe#578). It is decoded as optional and
+**omitted when `taskStats` is not computable** (`skip_serializing_if`, e.g. a transient
+notes-read failure) rather than emitted as `null` — when the field is absent or carries an
+unknown value, clients default the display to `not_started`. The derivation folds live agent
+activity around the "current cycle" rollup (intentd#793):
 
-1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most recently
-   updated open/draft entry in `pullRequests` — yields `pr_ready` (`mergeable == true` and not
-   draft) or `pr_open`.
-2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
-   (`inProgress > 0` or `completed > 0`), else `not_started`.
-3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests` entry) →
-   `pr_merged`.
-4. **All tasks complete** (`total > 0`, `completed == total`) → `complete`; else `not_started`.
+1. **Agent running** — any agent running in the workspace (the same signal behind
+   `activity == "agent_running"`) → `in_progress`, **unconditionally** (overrides the PR
+   stages and `complete`).
+2. **Not running** — the "current cycle" precedence:
+   1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
+      recently updated open/draft entry in `pullRequests` — yields `pr_ready`
+      (`mergeable == true` and not draft) or `pr_open`.
+   2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
+      (`inProgress > 0` or `completed > 0`), else `not_started`.
+   3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests`
+      entry) → `pr_merged`.
+   4. **All tasks complete** (`total > 0`, `completed == total`) → `complete`; else
+      `not_started`.
+3. **Idle demotion** — when not running and step 2 yields `in_progress` or `not_started`,
+   the result is demoted to `idle`; the PR stages and `complete` pass through.
 
-A merged PR in history never masks an open PR (step 1 scans `pullRequests` for open/draft
-entries) or open tasks (step 2 precedes the merged check). Transitions are pushed as
-`workspace:displayStatus-changed` (§6.5); the emit-path enrichment (both the enriched list/get
-path and the lite snapshot path) also seeds the in-memory baseline that event's
-recompute-and-compare runs against (a seed never emits).
+`not_started` and a non-running `in_progress` are therefore **no longer emitted**; those enum
+variants are retained for wire back-compat (older daemons / client decode paths — they still
+decode, and clients keep their `not_started` default for absent/unknown values).
+
+A merged PR in history never masks an open PR (step 2.1 scans `pullRequests` for open/draft
+entries) or open tasks (step 2.2 precedes the merged check). Transitions are pushed as
+`workspace:displayStatus-changed` (§6.5), which since intentd#793 also fires on agent
+start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
+running→not-running recompute runs after the same debounce grace window as
+`workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`,
+a PR stage, or `complete`), so the two stay in lockstep. The emit-path enrichment (both the enriched list/get path and the lite
+snapshot path) also seeds the in-memory baseline that event's recompute-and-compare runs
+against (a seed never emits).
 
 
 ```json
@@ -4257,7 +4274,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
-| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
+| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (promotion to `in_progress`), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:cow:created, sandbox:cow:merged | Emitted when `agent.delegate` resolves the `isolation` mode to `"cow"` on a sandbox-eligible workspace and the background provisioning task succeeds (§5.5 — asynchronous: the delegate result itself only ever reports `effectiveIsolation: "pending"`; this row is about the resolved request mode, not that result field) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.cow.merge`). `sandbox:cow:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:cow:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
