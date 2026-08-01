@@ -1390,8 +1390,8 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   row); an unparseable `queuedAt` fails open (content untouched). Messages delivered
   immediately (never queued) are not annotated. Alongside the content note, the drained
   entry's `messageMetadata` is stamped with structured queue info —
-  `queueInfo: { "queuedAt": "<ISO, the entry's enqueue timestamp>", "waitedMs": <non-negative
-  integer millis> }` — persisted on the user transcript row and round-tripping on chat reads
+  `queueInfo: { "queuedAt": "<ISO enqueue timestamp>", "waitedMs": <non-negative millis> }`
+  — persisted on the user transcript row and round-tripping on chat reads
   (`agent.getConversation` / `chat.subscribe`) like the A2A sender-attribution metadata, so
   clients can render the wait without parsing the note text. Same guards as the note: an
   existing `queueInfo` is never overwritten (first-delivery numbers stay across requeues),
