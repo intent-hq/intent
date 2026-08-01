@@ -70,7 +70,9 @@ workflow dispatch.
   (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
   absent). Manifests are dual-published — the mirror's copy points at the mirrored
   assets, the intentd repo's copy is unchanged — and the sitter fetches the mirror
-  first with a coded fallback to intentd. `mirror-release.yml` (manual dispatch)
+  first with a coded fallback to intentd. Daemon release notes are mirrored too
+  (source changelog with download URLs rewritten to the mirror; sitter releases
+  keep their purpose-written notes). `mirror-release.yml` (manual dispatch)
   backfills older releases. The mirror is temporary until intentd is open-sourced.
   Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
