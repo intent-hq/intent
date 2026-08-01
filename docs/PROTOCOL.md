@@ -1989,6 +1989,7 @@ the overriding flag ("overridden by startup flag …").
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
 - **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
+- **Workspace API tool output (new in intentd):** `workspaceApi.maxOutputChars` *(number, default `100000`; `0` = unlimited, otherwise `1000..=10000000` — a non-zero value below 1000 rejects with `-32602`)*, `workspaceApi.toonOutput` *(boolean, default `true`)*. TOML-backed under a `[workspaceApi]` config.toml section; they shape the plain success body of the agent-facing MCP `workspace_api` tool — the oversized-output redirect and TOON encoding described in §5.22.
 - **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
 
 **Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `linear.issueFilter`.
@@ -2644,6 +2645,26 @@ enable/disable, and restart MCP servers the daemon hosts. It is **distinct** fro
 MCP callback**, which lets a running agent reach BE-hosted MCP tools
 and surfaces as the `mcp:notification` event — that callback has no `mcp.servers.*` method. Health
 and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
+
+> **`workspace_api` output shaping (agent callback, new in intentd).** Two `workspaceApi.*`
+> settings (§5.12) shape the plain success body of the agent-facing MCP `workspace_api` tool;
+> both are read live per invocation (a settings-read failure falls back to the catalog
+> defaults). **TOON encoding** (`workspaceApi.toonOutput`, default `true`): object/array JS
+> results are TOON-encoded (token-efficient) instead of pretty JSON; scalars, strings,
+> booleans, numbers, and `null` keep pretty JSON, a value the TOON encoder rejects falls
+> back to pretty JSON, and setting the knob `false` restores pretty JSON for everything.
+> **Oversized-output redirect** (`workspaceApi.maxOutputChars`, default `100000`, `0` =
+> unlimited): when the final rendered text body (post-TOON) exceeds the limit, the FULL
+> output is written to `<workspace-folder>/tool-outputs/<utc-timestamp>-<short-id>.<toon|json>`
+> — the workspace's own folder (today's layout: `<workspaces-root>/<workspace-name>/tool-outputs/`),
+> a **sibling of the repo checkout**, never inside the git tree, so it needs no git
+> exclusion and the worktree-rooted `ws.file.*` surface cannot reach it — and the tool
+> returns a pointer message instead, carrying the total character count, the configured
+> limit, the absolute file path, a **2,000-char head preview**, and inspection hints
+> (grep/head/tail/ranged reads rather than reading the file whole). Error results and the
+> `__mcpContentItems` resource pass-through are exempt from both knobs, and a redirect
+> that cannot be written (e.g. no resolvable workspace directory) returns the untruncated
+> output — the tool call never fails because of the redirect.
 
 | Method | Params | Result |
 | --- | --- | --- |

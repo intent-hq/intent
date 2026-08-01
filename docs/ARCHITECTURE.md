@@ -36,6 +36,9 @@ The daemon embeds:
   launches pi with a bundled extension (`pi -e`); the extension connects to
   the agent's bridge via `INTENTD_MCP_BRIDGE_ADDR` from the inherited
   environment and registers the workspace tools through `pi.registerTool`.
+  `workspace_api` results are shaped by the `workspaceApi.*` settings — TOON
+  encoding of object/array results plus an oversized-output redirect to the
+  workspace folder's `tool-outputs/` directory (PROTOCOL.md §5.12 / §5.22).
 - A **provider-agnostic source-control** client (the `SourceControl` trait;
   `GitHubSourceControl` via octocrab) for PR/issue/review/check-run/mergeability.
 - An optional **context engine** abstraction whose only current implementation
