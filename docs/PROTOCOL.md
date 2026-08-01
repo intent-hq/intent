@@ -1388,7 +1388,15 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   prefix (a terminal-failure requeue keeps its first-delivery numbers); `persisted: true`
   requeues are never rewritten (the delivered prompt stays byte-identical to the durable
   row); an unparseable `queuedAt` fails open (content untouched). Messages delivered
-  immediately (never queued) are not annotated.
+  immediately (never queued) are not annotated. Alongside the content note, the drained
+  entry's `messageMetadata` is stamped with structured queue info —
+  `queueInfo: { "queuedAt": "<ISO enqueue timestamp>", "waitedMs": <non-negative millis> }`
+  — persisted on the user transcript row and round-tripping on chat reads
+  (`agent.getConversation` / `chat.subscribe`) like the A2A sender-attribution metadata, so
+  clients can render the wait without parsing the note text. Same guards as the note: an
+  existing `queueInfo` is never overwritten (first-delivery numbers stay across requeues),
+  `persisted: true` requeues are never stamped, and an unparseable `queuedAt` skips the
+  stamp; negative waits (clock skew) clamp to `0`.
 - **`agent.diagnostics` queues fill** — the per-agent `queues` snapshots are now real
   (previously hardcoded `[]`), using the same drain-order sorting.
 
