@@ -843,15 +843,33 @@ same `workspace.list` / `workspace.get` emit path — and the lite `workspace.su
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"not_started" | "in_progress" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
-(`"idle"` new in intentd#793). The field is **authoritative**: clients render it as-is and
+`"not_started" | "in_progress" | "needs_attention" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
+(`"idle"` new in intentd#793, `"needs_attention"` new in intentd). The field is
+**authoritative**: clients render it as-is and
 perform **no local derivation** (ios#59, cloudlands-fe#560; the former FE sidebar
 running/idle grouping overlay is deleted, cloudlands-fe#578). It is decoded as optional and
 **omitted when `taskStats` is not computable** (`skip_serializing_if`, e.g. a transient
 notes-read failure) rather than emitted as `null` — when the field is absent or carries an
-unknown value, clients default the display to `not_started`. The derivation folds live agent
-activity around the "current cycle" rollup (intentd#793):
+unknown value, clients default the display to `not_started`. The derivation folds the
+needs-attention signal and live agent activity around the "current cycle" rollup
+(intentd#793):
 
+0. **Needs attention** *(new in intentd)* — any **top-level foreground** agent in the
+   workspace is waiting on the user → `needs_attention`, **unconditionally** (step 0
+   outranks everything, including the step-1 agent-running promotion). A session counts
+   when it is top-level foreground — no `parentAgentId`, not background (`isBackground`),
+   and not deleted — and either (a) carries a pending **attention request**
+   (`attentionRequestKind` = `discussion`/`blocker`, raised via
+   `ws.agent.requestDiscussion` / `ws.agent.reportBlocker`, §5.5) or (b) has **pending
+   structured questions** — the same question-hold derivation as §5.5 (first non-system
+   transcript tail is a question-bearing assistant message whose id differs from the
+   `dismissedQuestionsMessageId` marker). Child (`parentAgentId` set) and background
+   sessions never count: their attention surface is the parent/subscriber (the §5.5
+   attention-retire taxonomy). The cheap session-metadata check (attention requests) runs
+   over every candidate first; transcript tail reads (question holds) only happen when no
+   session already flagged. Best-effort: a store read failure fails open to `false` (the
+   question-hold derivation fails open itself), so list/get emission is never wedged and
+   attention is never fabricated.
 1. **Agent running** — any agent running in the workspace (the same signal behind
    `activity == "agent_running"`) → `in_progress`, **unconditionally** (overrides the PR
    stages and `complete`).
@@ -878,7 +896,16 @@ entries) or open tasks (step 2.2 precedes the merged check). Transitions are pus
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
 `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`,
-a PR stage, or `complete`), so the two stay in lockstep. The emit-path enrichment (both the enriched list/get path and the lite
+a PR stage, or `complete`), so the two stay in lockstep. The step-0 attention signal adds
+its own recompute-and-compare points: an attention **raise** (`ws.agent.requestDiscussion`
+/ `ws.agent.reportBlocker` — a child/background raise stays silent, since the derivation
+ignores those sessions and the transition-only emission suppresses the no-op) and its
+**retire** (the turn-begin clear on a qualifying delivery, §5.5); a **question-asking turn
+end** (the persisted assistant tail flips the question-hold derivation either way) and
+each question-hold **release** — a persisted user-origin row superseding the question tail
+(`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s
+regenerated message, a drained user-origin queue entry), `agent.dismissQuestions`, or a
+later assistant tail. The emit-path enrichment (both the enriched list/get path and the lite
 snapshot path) also seeds the in-memory baseline that event's recompute-and-compare runs
 against (a seed never emits).
 
@@ -1263,7 +1290,10 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    dismiss a request the user has not seen. The turn-begin clear emits `agent:updated` with
    `data { agentId, attentionRequestCleared: true }` and removes all three session fields
    (skipped silently when none is pending); no new wire surface is introduced by the
-   child/background automatic retire.
+   child/background automatic retire. Both the raise and the retire also
+   recompute-and-compare the workspace's derived `displayStatus` — a top-level foreground
+   agent's pending request promotes it to `needs_attention` (§5.1 step 0), pushed as
+   `workspace:displayStatus-changed` on an actual transition (§6.5).
 2. **Transcript notice** — a system-role message is appended with a single text block carrying
    the reason and `meta.kind = "discussion-request"` / `"blocker-report"` (the
    `InterruptionNotice` shape, §5.35), emitting the standard `agent:message`
@@ -1407,7 +1437,11 @@ for that message id, or (3) a later assistant message becomes the transcript tai
 dismissal RPC and the end-of-turn path re-kick the queue drain, so parked entries resume promptly
 FIFO (interrupt-priority entries first) without waiting for an unrelated trigger; the send-path
 hold gates also re-check the hold after enqueueing and self-kick the drain if it cleared
-concurrently, so a racing dismissal/answer cannot strand a just-parked entry.
+concurrently, so a racing dismissal/answer cannot strand a just-parked entry. The hold also
+feeds the workspace's derived `displayStatus`: a top-level foreground agent under hold
+promotes it to `needs_attention` (§5.1 step 0), and each hold flip — the question-asking
+turn end and every release path above — recomputes-and-compares, pushed as
+`workspace:displayStatus-changed` on an actual transition (§6.5).
 
 ```json
 // → automatic A2A send while the target's question hold is active
@@ -4347,7 +4381,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
-| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (promotion to `in_progress`), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
+| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending step-0 attention signal still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the step-0 `needs_attention` signal (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the persisted assistant tail), and question-hold releases (a user-origin row persisted by the send/drain paths — `agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry — `agent.dismissQuestions`, or a later turn-end assistant tail; the transcript-mutation RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5) can flip the hold derivation but do **not** recompute — a stale value persists until the next trigger or list/get emit; tracked in [monorepo#1266](https://github.com/intent-hq/monorepo/issues/1266)) — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:cow:created, sandbox:cow:merged | Emitted when `agent.delegate` resolves the `isolation` mode to `"cow"` on a sandbox-eligible workspace and the background provisioning task succeeds (§5.5 — asynchronous: the delegate result itself only ever reports `effectiveIsolation: "pending"`; this row is about the resolved request mode, not that result field) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.cow.merge`). `sandbox:cow:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:cow:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 
