@@ -27,6 +27,11 @@ When changes span a submodule and the monorepo, follow this sequence: Phase 1 �
 3. **File a PR** on the submodule's repo (e.g., `intent-hq/intentd`).
 4. **Merge the PR** (squash merge preferred).
 
+When the change fixes a monorepo issue, reference it with the full cross-repo form —
+`Fixes intent-hq/monorepo#N` — in the squash-commit message or PR body. GitHub
+auto-closes the issue on merge, and the release notifier (see Release Process) comments
+on it when the fix ships in a release.
+
 ### Phase 2 — Monorepo Update
 
 1. Pull latest `main` in the updated submodule so it points to the newly merged commit.
@@ -87,6 +92,21 @@ workflow dispatch.
   publishes to `intent-hq/cloudlands-releases`.
 - Stable: dispatch `release-stable.yml` with the `version` input.
 
+### Release notifier
+
+- Both component repos run `scripts/notify-fixed-issues.sh` from their release workflows.
+  On beta publish it scans the released tag range (commit messages plus squash-merged PR
+  bodies, resolved via the `(#N)` subject suffix) for `intent-hq/monorepo#N` / full issue
+  URL references and posts "Fixed in <component> vX.Y.Z (beta)" on each referenced issue;
+  on stable promotion it posts a "promoted to stable" comment covering the range since the
+  previous stable. cloudlands-fe comments also name the bundled intentd version.
+- Comments embed a hidden per-component/version/channel marker, so tag rebuilds and
+  workflow re-runs never double-post. `--dry-run` prints intended comments without
+  posting.
+- Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on `intent-hq/monorepo`)
+  in both component repos. Notifier steps are fail-soft (`continue-on-error`; skipped
+  with a warning when the secret is absent) — they never block a release or promotion.
+
 ### Coordinated Release Ordering
 
 intentd release → promote intentd stable → cloudlands-fe pin-bump PR → cloudlands-fe
@@ -123,7 +143,9 @@ for all components.
   (`gh issue list --repo intent-hq/monorepo --search "<keywords>" --state all`) and
   comment on / link the existing issue instead of filing a duplicate.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
-  `fix: correct panel focus (#123)`).
+  `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
+  `Fixes intent-hq/monorepo#N` so the issue auto-closes on merge and the release
+  notifier comments on it when the fix ships (see Release Process).
 
 ## Terminology
 
