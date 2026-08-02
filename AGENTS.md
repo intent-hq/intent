@@ -42,6 +42,20 @@ on it when the fix ships in a release.
    in the body.
 6. **Merge the monorepo PR**.
 
+### Cross-component features (intentd + cloudlands-fe)
+
+For features that need changes in both intentd and cloudlands-fe, development and PR
+filing on both repos proceed fully in parallel — nothing serializes until merge time.
+The only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
+(or arm auto-merge on it) until the intentd PR is confirmed merged** — approved/green
+is not enough. This intentd-first rule applies specifically to protocol changes (the
+daemon↔fe wire contract, `docs/PROTOCOL.md`): whenever a feature touches the protocol,
+the daemon side must land first. Rationale: cloudlands-fe may depend on daemon
+behavior/protocol that only exists once the intentd change has landed, so an fe-first
+merge can break main or ship against a contract that doesn't exist yet. After both are
+merged, the normal Phase 2 submodule bump applies (a single monorepo PR may bump both
+submodule refs).
+
 ## Conventions
 
 - **Conventional commits** are required. PR titles are validated by CI
