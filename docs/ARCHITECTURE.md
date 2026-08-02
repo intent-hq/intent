@@ -100,7 +100,7 @@ bus — never on the transport or on each other directly.
 | intent-store | SQLite pool, migrations, repositories, file layout, locking | core |
 | intent-services | note/task/comment/workspace/agent/git/pr/script/file/event/draft logic plus the Agent-Ecosystem, Code-Changes-Review, and Integrations & Ops service modules | core, store, git, sourcecontrol, acp, context, providers, pty, search, linear, sentry |
 | intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
-| intent-providers | ProviderConfig registry, arg/env builder, model-tier table, capability/quirks | core |
+| intent-providers | ProviderConfig registry, arg/env builder, per-provider static model-tier tables (`fast`/`balanced`/`smart` → model id; no cross-provider fallback), capability/quirks | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
@@ -167,6 +167,32 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
   missing/soft-deleted and removes the sandbox directory (best-effort deleting the
   store record too) instead of persisting fields or emitting the event.
+
+## Agent default-model resolution (daemon-owned)
+
+Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
+§5.11 (`resolvedModel`/`resolvedProvider` previews). Architecturally:
+
+- **One resolver, daemon-side.** `agent_ops::resolve_agent_default_model` in
+  `intent-services` is the single resolver behind every agent-creation path
+  (`agent.create`, `agent.delegate`, `agent.wakeOrCreate`, `workspace.create`
+  `initialAgent`) **and** behind the `specialist.get`/`specialist.list` preview
+  decoration — so previews match what a no-model create actually pins. Clients
+  are pass-through: they send a model only when the user explicitly picked one
+  and never pre-resolve defaults.
+- **Provider boundaries.** `intent-providers` carries the static per-provider
+  tier tables (`fast`/`balanced`/`smart` → model id) with **no cross-provider
+  fallback**: a specialist `modelTier` resolves strictly within the resolved
+  provider's own table (dynamic-model providers have none and fall through),
+  and every resolved candidate — specialist frontmatter `model` or a settings
+  default — is provider-guarded (static tiers ∪ cached dynamic catalogs), so a
+  model owned by another provider falls through to the next step instead of
+  leaking across providers.
+- **Pinning.** The resolved model is persisted to `session.model` at creation
+  time and fixed for the session's lifetime; later settings/specialist changes
+  only affect subsequently created agents (`agent.setModel` is the explicit
+  mutation path). Bundled specialists carry no `modelTier` and inherit the
+  user's configured default (or the provider CLI default).
 
 ## Local models: the unsloth provider
 

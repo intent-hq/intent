@@ -661,6 +661,8 @@ exit code.
 daemon minimally creates the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+An omitted `initialAgent.model` resolves through the same daemon-side creation-time
+default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution").
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
@@ -1261,6 +1263,41 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.subscribe (deprecated) | eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — not the WS streaming surface (use events.subscribe). Registers a real internal subscription: when `agentId` names a subscriber agent, matching workspace events (category wildcards or exact types) are coalesced over `batchWindow` ms (default 500) and delivered as one `[WORKSPACE EVENTS]` wake message per batch, with `event_notification` message metadata; `excludeSelf` (default true) drops the subscriber's own events. **Agent events are off-limits to agent subscribers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229)):** when the call carries a subscriber agent, every explicit `agent:`-prefixed entry — exact types, the `agent:*` wildcard itself, and the observability events — plus `chat:stream:delta` is rejected with `-32602` at subscribe time, atomically (a mixed list like `["note:*", "agent:*"]` registers NOTHING; the error text redirects to `ws.agent.watch(agentId)` and lists the non-agent categories that remain available). A bare `*` is NOT rejected: it silently narrows to the non-agent category wildcards at resolution time (front-door `*` expansion is unchanged and still includes `agent:*`). A **match-time guard** backs the subscribe-time one: agent-owned delivery filters set `exclude_agent_events`, so legacy `agent:*` rows persisted before the guard existed never deliver agent events after a daemon restart. Subscriber-less (FE front-door) subscriptions are exempt from all of this and keep the full stream. Agent-owned subscriptions persist across daemon restarts (rows whose subscriber is gone — or whose workspace no longer exists, `__chief__` exempt — are pruned at startup, monorepo#947). Live subscriptions are listed via `agent.getSubscriptions` (`eventSubscriptions`) and reported by `agent.diagnostics`. `workspace.delete` drops the workspace's event subscriptions (delivery tasks aborted, rows deleted). Without `agentId` (FE front door) the subscription is match-only in memory — no wake target. Over the MCP seam (`ws.agent.subscribe` / `ws.event.subscribe`) the subscriber is the calling agent automatically (so the restriction applies; the MCP binding's `*` expansion moved into the daemon for the per-subscriber resolution). |
 | agent.unsubscribe (deprecated) | subscriptionId (req) | service result `{ success: true, subscriptionId }` — stops delivery; unknown id errors |
 
+**Creation-time default-model resolution (daemon-owned, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852)).**
+Every creation path — `agent.create`, `agent.delegate`, `agent.wakeOrCreate`, and
+`workspace.create`'s `initialAgent` (§5.1) — resolves the session's model through ONE
+daemon-side resolver when the client supplies no explicit `model`. Clients are pass-through:
+they send a model only when the user explicitly picked one, and never pre-resolve defaults.
+Precedence, first match wins:
+
+1. **Explicit client `model`** — validated per the `agent.create` rules above (unknown
+   compound provider prefix / provably-mismatched bare id → `-32602` before any side effect).
+2. **Specialist frontmatter `model`** (3-tier resolved, project > user > bundled) — used only
+   if it belongs to the resolved provider (static tiers ∪ cached dynamic catalogs, same
+   ownership evidence as `agent.create`); a model owned by another provider falls through
+   instead of leaking cross-provider.
+3. **Specialist frontmatter `modelTier`** (`fast` \| `balanced` \| `smart`) — resolved
+   **strictly within the resolved provider's static tier table** (§5.38 `modelTiers`), never
+   another provider's. Providers without a tier table (dynamic-model providers like
+   `opencode`, `droid`, `grok`), an unrecognized tier value, and claude-code's smart-tier
+   `"default"` sentinel ("use the CLI default", not a model id) all fall through.
+4. **Settings chain** — for background/delegated sessions
+   `backgroundAgents.typeOverrides[agentType]` (the specialist id doubles as the type key)
+   then `backgroundAgents.defaultModel`; then `model.providerDefaults[resolved provider]`;
+   then `model.default` (§5.12). Provider-guarded like step 2: a configured default owned by
+   another provider is dropped with a daemon warn log (falling to step 5) rather than
+   rejected — a `-32602` here would reject a model the caller never sent.
+5. **None** — `session.model` stays unset; the provider CLI's own default applies.
+
+The resolved provider is the explicit `provider` param, else the compound-`model` prefix,
+else the daemon default (legacy default-provider aliases normalized). The resolved model is
+persisted to `session.model` at creation time, **pinning it for the session's lifetime**:
+later settings/specialist changes only affect agents created afterwards, and an existing
+agent's model changes only via explicit `agent.setModel`. Bundled specialists ship with no
+`modelTier`, so they inherit the user's configured default (step 4) or the provider CLI
+default. `specialist.get`/`specialist.list` preview this resolution via the additive
+`resolvedModel`/`resolvedProvider` fields (§5.11), computed by the same resolver.
+
 **Agent attention requests *(new in intentd)*.** Two MCP `workspace_api` bindings —
 `ws.agent.requestDiscussion(reason)` (`kind: "discussion"`) and `ws.agent.reportBlocker(reason)`
 (`kind: "blocker"`) — let an agent flag that it is stuck BEFORE ending its turn: a discussion
@@ -1858,8 +1895,8 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | — (no workspaceId) | { specialists: SpecialistDef[] } (user files override bundled) |
-| specialist.get | id (req), workspacePath? | { specialist: SpecialistDef } — resolved view; -32602 if not found |
+| specialist.list | provider? — no workspaceId | { specialists: SpecialistDef[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.get | id (req), workspacePath?, provider? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
 | specialist.create | id (req), spec (req): SpecialistDef, scope?: "project"\|"user" (default "user") | { specialist: SpecialistDef } |
 | specialist.edit | id (req), spec (req): SpecialistDef, scope (req): "project"\|"user" | { specialist: SpecialistDef } |
 | specialist.delete | id (req), scope (req): "project"\|"user", workspacePath? | { success: true } — `bundled` definitions are read-only |
@@ -1867,11 +1904,12 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 | repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 
 ```json
-// → request
-{ "jsonrpc":"2.0","id":50,"method":"specialist.list" }
-// ← response
+// → request — `provider` is the optional resolution context for the preview fields
+{ "jsonrpc":"2.0","id":50,"method":"specialist.list","params":{ "provider":"codex" } }
+// ← response — resolvedModel/resolvedProvider omitted when the provider CLI default applies
 { "jsonrpc":"2.0","id":50,"result":{ "specialists": [
-  { "id":"implementor","name":"Implementor","description":"...","source":"bundled" } ] } }
+  { "id":"implementor","name":"Implementor","description":"...","source":"bundled",
+    "resolvedModel":"gpt-5.3-codex/high","resolvedProvider":"codex" } ] } }
 ```
 
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
@@ -1882,14 +1920,30 @@ resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-3
 non-existent or `bundled` definition → `-32602`.
 
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?,
-  modelTier?: "low"|"medium"|"high", roleReminder?, agentType?, prompt?, hidden?: boolean,
-  source: "project"|"user"|"bundled", path? }`. The optional scalars (`codingAgent`, `model`,
+  modelTier?: "fast"|"balanced"|"smart", roleReminder?, agentType?, prompt?, hidden?: boolean,
+  source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
+  scalars (`codingAgent`, `model`,
   `modelTier`, `roleReminder`, `agentType`) are first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
   `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
-  target tier.
+  target tier. `modelTier` is stored/echoed verbatim as a string; an unrecognized value is not
+  rejected — it simply falls through at resolution time (§5.5 step 3).
+- **`resolvedModel?` / `resolvedProvider?` (additive preview, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852))** —
+  on `list`/`get` only, the daemon decorates each definition with the model a **no-model
+  `agent.create`** for that specialist would actually pin, computed by the same daemon-side
+  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
+  preview has no client-picked model, so step 1 never applies). The optional `provider`
+  request param supplies the resolution context: absent/empty defaults to the daemon's
+  default provider; an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
+  methods. **Both fields are omitted** (never `null`) when resolution falls to the provider
+  CLI default — clients render "Provider default". Previews are context-free
+  (`isBackground = false`), so the background-only `backgroundAgents.*` settings steps never
+  apply; a specialist with no model config still previews the user's `model.providerDefaults`
+  / `model.default` settings chain. Over the WSS router, `specialist.list` resolves with no
+  project tier (no `workspacePath` param, matching its live wire signature); `specialist.get`
+  passes its `workspacePath?` through to the resolver.
 - **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
   frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
   lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
@@ -1929,10 +1983,10 @@ non-existent or `bundled` definition → `-32602`.
 { "jsonrpc":"2.0","id":51,"method":"specialist.create",
   "params":{ "id":"reviewer","scope":"project",
     "spec":{ "id":"reviewer","name":"Reviewer","description":"Reviews diffs",
-      "modelTier":"high","prompt":"You review code changes…" } } }
+      "modelTier":"smart","prompt":"You review code changes…" } } }
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "specialist":{
-  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"high",
+  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"smart",
   "source":"project","path":".intent/specialists/reviewer.md" } } }
 ```
 
@@ -1986,7 +2040,7 @@ the overriding flag ("overridden by startup flag …").
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
-- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default`. The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model`/`modelTier` take precedence over this chain, and every result is provider-guarded). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
