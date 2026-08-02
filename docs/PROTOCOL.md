@@ -2065,7 +2065,7 @@ entry) carries an additive `origin` field naming the layer the effective value c
 `"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
 boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
-`permissions.rules`, `userRules` / `workspaceRules`,
+`hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
 `endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
 `secrets.json`, state blobs stay in SQLite).
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
@@ -2087,6 +2087,7 @@ the overriding flag ("overridden by startup flag …").
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
+- **Hardware console (new in intentd):** `hardwareConsole.state` *(object, non-sensitive, default `{}`)* — persisted hardware-console device configuration (key assignments, action mappings, prompt-picker limit), opaque bag owned by the FE.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
 - **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
 - **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
