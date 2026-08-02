@@ -734,7 +734,7 @@ string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/typ
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `archivedAt`, `cowSupported`, `checkoutMode`,
-repository/worktree fields, …) are
+`diskUsage`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
@@ -837,6 +837,42 @@ omitted** (see its bullet below):
   stays on the wire shape as optional for decoder compatibility; clients that need diff data fetch
   it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
   workspace payload.
+
+**Workspace disk usage (`diskUsage`, new in intentd).** Alongside the card aggregates, the
+`workspace.list` / `workspace.get` read paths enrich each `Workspace` with a **cached**
+whole-workspace disk footprint —
+`diskUsage: { bytes, fileCount, computedAt, breakdown: [{ name, bytes, fileCount }] }` —
+decoded as optional and **omitted when no computed value exists yet** (`skip_serializing_if`)
+rather than emitted as `null` (never persisted; in-memory cache only):
+
+- **Scope — the whole per-workspace folder.** The walk covers
+  `<workspaces_root>/<workspaceId>` in its entirety: the repo checkout **plus** tool
+  outputs, agent sandboxes, and any other content of the workspace directory — not just
+  the checkout.
+- **Physical (allocated) usage, not apparent size.** `bytes` sums allocated blocks
+  (`st_blocks * 512`), so sparse regions don't count. Hard-linked files are deduped by
+  `(st_dev, st_ino)` within a walk — a multi-linked inode counts once, toward whichever
+  breakdown bucket encounters it first. Symlinks are never followed (only the link's own
+  allocation counts) and directory-inode allocation is excluded. **CoW caveat
+  (best-effort):** clone-shared extents (APFS `clonefile`, btrfs/XFS reflink) are counted
+  at **full** allocated size in every workspace that references them — excluding them
+  would need a per-file extent enumeration that blows the walk budget — so for
+  CoW-provisioned workspaces the value is a documented **upper bound**, not exact
+  exclusive usage.
+- `fileCount` counts the regular files that contributed bytes (hard-link duplicates
+  once); `computedAt` is the RFC-3339 wall-clock time the walk completed — clients can
+  render staleness from it.
+- `breakdown` carries one `{ name, bytes, fileCount }` entry per **top-level directory**
+  of the workspace folder, sorted by `bytes` descending (name ascending on ties), plus a
+  synthetic `"other"` bucket aggregating loose top-level files when non-empty.
+- **~60s cache / stale-while-revalidate / single-flight.** The walk never runs on the
+  request path. Each workspace's value has a ~60-second TTL: a fresh entry is served
+  as-is; an expired entry is served **immediately** while a single background walk
+  refreshes it for the next poll (stale-while-revalidate); refreshes are single-flight
+  per workspace, so concurrent `workspace.list` / `workspace.get` polls coalesce into one
+  walk. The first-ever poll finds no entry — the field is **omitted** and the computed
+  value backfills for the next poll. A failed walk keeps the last-good value (retried on
+  the next poll); a missing workspace directory simply never produces the field.
 
 **Derived display status (`displayStatus`, new in intentd).** Alongside the card aggregates, the
 same `workspace.list` / `workspace.get` emit path — and the lite `workspace.subscribe` seq-0
