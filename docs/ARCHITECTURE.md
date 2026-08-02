@@ -264,6 +264,47 @@ boundary:
   permissions — which is why the credential surface is deliberately absent
   from WSS: remote clients drive git through the `git.*` RPCs instead.
 
+## Background hooks
+
+Wire contract: PROTOCOL.md §5.40 (`hook.*` methods), §6.5 (`hook:*` events).
+A background hook is a small agent-authored JS script the daemon runs on a
+fixed interval until it dispatches (wakes its owner), fails (evicted), or is
+cancelled — letting an agent watch for a condition without burning turns
+polling. The subsystem lives in `intent-services`
+(`services::hook_manager`):
+
+- **Scheduler.** Each active hook owns one tokio task that sleeps `delayMs`
+  between runs; a `runNow` control frame triggers an immediate run and resets
+  the inter-run timer. Scheduling is MCP-only (`ws.hook.schedule` — hooks are
+  agent-authored per the PROTOCOL §6.8 principle); the FE wire surface is
+  read/trigger/cancel only (`hook.list` / `hook.runNow` / `hook.cancel`). The
+  first run happens **immediately at schedule time as validation**: a failing
+  script rejects the call, a dispatching one wakes the owner without
+  persisting a schedule.
+- **Execution.** Scripts evaluate in QuickJS (`intent_js::eval`) with the
+  exact same `ws.*` prelude + host dispatch the `workspace_api` MCP tool
+  installs — including `ws.host.exec` — with the hook's workspace/agent
+  pinned as the caller and a 60 s wall-clock budget. The return value is the
+  contract: `{ dispatch: true, message }` wakes the owning agent and
+  terminates the hook; `{ dispatch: false }` / `undefined` sleeps and
+  re-runs; a throw or the 60 s timeout evicts the hook, persists
+  `last_error`, and wakes the owner with the reason.
+- **Owner wakes** go through the automatic-delivery `agent.sendMessage` path
+  — queued behind an in-flight turn, question hold respected — and are
+  best-effort (a delivery failure is logged, never propagated).
+- **Persistence & rehydration.** Schedules persist in the SQLite `hook`
+  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql`, rows
+  cascade with their agent session)
+  and rehydrate at boot (`Services::rehydrate_hooks`): `scheduled`/`running`
+  rows respawn their tasks (`running` — daemon died mid-run — is healed back
+  to `scheduled` with a fresh countdown), rows whose owning agent is gone
+  are cancelled, and terminal rows (`dispatched`/`evicted`/`cancelled`) are
+  kept for inspection.
+- **Limits.** `[hooks] maxPerAgent` (config.toml, default 5) caps
+  concurrently active (scheduled/running) hooks per agent; `delayMs` has a
+  10 s floor and hook names are capped at 19 characters — all enforced at
+  schedule time.
+
 ## Dependency-direction rules
 
 ```text
@@ -300,6 +341,10 @@ Rules:
    `intent-services`) to avoid a dependency cycle `services → acp → services`.
    Concretely: `services` constructs the ACP client and hands it an
    `Arc<dyn WorkspaceApi>` so the agent→BE MCP server reuses the same logic.
+   (`intent-acp` additionally carries a **dev-only**, version-less
+   dev-dependency on `intent-services` so its binding tests can drive the
+   real service implementations — a Cargo-permitted dev-dep cycle; the
+   normal-build dependency direction is unchanged.)
 4. **No cross-imports between sibling "feature" service modules.**
    `services::notes` and `services::git` communicate through the store/event
    bus, not by importing each other.

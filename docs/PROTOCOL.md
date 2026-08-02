@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v2.9
+# Intent Backend — JSON-RPC Protocol v2.10
 
-**Protocol Version:** `2.9`
+**Protocol Version:** `2.10`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `2.9`
+**Version:** `2.10`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. No existing method changed shape in any of these bumps.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of these bumps.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "2.9", server: { protocolVersion: "2.9", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "2.9", ... }`
+- `client.hello` response: `{ protocolVersion: "2.10", server: { protocolVersion: "2.10", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "2.10", ... }`
 
 ### Compatibility Policy
 
@@ -156,22 +156,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **309 dispatchable method names** across the following categories:
+The API exposes **312 dispatchable method names** across the following categories:
 
-- **Router methods:** 273 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 276 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 309 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 312 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 309 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 312 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.39) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.40) carry each method's parameter and result contract.
 
-### Router methods by namespace (273 total)
+### Router methods by namespace (276 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -182,6 +182,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file | 9 | delete, exists, list, mkdir, read, rename, stat, tree, write |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | github | 23 | authStatus, branches.list, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 11 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update |
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
@@ -2511,7 +2512,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.9"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"2.10"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2523,18 +2524,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.9",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"2.10",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"2.9","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.10","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.9",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"2.10",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"2.9","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"2.10","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -4375,6 +4376,55 @@ are UTC and any local-time rendering is a client concern.
   { "bucketUtc":"2026-07-30T14:07:00Z","inputTokens":100,"outputTokens":40,"cacheReadTokens":20,"cacheCreationTokens":10 } ] } }
 ```
 
+### 5.40 Background hooks — `hook.*` *(v2.10)*
+
+A **background hook** is a small agent-authored JS script the daemon runs on a fixed
+interval until it *dispatches* (wakes its owning agent with a message and ends), fails
+(is *evicted* and wakes the owner with the error), or is *cancelled*. Hooks let an agent
+watch for a condition (CI results, file changes) without burning turns polling.
+Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
+agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 19 chars, code, delayMs ≥
+10000 }`; the first run happens immediately as validation — a failing script rejects the
+call, a dispatching one wakes without persisting a schedule; per-agent cap on active
+hooks, default 5). The FE **reads, triggers, and cancels**:
+
+| Method | Params | Result |
+| --- | --- | --- |
+| hook.list | workspaceId (req) | `{ hooks: Hook[] }` — every hook in the workspace, all states |
+| hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake) |
+| hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run |
+
+**Hook** — `{ hookId, workspaceId, agentId, name, code, delayMs, state, createdAt,
+lastRunAt?, nextRunAt?, runCount, lastError?, lastLogs? }` with `state ∈ scheduled |
+running | dispatched | evicted | cancelled` (`scheduled`/`running` are the active states;
+`runCount` includes the schedule-time validation run; `lastError` is set on eviction).
+`lastLogs` is the **last run's** `console.log/info/warn/error` output (newline-joined,
+overwritten each run; absent when the run logged nothing) — the capture is capped at 100
+lines / 8 KiB per run, head-truncated with an `[earlier log lines truncated]` marker. A
+timed-out run's logs are lost (the eval is killed before the capture can be returned), so
+`lastLogs` then keeps the previous run's value. `hook:*` event payloads (§6.5) stay light
+and do **not** carry `lastLogs`; clients read it via `hook.list`.
+
+Errors: a missing `workspaceId`/`hookId` and an unknown, foreign-workspace, or inactive
+(`cancel`/`runNow` on a non-active state) `hookId` all surface as `-32602` (§9;
+`NotFound` maps to invalid params like the other id-addressed namespaces). Lifecycle
+transitions emit the `hook:*` event family (§6.5): `hook:scheduled`, `hook:run-started`,
+`hook:run-completed`, `hook:dispatched`, `hook:evicted`, `hook:cancelled` — subscribe
+with a `hook:*` prefix filter (`hook:*` is not part of the bare-`*` category expansion
+applied by the internal `agent.subscribe`/`event.subscribe` aliases, §5.5/§5.10; the
+wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":96,"method":"hook.list","params":{ "workspaceId":"ws-1" } }
+// ← response
+{ "jsonrpc":"2.0","id":96,"result":{ "hooks":[
+  { "hookId":"hook-01…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch",
+    "code":"const s = await ws.pr.status(); …","delayMs":60000,"state":"scheduled",
+    "createdAt":"2026-07-31T10:00:00Z","lastRunAt":"2026-07-31T10:05:00Z",
+    "nextRunAt":"2026-07-31T10:06:00Z","runCount":6 } ] } }
+```
+
 ## 6. Events & Subscriptions
 
 Live event streaming is the **canonical** way a thin client stays in sync. It uses two server-handled methods (the plural `events.` prefix) plus a server-pushed notification.
@@ -4478,6 +4528,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending step-0 attention signal still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the step-0 `needs_attention` signal (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the persisted assistant tail), and question-hold releases (a user-origin row persisted by the send/drain paths — `agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry — `agent.dismissQuestions`, a later turn-end assistant tail, or a transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5), which recompute-and-compare after persisting (intentd#833), so the trigger taxonomy holds unconditionally) — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:cow:created, sandbox:cow:merged | Emitted when `agent.delegate` resolves the `isolation` mode to `"cow"` on a sandbox-eligible workspace and the background provisioning task succeeds (§5.5 — asynchronous: the delegate result itself only ever reports `effectiveIsolation: "pending"`; this row is about the resolved request mode, not that result field) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.cow.merge`). `sandbox:cow:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:cow:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
+| hook (new in intentd, v2.10) | hook:scheduled, hook:run-started, hook:run-completed, hook:dispatched, hook:evicted, hook:cancelled | Background-hook lifecycle (§5.40). All carry data { workspaceId, agentId, hookId, name, state } plus per-type extras: `hook:run-completed` adds `nextRunAt` when the hook stays scheduled; `hook:evicted` adds `lastError`; `hook:dispatched` fires when a run returns `{ dispatch: true }` (including the schedule-time validation run, which emits `hook:run-completed` + `hook:dispatched` with **no** preceding `hook:scheduled` — a persisting schedule emits validation `hook:run-completed` then `hook:scheduled`). Actor: system; the owner's agent id rides in `data.agentId` (the event row's internal session id is not part of the §6.3 wire object). Subscribe with a `hook:*` prefix filter — the family is **not** part of the bare-`*` category expansion applied by the internal `agent.subscribe`/`event.subscribe` aliases (§5.5/§5.10). |
 
 ### 6.6 Turn/event lifecycle & batching window
 
