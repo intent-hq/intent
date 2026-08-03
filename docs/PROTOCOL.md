@@ -4983,7 +4983,11 @@ invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
 Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
-identifier followed by `": "` or `":\t"` — is split, taking the prefix. Titles without that
+identifier followed by `": "` or `":\t"` — is split, taking the prefix. Codex's dot-separated
+MCP title form `mcp.<server>.<tool>` (server segment contains no dots; title carries no
+whitespace, so prose titles containing dots never match) is rewritten to `{server}_{tool}`
+and fed through the affix strip below (`mcp.workspace-mcp.workspace_api` → `workspace_api`,
+`mcp.other-server.some_tool` → `other-server_some_tool`). Titles without either
 shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
 `name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
 tool names carry no suffix, and auggie's `<tool>_<server>` convention appends the server
