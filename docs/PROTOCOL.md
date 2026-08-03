@@ -1806,7 +1806,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
-| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, ... } |
+| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, ... } — the `ScriptRuntimeState` snapshot; the runtime status value is one of `idle \| running \| restarting \| exited`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running` |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
 
 > **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
@@ -1816,6 +1816,13 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > `script.output` / `script.status` remain the historical poll reads. Service/command modes,
 > auto-restart, and URL/port detection are preserved — a detected dev-server URL feeds the
 > `forward.*` hook when the connection is remote (§5.14).
+>
+> **Runtime status values.** The `ScriptRuntimeState` served by `script.status` (and as the
+> runtime part of `script.list` entries) and carried on `script:state` events reports one of
+> `idle | running | restarting | exited`. `restarting` (new in intentd, monorepo#1318) covers
+> the restart-in-flight window — a service auto-restart's backoff between an exit and the next
+> spawn attempt, and `script.restart`'s stop→start gap — distinguishing it from a final exit;
+> the respawn flips it back to `running`.
 
 ### 5.9 `browser.*`, `terminal.*`, `file.*`
 
@@ -4610,7 +4617,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
 | git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `askpass-missing`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. `terminal:data` is **transient / broadcast-only** (same publish path as `chat:stream:delta`, §7): never persisted, invisible to `event.query` (§5.10); scrollback replay uses `terminal.getBuffer`. `terminal:exit` stays durable and is emitted after the stream task has broadcast every data chunk, so exit never overtakes data. |
-| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable. |
+| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable; the status value is one of `idle \| running \| restarting \| exited` (§5.8) — `restarting` (new in intentd, monorepo#1318) marks the transient restart-in-flight window (auto-restart backoff between an exit and the next spawn attempt, and the `script.restart` stop→start gap). |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
