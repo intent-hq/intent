@@ -48,8 +48,14 @@ The daemon embeds:
   JSON-RPC notifications.
 
 The overriding invariant, carried over from the original Intent Electron app:
-**transports are thin; services are shared.** Every transport (UDS, TCP/TLS,
-the agent-facing MCP server) dispatches into the same service layer.
+**transports are thin; services are shared.** Every transport (the local
+listener — UDS on Unix, a named pipe on Windows — TCP/TLS, the agent-facing
+MCP server) dispatches into the same service layer. The Windows pipe name is
+derived from the resolved socket path (`\\.\pipe\intentd-<hash16>`, first 16
+hex chars of SHA-256 over the normalized path — `intent-transport`'s
+`pipe_name_for_socket_path`, mirrored byte-for-byte by cloudlands-fe's
+`intentd-pipe-name.ts`; see PROTOCOL.md §1.1); framing and protocol are
+identical on both local transports.
 
 ## Crate layout
 
@@ -75,7 +81,8 @@ packages/intentd/               # cargo workspace root
     │                           #   (QuickJS via rquickjs), async host bindings, timeouts
     ├── intent-linear/          # LinearEngine + DTOs for the linear.* surface
     ├── intent-sentry/          # SentryEngine + DTOs for the sentry.* surface
-    └── intent-transport/       # UDS/TCP/TLS listeners, JSON-RPC router, auth,
+    └── intent-transport/       # local (UDS / Windows named pipe) + TCP/TLS
+                                #   listeners, JSON-RPC router, auth,
                                 #   client.hello → clientId mapping
 ```
 
@@ -109,7 +116,7 @@ bus — never on the transport or on each other directly.
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
-| intent-transport | UDS/TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
+| intent-transport | local (UDS on Unix, named pipe on Windows) + TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
 
 ## Workspace checkouts & agent sandboxes (CoW)
 
