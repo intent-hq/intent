@@ -339,15 +339,20 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# Builds the intentd release binary (may take several minutes on first build) and
 	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
 	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
+	# Ensure FE node_modules first so a fresh checkout does not fail when any
+	# staging helper (or a future copy-sidecar dep) expects an installed tree —
+	# and so `dist-mac` (which depends on this target) does not install after
+	# the sidecar step.
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[build-sidecar] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
 dist-mac: build-sidecar ## Build the packaged macOS app (Intent.app) via electron-builder into $(FE_DIR)/dist-electron
-	# End-to-end macOS packaging: build-sidecar (above) builds the intentd
-	# release binary and stages it under $(FE_DIR)/resources/sidecar for
-	# electron-builder, then this runs the FE's dist:mac script
+	# End-to-end macOS packaging: build-sidecar (above) ensures FE deps, builds
+	# the intentd release binary, and stages it under $(FE_DIR)/resources/sidecar
+	# for electron-builder, then this runs the FE's dist:mac script
 	# (build -> ensure-native-deps -> copy-sidecar -> electron-builder --mac).
 	# Output artifacts (arm64 dmg + zip, each containing Intent.app) land in
 	# $(FE_DIR)/dist-electron.
@@ -365,7 +370,6 @@ dist-mac: build-sidecar ## Build the packaged macOS app (Intent.app) via electro
 		echo "[dist-mac] ERROR: requires macOS (electron-builder --mac). Detected $$(uname -s)."; \
 		exit 1; \
 	fi
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dist-mac] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dist-mac] Packaging Intent.app (electron-builder --mac, Node heap $(FE_BUILD_HEAP_MB)MB)..."
 	cd $(FE_DIR) && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
 	@echo "[dist-mac] Done. Artifacts in $(FE_DIR)/dist-electron"
