@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v3.1
+# Intent Backend — JSON-RPC Protocol v4.0
 
-**Protocol Version:** `3.1`
+**Protocol Version:** `4.0`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `3.1`
+**Version:** `4.0`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8).
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "3.1", server: { protocolVersion: "3.1", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "3.1", ... }`
+- `client.hello` response: `{ protocolVersion: "4.0", server: { protocolVersion: "4.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "4.0", ... }`
 
 ### Compatibility Policy
 
@@ -1830,7 +1830,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
-| terminal.list | workspaceId (req) | bare array `[{ id, name, cwd, isExecutingCommand }]` — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
+| terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -1895,8 +1895,9 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > read-only methods. The daemon also serves interactive
 > `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
 > PTYs carry an optional daemon-assigned display name (set at spawn; not a
-> `terminal.create` parameter) that `terminal.list` surfaces as `name` with a
-> `"Terminal"` fallback — see the `terminal.list` row above.
+> `terminal.create` parameter) that `terminal.list` surfaces as `name` (on each
+> `terminals[]` entry of the v4.0 envelope) with a `"Terminal"` fallback — see the
+> `terminal.list` row above.
 
 ### 5.10 `event.*` (query/aggregation)
 
@@ -2156,7 +2157,8 @@ the overriding flag ("overridden by startup flag …").
 
 ### 5.13 Interactive `terminal.*`
 
-> Alongside the read-only methods (`terminal.list` / `terminal.readOutput`, §5.9), the
+> Alongside the read-only methods (`terminal.list` — the v4.0 `{ terminals, daemonBootId }`
+> envelope — and `terminal.readOutput`, §5.9), the
 > interactive methods below let a thin client open, drive, resize, and tear down PTYs that
 > run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
 > host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
@@ -2585,7 +2587,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"3.1"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"4.0"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2597,18 +2599,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"3.1",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"4.0",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"3.1","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"4.0","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"3.1",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"4.0",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"3.1","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"4.0","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
