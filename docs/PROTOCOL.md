@@ -909,9 +909,15 @@ needs-attention signal and live agent activity around the "current cycle" rollup
    session already flagged. Best-effort: a store read failure fails open to `false` (the
    question-hold derivation fails open itself), so list/get emission is never wedged and
    attention is never fabricated.
-1. **Agent running** — any agent running in the workspace (the same signal behind
-   `activity == "agent_running"`) → `in_progress`, **unconditionally** (overrides the PR
-   stages and `complete`).
+1. **Agent running / active hooks** — any agent running in the workspace (the same
+   signal behind `activity == "agent_running"`), **or** any ACTIVE (`scheduled`/`running`)
+   background hook owned by the workspace (§5.40) → `in_progress`, **unconditionally**
+   (overrides the PR stages and `complete`). The hook signal is a within-version
+   derivation refinement (intentd#856) folded into this step only: an idle agent still
+   watching via a background hook reads as active work; step 0 still outranks the
+   promotion, the `activity` field's semantics are unchanged, and there is no
+   wire-shape change. The hook lookup is best-effort — a store read failure fails open
+   to `false` (mirroring step 0), so emission is never wedged.
 2. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
       recently updated open/draft entry in `pullRequests` — yields `pr_ready`
@@ -935,7 +941,11 @@ entries) or open tasks (step 2.2 precedes the merged check). Transitions are pus
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
 `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`,
-a PR stage, or `complete`), so the two stay in lockstep. The step-0 attention signal adds
+a PR stage, or `complete`), so the two stay in lockstep. Hook lifecycle transitions
+recompute-and-compare too (intentd#856): a hook **schedule** (a newly persisted active
+hook can promote) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
+both the synchronous ops and the spawned-task run paths — so the demotion emits when the
+workspace's last active hook settles. The step-0 attention signal adds
 its own recompute-and-compare points: an attention **raise** (`ws.agent.requestDiscussion`
 / `ws.agent.reportBlocker` — a child/background raise stays silent, since the derivation
 ignores those sessions and the transition-only emission suppresses the no-op) and its
