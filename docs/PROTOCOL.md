@@ -158,18 +158,18 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **311 dispatchable method names** across the following categories:
+The API exposes **312 dispatchable method names** across the following categories:
 
 - **Router methods:** 275 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 311 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 312 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 311 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 312 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.40) carry each method's parameter and result contract.
 
@@ -212,11 +212,11 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-### Fast-path methods (34 total)
+### Fast-path methods (35 total)
 
-The following 34 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 35 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.shutdown, system.status
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
@@ -2228,6 +2228,7 @@ in the bullet under this table).
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
 | host.listDirectory | client → daemon | path? | { path, parent, home, entries: [{ name, path, isDirectory, isGitRepo }] } — directory listing for the FE directory picker. `path` defaults to the daemon-host home when absent/empty, and a leading `~` / `~/` is **expanded to the daemon-host home on the daemon** (`~user` forms pass through verbatim) — so clients may send a raw typed `~/sub` even when they have no `home` to expand against (monorepo#824). `home` is always present (never null/omitted): it is the daemon-host home, falling back to `/` when no home can be resolved from the environment — the defaulted `path` and `~` expansion then resolve against `/` too. The returned `path`/`parent`/entry paths are always fully expanded; `parent` is `null` at the filesystem root; entries include hidden files (the FE filters), sorted directories-first then by name. IO failures surface as `-32603` |
+| host.createDirectory | client → daemon | path (req) | { path } — creates the directory on the daemon host with parents (`create_dir_all` semantics); succeeding when the directory already exists is deliberate (idempotent). A leading `~` / `~/` is **expanded to the daemon-host home on the daemon**, exactly like `host.listDirectory` (`~user` forms pass through verbatim), and the returned `path` is always the fully expanded created path so the FE can navigate into it. `-32602` on a missing/empty `path`; IO failures surface as `-32603` with the error message |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 | host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
 | host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
