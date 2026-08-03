@@ -67,7 +67,7 @@ SWEEP_DAYS ?= 3
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	sweep sweep-all dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
+	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info
 
 all: build
 
@@ -211,9 +211,55 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	#   INTENTD_SOCKET=/path/to.sock  → UDS (highest precedence; e.g. point at
 	#                                    release-daemon's default socket).
 	#   INTENTD_WS_URL=ws://host:port → plain WebSocket to a specific URL.
+	#   `make run-fe-local`           → shorthand that resolves INTENTD_SOCKET to
+	#                                    the installed daemon's default UDS path.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
+
+run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
+	# Like `run-fe`, but points the FE at the installed Intent daemon's default
+	# socket path (<data_dir>/intentd.sock, per directories::ProjectDirs):
+	#   macOS   → $$HOME/Library/Application Support/intentd/intentd.sock
+	#   Linux   → $${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock
+	#   Windows → $$APPDATA/intentd/data/intentd.sock — not a filesystem entry:
+	#             the win32 FE derives the named pipe \\.\pipe\intentd-<hash16>
+	#             from the resolved socket path (intentd-pipe-name.ts; requires
+	#             an fe checkout that includes acbb0408), so the existence
+	#             pre-check is skipped there and the FE reports the connection
+	#             failure itself if no daemon is running.
+	# An INTENTD_SOCKET already set in the caller's environment wins over the
+	# platform default. Setting INTENTD_SOCKET is the highest-precedence
+	# transport override (resolveBackendConfig in
+	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts)
+	# and any transport override also disables sidecar spawning
+	# (intentd-spawn-policy.ts) — so only the daemon connection changes; the
+	# dev FE keeps its own DEV_PORT-namespaced userData dir.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe-local] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@sock="$$INTENTD_SOCKET"; \
+	is_windows=0; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) is_windows=1 ;; \
+	esac; \
+	if [ -n "$$sock" ]; then \
+		echo "[run-fe-local] using caller-provided INTENTD_SOCKET"; \
+	else \
+		case "$$(uname -s)" in \
+			Darwin) sock="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+			Linux) sock="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+			MINGW*|MSYS*|CYGWIN*) sock="$$APPDATA/intentd/data/intentd.sock" ;; \
+			*) echo "[run-fe-local] ERROR: unsupported platform $$(uname -s) — no known installed-daemon socket path."; \
+			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: INTENTD_WS_URL=ws://host:5181/ws make run-fe"; \
+			   exit 1 ;; \
+		esac; \
+	fi; \
+	if [ "$$is_windows" -eq 0 ] && [ ! -S "$$sock" ]; then \
+		echo "[run-fe-local] ERROR: no UDS socket at '$$sock' — is the installed Intent daemon running?"; \
+		exit 1; \
+	fi; \
+	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
+	cd $(FE_DIR) && INTENTD_SOCKET="$$sock" pnpm run dev
 
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
