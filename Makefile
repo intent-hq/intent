@@ -73,6 +73,7 @@ SWEEP_DAYS ?= 3
 FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
 
@@ -120,6 +121,72 @@ ensure-ios-submodule:
 		git submodule update --init --recursive "$(IOS_DIR)"; \
 	else \
 		echo "[ensure-ios-submodule] $(IOS_DIR) already initialized — leaving as-is"; \
+	fi
+
+# Pull/rebase the monorepo branch and every submodule onto its configured
+# remote branch (.gitmodules `branch = main` for all three today). Unlike
+# `ensure-submodules` (init-if-missing only) and bare `git submodule update`
+# (reset to the monorepo-recorded pin), this advances tips.
+#
+# Monorepo: fetch + pull --rebase --autostash on the current branch's upstream
+# (fails if detached HEAD or no upstream).
+# Each submodule: fetch, checkout the configured branch (creates a local
+# tracking branch from origin/<branch> when detached/missing), then
+# pull --rebase --autostash. Stops on the first conflict so you can fix and
+# re-run. Does not commit submodule pointer bumps in the monorepo — after a
+# successful update, `git status` will show dirty pins if you want a bump PR.
+update: ## git pull --rebase monorepo + each submodule onto its .gitmodules branch
+	@set -e; \
+	if ! git rev-parse -q --verify HEAD >/dev/null; then \
+		echo "[update] ERROR: monorepo has no HEAD"; \
+		exit 1; \
+	fi; \
+	if [ "$$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then \
+		echo "[update] ERROR: monorepo is detached HEAD — checkout a branch first (e.g. git checkout main)"; \
+		exit 1; \
+	fi; \
+	if ! git rev-parse -q --abbrev-ref '@{u}' >/dev/null 2>&1; then \
+		echo "[update] ERROR: monorepo branch '$$(git rev-parse --abbrev-ref HEAD)' has no upstream"; \
+		exit 1; \
+	fi; \
+	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) ← $$(git rev-parse --abbrev-ref '@{u}') (pull --rebase --autostash)"; \
+	git fetch --prune; \
+	git pull --rebase --autostash; \
+	git submodule sync --recursive; \
+	git submodule update --init --recursive; \
+	for sm in $(SUBMODULES); do \
+		branch=$$(git config -f .gitmodules --get "submodule.$$sm.branch" 2>/dev/null || echo main); \
+		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
+		if [ ! -e "$$sm/.git" ]; then \
+			echo "[update] ERROR: $$sm is not initialized after submodule update --init"; \
+			exit 1; \
+		fi; \
+		git -C "$$sm" fetch --prune origin; \
+		cur=$$(git -C "$$sm" rev-parse --abbrev-ref HEAD); \
+		if [ "$$cur" = "HEAD" ] || [ "$$cur" != "$$branch" ]; then \
+			if git -C "$$sm" show-ref --verify --quiet "refs/heads/$$branch"; then \
+				git -C "$$sm" checkout "$$branch"; \
+			elif git -C "$$sm" show-ref --verify --quiet "refs/remotes/origin/$$branch"; then \
+				git -C "$$sm" checkout -B "$$branch" "origin/$$branch"; \
+			else \
+				echo "[update] ERROR: $$sm has no local or origin/$$branch"; \
+				exit 1; \
+			fi; \
+		fi; \
+		if ! git -C "$$sm" rev-parse -q --abbrev-ref '@{u}' >/dev/null 2>&1; then \
+			git -C "$$sm" branch --set-upstream-to="origin/$$branch" "$$branch"; \
+		fi; \
+		git -C "$$sm" pull --rebase --autostash; \
+	done; \
+	echo "[update] done."; \
+	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) @ $$(git rev-parse --short HEAD)"; \
+	for sm in $(SUBMODULES); do \
+		echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+	done; \
+	if ! git diff --quiet -- $(SUBMODULES) 2>/dev/null \
+		|| ! git diff --cached --quiet -- $(SUBMODULES) 2>/dev/null; then \
+		echo "[update] submodule pointers differ from the monorepo commit (expected after advancing tips)."; \
+		echo "[update] stage and commit when you want a monorepo pin bump PR."; \
 	fi
 
 build: build-intentd ## Build the Rust workspace (packages/intentd)
