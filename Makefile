@@ -65,9 +65,16 @@ export DEV_PORT
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
+# Node heap ceiling (MB) for the FE production build. The renderer's vite build
+# OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
+# app; default to 16 GB. dist-mac exports this via NODE_OPTIONS so every child
+# Node process (vite, tsc, electron-builder) gets the bump. Overridable, e.g.
+# make dist-mac FE_BUILD_HEAP_MB=24576.
+FE_BUILD_HEAP_MB ?= 16384
+
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info
+	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
 
 all: build
 
@@ -269,6 +276,32 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
+
+dist-mac: build-sidecar ## Build the packaged macOS app (Intent.app) via electron-builder into $(FE_DIR)/dist-electron
+	# End-to-end macOS packaging: build-sidecar (above) builds the intentd
+	# release binary and stages it under $(FE_DIR)/resources/sidecar for
+	# electron-builder, then this runs the FE's dist:mac script
+	# (build -> ensure-native-deps -> copy-sidecar -> electron-builder --mac).
+	# Output artifacts (arm64 dmg + zip, each containing Intent.app) land in
+	# $(FE_DIR)/dist-electron.
+	#
+	# Code signing + notarization run only when the Apple credentials are present
+	# in the environment (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID);
+	# without them electron-builder produces an unsigned/ad-hoc build. See
+	# packages/cloudlands-fe/electron-builder.yml.
+	#
+	# NODE_OPTIONS raises Node's heap ceiling to $(FE_BUILD_HEAP_MB) MB so the
+	# renderer's vite build does not OOM; it is inherited by every child Node
+	# process. A pre-existing NODE_OPTIONS in the environment is preserved and
+	# wins (Node applies the last --max-old-space-size), so callers can override.
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[dist-mac] ERROR: requires macOS (electron-builder --mac). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dist-mac] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@echo "[dist-mac] Packaging Intent.app (electron-builder --mac, Node heap $(FE_BUILD_HEAP_MB)MB)..."
+	cd $(FE_DIR) && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
+	@echo "[dist-mac] Done. Artifacts in $(FE_DIR)/dist-electron"
 
 dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
 	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
