@@ -349,13 +349,18 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
 
-dist-mac: build-sidecar ## Build the packaged macOS app (Intent.app) via electron-builder into $(FE_DIR)/dist-electron
-	# End-to-end macOS packaging: build-sidecar (above) ensures FE deps, builds
-	# the intentd release binary, and stages it under $(FE_DIR)/resources/sidecar
-	# for electron-builder, then this runs the FE's dist:mac script
+dist-mac: update ## Pull/rebase monorepo+submodules, then package Intent.app into $(FE_DIR)/dist-electron
+	# End-to-end macOS packaging. Always starts with `update` (pull --rebase
+	# monorepo + each submodule onto its .gitmodules branch) so the package
+	# reflects current tips, not a stale pin. Then `build-sidecar` ensures FE
+	# deps, builds the intentd release binary, and stages it under
+	# $(FE_DIR)/resources/sidecar; finally the FE's dist:mac script runs
 	# (build -> ensure-native-deps -> copy-sidecar -> electron-builder --mac).
 	# Output artifacts (arm64 dmg + zip, each containing Intent.app) land in
 	# $(FE_DIR)/dist-electron.
+	#
+	# `build-sidecar` is invoked via a nested $(MAKE) (not a peer prerequisite)
+	# so it cannot race `update` under make -j.
 	#
 	# Code signing + notarization run only when the Apple credentials are present
 	# in the environment (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID);
@@ -370,6 +375,7 @@ dist-mac: build-sidecar ## Build the packaged macOS app (Intent.app) via electro
 		echo "[dist-mac] ERROR: requires macOS (electron-builder --mac). Detected $$(uname -s)."; \
 		exit 1; \
 	fi
+	@$(MAKE) build-sidecar
 	@echo "[dist-mac] Packaging Intent.app (electron-builder --mac, Node heap $(FE_BUILD_HEAP_MB)MB)..."
 	cd $(FE_DIR) && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
 	@echo "[dist-mac] Done. Artifacts in $(FE_DIR)/dist-electron"
