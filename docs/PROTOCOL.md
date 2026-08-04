@@ -1841,6 +1841,32 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
   "author":"octocat","verdict":"approve","body":"LGTM","submittedAt":"2026-06-17T05:00:00.000Z" } } }
 ```
 
+> **`ws.pr.snapshot(prNumber)` — agent MCP binding *(new in intentd,
+> [intentd#887](https://github.com/intent-hq/intentd/pull/887))*.** A compact,
+> diff-friendly snapshot of one PR's state, built for **hook-based PR monitoring**
+> (§5.40): a hook calls it each run, compares the result against the previous run's
+> carry-over `hookState`, and dispatches only on meaningful change. There is **no wire
+> method** (MCP-only, per the §6.8 principle — PR watching is agent-authored background
+> work; FE clients keep using `pr.status`/`pr.getReviews`/`pr.listCheckRuns`). Unlike
+> the rest of the `ws.pr.*` surface, `prNumber` is **required** (a positive number —
+> missing, non-numeric, or `<= 0` values are rejected with a validation error) and
+> there is **no active-PR fallback**: the binding addresses any PR in the workspace's
+> repository, so an agent can watch a PR it filed on a submodule or sibling repo link.
+> Result shape: `{ prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
+> updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
+> failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
+> comments: { conversationCount, reviewCommentCount, unresolvedThreadCount,
+> totalCount } }`. `mergeBlockedReason` is a human-readable reason and is non-`null`
+> exactly when the PR is open (draft included) and cannot be merged. `checks` tallies
+> the runs on the PR head (SHA, else source branch); a provider without the
+> `checkRuns` capability — or a PR whose head cannot be determined — reports an empty
+> tally rather than failing the snapshot. `comments.reviewCommentCount` counts every
+> inline thread comment **including replies** (threads come from GraphQL when
+> available, else the REST list grouped by reply parent — resolution state is
+> unavailable there, so every fallback thread counts as unresolved), and `totalCount =
+> conversationCount + reviewCommentCount`, so a new reply anywhere moves the counter a
+> hook can diff.
+
 ### 5.8 `script.*`
 
 | Method | Params | Result |
@@ -4565,7 +4591,7 @@ wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
 // ← response
 { "jsonrpc":"2.0","id":96,"result":{ "hooks":[
   { "hookId":"hook-01…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch",
-    "code":"const s = await ws.pr.status(); …","delayMs":60000,"state":"scheduled",
+    "code":"const s = await ws.pr.snapshot(887); if (hookState && JSON.stringify(s) !== JSON.stringify(hookState)) return { dispatch: true, message: 'PR #887 changed' }; return { dispatch: false, state: s };","delayMs":60000,"state":"scheduled",
     "createdAt":"2026-07-31T10:00:00Z","expiresAt":"2026-07-31T11:00:00Z",
     "lastRunAt":"2026-07-31T10:05:00Z",
     "nextRunAt":"2026-07-31T10:06:00Z","runCount":6 } ] } }
