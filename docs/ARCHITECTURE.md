@@ -338,6 +338,106 @@ polling. The subsystem lives in `intent-services`
   10 s floor and hook names are capped at 19 characters — all enforced at
   schedule time.
 
+## Agent feature toggles (`[agentFeatures]`)
+
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Eight booleans under the
+`[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
+`terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
+`attentionRequests` — all default `true`. Each toggle removes an agent-exposed
+feature from both the agent's system prompt and its MCP tool surface.
+
+- **Three MCP gating layers per feature** (defense in depth): (a) the
+  `workspace_api` **tool description** is assembled from per-namespace segments
+  at bridge creation (`tools::workspace_api_description`), so a disabled
+  feature's docs never reach the agent; (b) the **JS prelude** omits the gated
+  namespace installers (`bindings::prelude_for`), so a call fails with a clear
+  `TypeError` instead of silently dispatching; (c) the **dispatch layer**
+  denies the method outright (`tools::denied_feature`) with an explicit
+  `disabled in settings (agentFeatures.<key> = false)` error. Parity tests in
+  `tools.rs` keep description ↔ bindings segment-aware. Gating is
+  namespace-level except `attentionRequests`, which is method-level
+  (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` only —
+  `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated).
+- **Prompt-section gating.** `rules::assemble_system_prompt` threads the
+  captured flags into instruction assembly (`intent-services/instructions.rs`):
+  disabled features drop their bundled-instruction sections (e.g. common.md's
+  "Waiting on External Conditions", "Rich Chat Rendering", and "Raising
+  Attention" sections, workspace-agent.md's dev-server script guidance) and
+  the rules.rs-assembled "Asking the User Questions" section
+  (`structuredQuestions`). With all defaults the assembled prompt and tool
+  description are byte-identical to the pre-toggle output.
+- **Hook runtime.** `hook.schedule` is additionally rejected in the services
+  layer when `backgroundHooks` is off, and that check reads the effective
+  settings **live**. For sessions created after the flip, the MCP dispatch
+  deny (captured flags) blocks the call first and the services check is
+  redundant defense in depth; for pre-flip sessions — whose captured surface
+  still advertises `ws.hook.*` and whose dispatch layer lets the frame
+  through — the live services check is what denies it. Net effect: uniquely
+  among the toggles, flipping `backgroundHooks` off denies new schedules
+  immediately from **all** sessions. **Already-active hooks are unaffected by
+  the toggle and run to their terminal state/TTL**.
+  Hook script runs build their `ws.*` prelude from the effective flags read
+  fresh per run — a hook outlives sessions and daemon restarts, so a hook run
+  honors the same gates (e.g. `hostExec`) a newly created session would.
+- **New sessions only.** Flags are captured once at agent-session creation
+  (the assembled system prompt is persisted per-session) and at per-agent MCP
+  bridge creation — never live-read per call (deliberately unlike
+  `workspaceApi.toonOutput`) — so a settings change applies only to sessions
+  created afterwards; existing sessions keep the surface they were created
+  with.
+
+## Read-path performance principles
+
+Hot read RPCs — the methods clients poll or fan out on focus (`workspace.list`
+/ `workspace.get`, `agent.list` / `agent.get`, conversation pagination, event
+reads) — obey one invariant: **cost is O(rows returned)**. Work is
+proportional to the size of the response, never to transcript length, blob
+size, repository size, or history depth — and no unbounded filesystem or git
+work (workdir walks, `git diff`, reflink probes) runs inline on these paths.
+Every recent performance regression attached unbounded-cost computation to a
+bounded-expectation read path (monorepo#958, #963, #1010, #1061, #1395/#1396);
+this section records the design that prevents the next one.
+
+Derived or enriched fields on hot read paths sit on a three-rung ladder —
+prefer the highest rung that fits:
+
+1. **Stored on write.** Maintain the derived value in the same transaction as
+   the write that changes it; the read path only selects columns. Embodiment:
+   the persisted `last_assistant_preview` / `last_user_preview` /
+   `last_message_role` columns on `agent_session` (migrations 0066/0070) —
+   `agent.list` previews are written at message-append time, so the read path
+   never hydrates or decodes transcript bodies (#958).
+2. **Cached with invalidation.** Compute off the hot path and serve from a
+   shared cache with explicit invalidation or a TTL. Embodiments: the
+   `workspace_aggregates` cache (`intent-services/src/workspace_aggregates.rs`
+   — lifetime-cached CoW probe, single-flight, per-call budget), the
+   `agent.list` projection cache (`agent_list_cache.rs` — event-driven
+   invalidation on transcript writes, epoch-guarded against stale in-flight
+   loads), and the disk-usage cache (`disk_usage.rs` — ~60 s TTL,
+   stale-while-revalidate: an expired entry is served immediately while a
+   single-flight background walk refreshes it).
+3. **On-demand RPC.** If a field cannot be made cheap, it does not belong on
+   a list payload: give it its own method the client calls when it actually
+   needs the value. Embodiment: `diffSummary` was removed from workspace
+   metadata payloads (its per-workspace `head_diff_rollup` pinned the
+   blocking pool on every list poll, #963) in favor of on-demand `git.diffs`.
+
+Two corollaries:
+
+- **Degrade by omission, never by blocking.** When a cached aggregate is
+  cold or over budget, the read omits the optional field and lets a detached
+  task backfill the cache for the next poll (`cowSupported`'s 1.5 s budget,
+  disk usage's first-poll omission) — a hot RPC never waits out a probe or a
+  filesystem walk.
+- **Window before materializing.** Pagination selects and decodes only the
+  requested page inside SQLite (`get_agent_messages_page`; the preview
+  window query runs on a covering index and never fetches `content`), rather
+  than hydrating the full log and slicing in memory (#1010).
+
+New enrichment fields on hot read paths carry the burden of proof: they must
+name their rung on this ladder before they land. The companion agent-facing
+contract lives in the intentd repo's AGENTS.md.
+
 ## Dependency-direction rules
 
 ```text
