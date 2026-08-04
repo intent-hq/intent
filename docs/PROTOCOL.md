@@ -4671,7 +4671,8 @@ wire). **Daemon-global**: no `workspaceId` (like `stats.getRateHistory`, §5.39)
 - `context?` — `{ prompt?: string, keyterms?: string[] }` — optional domain-vocabulary
   hints for transcription accuracy (e.g. workspace title, branch name, agent names).
   `keyterms` must be an array of strings (a non-array or non-string element →
-  `-32602`). Mapped per provider — see "Context mapping" below.
+  `-32602`; an explicit `null` is treated as absent). Mapped per provider — see
+  "Context mapping" below.
 
 **Result:**
 
