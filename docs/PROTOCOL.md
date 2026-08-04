@@ -1325,26 +1325,26 @@ Precedence, first match wins:
    if it belongs to the resolved provider (static tiers ∪ cached dynamic catalogs, same
    ownership evidence as `agent.create`); a model owned by another provider falls through
    instead of leaking cross-provider.
-3. **Specialist frontmatter `modelTier`** (`fast` \| `balanced` \| `smart`) — resolved
-   **strictly within the resolved provider's static tier table** (§5.38 `modelTiers`), never
-   another provider's. Providers without a tier table (dynamic-model providers like
-   `opencode`, `droid`, `grok`), an unrecognized tier value, and claude-code's smart-tier
-   `"default"` sentinel ("use the CLI default", not a model id) all fall through.
-4. **Settings chain** — for background/delegated sessions
+3. **Settings chain** — for background/delegated sessions
    `backgroundAgents.typeOverrides[agentType]` (the specialist id doubles as the type key)
    then `backgroundAgents.defaultModel`; then `model.providerDefaults[resolved provider]`;
    then `model.default` (§5.12). Provider-guarded like step 2: a configured default owned by
-   another provider is dropped with a daemon warn log (falling to step 5) rather than
+   another provider is dropped with a daemon warn log (falling to step 4) rather than
    rejected — a `-32602` here would reject a model the caller never sent.
-5. **None** — `session.model` stays unset; the provider CLI's own default applies.
+4. **None** — `session.model` stays unset; the provider CLI's own default applies.
+
+The former specialist frontmatter `modelTier` step is **retired** (tolerated-and-ignored,
+§5.11): a specialist's model is either an explicit frontmatter `model` pin or inherited via
+the settings chain; the static tier tables (§5.38 `modelTiers`) no longer participate in
+creation-time resolution.
 
 The resolved provider is the explicit `provider` param, else the compound-`model` prefix,
 else the daemon default (legacy default-provider aliases normalized). The resolved model is
 persisted to `session.model` at creation time, **pinning it for the session's lifetime**:
 later settings/specialist changes only affect agents created afterwards, and an existing
 agent's model changes only via explicit `agent.setModel`. Bundled specialists ship with no
-`modelTier`, so they inherit the user's configured default (step 4) or the provider CLI
-default. `specialist.get`/`specialist.list` preview this resolution via the additive
+frontmatter `model`, so they inherit the user's configured default (step 3) or the provider
+CLI default. `specialist.get`/`specialist.list` preview this resolution via the additive
 `resolvedModel`/`resolvedProvider` fields (§5.11), computed by the same resolver.
 
 **Agent attention requests *(new in intentd)*.** Two MCP `workspace_api` bindings —
@@ -2048,20 +2048,24 @@ resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-3
 non-existent or `bundled` definition → `-32602`.
 
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?,
-  modelTier?: "fast"|"balanced"|"smart", roleReminder?, agentType?, prompt?, hidden?: boolean,
+  roleReminder?, agentType?, prompt?, hidden?: boolean,
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
-  scalars (`codingAgent`, `model`,
-  `modelTier`, `roleReminder`, `agentType`) are first-class **string** fields on the wire, not
+  scalars (`codingAgent`, `model`, `roleReminder`, `agentType`) are first-class **string**
+  fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
   `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
-  target tier. `modelTier` is stored/echoed verbatim as a string; an unrecognized value is not
-  rejected — it simply falls through at resolution time (§5.5 step 3).
+  target tier.
+- **`modelTier` is retired** (tolerated-and-ignored, like the retired
+  `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
+  in an existing file's frontmatter never errors, but the key is stripped on parse — never
+  echoed by `list`/`get`, never written by `create`/`edit` (an existing frontmatter line is
+  dropped on the file's next rewrite) — and never participates in model resolution (§5.5).
 - **`resolvedModel?` / `resolvedProvider?` (additive preview, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852))** —
   on `list`/`get` only, the daemon decorates each definition with the model a **no-model
   `agent.create`** for that specialist would actually pin, computed by the same daemon-side
-  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
+  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–4 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
   request param supplies the resolution context: absent/empty defaults to the daemon's
   default provider; an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
@@ -2083,7 +2087,7 @@ non-existent or `bundled` definition → `-32602`.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
-- **Config scalars (`codingAgent` / `model` / `modelTier` / `agentType`)** — the four optional
+- **Config scalars (`codingAgent` / `model` / `agentType`)** — the three optional
   config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
   independently, across the tiers (embedded bundled floor → bundled dir → user → project): a
   file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
@@ -2111,10 +2115,10 @@ non-existent or `bundled` definition → `-32602`.
 { "jsonrpc":"2.0","id":51,"method":"specialist.create",
   "params":{ "id":"reviewer","scope":"project",
     "spec":{ "id":"reviewer","name":"Reviewer","description":"Reviews diffs",
-      "modelTier":"smart","prompt":"You review code changes…" } } }
+      "model":"opus4.5","prompt":"You review code changes…" } } }
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "specialist":{
-  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"smart",
+  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","model":"opus4.5",
   "source":"project","path":".intent/specialists/reviewer.md" } } }
 ```
 
@@ -2168,7 +2172,7 @@ the overriding flag ("overridden by startup flag …").
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
-- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model`/`modelTier` take precedence over this chain, and every result is provider-guarded). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
 - **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
