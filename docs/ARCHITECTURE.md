@@ -366,13 +366,16 @@ feature from both the agent's system prompt and its MCP tool surface.
   the rules.rs-assembled "Asking the User Questions" section
   (`structuredQuestions`). With all defaults the assembled prompt and tool
   description are byte-identical to the pre-toggle output.
-- **Hook runtime.** `hook.schedule` is rejected in the services layer when
-  `backgroundHooks` is off (behind the MCP dispatch deny); the services-layer
-  check reads the effective settings **live**, so — uniquely among the toggles
-  — flipping `backgroundHooks` off denies new schedules immediately from all
-  sessions, including pre-flip ones whose captured surface still advertises
-  `ws.hook.*`. **Already-active hooks are unaffected by the toggle and run to
-  their terminal state/TTL**.
+- **Hook runtime.** `hook.schedule` is additionally rejected in the services
+  layer when `backgroundHooks` is off, and that check reads the effective
+  settings **live**. For sessions created after the flip, the MCP dispatch
+  deny (captured flags) blocks the call first and the services check is
+  redundant defense in depth; for pre-flip sessions — whose captured surface
+  still advertises `ws.hook.*` and whose dispatch layer lets the frame
+  through — the live services check is what denies it. Net effect: uniquely
+  among the toggles, flipping `backgroundHooks` off denies new schedules
+  immediately from **all** sessions. **Already-active hooks are unaffected by
+  the toggle and run to their terminal state/TTL**.
   Hook script runs build their `ws.*` prelude from the effective flags read
   fresh per run — a hook outlives sessions and daemon restarts, so a hook run
   honors the same gates (e.g. `hostExec`) a newly created session would.
