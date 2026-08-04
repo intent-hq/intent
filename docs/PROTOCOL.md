@@ -701,24 +701,27 @@ any of it — unlike the delete cascade below, nothing is deleted:
   rows, transcripts, completion watches, and pending message queues all **survive for
   unarchive to resume**; no `agent:deleted` fires. Read-only wiring (no agent manager
   attached) still archives without error.
-- **Queued messages and wakes park while archived.** Both delivery arms gate on the
+- **Queued messages and wakes park while archived.** Both gated delivery arms check the
   archived flag: the automatic queue drain and wake delivery (hook wakes,
-  completion-watch wakes, `agent.wakeOrCreate` context messages) refuse to start a turn
-  in an archived workspace — entries stay parked in the pending queue (still visible
-  via `agent.getQueue`, §5.5). The virtual chief workspace skips the row read (never
-  archived), and a row-lookup error fails open so a transient store error cannot strand
-  a queue. `workspace.unarchive` re-kicks the drain for every workspace agent with
-  ready-to-send work (the drain re-checks its own gates), so parked queues deliver
-  after unarchive without a manual kick.
+  `agent.wakeOrCreate` context messages) refuse to start a turn in an archived
+  workspace — entries stay parked in the pending queue (still visible via
+  `agent.getQueue`, §5.5). Completion-watch wakes take a different arm
+  (`send_message`) that carries no archived gate — a watched child completing elsewhere
+  can still wake an idle parent in an archived workspace. The virtual chief workspace
+  skips the row read (never archived), and a row-lookup error fails open so a transient
+  store error cannot strand a queue. `workspace.unarchive` re-kicks the drain for every
+  workspace agent with ready-to-send work (the drain re-checks its own gates), so
+  parked queues deliver after unarchive without a manual kick.
 - **Active background hooks are cancelled.** Every ACTIVE (`scheduled`/`running`) hook
   in the workspace (§5.40) goes through the `hook.cancel` machinery: scheduler task
   aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5), and the
   owner woken with an archive-specific notice — the wake itself parks behind the
   archived gate above, so it queues at most and never starts a turn while archived.
   Terminal hooks are untouched, and **unarchive does not resurrect cancelled hooks** —
-  the notice tells the owner to reschedule if the condition still matters. Best-effort
-  per hook: a store failure is logged and the sweep moves on (archiving never fails
-  because one hook row would not update).
+  the notice ("This hook was cancelled because its workspace was archived.") explains
+  why the watch stopped; the owner is expected to reschedule if the condition still
+  matters. Best-effort per hook: a store failure is logged and the sweep moves on
+  (archiving never fails because one hook row would not update).
 
 One residual race is a deliberate trade-off: a drain that read the workspace row before
 the archive persisted can claim the in-flight slot after the sweep's busy-list snapshot,
