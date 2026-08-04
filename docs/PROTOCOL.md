@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v4.2
+# Intent Backend — JSON-RPC Protocol v4.3
 
-**Protocol Version:** `4.2`
+**Protocol Version:** `4.3`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `4.2`
+**Version:** `4.3`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients.
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "4.2", server: { protocolVersion: "4.2", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "4.2", ... }`
+- `client.hello` response: `{ protocolVersion: "4.3", server: { protocolVersion: "4.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "4.3", ... }`
 
 ### Compatibility Policy
 
@@ -158,22 +158,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **314 dispatchable method names** across the following categories:
+The API exposes **315 dispatchable method names** across the following categories:
 
-- **Router methods:** 277 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 278 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 314 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 315 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 314 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 315 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.40) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.41) carry each method's parameter and result contract.
 
-### Router methods by namespace (277 total)
+### Router methods by namespace (278 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -208,6 +208,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
+| voice | 1 | transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no `workspaceId`) |
 | workspace | 26 | archive, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
@@ -2195,8 +2196,8 @@ entry) carries an additive `origin` field naming the layer the effective value c
 boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
 `hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
-`endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
-`secrets.json`, state blobs stay in SQLite).
+`endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
+(secrets stay in `secrets.json`, state blobs stay in SQLite).
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
 comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
 re-parse, debounced; invalid content keeps last-good values) and emit the same
@@ -2213,6 +2214,7 @@ the overriding flag ("overridden by startup flag …").
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Voice (new in intentd):** `voice.provider` (enum: `elevenlabs` | `openai`, default `elevenlabs`) — the transcription provider `voice.transcribe` uses when the call carries no per-call `provider` override (§5.41); `voice.openai.model` (enum: `gpt-4o-transcribe` | `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`) — the transcription model the OpenAI provider posts (§5.41 "Providers"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`); `voice.vocabulary` *(object, non-sensitive — a JSON string array; default = `["Intent"]`, see §5.41 "Context mapping")* — the user-editable vocabulary biased into every `voice.transcribe` call, read per call and merged ahead of `context.keyterms` (§5.41; SQLite-backed like the other opaque bags — no `origin`; a stored value exactly matching the retired 17-term seed default is deleted on daemon start so the new default applies — user-modified lists are never touched); `voice.elevenlabs.apiKey` *(sensitive)* and `voice.openai.apiKey` *(sensitive)* — the provider API keys, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) like `linear.token`. Key resolution is secret store first, then the `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` environment variable fallback; the keys are never logged, echoed, or returned over the wire (redacted in `settings.list` / `settings.get` like every sensitive path).
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
@@ -2699,7 +2701,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"4.2"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"4.3"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2711,18 +2713,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"4.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"4.3",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"4.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"4.3","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"4.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"4.3",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"4.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"4.3","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -4634,6 +4636,117 @@ wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
     "createdAt":"2026-07-31T10:00:00Z","expiresAt":"2026-07-31T11:00:00Z",
     "lastRunAt":"2026-07-31T10:05:00Z",
     "nextRunAt":"2026-07-31T10:06:00Z","runCount":6 } ] } }
+```
+
+### 5.41 Voice transcription — `voice.transcribe` *(v4.3)*
+
+Daemon-owned speech-to-text behind a pluggable provider seam: the client records audio
+(e.g. the desktop push-to-talk flow), ships it base64-encoded, and the daemon calls the
+configured transcription provider — **ElevenLabs Scribe** (`scribe_v2`) or **OpenAI**
+(the configured `voice.openai.model`, default `gpt-4o-transcribe`; `whisper-1`
+fallback) — and returns the transcript. Daemon-owned so the provider API keys live in
+the daemon's file-backed secret store and **never reach clients** (the same 🔒 secret
+guardrail as `linear.token`, §5.28: keys are never logged, echoed, or returned over the
+wire). **Daemon-global**: no `workspaceId` (like `stats.getRateHistory`, §5.39).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| voice.transcribe | audio (req), mimeType?, language?, provider?, context? | `{ text, provider, durationMs }` — `durationMs` always present, `null` when unknown |
+
+**Params:**
+
+- `audio` (req) — the recorded audio bytes, **base64-encoded** (standard alphabet,
+  padded). Typically webm/opus (the FE `MediaRecorder` default) or wav; the daemon
+  forwards the bytes to the provider unchanged. Missing, blank, invalid base64, or a
+  payload that decodes to zero bytes → `-32602`. Capped at **25 MB decoded**
+  (`26,214,400` bytes), enforced twice — pre-decode on the base64 text length and
+  post-decode on the byte length — so an over-cap payload is rejected before any
+  provider call (see errors below).
+- `mimeType?` — the audio container MIME type (e.g. `"audio/webm"`, `"audio/wav"`);
+  defaults to `"audio/webm"` when omitted or blank.
+- `language?` — optional language hint, forwarded to the provider.
+- `provider?` — per-call provider override: `"elevenlabs" | "openai"` (the same enum as
+  the `voice.provider` setting); any other value → `-32602`. Absent → the
+  `voice.provider` setting (§5.12) selects the provider.
+- `context?` — `{ prompt?: string, keyterms?: string[] }` — optional domain-vocabulary
+  hints for transcription accuracy (e.g. workspace title, branch name, agent names).
+  `keyterms` must be an array of strings (a non-array or non-string element →
+  `-32602`; an explicit `null` is treated as absent). Mapped per provider — see
+  "Context mapping" below.
+
+**Result:**
+
+- `text` — the transcript.
+- `provider` — the provider that actually served the request (`"elevenlabs"` or
+  `"openai"`), so clients can attribute the result when the setting (not a per-call
+  override) chose it.
+- `durationMs` — the transcribed **audio duration** in milliseconds as reported by the
+  provider (ElevenLabs: the last word's `end` timestamp; OpenAI: the response
+  `duration` field — not request latency). **Always present, `null` when the provider
+  does not report it** (unlike the §5.39-style omitted-when-unset convention).
+
+**Context mapping (per provider).** The daemon biases every transcription with the
+user-editable **`voice.vocabulary`** setting (§5.12 — a string array defaulting to
+`["Intent"]`; users add their own terms, the shipped default is minimal),
+**read per call** — an absent or non-array stored value degrades to an empty list and
+non-string elements are skipped, never an error — plus a fixed style hint ("Technical dictation in a
+software-engineering app; preserve code identifiers and file paths verbatim."), and
+merges the request's `context` into it:
+
+- **OpenAI** — composed into the API's single free-form `prompt` parameter: the style
+  hint, then `" Vocabulary: <terms comma-joined>."` (configured vocabulary +
+  `context.keyterms`), then `context.prompt` appended.
+- **ElevenLabs** — the configured vocabulary and `context.keyterms` feed Scribe v2
+  **keyterm prompting** (repeated `keyterms` form fields; requires `model_id:
+  scribe_v2`): vocabulary first, then request keyterms; case-insensitive dedup (first
+  spelling wins); blank and > 50-char terms skipped; hard cap of 100 total.
+  `context.prompt` has no ElevenLabs equivalent and is **ignored** for this provider.
+
+**Providers.** Both are typed REST engines over `reqwest` (the `intent-linear` /
+`intent-sentry` pattern):
+
+- **ElevenLabs** — multipart `POST https://api.elevenlabs.io/v1/speech-to-text` with
+  `model_id: scribe_v2` (required for keyterm prompting).
+- **OpenAI** — multipart `POST https://api.openai.com/v1/audio/transcriptions` with
+  `model:` the configured `voice.openai.model` setting (§5.12; `gpt-4o-transcribe` |
+  `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`), with a one-shot
+  `whisper-1` fallback when the selected model is unavailable on the account (404 /
+  model-not-found) — skipped when `whisper-1` itself is the selected model.
+
+**Settings & secrets (§5.12).** `voice.provider` (enum: `elevenlabs` | `openai`, default
+`elevenlabs`; an invalid stored value silently falls back to the default) selects the
+provider when the call carries no override — selection order: per-call `provider` →
+`voice.provider` setting → `elevenlabs`. `voice.openai.model` selects the OpenAI
+transcription model (see "Providers" above). The API keys are the **sensitive** catalog
+entries `voice.elevenlabs.apiKey` / `voice.openai.apiKey`, persisted to the daemon's
+file-backed secret store (`~/intent/secrets.json`, `0600`) and settable via
+`settings.update` — the FE "connect" flow, exactly like `linear.token`. Key resolution
+is **secret store first, then env fallback** (`ELEVENLABS_API_KEY` / `OPENAI_API_KEY`);
+empty/whitespace-only values are treated as absent at both levels.
+
+**Errors** (§9):
+
+- Caller-input problems — missing/blank/invalid-base64/zero-byte `audio`, an unknown
+  `provider` value, a malformed `context.keyterms` — → `-32602` with the generic
+  `error.data.code: "invalid-params"` discriminator (no voice-specific data codes).
+- **Audio too large** (over the 25 MB cap, either enforcement point) → `-32602`
+  (`"audio exceeds the 25 MB limit"`) — rejected before any provider call.
+- **No API key configured** for the selected provider → `-32603` with the descriptive
+  message carried in `error.data` (a plain string) — clients should surface it as a
+  "configure in Settings" hint (the message names the provider), not a silent failure.
+- **Provider HTTP failure** (auth rejection, rate limit, 5xx, decode errors) →
+  `-32603` with the provider's error detail in `error.data` (e.g.
+  `"elevenlabs returned 401 Unauthorized: …"`); the API key never appears in the error.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":97,"method":"voice.transcribe","params":{
+  "audio":"GkXfo59ChoEBQveBAULygQRC…","mimeType":"audio/webm","language":"en",
+  "context":{ "keyterms":["cloudlands-fe","submodule","clippy"] } } }
+// ← response
+{ "jsonrpc":"2.0","id":97,"result":{
+  "text":"Bump the cloudlands-fe submodule and rerun clippy.",
+  "provider":"elevenlabs","durationMs":3200 } }
 ```
 
 ## 6. Events & Subscriptions
