@@ -1526,8 +1526,11 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
 When an agent goes idle with **more than one** ready-to-send queued entry, the queue drain may
 deliver several of them as ONE combined provider turn instead of one turn per message. The mode
 is controlled by the `agents.flushQueuedMessages` setting (§5.12 — enum `"all" | "systemOnly" |
-"off"`, default `"all"`, mutable via `settings.update`; read at drain time — legacy `config.toml`
-booleans are accepted, `true` → `"all"`, `false` → `"off"`):
+"off"`, default `"all"`, mutable via `settings.update`; read at drain time). `settings.update`
+only accepts the three string values (validated as an enum — a boolean `value` is rejected with
+`-32602`); the legacy boolean shape (`true` → `"all"`, `false` → `"off"`) is accepted **only**
+when parsing an on-disk `config.toml` written by an older daemon, so an existing boolean survives
+upgrade but a client cannot write one back over the wire:
 
 - **`"all"`** — every ready entry batches into one combined turn (≥2 ready entries required; the
   original boolean-`true` behavior).
@@ -1535,8 +1538,10 @@ booleans are accepted, `true` → `"all"`, `false` → `"off"`):
   of them batch into one combined turn, preserving their relative order but skipping over any
   interleaved user-origin entries — a system batch may therefore deliver ahead of an
   earlier-queued user message. User-origin entries always deliver individually, FIFO among
-  themselves, and are never folded into a system batch. A single ready system entry (no other
-  ready system entries present) falls through to the single-entry drain path below.
+  themselves, and are never folded into a system batch. A single ready system entry — even
+  with other ready user entries also present — has nothing to batch with, so it delivers via
+  the same single-entry drain path as `"off"` (one turn for just that entry); only ≥2 ready
+  system entries trigger a combined batch.
 - **`"off"`** — the legacy one-message-per-turn drain: every ready entry starts its own turn
   (the original boolean-`false` behavior).
 
@@ -2247,7 +2252,7 @@ the overriding flag ("overridden by startup flag …").
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
 - **Hardware console (new in intentd):** `hardwareConsole.state` *(object, non-sensitive, default `{}`)* — persisted hardware-console device configuration (key assignments, action mappings, prompt-picker limit), opaque bag owned by the FE.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
-- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`, `agents.flushQueuedMessages` *(enum `"all" | "systemOnly" | "off"`, default `"all"` — controls how the queue drain batches ready-to-send queued messages into a combined provider turn when an agent goes idle; §5.5 "Queued-message flush". `"all"`: batch every ready entry into ONE combined turn. `"systemOnly"`: batch ALL ready system-origin entries (anywhere in the queue, relative order preserved) into ONE combined turn while user-origin entries still deliver individually, FIFO. `"off"`: the legacy one-message-per-turn drain. Read at drain time, so a `settings.update` takes effect on the next drain. Legacy `config.toml` booleans are accepted for backward compatibility: `true` → `"all"`, `false` → `"off"`)*.
+- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`, `agents.flushQueuedMessages` *(enum `"all" | "systemOnly" | "off"`, default `"all"` — controls how the queue drain batches ready-to-send queued messages into a combined provider turn when an agent goes idle; §5.5 "Queued-message flush". `"all"`: batch every ready entry into ONE combined turn. `"systemOnly"`: batch ALL ready system-origin entries (anywhere in the queue, relative order preserved) into ONE combined turn while user-origin entries still deliver individually, FIFO. `"off"`: the legacy one-message-per-turn drain. Read at drain time, so a `settings.update` takes effect on the next drain. `settings.update` validates the `value` as one of the three strings and rejects a boolean with `-32602`; the legacy boolean shape (`true` → `"all"`, `false` → `"off"`) is accepted only when parsing an existing on-disk `config.toml` from an older daemon, not over `settings.update`)*.
 - **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
 - **Workspace API tool output (new in intentd):** `workspaceApi.maxOutputChars` *(number, default `100000`; `0` = unlimited, otherwise `1000..=10000000` — a non-zero value below 1000 rejects with `-32602`)*, `workspaceApi.toonOutput` *(boolean, default `true`)*. TOML-backed under a `[workspaceApi]` config.toml section; they shape the plain success body of the agent-facing MCP `workspace_api` tool — the oversized-output redirect and TOON encoding described in §5.22.
 - **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
