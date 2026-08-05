@@ -1423,6 +1423,12 @@ The former specialist frontmatter `modelTier` step is **retired** (tolerated-and
 the settings chain; the static tier tables (§5.38 `modelTiers`) no longer participate in
 creation-time resolution.
 
+Specialist `modelOptions` (§5.11) likewise adds **no resolver step**: the list is advisory
+— surfaced to delegating agents in the `workspace_api` tool description's
+`ws.agent.delegate` docs — and a chosen option is sent as the explicit client `model`, i.e.
+step 1 above, which remains the first-match step exactly as before. A caller that omits
+`model` resolves through steps 2–4 unchanged, regardless of any `modelOptions`.
+
 The resolved provider is the explicit `provider` param, else the compound-`model` prefix,
 else the daemon default (legacy default-provider aliases normalized). The resolved model is
 persisted to `session.model` at creation time, **pinning it for the session's lifetime**:
@@ -2165,7 +2171,7 @@ resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-3
 non-existent or `bundled` definition → `-32602`.
 
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?,
-  roleReminder?, agentType?, prompt?, hidden?: boolean,
+  roleReminder?, agentType?, prompt?, hidden?: boolean, modelOptions?: [{ model, hint }],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
   scalars (`codingAgent`, `model`, `roleReminder`, `agentType`) are first-class **string**
   fields on the wire, not
@@ -2217,6 +2223,31 @@ non-existent or `bundled` definition → `-32602`.
   **winner-takes-all** (not inherited): it is coupled to the prompt body (itself
   winner-takes-all), so the derive-from-body fallback remains correct when a higher tier
   rewrites the body.
+- **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
+  [#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
+  model options** a specialist's author suggests: `[{ model, hint }]` entries where `model` is
+  the internal compound model id (e.g. `opencode:kimi-k3`) and `hint` is the author's free-text
+  guidance for choosing that option (`""` when none was given). Carried additively on
+  `specialist.get`/`list`/`create`/`edit` — emitted when the resolved list is non-empty, omitted
+  otherwise (never `null`/`[]` on the wire) — and accepted in `create`/`edit` `spec` bodies. In
+  the file it is a frontmatter scalar encoded as a **single-line JSON array**
+  (`modelOptions: [{"model":"opencode:kimi-k3","hint":"cheap"}]`) so it fits the line-based
+  frontmatter parser and round-trips parse→write→parse losslessly. Resolution follows the same
+  3-tier **inherit-on-omit** fold as the config scalars above, with **`[]` as the explicit
+  clear** (the array analogue of `key: ""`): an omitted key inherits the lower tiers' effective
+  list, an explicit `[]` clears it, and a non-empty list overrides **wholesale** — entries never
+  merge across tiers. Reads are **lenient** (files are never rejected): an unparseable scalar or
+  a non-array is treated as an omitted key (inherits), and unusable entries — non-objects, or no
+  non-empty string `model` — are skipped individually; only a **literal `[]`** clears — a
+  non-empty array whose entries are ALL unusable is treated as omitted (falls through to
+  inheritance), so one bad hand-authored entry never silently drops an inherited list. Writes
+  are **strict**: `create`/`edit` validate the `spec` value before writing — it must be a JSON
+  array of objects, each with a non-empty string `model`; `hint` must be a string when present
+  (defaults to `""`) — and any invalid shape → `-32602` with nothing written. The list adds
+  **no resolver step** (§5.5 "Creation-time default-model resolution"): it is advisory — the
+  daemon injects each visible specialist's options into the delegating agent's `workspace_api`
+  tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
+  the explicit `model` param (resolution step 1).
 - The daemon watches the user (`~/.intent/specialists/`) and project
   (`<workspace>/.intent/specialists/`) tiers (using `notify` watchers, the same infrastructure as
   workspace `file:changed` events); when a specialist file is created/modified/deleted under a
