@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v4.5
+# Intent Backend — JSON-RPC Protocol v5.0
 
-**Protocol Version:** `4.5`
+**Protocol Version:** `5.0`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `4.5`
+**Version:** `5.0`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Within 4.2 (behavior only, no wire change): `workspace.archive` gracefully interrupts the workspace's in-flight agent turns and cancels its ACTIVE background hooks, queued messages and wakes park while the workspace stays archived (drained again after `workspace.unarchive`), and `workspace.delete` eagerly aborts live hook scheduler tasks before the store cascade — [intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); see the §5.1 archive active-work teardown / delete cascade blocks and §5.40. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients. Within 4.3 (no method-catalog or wire-shape change — the notice rides the existing opaque `messageMetadata` per-message payload and the v2.8 `interruptPriority?` queue flag): `agent.dismissQuestions` now **notifies the model** of the dismissal (intentd#892; §5.5 "Question hold", §7) — after the marker persist and hold release, a system-origin notice ("User dismissed your N questions without answering. Do not re-ask; continue with your best judgment.", count-aware wording) is delivered to the agent, carrying `messageMetadata { type: "questions_dismissed", source: "system", dismissedQuestionsMessageId }`, visible on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row; idle agents get it as an immediate turn, busy/still-held agents get it promoted to the queue head with `interruptPriority: true`; idempotent (no duplicate notice on re-dismiss) and fail-soft (a notice delivery error never fails the RPC). This supersedes the pre-#892 "the model is NOT notified" contract documented since v2.8. Also within 4.3 (behavior only, no wire change; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)): the **agent-waiting deferral** — an `agent:idle` for a child that itself holds live outgoing completion watches on other, unsettled agents is not its completion; completion-watch delivery and `after_all` settlement records defer exactly like the hook-waiting case (§Completion-watch persistence), with a 2-cycle deadlock guard and without deferring the child's own `after_all` group seal. Version 4.4 is an **additive**-style minor bump over 4.3: the `voice.transcribe` **no-API-key** failure (§5.41) now carries structured `error.data` — `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }` — instead of the former plain string (monorepo#1448; intentd#902), following the `{ code, detail }` data-code precedent (`CloneFailed`, monorepo#826; `base-ref-unresolvable`, monorepo#761). The envelope is otherwise unchanged (`-32603`, `"Internal error"`), and `data.detail` is **byte-identical** to the pre-4.4 plain-string `data`, so clients that sniffed the message keep working; every other `voice.transcribe` failure is untouched (provider HTTP failures keep plain-string `data`, the `-32602` caller errors are unchanged). Version 4.5 is an **additive** minor bump over 4.4: it adds the `agent.markSeen` router method (§5.5) — the per-conversation **seen marker**: persists `lastSeenMessageId` (the id of the newest transcript message the user has seen) in the agent session metadata (survives daemon restarts), advances **monotonically** (naming a message older than the current marker is a no-op returning the current marker), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (presence-detected additive response field, omitted when nothing was marked seen). Within 4.5 (additive metadata/event-payload fields, presence-detected per the convention below; [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919)): the **interruption-reason contract** (§7.2) — every interrupted turn's persisted marker row and interrupt terminal `agent:stream:end` carry the machine-readable `interruptReason` (`user_stop` / `preempted_by_message` / `daemon_shutdown` / `agent_stopped`), `interruptedBy` (`{ kind: "user" }` or `{ kind: "agent", agentId, name? }`) rides along only on `preempted_by_message`, and every interruption that found a registered live-turn slot now **always persists** the interrupted assistant marker row (empty `contentBlocks` included) so the interrupt `agent:stream:end` reliably carries `messageId` — superseding the STAB-114 zero-output no-op flush; the monorepo#1014 zero-output combined delivery is preserved by excluding the still-empty marker row from the turn-progress check.
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Within 4.2 (behavior only, no wire change): `workspace.archive` gracefully interrupts the workspace's in-flight agent turns and cancels its ACTIVE background hooks, queued messages and wakes park while the workspace stays archived (drained again after `workspace.unarchive`), and `workspace.delete` eagerly aborts live hook scheduler tasks before the store cascade — [intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); see the §5.1 archive active-work teardown / delete cascade blocks and §5.40. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients. Within 4.3 (no method-catalog or wire-shape change — the notice rides the existing opaque `messageMetadata` per-message payload and the v2.8 `interruptPriority?` queue flag): `agent.dismissQuestions` now **notifies the model** of the dismissal (intentd#892; §5.5 "Question hold", §7) — after the marker persist and hold release, a system-origin notice ("User dismissed your N questions without answering. Do not re-ask; continue with your best judgment.", count-aware wording) is delivered to the agent, carrying `messageMetadata { type: "questions_dismissed", source: "system", dismissedQuestionsMessageId }`, visible on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row; idle agents get it as an immediate turn, busy/still-held agents get it promoted to the queue head with `interruptPriority: true`; idempotent (no duplicate notice on re-dismiss) and fail-soft (a notice delivery error never fails the RPC). This supersedes the pre-#892 "the model is NOT notified" contract documented since v2.8. Also within 4.3 (behavior only, no wire change; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)): the **agent-waiting deferral** — an `agent:idle` for a child that itself holds live outgoing completion watches on other, unsettled agents is not its completion; completion-watch delivery and `after_all` settlement records defer exactly like the hook-waiting case (§Completion-watch persistence), with a 2-cycle deadlock guard and without deferring the child's own `after_all` group seal. Version 4.4 is an **additive**-style minor bump over 4.3: the `voice.transcribe` **no-API-key** failure (§5.41) now carries structured `error.data` — `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }` — instead of the former plain string (monorepo#1448; intentd#902), following the `{ code, detail }` data-code precedent (`CloneFailed`, monorepo#826; `base-ref-unresolvable`, monorepo#761). The envelope is otherwise unchanged (`-32603`, `"Internal error"`), and `data.detail` is **byte-identical** to the pre-4.4 plain-string `data`, so clients that sniffed the message keep working; every other `voice.transcribe` failure is untouched (provider HTTP failures keep plain-string `data`, the `-32602` caller errors are unchanged). Version 4.5 is an **additive** minor bump over 4.4: it adds the `agent.markSeen` router method (§5.5) — the per-conversation **seen marker**: persists `lastSeenMessageId` (the id of the newest transcript message the user has seen) in the agent session metadata (survives daemon restarts), advances **monotonically** (naming a message older than the current marker is a no-op returning the current marker), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (presence-detected additive response field, omitted when nothing was marked seen). Within 4.5 (additive metadata/event-payload fields, presence-detected per the convention below; [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919)): the **interruption-reason contract** (§7.2) — every interrupted turn's persisted marker row and interrupt terminal `agent:stream:end` carry the machine-readable `interruptReason` (`user_stop` / `preempted_by_message` / `daemon_shutdown` / `agent_stopped`), `interruptedBy` (`{ kind: "user" }` or `{ kind: "agent", agentId, name? }`) rides along only on `preempted_by_message`, and every interruption that found a registered live-turn slot now **always persists** the interrupted assistant marker row (empty `contentBlocks` included) so the interrupt `agent:stream:end` reliably carries `messageId` — superseding the STAB-114 zero-output no-op flush; the monorepo#1014 zero-output combined delivery is preserved by excluding the still-empty marker row from the turn-progress check. Version 5.0 is a **breaking** major bump over 4.5: it **removes** 11 caller-less `pr.*` router methods (§5.7) — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — left dead after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)). `pr.status` and `pr.refresh` survive unchanged, and the explicit-addressing `github.*` surface (§5.27) and the MCP `ws.pr.snapshot` binding (§5.7) are untouched. Calling a removed method now returns `-32601` (Method not found). Follows the v3.0 `pr.waitForChanges` precedent — a caller-less method is deleted outright with a major bump rather than deprecated in place ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "4.5", server: { protocolVersion: "4.5", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "4.5", ... }`
+- `client.hello` response: `{ protocolVersion: "5.0", server: { protocolVersion: "5.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "5.0", ... }`
 
 ### Compatibility Policy
 
@@ -158,22 +158,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **316 dispatchable method names** across the following categories:
+The API exposes **305 dispatchable method names** across the following categories:
 
-- **Router methods:** 279 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 268 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 316 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 305 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 316 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 305 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.41) carry each method's parameter and result contract.
 
-### Router methods by namespace (279 total)
+### Router methods by namespace (268 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -190,7 +190,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
-| pr | 13 | capabilities, createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch |
+| pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
 | repo | 2 | list, remove |
@@ -1886,51 +1886,18 @@ turn end and every release path above — recomputes-and-compares, pushed as
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace — otherwise the underlying service throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below), **and `pr.capabilities`** (v2.1), which reports the active provider's capability flags before any PR exists (see below).
+The namespace holds the **two** workspace/active-PR-scoped methods that survived the v5.0 removal: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
 
 > Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
+> **Removed in v5.0 ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).** The 11 other `pr.*` methods — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — were left caller-less after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)), and are deleted from the wire (calling one returns `-32601` Method not found — same precedent as the v3.0 `pr.waitForChanges` removal). The v2.1 provider capability gating went with them (no gated `pr.*` operation remains). Equivalent PR read/write operations live on the explicit-addressing `github.*` surface (§5.27 — e.g. `github.pulls.merge`, `github.pulls.updateBranch`, `github.getReviewThreads`, `github.listReviewComments`, `github.replyReviewComment`, `github.resolveThread` / `github.unresolveThread`); agents use `gh` on the host plus the read-only MCP `ws.pr.snapshot` binding (below).
+
 | Method | Params | Result |
 | --- | --- | --- |
-| pr.merge | mergeMethod?: "merge" | "squash" |
 | pr.status | — | { prNumber, title, url, state, mergeable, mergeableState, hasConflicts, isDraft, isMerged, isClosed, summary } |
-| pr.updateBranch | — | service result |
-| pr.listReviewComments | path?, status?: "unresolved" | "resolved" |
-| pr.replyToReviewComment | commentId (req), body (req) | service result |
-| pr.resolveThread | threadId (req), action?: "resolve" | "unresolve" |
-| pr.listComments | count? | conversation-level comments |
-| pr.postComment | body (req) | service result |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state. Forces the same PR discovery/refresh the daemon's background sweep runs for one workspace, on demand |
 
-**Review & CI methods.** Five further methods round out the `pr.*` namespace. Three
-review/CI methods map onto the `SourceControl` trait (`list_reviews` / `check_runs` /
-`submit_review`) and stay host-agnostic. `pr.refresh` forces the same PR
-discovery/refresh the daemon's background sweep runs for one workspace, on demand.
-`pr.capabilities` (v2.1) exposes the active provider's capability flags.
-
-| Method | Params | Result |
-| --- | --- | --- |
-| pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
-| pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas). Gated on the `checkRuns` capability (see capability gating below) |
-| pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR. A `"request-changes"` verdict is gated on the `reviewRequiredChanges` capability (see capability gating below); `"approve"` / `"comment"` are ungated |
-| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
-| pr.capabilities | — (workspaceId only, per §3.6) | { provider, capabilities: { draftPrs, squashMerge, rebaseMerge, reviewRequiredChanges, checkRuns, issues } } — the active provider's id (e.g. `"github"`) and its boolean capability flags, so clients can gate UI before invoking gated operations |
-
-> **`pr.capabilities` semantics (v2.1).** Requires a resolvable source-control provider but
-> **not** an active PR — clients gate UI on the flags before any PR exists. The
-> `workspaceId` is still validated (unknown workspace → not-found error like every other
-> workspace-scoped method).
-
-> **Capability gating (v2.1).** Operations a provider does not support fail with
-> `-32603 "Internal error"` whose `error.data` carries a message with the stable prefix
-> `unsupported by provider:` (per the §3.3/§9 envelope, `error.data` holds the original
-> internal message for `-32603`). Gated operations: `pr.merge` with
-> `mergeMethod: "squash"` (`squashMerge` flag) or `"rebase"` (`rebaseMerge` flag — a plain
-> `"merge"` is ungated), `pr.createReview` with `verdict: "request-changes"`
-> (`reviewRequiredChanges` flag), and `pr.listCheckRuns` (`checkRuns` flag). Clients should
-> match on the `unsupported by provider:` prefix to distinguish capability failures from
-> other internal errors.
-
-> **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
+> **`pr.refresh` semantics.** Unlike `pr.status`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
@@ -1957,12 +1924,13 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
-// → request — submit an approving review on the active PR
-{ "jsonrpc":"2.0","id":40,"method":"pr.createReview",
-  "params":{ "workspaceId":"ws-abc","verdict":"approve","body":"LGTM" } }
+// → request — the active PR's status
+{ "jsonrpc":"2.0","id":40,"method":"pr.status","params":{ "workspaceId":"ws-abc" } }
 // ← response
-{ "jsonrpc":"2.0","id":40,"result":{ "review":{
-  "author":"octocat","verdict":"approve","body":"LGTM","submittedAt":"2026-06-17T05:00:00.000Z" } } }
+{ "jsonrpc":"2.0","id":40,"result":{ "prNumber":12,"title":"Add review wire surface",
+  "url":"https://github.com/octo/repo/pull/12","state":"open","mergeable":true,
+  "mergeableState":"clean","hasConflicts":false,"isDraft":false,"isMerged":false,
+  "isClosed":false,"summary":"..." } }
 ```
 
 > **`ws.pr.snapshot(prNumber, { repo? })` — agent MCP binding *(new in intentd,
@@ -1977,7 +1945,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > (§5.40): a hook calls it each run, compares the result against the previous run's
 > carry-over `hookState`, and dispatches only on meaningful change. There is **no wire
 > method** (MCP-only, per the §6.8 principle — PR watching is agent-authored background
-> work; FE clients keep using `pr.status`/`pr.getReviews`/`pr.listCheckRuns`).
+> work; FE clients keep using `pr.status` and the explicit-addressing `github.*` reads, §5.27).
 > `prNumber` is **required** (a positive number —
 > missing, non-numeric, or `<= 0` values are rejected with a validation error) and
 > there is **no active-PR fallback**: the snapshot is scoped to the workspace's
@@ -2739,8 +2707,8 @@ final, complete answer is the `search:done` event (or the inline result when not
 (`search.inFiles` / `search.fileNames` / `search.codebase`) — → `-32602`. `search.cancel`
 with an unknown or already-finished `requestId` is a no-op success (`{ ok: true }`). A malformed
 `opts.regex` pattern yields `-32602 "Invalid regex"`. Host-API searches (PR/issue/repo) are
-**not** part of `search.*` — they stay under `pr.*` / the provider-agnostic `SourceControl`
-(§5.7, host-agnostic).
+**not** part of `search.*` — they live on the explicit-addressing `github.*` surface
+(`github.pulls.search` / `github.issues.search` / `github.repos.search`, §5.27).
 
 ### 5.16 `drafts.*`
 
@@ -2829,7 +2797,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"4.5"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"5.0"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2841,18 +2809,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"4.5",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"5.0",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"4.5","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"5.0","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"4.5",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"5.0",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"4.5","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"5.0","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -2892,7 +2860,7 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
   "files":[{ "path":"docs/rust-backend/PROTOCOL.md","additions":140,"deletions":12,"staged":true }] } }
 ```
 
-**Shared schemas (Code Changes Review).** Defined once here; referenced by §5.7, §5.19, §5.20.
+**Shared schemas (Code Changes Review).** Defined once here; referenced by §5.19, §5.20.
 
 - **WorkspaceGitStatus** — `{ branch, trunkBranch, aheadOfTrunk, behindTrunk, hasRemote,
   isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
@@ -3286,8 +3254,9 @@ script's exit code (§5.1).
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
 > that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
-> **auth** and GitHub-**derived identity** live on `github.*`. The existing `pr.*` methods (§5.7) are
-> deliberately **workspace/active-PR scoped** (`ws` → owner/repo/number) and are left **untouched**;
+> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.*` methods (§5.7 —
+> `pr.status` / `pr.refresh` since the v5.0 removal) are deliberately **workspace/active-PR scoped**
+> (`ws` → owner/repo/number) and are left **untouched**;
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
 
