@@ -358,6 +358,18 @@ feature from both the agent's system prompt and its MCP tool surface.
   namespace-level except `attentionRequests`, which is method-level
   (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` only —
   `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated).
+- **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
+  per-bridge description assembly carries one dynamic segment: each visible
+  specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
+  fold at bridge creation (`Services::specialist_model_options_for_workspace`
+  → `specialist_model_options`, project tier derived from the stored workspace
+  record — worktree path, else repository path) and injected as
+  continuation-indented lines of the `ws.agent.delegate` doc entry
+  (`tools::workspace_api_description_with_model_options`), composing with the
+  feature pruning above. Snapshot semantics match the `[agentFeatures]`
+  toggles — captured once at bridge creation, never live-read — and when no
+  specialist carries options (the default) the assembled description is
+  byte-identical to the plain assembly by construction.
 - **Prompt-section gating.** `rules::assemble_system_prompt` threads the
   captured flags into instruction assembly (`intent-services/instructions.rs`):
   disabled features drop their bundled-instruction sections (e.g. common.md's
