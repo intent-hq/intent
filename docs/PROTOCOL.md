@@ -2224,10 +2224,11 @@ non-existent or `bundled` definition → `-32602`.
   winner-takes-all), so the derive-from-body fallback remains correct when a higher tier
   rewrites the body.
 - **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
-  [#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
+  [intent-hq/intentd#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
   model options** a specialist's author suggests: `[{ model, hint }]` entries where `model` is
-  the internal compound model id (e.g. `opencode:kimi-k3`) and `hint` is the author's free-text
-  guidance for choosing that option (`""` when none was given). Carried additively on
+  the model id to pass on delegation — typically an internal compound id (e.g.
+  `opencode:kimi-k3`); validation requires only a non-empty string — and `hint` is the author's
+  free-text guidance for choosing that option (`""` when none was given). Carried additively on
   `specialist.get`/`list`/`create`/`edit` — emitted when the resolved list is non-empty, omitted
   otherwise (never `null`/`[]` on the wire) — and accepted in `create`/`edit` `spec` bodies. In
   the file it is a frontmatter scalar encoded as a **single-line JSON array**
@@ -2238,7 +2239,8 @@ non-existent or `bundled` definition → `-32602`.
   list, an explicit `[]` clears it, and a non-empty list overrides **wholesale** — entries never
   merge across tiers. Reads are **lenient** (files are never rejected): an unparseable scalar or
   a non-array is treated as an omitted key (inherits), and unusable entries — non-objects, or no
-  non-empty string `model` — are skipped individually; only a **literal `[]`** clears — a
+  non-empty string `model` — are skipped individually (a non-string `hint` alone does not make
+  an entry unusable on read — it is coerced to `""`); only a **literal `[]`** clears — a
   non-empty array whose entries are ALL unusable is treated as omitted (falls through to
   inheritance), so one bad hand-authored entry never silently drops an inherited list. Writes
   are **strict**: `create`/`edit` validate the `spec` value before writing — it must be a JSON

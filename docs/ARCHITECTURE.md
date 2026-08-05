@@ -361,8 +361,9 @@ feature from both the agent's system prompt and its MCP tool surface.
 - **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
   per-bridge description assembly carries one dynamic segment: each visible
   specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
-  fold at bridge creation (`Services::specialist_model_options`, project tier
-  derived from the stored workspace record) and injected as
+  fold at bridge creation (`Services::specialist_model_options_for_workspace`
+  → `specialist_model_options`, project tier derived from the stored workspace
+  record — worktree path, else repository path) and injected as
   continuation-indented lines of the `ws.agent.delegate` doc entry
   (`tools::workspace_api_description_with_model_options`), composing with the
   feature pruning above. Snapshot semantics match the `[agentFeatures]`
