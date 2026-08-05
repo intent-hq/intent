@@ -2634,7 +2634,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 | --- | --- | --- |
 | search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search |
 | search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
-| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
+| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
 | search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
 | search.memories | query (req), workspaceId?, requestId? | { requestId, matches: MemoryMatch[] } — over the BE memories store |
 | search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
@@ -2682,8 +2682,13 @@ not indexed), ranked by bm25 — matches order by adjusted rank, then newest-fir
 matching message (no per-agent collapse). `preferWorkspaceId` subtracts a fixed boost from the
 bm25 rank (lower = better) of matches owned by the preferred workspace: large enough to lift a
 preferred-workspace match above equally-relevant matches elsewhere, small enough that a
-decisively better match from another workspace still wins. **User-typed queries never error:**
-the raw query is never handed to the FTS5 query parser verbatim — it is reduced to its
+decisively better match from another workspace still wins. Symmetrically, matches owned by
+**archived** workspaces get a fixed penalty (same bm25-unit scale as the boost) added to their
+rank — applied regardless of whether `preferWorkspaceId` is set — so the default tier order is
+preferred workspace → other active workspaces → archived workspaces. Both adjustments are
+**soft**: a decisively more relevant match still overrides tier order, and nothing is excluded.
+**User-typed queries never error:** the raw query is never handed to the FTS5 query parser
+verbatim — it is reduced to its
 alphanumeric tokens, each matched as a quoted phrase joined with `AND`, with the final token —
 presumed mid-typing — also matching as a prefix; operators, quotes, and punctuation are
 stripped rather than surfacing `fts5: syntax error`, and a query with no searchable tokens
