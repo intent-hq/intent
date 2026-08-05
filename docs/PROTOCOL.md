@@ -4838,7 +4838,8 @@ empty/whitespace-only values are treated as absent at both levels.
   carries one.
 - **Provider HTTP failure** (auth rejection, rate limit, 5xx, decode errors) →
   `-32603` with the provider's error detail in `error.data` (a plain string,
-  unchanged in 4.4 — e.g. `"elevenlabs returned 401 Unauthorized: …"`); the API key
+  unchanged in 4.4 — e.g.
+  `"voice auth error: elevenlabs returned 401 Unauthorized: …"`); the API key
   never appears in the error.
 
 ```json
