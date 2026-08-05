@@ -3289,6 +3289,10 @@ script's exit code (§5.1).
 > the `gh auth token` fallback (§5.12) — so every `github.*` / `pr.*` consumer picks it up with
 > zero resolution changes. Because the daemon owns the poll loop, the flow **survives client
 > refreshes**: a reconnecting client re-reads the in-flight state from `github.authStatus`.
+> On authorize the daemon also **best-effort** authenticates a locally installed `gh` CLI with the
+> stored token (piped via stdin only, never argv or logs; skipped when `gh` is absent or already
+> logged in — an existing `gh` login is never overwritten; a sync failure never affects the device
+> flow — behavior-only, no wire-shape change).
 >
 > - `github.authStatus` validates the resolved token via `GET /user` and reports connection state,
 >   plus the in-flight device flow (if any) under `deviceFlow`.
