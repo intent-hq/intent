@@ -1965,18 +1965,25 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
   "author":"octocat","verdict":"approve","body":"LGTM","submittedAt":"2026-06-17T05:00:00.000Z" } } }
 ```
 
-> **`ws.pr.snapshot(prNumber)` — agent MCP binding *(new in intentd,
-> [intentd#887](https://github.com/intent-hq/intentd/pull/887))*.** A compact,
+> **`ws.pr.snapshot(prNumber, { repo? })` — agent MCP binding *(new in intentd,
+> [intentd#887](https://github.com/intent-hq/intentd/pull/887); repo override + echo
+> [intentd#911](https://github.com/intent-hq/intentd/pull/911))*.** Since
+> [intentd#918](https://github.com/intent-hq/intentd/pull/918) this is the **only**
+> `ws.pr.*` MCP binding: agent GitHub workflows are **`gh`-CLI-based** (PR creation,
+> status/checks, reviews, comments, thread resolution, branch updates, and merging all
+> go through `gh` on the host), and the snapshot survives as the sole read-only,
+> hook-friendly monitoring binding. A compact,
 > diff-friendly snapshot of one PR's state, built for **hook-based PR monitoring**
 > (§5.40): a hook calls it each run, compares the result against the previous run's
 > carry-over `hookState`, and dispatches only on meaningful change. There is **no wire
 > method** (MCP-only, per the §6.8 principle — PR watching is agent-authored background
-> work; FE clients keep using `pr.status`/`pr.getReviews`/`pr.listCheckRuns`). Unlike
-> the rest of the `ws.pr.*` surface, `prNumber` is **required** (a positive number —
+> work; FE clients keep using `pr.status`/`pr.getReviews`/`pr.listCheckRuns`).
+> `prNumber` is **required** (a positive number —
 > missing, non-numeric, or `<= 0` values are rejected with a validation error) and
-> there is **no active-PR fallback**: the binding addresses any PR in the workspace's
-> repository, so an agent can watch a PR it filed on a submodule or sibling repo link.
-> Result shape: `{ prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
+> there is **no active-PR fallback**: the snapshot is scoped to the workspace's
+> repository unless `repo: "owner/name"` overrides it (e.g. a submodule's repo), and
+> the result echoes the resolved `repo` so a wrong-repo read is detectable.
+> Result shape: `{ repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
 > updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
 > failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
 > comments: { conversationCount, reviewCommentCount, unresolvedThreadCount,
