@@ -1961,16 +1961,36 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
 > failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
 > comments: { conversationCount, reviewCommentCount, unresolvedThreadCount,
-> totalCount } }`. `mergeBlockedReason` is a human-readable reason and is non-`null`
-> exactly when the PR is open (draft included) and cannot be merged. `checks` tallies
-> the runs on the PR head (SHA, else source branch); a provider without the
-> `checkRuns` capability — or a PR whose head cannot be determined — reports an empty
-> tally rather than failing the snapshot. `comments.reviewCommentCount` counts every
-> inline thread comment **including replies** (threads come from GraphQL when
-> available, else the REST list grouped by reply parent — resolution state is
-> unavailable there, so every fallback thread counts as unresolved), and `totalCount =
-> conversationCount + reviewCommentCount`, so a new reply anywhere moves the counter a
-> hook can diff.
+> threadResolutionUnknown, totalCount } }`. `mergeBlockedReason` is a human-readable
+> reason and is non-`null` exactly when the PR is open (draft included) and cannot be
+> merged. `checks` tallies the runs on the PR head (SHA, else source branch); a
+> provider without the `checkRuns` capability — or a PR whose head cannot be
+> determined — reports an empty tally rather than failing the snapshot.
+> **`reviews.decision`** *(changed in intentd,
+> [intentd#942](https://github.com/intent-hq/intentd/pull/942);
+> [intent-hq/monorepo#1524](https://github.com/intent-hq/monorepo/issues/1524))*
+> is derived from the forge's authoritative review-requirement verdict (GitHub's
+> GraphQL `reviewDecision`) when available: `approved`, `changes_requested`, or
+> `review_required` (the last only for an open PR, draft included) map directly.
+> When the provider signal is unavailable — no review requirement configured on
+> the base branch, a host without the capability, or a failed fetch — the
+> decision falls back to the aggregated actionable reviews: `changes_requested`,
+> else `approved`, else `none`; the fallback path never yields
+> `review_required`. REST `mergeable_state` is **no longer consulted** for this
+> field — its `blocked` value conflates required checks, merge queues, and
+> token-access gaps with an actual review requirement, and previously caused
+> `review_required` to appear on PRs with no reviews or requirement at all.
+> `comments.reviewCommentCount` counts every inline thread comment **including
+> replies** (threads come from GraphQL when available, else the REST list
+> grouped by reply parent), and `totalCount = conversationCount +
+> reviewCommentCount`, so a new reply anywhere moves the counter a hook can
+> diff. **`comments.threadResolutionUnknown`** *(new in intentd, same PR)* is
+> `true` when the GraphQL thread fetch failed and the snapshot fell back to the
+> REST comment list grouped by reply parent — that fallback carries no
+> resolution state, so every fallback thread counts as unresolved and
+> `unresolvedThreadCount` is unreliable (an overcount) whenever this flag is
+> set; `false` (the normal case) means `unresolvedThreadCount` reflects real
+> per-thread resolution state from GraphQL.
 
 ### 5.8 `script.*`
 
