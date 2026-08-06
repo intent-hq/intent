@@ -1974,7 +1974,9 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > `review_required` (the last only for an open PR, draft included) map directly.
 > When the provider signal is unavailable — no review requirement configured on
 > the base branch, a host without the capability, or a failed fetch — the
-> decision falls back to the aggregated actionable reviews: `changes_requested`,
+> decision falls back to the aggregated actionable reviews; a provider
+> `review_required` on a merged/closed PR is likewise discarded and falls back
+> to the aggregate. That fallback yields `changes_requested`,
 > else `approved`, else `none`; the fallback path never yields
 > `review_required`. REST `mergeable_state` is **no longer consulted** for this
 > field — its `blocked` value conflates required checks, merge queues, and
