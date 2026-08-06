@@ -2036,7 +2036,7 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
 > failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
 > comments: { conversationCount, reviewCommentCount, unresolvedThreadCount,
-> threadResolutionUnknown, totalCount } }`. `mergeBlockedReason` is a human-readable
+> totalCount } }`. `mergeBlockedReason` is a human-readable
 > reason and is non-`null` exactly when the PR is open (draft included) and cannot be
 > merged. `checks` tallies the runs on the PR head (SHA, else source branch); a
 > provider without the `checkRuns` capability — or a PR whose head cannot be
@@ -2061,13 +2061,11 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > replies** (threads come from GraphQL when available, else the REST list
 > grouped by reply parent), and `totalCount = conversationCount +
 > reviewCommentCount`, so a new reply anywhere moves the counter a hook can
-> diff. **`comments.threadResolutionUnknown`** *(new in intentd, same PR)* is
-> `true` when the GraphQL thread fetch failed and the snapshot fell back to the
-> REST comment list grouped by reply parent — that fallback carries no
-> resolution state, so every fallback thread counts as unresolved and
-> `unresolvedThreadCount` is unreliable (an overcount) whenever this flag is
-> set; `false` (the normal case) means `unresolvedThreadCount` reflects real
-> per-thread resolution state from GraphQL.
+> diff. `comments.unresolvedThreadCount` reflects real per-thread resolution
+> state from the GraphQL threads; on the REST fallback (grouped by reply parent)
+> no resolution state is available, so every thread counts as unresolved — that
+> fallback is logged at warn level with the underlying GraphQL error
+> *(intentd, [intentd#949](https://github.com/intent-hq/intentd/pull/949))*.
 
 ### 5.8 `script.*`
 
