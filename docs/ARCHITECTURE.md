@@ -337,8 +337,9 @@ polling. The subsystem lives in `intent-services`
   kept for inspection.
 - **Limits.** `[hooks] maxPerAgent` (config.toml, default 5) caps
   concurrently active (scheduled/running) hooks per agent; `delayMs` has a
-  10 s floor and hook names are capped at 19 characters — all enforced at
-  schedule time.
+  10 s floor and hook names — user-facing, human-readable descriptions of
+  what the hook is waiting for — are capped at 50 characters — all enforced
+  at schedule time.
 
 ## Agent completion settlement & deferrals
 
