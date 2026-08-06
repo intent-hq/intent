@@ -3206,20 +3206,34 @@ neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsag
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
-**TokenUsageTotals** is the four consumption counters
-`{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`. `byAgentId` keys are
+**TokenUsageTotals** is the four consumption counters plus an optional cost —
+`{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
+cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
 the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
 (`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
+
+**Cost** is sourced from the ACP `usage_update` session notification's `cost` object
+(`{ amount, currency }`, `currency` an ISO 4217 code) and is therefore present **only for
+providers that report it** — the field is **omitted** (never `null`, never a fabricated `0`)
+on any bucket no contributing session reported a cost for, so clients written against the
+pre-cost shape are unaffected. Like the token counters, `usage_update` cost is **cumulative
+per ACP session**, so each report REPLACES the session's previous cost and an ACP session
+recreate folds it into the same internal baseline as the counters (no reset-to-zero loss, no
+double count). The two reports are independent: a turn carrying only a cost never zeroes the
+counters, and a turn carrying only counters never drops a cost already reported. Aggregation
+sums amounts per currency within each bucket (`totals`, each `byAgentId` entry, each `byModel`
+entry); in the pathological case of a bucket mixing currencies, the currency with the largest
+sum wins — the daemon never converts between currencies.
 
 ```json
 // → request
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
 // ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
-  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
-  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
-  "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 },
+  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
 
