@@ -107,7 +107,7 @@ bus — never on the transport or on each other directly.
 | intent-store | SQLite pool, migrations, repositories, file layout, locking | core |
 | intent-services | note/task/comment/workspace/agent/git/pr/script/file/event/draft logic plus the Agent-Ecosystem, Code-Changes-Review, and Integrations & Ops service modules | core, store, git, sourcecontrol, acp, context, providers, pty, search, linear, sentry |
 | intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
-| intent-providers | ProviderConfig registry, arg/env builder, per-provider static model-tier tables (`fast`/`balanced`/`smart` → model id; no cross-provider fallback), capability/quirks | core |
+| intent-providers | ProviderConfig registry, arg/env builder, capability/quirks (no static model catalogs — model discovery is dynamic via `models.list`, and no provider carries a default designation) | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
@@ -187,19 +187,21 @@ Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
   decoration — so previews match what a no-model create actually pins. Clients
   are pass-through: they send a model only when the user explicitly picked one
   and never pre-resolve defaults.
-- **Provider boundaries.** `intent-providers` carries the static per-provider
-  tier tables (`fast`/`balanced`/`smart` → model id) with **no cross-provider
-  fallback**: a specialist `modelTier` resolves strictly within the resolved
-  provider's own table (dynamic-model providers have none and fall through),
-  and every resolved candidate — specialist frontmatter `model` or a settings
-  default — is provider-guarded (static tiers ∪ cached dynamic catalogs), so a
-  model owned by another provider falls through to the next step instead of
-  leaking across providers.
+- **Provider boundaries.** The model-tier concept (`fast`/`balanced`/`smart`)
+  and the static per-provider tier tables are removed (intentd#922): all model
+  discovery is dynamic (`models.list` probes, cached per provider), and every
+  resolved candidate — specialist frontmatter `model` or a settings default —
+  is provider-guarded against the cached dynamic catalogs, so a model owned by
+  another provider falls through to the next step instead of leaking across
+  providers. The **default provider** is settings-derived (the provider prefix
+  of `model.default` when compound and registry-valid, else `providers.active`),
+  bottoming out at the first registered provider as a neutral positional last
+  resort — no provider carries a hardcoded default designation.
 - **Pinning.** The resolved model is persisted to `session.model` at creation
   time and fixed for the session's lifetime; later settings/specialist changes
   only affect subsequently created agents (`agent.setModel` is the explicit
-  mutation path). Bundled specialists carry no `modelTier` and inherit the
-  user's configured default (or the provider CLI default).
+  mutation path). Bundled specialists carry no frontmatter `model` and inherit
+  the user's configured default (or the provider CLI default).
 
 ## Local models: the unsloth provider
 
