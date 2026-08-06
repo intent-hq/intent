@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v5.0
+# Intent Backend — JSON-RPC Protocol v5.1
 
-**Protocol Version:** `5.0`
+**Protocol Version:** `5.1`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,14 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `5.0`
+**Version:** `5.1`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Within 4.2 (behavior only, no wire change): `workspace.archive` gracefully interrupts the workspace's in-flight agent turns and cancels its ACTIVE background hooks, queued messages and wakes park while the workspace stays archived (drained again after `workspace.unarchive`), and `workspace.delete` eagerly aborts live hook scheduler tasks before the store cascade — [intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); see the §5.1 archive active-work teardown / delete cascade blocks and §5.40. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients. Within 4.3 (no method-catalog or wire-shape change — the notice rides the existing opaque `messageMetadata` per-message payload and the v2.8 `interruptPriority?` queue flag): `agent.dismissQuestions` now **notifies the model** of the dismissal (intentd#892; §5.5 "Question hold", §7) — after the marker persist and hold release, a system-origin notice ("User dismissed your N questions without answering. Do not re-ask; continue with your best judgment.", count-aware wording) is delivered to the agent, carrying `messageMetadata { type: "questions_dismissed", source: "system", dismissedQuestionsMessageId }`, visible on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row; idle agents get it as an immediate turn, busy/still-held agents get it promoted to the queue head with `interruptPriority: true`; idempotent (no duplicate notice on re-dismiss) and fail-soft (a notice delivery error never fails the RPC). This supersedes the pre-#892 "the model is NOT notified" contract documented since v2.8. Also within 4.3 (behavior only, no wire change; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)): the **agent-waiting deferral** — an `agent:idle` for a child that itself holds live outgoing completion watches on other, unsettled agents is not its completion; completion-watch delivery and `after_all` settlement records defer exactly like the hook-waiting case (§Completion-watch persistence), with a 2-cycle deadlock guard and without deferring the child's own `after_all` group seal. Version 4.4 is an **additive**-style minor bump over 4.3: the `voice.transcribe` **no-API-key** failure (§5.41) now carries structured `error.data` — `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }` — instead of the former plain string (monorepo#1448; intentd#902), following the `{ code, detail }` data-code precedent (`CloneFailed`, monorepo#826; `base-ref-unresolvable`, monorepo#761). The envelope is otherwise unchanged (`-32603`, `"Internal error"`), and `data.detail` is **byte-identical** to the pre-4.4 plain-string `data`, so clients that sniffed the message keep working; every other `voice.transcribe` failure is untouched (provider HTTP failures keep plain-string `data`, the `-32602` caller errors are unchanged). Version 4.5 is an **additive** minor bump over 4.4: it adds the `agent.markSeen` router method (§5.5) — the per-conversation **seen marker**: persists `lastSeenMessageId` (the id of the newest transcript message the user has seen) in the agent session metadata (survives daemon restarts), advances **monotonically** (naming a message older than the current marker is a no-op returning the current marker), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (presence-detected additive response field, omitted when nothing was marked seen). Within 4.5 (additive metadata/event-payload fields, presence-detected per the convention below; [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919)): the **interruption-reason contract** (§7.2) — every interrupted turn's persisted marker row and interrupt terminal `agent:stream:end` carry the machine-readable `interruptReason` (`user_stop` / `preempted_by_message` / `daemon_shutdown` / `agent_stopped`), `interruptedBy` (`{ kind: "user" }` or `{ kind: "agent", agentId, name? }`) rides along only on `preempted_by_message`, and every interruption that found a registered live-turn slot now **always persists** the interrupted assistant marker row (empty `contentBlocks` included) so the interrupt `agent:stream:end` reliably carries `messageId` — superseding the STAB-114 zero-output no-op flush; the monorepo#1014 zero-output combined delivery is preserved by excluding the still-empty marker row from the turn-progress check. Version 5.0 is a **breaking** major bump over 4.5: it **removes** 11 caller-less `pr.*` router methods (§5.7) — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — left dead after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)). `pr.status` and `pr.refresh` survive unchanged, and the explicit-addressing `github.*` surface (§5.27) and the MCP `ws.pr.snapshot` binding (§5.7) are untouched. Calling a removed method now returns `-32601` (Method not found). Follows the v3.0 `pr.waitForChanges` precedent — a caller-less method is deleted outright with a major bump rather than deprecated in place ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Within 4.2 (behavior only, no wire change): `workspace.archive` gracefully interrupts the workspace's in-flight agent turns and cancels its ACTIVE background hooks, queued messages and wakes park while the workspace stays archived (drained again after `workspace.unarchive`), and `workspace.delete` eagerly aborts live hook scheduler tasks before the store cascade — [intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); see the §5.1 archive active-work teardown / delete cascade blocks and §5.40. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients. Within 4.3 (no method-catalog or wire-shape change — the notice rides the existing opaque `messageMetadata` per-message payload and the v2.8 `interruptPriority?` queue flag): `agent.dismissQuestions` now **notifies the model** of the dismissal (intentd#892; §5.5 "Question hold", §7) — after the marker persist and hold release, a system-origin notice ("User dismissed your N questions without answering. Do not re-ask; continue with your best judgment.", count-aware wording) is delivered to the agent, carrying `messageMetadata { type: "questions_dismissed", source: "system", dismissedQuestionsMessageId }`, visible on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row; idle agents get it as an immediate turn, busy/still-held agents get it promoted to the queue head with `interruptPriority: true`; idempotent (no duplicate notice on re-dismiss) and fail-soft (a notice delivery error never fails the RPC). This supersedes the pre-#892 "the model is NOT notified" contract documented since v2.8. Also within 4.3 (behavior only, no wire change; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)): the **agent-waiting deferral** — an `agent:idle` for a child that itself holds live outgoing completion watches on other, unsettled agents is not its completion; completion-watch delivery and `after_all` settlement records defer exactly like the hook-waiting case (§Completion-watch persistence), with a 2-cycle deadlock guard and without deferring the child's own `after_all` group seal. Version 4.4 is an **additive**-style minor bump over 4.3: the `voice.transcribe` **no-API-key** failure (§5.41) now carries structured `error.data` — `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }` — instead of the former plain string (monorepo#1448; intentd#902), following the `{ code, detail }` data-code precedent (`CloneFailed`, monorepo#826; `base-ref-unresolvable`, monorepo#761). The envelope is otherwise unchanged (`-32603`, `"Internal error"`), and `data.detail` is **byte-identical** to the pre-4.4 plain-string `data`, so clients that sniffed the message keep working; every other `voice.transcribe` failure is untouched (provider HTTP failures keep plain-string `data`, the `-32602` caller errors are unchanged). Version 4.5 is an **additive** minor bump over 4.4: it adds the `agent.markSeen` router method (§5.5) — the per-conversation **seen marker**: persists `lastSeenMessageId` (the id of the newest transcript message the user has seen) in the agent session metadata (survives daemon restarts), advances **monotonically** (naming a message older than the current marker is a no-op returning the current marker), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (presence-detected additive response field, omitted when nothing was marked seen). Within 4.5 (additive metadata/event-payload fields, presence-detected per the convention below; [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919)): the **interruption-reason contract** (§7.2) — every interrupted turn's persisted marker row and interrupt terminal `agent:stream:end` carry the machine-readable `interruptReason` (`user_stop` / `preempted_by_message` / `daemon_shutdown` / `agent_stopped`), `interruptedBy` (`{ kind: "user" }` or `{ kind: "agent", agentId, name? }`) rides along only on `preempted_by_message`, and every interruption that found a registered live-turn slot now **always persists** the interrupted assistant marker row (empty `contentBlocks` included) so the interrupt `agent:stream:end` reliably carries `messageId` — superseding the STAB-114 zero-output no-op flush; the monorepo#1014 zero-output combined delivery is preserved by excluding the still-empty marker row from the turn-progress check. Version 5.0 is a **breaking** major bump over 4.5: it **removes** 11 caller-less `pr.*` router methods (§5.7) — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — left dead after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)). `pr.status` and `pr.refresh` survive unchanged, and the explicit-addressing `github.*` surface (§5.27) and the MCP `ws.pr.snapshot` binding (§5.7) are untouched. Calling a removed method now returns `-32601` (Method not found). Follows the v3.0 `pr.waitForChanges` precedent — a caller-less method is deleted outright with a major bump rather than deprecated in place ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506). Version 5.1 is an **additive** minor bump over 5.0: it adds the optional `workspaceId?` param on `voice.transcribe` (§5.41) — when present, the daemon injects the workspace's auto-derived vocabulary into the transcription bias, merged as user `voice.vocabulary` → workspace auto-terms → request `context.keyterms` under the existing dedup/cap rules (case-insensitive dedup, first spelling wins, ≤ 100 terms total, ≤ 50 chars each); an absent or stale `workspaceId` is tolerated (never an error), a non-string value is `-32602` — plus the `voice.getWorkspaceVocabulary` router method (§5.41), serving the derived terms for client-side (OS-engine) transcription and Settings previews, and the `voice.workspaceVocabulary.maxTerms` settings-catalog entry (§5.12; number, default 50, min 0, max 100, TOML-backed under `[voice]`; `0` disables derivation and injection).
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "5.0", server: { protocolVersion: "5.0", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "5.0", ... }`
+- `client.hello` response: `{ protocolVersion: "5.1", server: { protocolVersion: "5.1", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "5.1", ... }`
 
 ### Compatibility Policy
 
@@ -158,22 +158,22 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **305 dispatchable method names** across the following categories:
+The API exposes **306 dispatchable method names** across the following categories:
 
-- **Router methods:** 268 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 269 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 305 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 306 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
 
-**Total:** 305 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 306 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.41) carry each method's parameter and result contract.
 
-### Router methods by namespace (268 total)
+### Router methods by namespace (269 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -208,7 +208,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
-| voice | 1 | transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no `workspaceId`) |
+| voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
 | workspace | 26 | archive, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
@@ -2305,7 +2305,7 @@ the overriding flag ("overridden by startup flag …").
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
-- **Voice (new in intentd):** `voice.provider` (enum: `elevenlabs` | `openai`, default `elevenlabs`) — the transcription provider `voice.transcribe` uses when the call carries no per-call `provider` override (§5.41); `voice.language` *(string, optional — no default)* — the default transcription language hint (ISO-639-1 code, e.g. `"en"`) applied when a `voice.transcribe` call carries no per-call `language` (or a blank one — per-call values are trimmed and blank behaves like omitted; §5.41 "Language resolution"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; unset or blank means provider auto-detection); `voice.openai.model` (enum: `gpt-4o-transcribe` | `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`) — the transcription model the OpenAI provider posts (§5.41 "Providers"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`); `voice.vocabulary` *(object, non-sensitive — a JSON string array; default = `["Intent"]`, see §5.41 "Context mapping")* — the user-editable vocabulary biased into every `voice.transcribe` call, read per call and merged ahead of `context.keyterms` (§5.41; SQLite-backed like the other opaque bags — no `origin`; a stored value exactly matching the retired 17-term seed default is deleted on daemon start so the new default applies — user-modified lists are never touched); `voice.elevenlabs.apiKey` *(sensitive)* and `voice.openai.apiKey` *(sensitive)* — the provider API keys, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) like `linear.token`. Key resolution is secret store first, then the `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` environment variable fallback; the keys are never logged, echoed, or returned over the wire (redacted in `settings.list` / `settings.get` like every sensitive path).
+- **Voice (new in intentd):** `voice.provider` (enum: `elevenlabs` | `openai`, default `elevenlabs`) — the transcription provider `voice.transcribe` uses when the call carries no per-call `provider` override (§5.41); `voice.language` *(string, optional — no default)* — the default transcription language hint (ISO-639-1 code, e.g. `"en"`) applied when a `voice.transcribe` call carries no per-call `language` (or a blank one — per-call values are trimmed and blank behaves like omitted; §5.41 "Language resolution"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; unset or blank means provider auto-detection); `voice.openai.model` (enum: `gpt-4o-transcribe` | `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`) — the transcription model the OpenAI provider posts (§5.41 "Providers"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`); `voice.vocabulary` *(object, non-sensitive — a JSON string array; default = `["Intent"]`, see §5.41 "Context mapping")* — the user-editable vocabulary biased into every `voice.transcribe` call, read per call and merged ahead of `context.keyterms` (§5.41; SQLite-backed like the other opaque bags — no `origin`; a stored value exactly matching the retired 17-term seed default is deleted on daemon start so the new default applies — user-modified lists are never touched); `voice.workspaceVocabulary.maxTerms` *(number, default `50`, min `0`, max `100`; v5.1)* — the cap on the auto-derived workspace vocabulary injected into `voice.transcribe` calls carrying a `workspaceId` and served by `voice.getWorkspaceVocabulary` (§5.41 "Workspace vocabulary"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; `0` disables workspace vocabulary entirely — no derivation, no injection; a change takes effect on the next derivation); `voice.elevenlabs.apiKey` *(sensitive)* and `voice.openai.apiKey` *(sensitive)* — the provider API keys, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) like `linear.token`. Key resolution is secret store first, then the `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` environment variable fallback; the keys are never logged, echoed, or returned over the wire (redacted in `settings.list` / `settings.get` like every sensitive path).
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
@@ -2797,7 +2797,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"5.0"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"5.1"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2809,18 +2809,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"5.0",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"5.1",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"5.0","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"5.1","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"5.0",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"5.1",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"5.0","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"5.1","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -4745,7 +4745,7 @@ wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
     "nextRunAt":"2026-07-31T10:06:00Z","runCount":6 } ] } }
 ```
 
-### 5.41 Voice transcription — `voice.transcribe` *(v4.3)*
+### 5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` *(v4.3; workspace vocabulary v5.1)*
 
 Daemon-owned speech-to-text behind a pluggable provider seam: the client records audio
 (e.g. the desktop push-to-talk flow), ships it base64-encoded, and the daemon calls the
@@ -4754,11 +4754,16 @@ configured transcription provider — **ElevenLabs Scribe** (`scribe_v2`) or **O
 fallback) — and returns the transcript. Daemon-owned so the provider API keys live in
 the daemon's file-backed secret store and **never reach clients** (the same 🔒 secret
 guardrail as `linear.token`, §5.28: keys are never logged, echoed, or returned over the
-wire). **Daemon-global**: no `workspaceId` (like `stats.getRateHistory`, §5.39).
+wire). **Daemon-global**: no required `workspaceId` (like `stats.getRateHistory`,
+§5.39) — since v5.1 `voice.transcribe` accepts an **optional** `workspaceId?` that
+opts the call into workspace-vocabulary injection (see "Workspace vocabulary" below),
+and the companion read RPC `voice.getWorkspaceVocabulary` is workspace-scoped
+(`workspaceId` req).
 
 | Method | Params | Result |
 | --- | --- | --- |
-| voice.transcribe | audio (req), mimeType?, language?, provider?, context? | `{ text, provider, durationMs }` — `durationMs` always present, `null` when unknown |
+| voice.transcribe | audio (req), mimeType?, language?, provider?, context?, workspaceId? *(v5.1)* | `{ text, provider, durationMs }` — `durationMs` always present, `null` when unknown |
+| voice.getWorkspaceVocabulary *(v5.1)* | workspaceId (req) | `{ terms: string[] }` — the auto-derived workspace vocabulary, derived terms only (the user's `voice.vocabulary` is not merged in) |
 
 **Params:**
 
@@ -4782,6 +4787,13 @@ wire). **Daemon-global**: no `workspaceId` (like `stats.getRateHistory`, §5.39)
   `keyterms` must be an array of strings (a non-array or non-string element →
   `-32602`; an explicit `null` is treated as absent). Mapped per provider — see
   "Context mapping" below.
+- `workspaceId?` *(v5.1)* — opt-in workspace-vocabulary injection: when present and
+  naming a known workspace, the daemon merges that workspace's auto-derived
+  vocabulary into the transcription bias (see "Workspace vocabulary" below).
+  **Tolerant by design**: an absent, unknown, or stale `workspaceId` (e.g. a
+  workspace deleted since the client cached it) is never an error — the call behaves
+  exactly like a no-`workspaceId` call; only a wrong **type** (a non-string value)
+  → `-32602`.
 
 **Result:**
 
@@ -4799,17 +4811,38 @@ user-editable **`voice.vocabulary`** setting (§5.12 — a string array defaulti
 `["Intent"]`; users add their own terms, the shipped default is minimal),
 **read per call** — an absent or non-array stored value degrades to an empty list and
 non-string elements are skipped, never an error — plus a fixed style hint ("Technical dictation in a
-software-engineering app; preserve code identifiers and file paths verbatim."), and
-merges the request's `context` into it:
+software-engineering app; preserve code identifiers and file paths verbatim.") — and,
+when the call carries a `workspaceId` naming a known workspace, the auto-derived
+**workspace vocabulary** (v5.1; see "Workspace vocabulary" below) — and merges the
+request's `context` into it, in the fixed order user `voice.vocabulary` → workspace
+auto-terms → `context.keyterms`:
 
 - **OpenAI** — composed into the API's single free-form `prompt` parameter: the style
   hint, then `" Vocabulary: <terms comma-joined>."` (configured vocabulary +
-  `context.keyterms`), then `context.prompt` appended.
+  workspace auto-terms + `context.keyterms`, in that order), then `context.prompt`
+  appended.
 - **ElevenLabs** — the configured vocabulary and `context.keyterms` feed Scribe v2
   **keyterm prompting** (repeated `keyterms` form fields; requires `model_id:
-  scribe_v2`): vocabulary first, then request keyterms; case-insensitive dedup (first
+  scribe_v2`): vocabulary first, then workspace auto-terms, then request keyterms;
+  case-insensitive dedup (first
   spelling wins); blank and > 50-char terms skipped; hard cap of 100 total.
   `context.prompt` has no ElevenLabs equivalent and is **ignored** for this provider.
+
+**Workspace vocabulary (v5.1).** When `voice.transcribe` carries a `workspaceId`, the
+daemon injects that workspace's **auto-derived vocabulary** — unique/non-dictionary
+and rare terms mined from the workspace's own docs, so project-specific identifiers
+(e.g. "intentd", "clippy") transcribe correctly with no manual `voice.vocabulary`
+entry — into the merge, between the user vocabulary and the request keyterms: user
+`voice.vocabulary` → workspace auto-terms → `context.keyterms`, under the existing
+rules above (case-insensitive dedup, first spelling wins; blank and > 50-char terms
+skipped; hard cap of 100 total). Derivation sources are the workspace's root
+`README` / `AGENTS` docs, the same docs one directory level down (e.g.
+`packages/*/README.md`-style direct children), and the workspace's spec note; the
+derived list is capped by the `voice.workspaceVocabulary.maxTerms` setting (§5.12 —
+default 50, `0` disables derivation and injection entirely) and **content-hash
+cached**: unchanged sources mean no re-extraction on subsequent calls (a source edit
+or a `maxTerms` change takes effect on the next derivation). Per the `workspaceId?`
+param above, a stale or unknown id degrades to no injection — never an error.
 
 **Providers.** Both are typed REST engines over `reqwest` (the `intent-linear` /
 `intent-sentry` pattern):
@@ -4835,7 +4868,9 @@ provider when the call carries no override — selection order: per-call `provid
 `voice.provider` setting → `elevenlabs`. `voice.language` supplies the default
 transcription language hint (see "Language resolution" above). `voice.openai.model`
 selects the OpenAI
-transcription model (see "Providers" above). The API keys are the **sensitive** catalog
+transcription model (see "Providers" above). `voice.workspaceVocabulary.maxTerms`
+caps the auto-derived workspace vocabulary (v5.1; see "Workspace vocabulary" above).
+The API keys are the **sensitive** catalog
 entries `voice.elevenlabs.apiKey` / `voice.openai.apiKey`, persisted to the daemon's
 file-backed secret store (`~/intent/secrets.json`, `0600`) and settable via
 `settings.update` — the FE "connect" flow, exactly like `linear.token`. Key resolution
@@ -4845,9 +4880,11 @@ empty/whitespace-only values are treated as absent at both levels.
 **Errors** (§9):
 
 - Caller-input problems — missing/blank/invalid-base64/zero-byte `audio`, an unknown
-  `provider` value, a malformed `context.keyterms` — → `-32602` with the generic
-  `error.data.code: "invalid-params"` discriminator (no voice-specific `-32602` data
-  codes).
+  `provider` value, a malformed `context.keyterms`, a non-string `workspaceId`
+  *(v5.1)* — → `-32602` with the generic `error.data.code: "invalid-params"`
+  discriminator (no voice-specific `-32602` data codes). A **stale or unknown**
+  `workspaceId` is deliberately NOT among these — it is tolerated (see "Workspace
+  vocabulary" above); only the wrong type errors.
 - **Audio too large** (over the 25 MB cap, either enforcement point) → `-32602`
   (`"audio exceeds the 25 MB limit"`) — rejected before any provider call.
 - **No API key configured** for the selected provider → `-32603` with the generic
@@ -4876,11 +4913,33 @@ empty/whitespace-only values are treated as absent at both levels.
 // → request
 { "jsonrpc":"2.0","id":97,"method":"voice.transcribe","params":{
   "audio":"GkXfo59ChoEBQveBAULygQRC…","mimeType":"audio/webm","language":"en",
+  "workspaceId":"ws-abc",
   "context":{ "keyterms":["cloudlands-fe","submodule","clippy"] } } }
 // ← response
 { "jsonrpc":"2.0","id":97,"result":{
   "text":"Bump the cloudlands-fe submodule and rerun clippy.",
   "provider":"elevenlabs","durationMs":3200 } }
+```
+
+**`voice.getWorkspaceVocabulary` *(v5.1)*.** The read RPC serving a workspace's
+auto-derived vocabulary — the **derived terms only** (the user's `voice.vocabulary`
+is a separate §5.12 setting and is not merged in) — for clients that transcribe
+**outside** the daemon (e.g. the desktop OS-engine dictation path) and for Settings
+previews, so both engines bias with the same terms. The response is served from the
+same content-hash cache the `voice.transcribe` injection uses (unchanged sources ⇒
+no re-extraction), already capped by `voice.workspaceVocabulary.maxTerms`
+(`{ "terms": [] }` when the setting is `0` or nothing derives). Unlike the tolerant
+`workspaceId?` on `voice.transcribe`, the param here is **required** and validated:
+an unknown `workspaceId` is the standard not-found error (`-32602` with
+`error.data.code: "not-found"`, §9).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":98,"method":"voice.getWorkspaceVocabulary","params":{
+  "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":98,"result":{
+  "terms":["intentd","clippy","cloudlands-fe","TOON"] } }
 ```
 
 ## 6. Events & Subscriptions
