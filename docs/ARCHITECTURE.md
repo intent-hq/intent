@@ -142,8 +142,10 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
   users and to recent-repo derivation; the module never reads config — the caller passes
   the cache root). `ensure_cached_repo` is the single entry point: it serializes callers
-  on a per-repo lock, then clones fresh (miss) or refreshes (`git fetch --prune` + hard
-  reset to the remote default branch). **Refresh never fails the flow** — any anomaly
+  on a per-repo lock, then clones fresh (miss) or refreshes (`git fetch --prune`,
+  `remote set-head origin --auto` so an upstream default-branch change is re-resolved,
+  hard reset to that branch, then `git clean -fdx` so untracked pollution is never
+  byte-copied into hydrated checkouts). **Refresh never fails the flow** — any anomaly
   (diverged history, corrupt object store, an interrupted prior clone, a vanished
   `origin/HEAD`, a mismatched `origin`) deletes the cache dir and re-clones; only a
   failed clone surfaces as an error. `intent-services` uses the cache to hydrate

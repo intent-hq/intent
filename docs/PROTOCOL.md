@@ -585,7 +585,11 @@ invisible to users and to recent-repo derivation) and holds a read-only clone wi
 remote's default branch checked out. Flow:
 
 1. **Ensure the cache** — the only network-bound phase. Cache miss ⇒ full clone; cache
-   hit ⇒ `git fetch --prune origin` + hard reset to the remote default branch.
+   hit ⇒ `git fetch --prune origin`, `git remote set-head origin --auto` (a fetch alone
+   never re-resolves `origin/HEAD`, so an upstream default-branch change is picked up
+   here), a hard reset to that remote default branch, and `git clean -fdx` (a hard reset
+   alone leaves untracked pollution — e.g. from a process killed mid-checkout — that
+   would be byte-copied into every hydrated checkout).
    **Refresh never fails the flow:** any anomaly (diverged history, corrupt object store,
    an interrupted prior clone, a vanished `origin/HEAD`, or an `origin` that no longer
    matches the requested URL) deletes the cache directory and re-clones from scratch.
@@ -610,8 +614,12 @@ remote's default branch checked out. Flow:
 The workspace's `repositoryPath` **is** the checkout (`worktreePath` carries the same
 path), `baseCommitSha` is the checked-out tip, and `repositoryOwner`/`repositoryName`
 derive from the URL when the caller left them blank. Progress streams through the same
-`git:clone:progress` / `git:clone:done` frames as a network clone (scoped to the newly
-minted `workspaceId`), and a cache failure fails the whole create pre-insert with the
+`git:clone:progress` / `git:clone:done` frame shapes as a network clone (scoped to the
+newly minted `workspaceId`), but as **synthetic milestones** rather than parsed git
+percentages: `starting` at 0% before the cache ensure, `checkout` at 90% once the cache
+is ready, then the terminal `git:clone:done` — the local checkout provisioning that
+follows emits nothing, matching the legacy flow where worktree provisioning runs after
+`git:clone:done`. A cache failure fails the whole create pre-insert with the
 same clone-failure taxonomy as below (no row persisted, no `workspace:created`).
 Hydration is skipped — the legacy network clone below applies unchanged — for an
 explicit non-empty `clonePath`, a URL carrying no `owner/repo` pair, and creates that
@@ -676,11 +684,16 @@ a no-op; when `.git` exists but HEAD does not resolve (a previously failed init 
 directory half-initialized), the init re-runs and completes it. Absent/`false` preserves
 the legacy behavior: a non-git `repositoryPath` skips provisioning and persists a
 row-only workspace (worktree-provisioning skip conditions above).
-`isNewRepo` creates persist **`checkoutMode: "direct"`** (intentd#944): no worktree and
-no CoW clone is provisioned — the workspace works directly in the initialized repository
-folder, where the workspace `branch` is created (at `baseRef` when supplied, else from
-`HEAD`) and checked out so agents land on `branch` as in every other checkout mode.
-`worktreePath` stays unset; `repositoryPath` is the checkout.
+An `isNewRepo` create that would otherwise be provisioned persists
+**`checkoutMode: "direct"`** (intentd#944): no worktree and no CoW clone is provisioned —
+the workspace works directly in the initialized repository folder, where the workspace
+`branch` is created (at `baseRef` when supplied, else from `HEAD`) and checked out so
+agents land on `branch` as in every other checkout mode. `worktreePath` stays unset;
+`repositoryPath` is the checkout. The `"direct"` arm is gated on the same
+provisioning-skip conditions as the worktree path above — an `isNewRepo` create with
+`isRemote: true`, `skipIsolation`/`skipWorktree`, or a caller-supplied `worktreePath`
+still initializes the repository but persists **no** `checkoutMode` and creates no
+workspace branch.
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
