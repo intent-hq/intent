@@ -5453,8 +5453,13 @@ identifier followed by `": "` or `":\t"` — is split, taking the prefix. Codex'
 MCP title form `mcp.<server>.<tool>` (server segment contains no dots; title carries no
 whitespace, so prose titles containing dots never match) is rewritten to `{server}_{tool}`
 and fed through the affix strip below (`mcp.workspace-mcp.workspace_api` → `workspace_api`,
-`mcp.other-server.some_tool` → `other-server_some_tool`). Titles without either
-shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
+`mcp.other-server.some_tool` → `other-server_some_tool`). Claude Code's
+double-underscore-separated MCP title form `mcp__<server>__<tool>` (server segment runs to
+the first `__`; both segments must be non-empty; title carries no whitespace, so prose
+titles containing `mcp__` never match) gets the same treatment
+(`mcp__workspace-mcp__workspace_api` → `workspace_api`,
+`mcp__github__list_issues` → `github_list_issues`). Titles without any of these
+shapes (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
 `name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
 tool names carry no suffix, and auggie's `<tool>_<server>` convention appends the server
 name, so stripping recovers the registry name (`add_to_note_workspace-mcp` → `add_to_note`).
