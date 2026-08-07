@@ -5077,7 +5077,7 @@ cacheCreationTokens, thoughtTokens }`:
   lexicographically in chronological order.
 - The token counters are the minute's accumulated per-turn deltas (same clamped-≥ 0
   semantics as §5.36's UsageTotals).
-- **thoughtTokens** *(additive within v6.0, [intent-hq/intentd#974](https://github.com/intent-hq/intentd/pull/974))*
+- **thoughtTokens** *(additive within v6.0, [intent-hq/intentd#976](https://github.com/intent-hq/intentd/pull/976))*
   — the minute's accumulated reasoning ("thought") token deltas, the per-minute counterpart
   of the `TokenUsageTotals.thoughtTokens` counter (§5.31). Unlike that omitted-when-zero
   field, samples here are **dense**: every counter is always present, so a minute with no
