@@ -167,6 +167,54 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `agent.delete` races the clone, `settle_provisioned_sandbox` finds the session
   missing/soft-deleted and removes the sandbox directory (best-effort deleting the
   store record too) instead of persisting fields or emitting the event.
+- **Uniform per-agent isolation (`executionEnvironment: cow` / `microvm`).** In
+  workspaces whose persisted execution environment is `cow` or `microvm`, **every**
+  agent — top-level `agent.create` agents included, not just delegates — gets its
+  own per-agent CoW sandbox: `ensure_started` (agent_manager) provisions it
+  **synchronously** on the agent's first spawn when the session has no
+  `sandbox_path`, persists the session sandbox fields inline, and resolves the
+  spawn cwd to the sandbox. Failure semantics differ per environment: `microvm`
+  hard-errors (`ExecutionEnvironmentUnavailable`) because the VM mounts the clone
+  as its workspace; `cow` WARNs and falls back to the shared workspace checkout —
+  isolation there is a collaboration convenience, not a mount requirement. Turn-end
+  merge-back applies identically to these sandboxes (merge_on_turn_end defaults
+  true; canonical merge target resolved via `resolve_user_directory`). Agents that
+  predate the uniform-isolation change (no sandbox yet in a `cow` workspace) are
+  provisioned on their next spawn from the checkout's state at that point.
+  The persisted `execution_environment` is the **authority** for isolation: the
+  `agent.delegate` `isolation` param and the global `workspace.cowIsolation`
+  setting are ignored in workspaces that carry the field (`cow`/`microvm` always
+  sandbox; `direct`/`worktree` never do — flipping the setting after creation
+  changes nothing), and only legacy rows without it keep the param-then-setting
+  delegate resolution. The coordinator isolation hint (`rules.rs`
+  `build_isolation_hint`) keys off the same field so prompt and provisioning
+  cannot disagree.
+- **Merge-back lifecycle.** Wire contract: PROTOCOL §5.5a (Status lifecycle). The
+  merge-back runs on three paths — completion interception (turn end), the
+  background retry sweep, and manual `sandbox.cow.merge` — all funneled through an
+  atomic claim (status → `merging`) held by a crash-safe RAII guard
+  (`MergeClaimGuard`) that resets an unfinished claim to `merge_pending` on
+  drop/panic; daemon startup additionally recovers rows stranded in `merging` by a
+  hard crash. Blocking `git2` work runs on dedicated threads via
+  `spawn_blocking`. The git half fetches the sandbox branch into the canonical
+  repository, breaks a stale `.git/index.lock` (older than the stale threshold;
+  a fresh lock fails with an actionable error naming the file), ignores
+  submodule (gitlink) pointer entries in the pre-merge dirty check so identical
+  pointers never read as conflicts, and cherry-picks the sandbox range —
+  skipping commits whose patch-id already exists in canonical (the change
+  landed independently), so re-merges produce neither duplicate commits nor
+  false conflicts. On conflict with a live
+  agent turn, the sandbox enters `conflict_bounced` (conflicting paths persisted on
+  the row) and the agent is **woken** — `deliver_wake_message` drives a real
+  resumed turn with the conflicting paths, the freshly fetched canonical tip, and
+  reconciliation instructions; exhausted bounces (or conflicts with no live turn)
+  land in terminal `conflict`, which persists `conflictingPaths` and fetches the
+  sandbox branch as a canonical `sb/<agentId>-recovery-<timestamp>` recovery
+  branch so the work is never lost. The retry sweep processes each workspace's
+  queue on its own concurrent lane, and the whole pass runs under a time budget —
+  lanes still running at the budget are aborted and their claims reset to
+  `merge_pending` for the next tick — so one wedged merge can never stall the
+  sweep for other workspaces.
 
 ## Agent default-model resolution (daemon-owned)
 
