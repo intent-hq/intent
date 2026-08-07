@@ -158,29 +158,29 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **306 dispatchable method names** across the following categories:
+The API exposes **304 dispatchable method names** across the following categories:
 
-- **Router methods:** 269 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 267 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 306 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 304 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 306 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 304 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.41) carry each method's parameter and result contract.
 
-### Router methods by namespace (269 total)
+### Router methods by namespace (267 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | agent | 41 | appendMessage, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
-| event | 5 | agentActivity, directoryChanges, query, recentFiles, workspaceSummary |
+| event | 3 | agentActivity, query, workspaceSummary |
 | file | 9 | delete, exists, list, mkdir, read, rename, stat, tree, write |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | github | 23 | authStatus, branches.list, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
@@ -2299,12 +2299,17 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > itself), and a one-time `VACUUM` at daemon startup rebuilds the file to apply it, so space
 > reclamation applies to all databases.
 
+> **`file:*` hybrid persistence** ([intentd#951](https://github.com/intent-hq/intentd/pull/951)).
+> `file:changed` / `file:created` / `file:deleted` events are only written to the event
+> table when agent-attributed (`ActorType::Agent`) — these back `event.agentActivity` and
+> `event.workspaceSummary`. Watcher-observed (system/user) `file:*` events are
+> **broadcast-only**: delivered live over the streaming channel (§6) with no SQLite write,
+> so they are not queryable historically via `event.query` or any other §5.10 method.
+
 | Method | Params | Result |
 | --- | --- | --- |
-| event.recentFiles | limit? | recently modified files |
 | event.agentActivity | agentId?, minutesAgo? | activity events |
 | event.workspaceSummary | minutesAgo? | aggregated activity summary |
-| event.directoryChanges | dir (req), limit? | recent changes under a directory prefix |
 | event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. `eventType` accepts the **same glob syntax as `event.subscribe`** ([intentd#938](https://github.com/intent-hq/intentd/pull/938)): bare `*` = no type filter, `prefix:*` = category prefix match (e.g. `note:*` matches `note:created` / `note:updated` / `note:deleted`), anything else = exact match; matching is **case-sensitive** (`NOTE:*` matches nothing), mirroring subscribe's `starts_with` semantics — a `prefix:*` compiles to an index-served half-open range scan, not a `LIKE`, so `%` / `_` in a pattern are literal bytes. |
 | event.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — use events.subscribe for WS streaming. Shares the one real subscription implementation with the `agent.subscribe` alias of §5.5 (matching, batching, subscriber wakes, restart persistence) — **including the [monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229) agent-subscriber restriction** (explicit `agent:`-prefixed types and `chat:stream:delta` rejected atomically with `-32602`; bare `*` silently narrowed to the non-agent categories; match-time `exclude_agent_events` guard on rehydrated legacy rows — see the §5.5 row); over the MCP seam the subscriber is the calling agent, so `ws.event.subscribe` callers are directed to `ws.agent.watch(agentId)` for agent monitoring. Note: the singular `event.subscribe` / `event.unsubscribe` methods are NOT routable on the wire (MCP bindings only) — wire callers use the `agent.subscribe` alias. |
 | event.unsubscribe (deprecated) | subscriptionId (req) | service result `{ ok: true, subscriptionId }` — stops delivery; unknown id errors |
