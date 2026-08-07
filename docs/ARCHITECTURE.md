@@ -410,6 +410,32 @@ polling. The subsystem lives in `intent-services`
   what the hook is waiting for — are capped at 50 characters — all enforced
   at schedule time.
 
+## Centralized PR monitoring
+
+Wire contract: PROTOCOL.md §5.42 (`prMonitor.*` methods, the
+merge-requirements checklist) and §6.5 (`prMonitor:*` events). The subsystem
+lives in `intent-services` (`services::pr_monitor`): agents register monitors
+via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
+`ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
+`flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
+`main.rs` beside the PR-refresh sweep) polls every active monitor on the live
+`prMonitor.pollSeconds` cadence, diffs the merge-requirements checklist
+(checks, reviews, threads, mergeability, branch rules — composed in
+`pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
+the monitor's persisted baseline, and wakes the owning agent with a single
+consolidated notification once the PR has been quiet for
+`prMonitor.debounceSeconds` (with a max-latency bound so a never-quiet PR is
+late, never starved). Monitors persist in the SQLite `pr_monitor` table
+(migration `0085_pr_monitor.sql`, rows cascade with their agent session),
+survive daemon restarts via boot rehydration with catch-up delivery, and
+terminalize on merge/close with an immediate final wake (`completed` rows are
+retained so merged PRs stay visible). Store writes are guarded
+compare-and-swap so concurrent flush / cancel / re-register / poll never
+clobber each other; owner wakes go through the same automatic-delivery path
+as hook wakes. The agent surface (`ws.pr.monitor` / `ws.pr.unmonitor` /
+`ws.pr.monitors`, plus the `requirements` block on `ws.pr.snapshot`) is gated
+by `agentFeatures.prMonitor`.
+
 ## Agent completion settlement & deferrals
 
 Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
@@ -458,12 +484,12 @@ rehydrate before the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Nine booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Ten booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot` — all default `true`. Each toggle removes an
-agent-exposed feature from the agent's system prompt, its MCP tool surface, or
-(for `stateSnapshot`) its per-turn prompt decoration.
+`attentionRequests`, `stateSnapshot`, `prMonitor` — all default `true`. Each
+toggle removes an agent-exposed feature from the agent's system prompt, its MCP
+tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -474,9 +500,11 @@ agent-exposed feature from the agent's system prompt, its MCP tool surface, or
   denies the method outright (`tools::denied_feature`) with an explicit
   `disabled in settings (agentFeatures.<key> = false)` error. Parity tests in
   `tools.rs` keep description ↔ bindings segment-aware. Gating is
-  namespace-level except `attentionRequests`, which is method-level
-  (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` only —
-  `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated).
+  namespace-level except `attentionRequests` and `prMonitor`, which are
+  method-level (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` only —
+  `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated; and
+  `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` only —
+  `ws.pr.snapshot` stays un-gated).
 - **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
   per-bridge description assembly carries one dynamic segment: each visible
   specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
@@ -517,7 +545,7 @@ agent-exposed feature from the agent's system prompt, its MCP tool surface, or
   (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
   **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
   the next turn of every session, existing ones included — unlike the other
-  eight. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
+  nine. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
   description/prelude/dispatch pruning), so the tool stays callable either way.
   The line is rebuilt per turn from live sources (hook store, watch registry,
   queue registry, event subscriptions, unsettled-children aggregate, pending
