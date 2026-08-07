@@ -568,17 +568,19 @@ standalone:
   is the source's **own checkout** (`worktreePath`, or `repositoryPath` when the
   repository itself is the checkout), not the source's `repositoryPath`. A CoW probe from
   that checkout to `<root>/<newId>` decides the mode: supported ⇒ CoW clone
-  (`checkoutMode: "cow"`); Unsupported, probe error, or a CoW clone that still reports
-  Unsupported ⇒ a **plain local `git clone`** of the source checkout
-  (`checkoutMode: "direct"`) with a logged warning. A source checkout whose `.git` is a
-  gitfile skips the probe and goes straight to the local clone. `workspace.cowIsolation`
+  (`checkoutMode: "cow"`); Unsupported ⇒ a **plain local `git clone`** of the source
+  checkout (`checkoutMode: "direct"`), and the same local-clone fallback is taken — with a
+  logged warning — on a probe error or when a CoW clone still reports Unsupported despite a
+  passing probe. A source checkout whose `.git` is a gitfile skips the probe and goes
+  straight to the local clone (also warned). `workspace.cowIsolation`
   is **ignored** for standalone sources (parity with cache-hydrated create). Like a
   hydrated create, the checkout *is* the repository: the duplicate persists
-  `repositoryPath` = its **own** checkout path, and `origin` is retargeted at the source's
-  own resolved `origin` — a network URL and an absolute local path carry over verbatim, a
-  relative local path is absolutized against the source repository so it still names the
-  same upstream, and `origin` is **removed** when the source has none or when it resolves
-  to the source checkout itself — so nothing references the source workspace's directory.
+  `repositoryPath` = its **own** checkout path, so nothing in the row references the source
+  workspace's directory. The `direct` local-clone path additionally **resolves `origin`**
+  (a CoW clone is a byte copy and keeps the source's `.git/config` verbatim): a network URL
+  and an absolute local path carry over as-is, a relative local path is absolutized against
+  the source repository so it still names the same upstream, and the remote is **removed**
+  when the source has no `origin` or when `origin` resolves to the source checkout itself.
   The local-clone fallback carries **committed state only** —
   uncommitted/untracked work in the source is not copied. Rationale
   ([intent-hq/monorepo#1560](https://github.com/intent-hq/monorepo/issues/1560)): a linked

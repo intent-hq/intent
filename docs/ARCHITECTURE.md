@@ -143,7 +143,9 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `repositoryPath`: CoW probe ⇒ `cow` clone, Unsupported/probe error ⇒ a plain
   local clone of the source checkout persisted as `direct`
   (`intent_git::cow_checkout::provision_local_clone_checkout`, which carries
-  committed state only). `workspace.cowIsolation` is **ignored** for such sources
+  committed state only and resolves `origin` so no relative or self-referencing
+  URL survives into the duplicate — the CoW path copies `.git/config` verbatim
+  instead). `workspace.cowIsolation` is **ignored** for such sources
   (parity with cache-hydrated create), and the duplicate persists
   `repository_path` = its **own** checkout so it is fully self-contained. A linked
   worktree rooted in a sibling workspace's checkout is never provisioned: the
