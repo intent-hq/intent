@@ -355,15 +355,34 @@ polling. The subsystem lives in `intent-services`
   read/trigger/cancel only (`hook.list` / `hook.runNow` / `hook.cancel`). The
   first run happens **immediately at schedule time as validation**: a failing
   script rejects the call, a dispatching one wakes the owner without
-  persisting a schedule.
+  persisting a schedule — except for a perpetual hook, which persists and
+  schedules anyway (see below).
 - **Execution.** Scripts evaluate in QuickJS (`intent_js::eval`) with the
   exact same `ws.*` prelude + host dispatch the `workspace_api` MCP tool
   installs — including `ws.host.exec` — with the hook's workspace/agent
   pinned as the caller and a 60 s wall-clock budget. The return value is the
   contract: `{ dispatch: true, message }` wakes the owning agent and
-  terminates the hook; `{ dispatch: false }` / `undefined` sleeps and
+  terminates the hook — unless the hook is perpetual, which counts the fire
+  and returns to `scheduled`; `{ dispatch: false }` / `undefined` sleeps and
   re-runs; a throw or the 60 s timeout evicts the hook, persists
   `last_error`, and wakes the owner with the reason.
+- **Perpetual hooks** ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)).
+  The optional `perpetual` schedule param (default `false` — one-shot
+  behavior is unchanged) makes dispatch **non-terminal**: the run wakes the
+  owner as usual, bumps `dispatch_count`, and re-arms the hook to `scheduled`
+  with a fresh `next_run_at`, so it keeps running on its cadence until TTL
+  expiry, cancel, or eviction. The wake states the **dual fact** — the hook
+  fired, and it remains active until its TTL (naming `expiresAt`) with a
+  `ws.hook.cancel` pointer — replacing the one-shot "retired" note; a
+  dispatch landing at/after `expiresAt` still wins but terminalizes the hook
+  (dispatch wake, then the expiry notice), and keeps the one-shot phrasing so
+  the two notices cannot contradict each other. Both paths resolve and
+  persist the post-dispatch state before emitting `hook:run-completed` /
+  `hook:dispatched`, so those payloads carry the real outcome. `perpetual`
+  and `dispatch_count` persist as defaulted columns
+  (`0084_hook_perpetual.sql`) and surface on `hook.list` plus every `hook:*`
+  payload as `perpetual` / `dispatchCount`; the TTL-expiry notice reports
+  "N runs, M dispatches" for a perpetual hook.
 - **Ownership scoping.** Hooks are agent-owned, and `hook_cancel` takes the
   cancelling agent as `caller: Option<AgentId>`. The MCP binding passes the
   calling agent's id (`Some`) — and, like `ws.hook.schedule`, rejects a call
@@ -378,8 +397,8 @@ polling. The subsystem lives in `intent-services`
   — queued behind an in-flight turn, question hold respected — and are
   best-effort (a delivery failure is logged, never propagated).
 - **Persistence & rehydration.** Schedules persist in the SQLite `hook`
-  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql`, rows
-  cascade with their agent session)
+  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql` +
+  `0084_hook_perpetual.sql`, rows cascade with their agent session)
   and rehydrate at boot (`Services::rehydrate_hooks`): `scheduled`/`running`
   rows respawn their tasks (`running` — daemon died mid-run — is healed back
   to `scheduled` with a fresh countdown), rows whose owning agent is gone
