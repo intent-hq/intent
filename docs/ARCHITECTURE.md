@@ -439,11 +439,12 @@ rehydrate before the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Eight booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Nine booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests` — all default `true`. Each toggle removes an agent-exposed
-feature from both the agent's system prompt and its MCP tool surface.
+`attentionRequests`, `stateSnapshot` — all default `true`. Each toggle removes an
+agent-exposed feature from the agent's system prompt, its MCP tool surface, or
+(for `stateSnapshot`) its per-turn prompt decoration.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -483,19 +484,36 @@ feature from both the agent's system prompt and its MCP tool surface.
   deny (captured flags) blocks the call first and the services check is
   redundant defense in depth; for pre-flip sessions — whose captured surface
   still advertises `ws.hook.*` and whose dispatch layer lets the frame
-  through — the live services check is what denies it. Net effect: uniquely
-  among the toggles, flipping `backgroundHooks` off denies new schedules
-  immediately from **all** sessions. **Already-active hooks are unaffected by
-  the toggle and run to their terminal state/TTL**.
+  through — the live services check is what denies it. Net effect: flipping
+  `backgroundHooks` off denies new schedules immediately from **all** sessions.
+  **Already-active hooks are unaffected by the toggle and run to their terminal
+  state/TTL**.
   Hook script runs build their `ws.*` prelude from the effective flags read
   fresh per run — a hook outlives sessions and daemon restarts, so a hook run
   honors the same gates (e.g. `hostExec`) a newly created session would.
-- **New sessions only.** Flags are captured once at agent-session creation
-  (the assembled system prompt is persisted per-session) and at per-agent MCP
-  bridge creation — never live-read per call (deliberately unlike
-  `workspaceApi.toonOutput`) — so a settings change applies only to sessions
-  created afterwards; existing sessions keep the surface they were created
-  with.
+- **Per-turn state-snapshot injection (`stateSnapshot`).** The one toggle that
+  gates neither a prompt section nor a tool: it governs only the
+  `current ws.agent.snapshot() => {…}` line that
+  `AgentManager::build_turn_prompt` prefixes to outbound turn prompts
+  (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
+  **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
+  the next turn of every session, existing ones included — unlike the other
+  eight. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
+  description/prelude/dispatch pruning), so the tool stays callable either way.
+  The line is rebuilt per turn from live sources (hook store, watch registry,
+  queue registry, event subscriptions, unsettled-children aggregate, pending
+  questions, the session's attention request), skipped when the snapshot is
+  trivial, and never persisted — the transcript row keeps the undecorated
+  content, and all three skip paths (toggle off, trivial snapshot, build
+  failure) leave the prompt byte-identical to pre-feature output.
+- **New sessions only (except the live-read toggles).** Flags are captured once
+  at agent-session creation (the assembled system prompt is persisted
+  per-session) and at per-agent MCP bridge creation — never live-read per call
+  (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
+  applies only to sessions created afterwards; existing sessions keep the
+  surface they were created with. The two exceptions above (`hook.schedule`'s
+  services-layer check, `stateSnapshot`'s per-turn read) act on existing
+  sessions immediately.
 
 ## Read-path performance principles
 
