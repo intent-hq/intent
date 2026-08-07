@@ -123,7 +123,7 @@ bus — never on the transport or on each other directly.
 Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
 (sandboxes). Architectural split of responsibilities:
 
-- **Provisioning (`workspace.create` / `workspace.duplicate`).** `intent-services`
+- **Provisioning (`workspace.create`).** `intent-services`
   owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
   (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe from the
   repository directory into the workspace dir (`intent_git::cow_probe(&repo_dir,
@@ -134,9 +134,25 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   logs a warning and falls back to the linked-worktree path (the setting is a
   preference, not a guarantee; the separate root→root probe backing the
   `cowSupported` aggregate is advisory only). Both paths run under the
-  per-repository worktree lock. `workspace.duplicate` applies the same matrix when
-  provisioning the copy's checkout. The setting is consulted **only** at
+  per-repository worktree lock. The setting is consulted **only** at
   provisioning time; the persisted `checkoutMode` is immutable per workspace.
+- **Duplication (`workspace.duplicate`).** Applies that matrix only for
+  shared-checkout (worktree-mode) sources. A **standalone** source — the source's
+  own `checkoutMode` is `cow` or `direct` — always duplicates as a standalone
+  checkout, cloned from the source's own checkout rather than from its
+  `repositoryPath`: CoW probe ⇒ `cow` clone, Unsupported/probe error ⇒ a plain
+  local clone of the source checkout persisted as `direct`
+  (`intent_git::cow_checkout::provision_local_clone_checkout`, which carries
+  committed state only and resolves `origin` so no relative or self-referencing
+  URL survives into the duplicate — the CoW path copies `.git/config` verbatim
+  instead). `workspace.cowIsolation` is **ignored** for such sources
+  (parity with cache-hydrated create), and the duplicate persists
+  `repository_path` = its **own** checkout so it is fully self-contained. A linked
+  worktree rooted in a sibling workspace's checkout is never provisioned: the
+  source's deletion detaches that directory and would orphan the duplicate, and
+  deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
+  provisioning fails, the inherited `repository_path` is cleared for standalone
+  sources so no checkout-less row references the source's directory.
 - **Repo cache & cache-hydrated creation.** `intent-git::repo_cache` owns a hidden,
   daemon-managed cache of read-only GitHub clones at
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
