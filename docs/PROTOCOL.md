@@ -2274,8 +2274,10 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > totalCount }, requirements: MergeRequirements }`. **`requirements`** *(additive in v6.1,
 > [intentd#989](https://github.com/intent-hq/intentd/pull/989))* is the full
 > merge-requirements checklist (§5.42 — "what is still needed to merge this PR"), the
-> SAME canonical object `ws.pr.monitor` returns and monitor wakes / `ws.pr.monitors`
-> rows carry; the top-level `checks` / `reviews` / `comments` blocks are the compact
+> SAME canonical object `ws.pr.monitor` returns (its `requirements` result field) and
+> the monitor loop's change detection diffs — `ws.pr.monitors` rows carry only the
+> reduced `lastSnapshot` summary of it (§5.42), and monitor wakes carry the derived
+> change lines; the top-level `checks` / `reviews` / `comments` blocks are the compact
 > projection of the same read. `mergeBlockedReason` is a human-readable
 > reason and is non-`null` exactly when the PR is open (draft included) and cannot be
 > merged. `checks` tallies the runs on the PR head (SHA, else source branch); a

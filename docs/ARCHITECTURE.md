@@ -433,8 +433,10 @@ retained so merged PRs stay visible). Store writes are guarded
 compare-and-swap so concurrent flush / cancel / re-register / poll never
 clobber each other; owner wakes go through the same automatic-delivery path
 as hook wakes. The agent surface (`ws.pr.monitor` / `ws.pr.unmonitor` /
-`ws.pr.monitors`, plus the `requirements` block on `ws.pr.snapshot`) is gated
-by `agentFeatures.prMonitor`.
+`ws.pr.monitors`) is gated by `agentFeatures.prMonitor`; `ws.pr.snapshot`
+stays un-gated and always carries its `requirements` block — the toggle only
+scrubs the "prefer `ws.pr.monitor`" cross-references from the surviving doc
+entries.
 
 ## Agent completion settlement & deferrals
 
