@@ -878,8 +878,12 @@ each with a dedicated change event (§6.5) that carries the new value:
   `workspace:activity-changed` (§6.5).
 - `attention` — **dismissible (blue dot).** A small flag raised by BE transitions, e.g.
   `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
-  clears it for all clients. Cleared via `workspace.dismissAttention` / `workspace.markSeen`;
-  surfaces via `workspace:attention-changed` (§6.5). This is shared BE state rather than
+  clears it for all clients. The two clears are **not** interchangeable (intentd#945):
+  `workspace.dismissAttention` retires the flag whatever its value, while
+  `workspace.markSeen` is **guarded on `unread`** — it clears the turn-end blue dot and
+  leaves a persistent `review_required` in place (see the attention-flag write guard under
+  the derived `displayStatus` block below). Both surface via
+  `workspace:attention-changed` (§6.5). This is shared BE state rather than
   per-client local state (the daemon is single-user in v1; per-viewer cursors are a future
   extension).
 
@@ -1068,7 +1072,8 @@ degrades to a **neutral unknown** treatment (a placeholder rendering, sorted las
 `not_started` or any other real status. Clients must not conflate the two: a value the build
 does not know is not evidence that work has not started. The derivation is the
 **canonical precedence** (intentd#945) — `failed` > `blocked` > `needs_attention` >
-`in_progress` (running agent) > `unread` > the PR/task rollup — folding the attention axes
+`in_progress` (running agent) > `unread` (idle/terminal base only, step 6 — the active
+`pr_ready` / `pr_open` stages outrank it) > the PR/task rollup — folding the attention axes
 and live agent activity around the "current cycle" rollup:
 
 The attention axes (steps 0–2 and the step-6 `unread` promotion) are probed per workspace
