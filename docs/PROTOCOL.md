@@ -1805,8 +1805,9 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
 
 #### Per-turn agent state snapshot *(new in intentd, [intentd#971](https://github.com/intent-hq/intentd/pull/971))*
 
-Every outbound turn prompt is prefixed with a compact, machine-readable digest of the agent's
-own runtime state, and the same digest is callable on demand. **MCP-only surface** (§6.8
+Outbound turn prompts are prefixed with a compact, machine-readable digest of the agent's own
+runtime state — unless the toggle is off, the digest is trivial, or building it failed (all
+three skip cases below) — and the same digest is callable on demand. **MCP-only surface** (§6.8
 principle) — there is **no wire method**: the FE neither reads nor renders snapshots, and none
 are persisted.
 
@@ -1826,13 +1827,13 @@ are persisted.
   `0`, never `null`). A workspace mismatch on the resolved session fails closed as
   `NotFound` (defense-in-depth against bare-id probes, like `getSessionStats`). The cheap
   counterpart to `ws.agent.diagnostics`, which is unchanged and remains the deep-dive tool.
-- **Per-turn injection** — `build_turn_prompt` prefixes the outbound prompt with the single
-  line `current ws.agent.snapshot() => {json}` (the same JSON object, serialized on one line),
-  followed by a blank line. It is the outermost **recurring** per-turn decoration — ahead of
-  the context block, naming, and the specialist role reminder, and inside only the fire-once
-  first-turn `<system>` prepend — is rebuilt every turn for **all** agents (specialist and
-  non-specialist, unlike the role reminder), and is **never persisted**: the transcript's user
-  row keeps the undecorated content.
+- **Per-turn injection** — when not skipped, `build_turn_prompt` prefixes the outbound prompt
+  with the single line `current ws.agent.snapshot() => {json}` (the same JSON object,
+  serialized on one line), followed by a blank line. It is the outermost **recurring** per-turn
+  decoration — ahead of the context block, naming, and the specialist role reminder, and inside
+  only the fire-once first-turn `<system>` prepend — is rebuilt every turn for **all** agents
+  (specialist and non-specialist, unlike the role reminder), and is **never persisted**: the
+  transcript's user row keeps the undecorated content.
 - **Skipped when trivial** — when every field other than `time` would be omitted (all counts
   zero, no pending attention) the whole line is dropped, so `time` alone never forces an
   injection and an idle agent's prompt stays byte-identical to pre-feature output. Building

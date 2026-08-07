@@ -494,7 +494,7 @@ agent-exposed feature from the agent's system prompt, its MCP tool surface, or
 - **Per-turn state-snapshot injection (`stateSnapshot`).** The one toggle that
   gates neither a prompt section nor a tool: it governs only the
   `current ws.agent.snapshot() => {…}` line that
-  `AgentManager::build_turn_prompt` prefixes to every outbound turn prompt
+  `AgentManager::build_turn_prompt` prefixes to outbound turn prompts
   (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
   **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
   the next turn of every session, existing ones included — unlike the other
@@ -504,8 +504,8 @@ agent-exposed feature from the agent's system prompt, its MCP tool surface, or
   queue registry, event subscriptions, unsettled-children aggregate, pending
   questions, the session's attention request), skipped when the snapshot is
   trivial, and never persisted — the transcript row keeps the undecorated
-  content, and both skip paths leave the prompt byte-identical to pre-feature
-  output.
+  content, and all three skip paths (toggle off, trivial snapshot, build
+  failure) leave the prompt byte-identical to pre-feature output.
 - **New sessions only (except the live-read toggles).** Flags are captured once
   at agent-session creation (the assembled system prompt is persisted
   per-session) and at per-agent MCP bridge creation — never live-read per call
