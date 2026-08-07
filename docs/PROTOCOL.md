@@ -559,15 +559,47 @@ removed in the background as usual.
 **Duplication (`workspace.duplicate`).** Duplicating a local workspace off a local git
 repository provisions a fresh checkout for the copy at `<root>/<newId>/<repo-slug>` on a
 branch named for the new id (uniquified against the source repo's local and
-remote-tracking branches), using the **same decision matrix as `workspace.create`**:
-`workspace.cowIsolation` off ⇒ linked worktree (`checkoutMode: "worktree"`); on ⇒ CoW
-probe from the repository directory to `<root>/<newId>` — supported ⇒ standalone CoW
-clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **falls back to
-a linked worktree** with a logged warning (same fallback semantics as create).
-Provisioning is skipped for remote / skip-isolation sources and for a `repositoryPath`
-that is not a local git repository. An ordinary provisioning failure is logged and
+remote-tracking branches). The decision depends on whether the **source** checkout is
+standalone:
+
+- **Standalone source** (the source's own `checkoutMode` is `"cow"` or `"direct"`, which
+  includes every cache-hydrated workspace and an `isNewRepo` `direct` workspace): the
+  duplicate is **always standalone too, and never a linked worktree**. The clone source
+  is the source's **own checkout** (`worktreePath`, or `repositoryPath` when the
+  repository itself is the checkout), not the source's `repositoryPath`. A CoW probe from
+  that checkout to `<root>/<newId>` decides the mode: supported ⇒ CoW clone
+  (`checkoutMode: "cow"`); Unsupported ⇒ a **plain local `git clone`** of the source
+  checkout (`checkoutMode: "direct"`), and the same local-clone fallback is taken — with a
+  logged warning — on a probe error or when a CoW clone still reports Unsupported despite a
+  passing probe. A source checkout whose `.git` is a gitfile skips the probe and goes
+  straight to the local clone (also warned). `workspace.cowIsolation`
+  is **ignored** for standalone sources (parity with cache-hydrated create). Like a
+  hydrated create, the checkout *is* the repository: the duplicate persists
+  `repositoryPath` = its **own** checkout path, so nothing in the row references the source
+  workspace's directory. The `direct` local-clone path additionally **resolves `origin`**
+  (a CoW clone is a byte copy and keeps the source's `.git/config` verbatim): a network URL
+  and an absolute local path carry over as-is, a relative local path is absolutized against
+  the source repository so it still names the same upstream, and the remote is **removed**
+  when the source has no `origin` or when `origin` resolves to the source checkout itself.
+  The local-clone fallback carries **committed state only** —
+  uncommitted/untracked work in the source is not copied. Rationale
+  ([intent-hq/monorepo#1560](https://github.com/intent-hq/monorepo/issues/1560)): a linked
+  worktree rooted in a sibling workspace's checkout is orphaned when that workspace is
+  deleted (the checkout dir is detached), and deleting the duplicate would mutate the
+  source's checkout.
+- **Shared-checkout source** (no `checkoutMode` — a worktree-mode or shared workspace):
+  the **same decision matrix as `workspace.create`** applies against the source's
+  `repositoryPath` — `workspace.cowIsolation` off ⇒ linked worktree
+  (`checkoutMode: "worktree"`); on ⇒ CoW probe from the repository directory to
+  `<root>/<newId>` — supported ⇒ standalone CoW clone (`checkoutMode: "cow"`),
+  Unsupported/probe error ⇒ fall back to a linked worktree with a logged warning.
+
+Provisioning is skipped for remote / skip-isolation sources and when the resolved source
+directory is not a local git repository. An ordinary provisioning failure is logged and
 swallowed (FE parity — "continue without worktree"): the row persists without
-`worktreePath`/`checkoutMode`.
+`worktreePath`/`checkoutMode`. For a standalone source the inherited `repositoryPath` is
+also **cleared** in that case, so a checkout-less duplicate never points at the source
+workspace's directory.
 
 **`checkoutMode` is immutable.** `workspace.cowIsolation` is consulted **only** at
 provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
@@ -2434,7 +2466,7 @@ the overriding flag ("overridden by startup flag …").
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
 - **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded). These two keys also derive the **effective default provider** ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)): the provider prefix of `model.default` when it is a compound id naming a registered provider, else `providers.active` (registry-validated, so a stale/mistyped value falls through), else no derived default — resolution bottoms out at the first registered provider (no provider carries a hardcoded default designation). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
-- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); ignored by cache-hydrated creation and by `workspace.duplicate` of a standalone-checkout source, which are always standalone (§5.1); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
 - **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
