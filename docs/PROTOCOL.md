@@ -1098,7 +1098,8 @@ attention is never fabricated.
    `ws.agent.requestDiscussion`, §5.5) or (b) has **pending structured questions** — the
    same question-hold derivation as §5.5 (the persisted `pendingQuestionsMessageId` marker
    is set and differs from the `dismissedQuestionsMessageId` marker; within v6.0 this is a
-   metadata read, not a transcript tail walk, and pendingness survives later user messages
+   metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
+   §5.5 — and pendingness survives later user messages
    and agent turns) — or (c, new in intentd#945) the workspace
    `attention` flag reads `review_required`. The cheap session-metadata check (attention
    requests) runs over every candidate first; question-hold probes only
@@ -1856,10 +1857,13 @@ and still marker-aware). So pendingness **survives** later plain user messages, 
 subsequent turns, and daemon restarts — the check is a bounded single-row metadata read, not a
 transcript walk. There is still no hold flag or lifecycle status: an agent under hold remains
 `idle`/`completed` as usual. The derivation fails open (`false`) on store read errors so a
-transient failure can never wedge deliveries. The marker is **daemon-internal** — unlike
-`dismissedQuestionsMessageId` / `lastSeenMessageId` it is NOT served on the `AgentLite` /
-`AgentSession` `metadata` projections; clients derive pendingness from the transcript plus the
-answer tag below (and read the daemon's verdict through `displayStatus`, §5.1 step 2).
+transient failure can never wedge deliveries. Unlike `dismissedQuestionsMessageId` /
+`lastSeenMessageId` the marker is NOT lifted into the structured `AgentLite` `metadata`
+projection (`agent.list` / `agent.get`). It does ride the raw free-form `metadata` object
+`agent.getSession` serves — like every session-metadata key, whether set or cleared to the
+empty string — but it is **daemon-internal**: clients must NOT derive pendingness from it.
+They derive it from the transcript plus the answer tag below (and read the daemon's verdict
+through `displayStatus`, §5.1 step 2).
 
 *Pre-upgrade fallback.* A session whose marker key is **absent entirely** (the daemon never wrote
 it) falls back once to the legacy transcript tail walk — walking back past any trailing `system`
