@@ -355,15 +355,34 @@ polling. The subsystem lives in `intent-services`
   read/trigger/cancel only (`hook.list` / `hook.runNow` / `hook.cancel`). The
   first run happens **immediately at schedule time as validation**: a failing
   script rejects the call, a dispatching one wakes the owner without
-  persisting a schedule.
+  persisting a schedule — except for a perpetual hook, which persists and
+  schedules anyway (see below).
 - **Execution.** Scripts evaluate in QuickJS (`intent_js::eval`) with the
   exact same `ws.*` prelude + host dispatch the `workspace_api` MCP tool
   installs — including `ws.host.exec` — with the hook's workspace/agent
   pinned as the caller and a 60 s wall-clock budget. The return value is the
   contract: `{ dispatch: true, message }` wakes the owning agent and
-  terminates the hook; `{ dispatch: false }` / `undefined` sleeps and
+  terminates the hook — unless the hook is perpetual, which counts the fire
+  and returns to `scheduled`; `{ dispatch: false }` / `undefined` sleeps and
   re-runs; a throw or the 60 s timeout evicts the hook, persists
   `last_error`, and wakes the owner with the reason.
+- **Perpetual hooks** ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)).
+  The optional `perpetual` schedule param (default `false` — one-shot
+  behavior is unchanged) makes dispatch **non-terminal**: the run wakes the
+  owner as usual, bumps `dispatch_count`, and re-arms the hook to `scheduled`
+  with a fresh `next_run_at`, so it keeps running on its cadence until TTL
+  expiry, cancel, or eviction. The wake states the **dual fact** — the hook
+  fired, and it remains active until its TTL (naming `expiresAt`) with a
+  `ws.hook.cancel` pointer — replacing the one-shot "retired" note; a
+  dispatch landing at/after `expiresAt` still wins but terminalizes the hook
+  (dispatch wake, then the expiry notice), and keeps the one-shot phrasing so
+  the two notices cannot contradict each other. Both paths resolve and
+  persist the post-dispatch state before emitting `hook:run-completed` /
+  `hook:dispatched`, so those payloads carry the real outcome. `perpetual`
+  and `dispatch_count` persist as defaulted columns
+  (`0084_hook_perpetual.sql`) and surface on `hook.list` plus every `hook:*`
+  payload as `perpetual` / `dispatchCount`; the TTL-expiry notice reports
+  "N runs, M dispatches" for a perpetual hook.
 - **Ownership scoping.** Hooks are agent-owned, and `hook_cancel` takes the
   cancelling agent as `caller: Option<AgentId>`. The MCP binding passes the
   calling agent's id (`Some`) — and, like `ws.hook.schedule`, rejects a call
@@ -378,8 +397,8 @@ polling. The subsystem lives in `intent-services`
   — queued behind an in-flight turn, question hold respected — and are
   best-effort (a delivery failure is logged, never propagated).
 - **Persistence & rehydration.** Schedules persist in the SQLite `hook`
-  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql`, rows
-  cascade with their agent session)
+  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql` +
+  `0084_hook_perpetual.sql`, rows cascade with their agent session)
   and rehydrate at boot (`Services::rehydrate_hooks`): `scheduled`/`running`
   rows respawn their tasks (`running` — daemon died mid-run — is healed back
   to `scheduled` with a fresh countdown), rows whose owning agent is gone
@@ -439,11 +458,12 @@ rehydrate before the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Eight booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Nine booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests` — all default `true`. Each toggle removes an agent-exposed
-feature from both the agent's system prompt and its MCP tool surface.
+`attentionRequests`, `stateSnapshot` — all default `true`. Each toggle removes an
+agent-exposed feature from the agent's system prompt, its MCP tool surface, or
+(for `stateSnapshot`) its per-turn prompt decoration.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -483,19 +503,36 @@ feature from both the agent's system prompt and its MCP tool surface.
   deny (captured flags) blocks the call first and the services check is
   redundant defense in depth; for pre-flip sessions — whose captured surface
   still advertises `ws.hook.*` and whose dispatch layer lets the frame
-  through — the live services check is what denies it. Net effect: uniquely
-  among the toggles, flipping `backgroundHooks` off denies new schedules
-  immediately from **all** sessions. **Already-active hooks are unaffected by
-  the toggle and run to their terminal state/TTL**.
+  through — the live services check is what denies it. Net effect: flipping
+  `backgroundHooks` off denies new schedules immediately from **all** sessions.
+  **Already-active hooks are unaffected by the toggle and run to their terminal
+  state/TTL**.
   Hook script runs build their `ws.*` prelude from the effective flags read
   fresh per run — a hook outlives sessions and daemon restarts, so a hook run
   honors the same gates (e.g. `hostExec`) a newly created session would.
-- **New sessions only.** Flags are captured once at agent-session creation
-  (the assembled system prompt is persisted per-session) and at per-agent MCP
-  bridge creation — never live-read per call (deliberately unlike
-  `workspaceApi.toonOutput`) — so a settings change applies only to sessions
-  created afterwards; existing sessions keep the surface they were created
-  with.
+- **Per-turn state-snapshot injection (`stateSnapshot`).** The one toggle that
+  gates neither a prompt section nor a tool: it governs only the
+  `current ws.agent.snapshot() => {…}` line that
+  `AgentManager::build_turn_prompt` prefixes to outbound turn prompts
+  (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
+  **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
+  the next turn of every session, existing ones included — unlike the other
+  eight. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
+  description/prelude/dispatch pruning), so the tool stays callable either way.
+  The line is rebuilt per turn from live sources (hook store, watch registry,
+  queue registry, event subscriptions, unsettled-children aggregate, pending
+  questions, the session's attention request), skipped when the snapshot is
+  trivial, and never persisted — the transcript row keeps the undecorated
+  content, and all three skip paths (toggle off, trivial snapshot, build
+  failure) leave the prompt byte-identical to pre-feature output.
+- **New sessions only (except the live-read toggles).** Flags are captured once
+  at agent-session creation (the assembled system prompt is persisted
+  per-session) and at per-agent MCP bridge creation — never live-read per call
+  (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
+  applies only to sessions created afterwards; existing sessions keep the
+  surface they were created with. The two exceptions above (`hook.schedule`'s
+  services-layer check, `stateSnapshot`'s per-turn read) act on existing
+  sessions immediately.
 
 ## Read-path performance principles
 
