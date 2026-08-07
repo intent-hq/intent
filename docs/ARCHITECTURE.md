@@ -364,6 +364,16 @@ polling. The subsystem lives in `intent-services`
   terminates the hook; `{ dispatch: false }` / `undefined` sleeps and
   re-runs; a throw or the 60 s timeout evicts the hook, persists
   `last_error`, and wakes the owner with the reason.
+- **Ownership scoping.** Hooks are agent-owned, and `hook_cancel` takes the
+  cancelling agent as `caller: Option<AgentId>`. The MCP binding passes the
+  calling agent's id (`Some`) — and, like `ws.hook.schedule`, rejects a call
+  with no agent caller context outright — so an agent can only cancel its
+  own hooks; a non-owner cancel is rejected with an error naming the owning
+  agent, before any state change. The FE wire path (`hook.cancel`) passes
+  `None`: it may cancel any hook in the workspace. Cancels are visible in
+  exactly one direction: an owner's own cancel delivers no self-wake, while
+  a `None`-caller cancel wakes the owner with a notice
+  ([intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953)).
 - **Owner wakes** go through the automatic-delivery `agent.sendMessage` path
   — queued behind an in-flight turn, question hold respected — and are
   best-effort (a delivery failure is logged, never propagated).
