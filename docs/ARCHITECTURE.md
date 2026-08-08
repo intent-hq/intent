@@ -445,7 +445,7 @@ Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
 (`deliver_completion_to_watches` in `lib.rs`, the completion-watch registry in
 `agent_subscriptions.rs`): an `agent:idle` only counts as the agent's
 completion — firing its watchers' deliver-once wakes and recording `after_all`
-group settlement — when the agent has genuinely settled. Three deferral
+group settlement — when the agent has genuinely settled. Four deferral
 classes gate this, all probed **live at delivery time** (never from emit-time
 event stamps):
 
@@ -454,35 +454,43 @@ event stamps):
   are exempt (group accounting must see every completion).
 - **Hook-waiting** — the agent owns active background hooks. Defers both
   watch delivery and grouped settlement records; TTL-bounded by hook expiry.
+- **PR-monitor-waiting** (unified external-wait; intentd#1002) — the agent
+  owns active PR monitors (§Centralized PR monitoring). Defers watch delivery
+  and grouped settlement records exactly like hook-waiting, but has **no
+  TTL** of its own (PR monitors don't expire) — it resolves only via the
+  monitor's own terminal transitions (completion, owner `ws.pr.unmonitor`,
+  external `prMonitor.cancel`, or restart rehydration), each of which
+  re-runs the redelivery backstop.
 - **Agent-waiting** (monorepo#1468) — the agent itself holds live outgoing
   completion watches on other, unsettled agents (ungrouped or grouped; a
   coordinator with an open delegation group is waiting on its children).
   Defers watch delivery and grouped settlement records, like hook-waiting.
 
-Two interim notions are deliberately split: `seal_interim` (queue/busy/hook)
-also blocks sealing the agent's own open `after_all` group, while
-agent-waiting does **not** — an `after_all` coordinator always holds grouped
-outgoing watches on its own children, so gating the seal on agent-waiting
-would deadlock every group. The waiting classification
-(`Services::agent_is_waiting_on_agents` / `classify_agent_waiting`) bakes in a
-**2-cycle deadlock guard**: a mutual watch pair whose both sides are idle is
-not a waiting reason (the pair delivers as before); deeper cycles (A→B→C→A)
-are an accepted limitation, deferring until an external event breaks the
-cycle. Never deferred by any class: `agent:failed` / `agent:deleted`, the
-immediate `reportToParent` wake, and the attention (blocker/discussion)
-fan-out.
+Two interim notions are deliberately split: `seal_interim`
+(queue/busy/hook/PR-monitor) also blocks sealing the agent's own open
+`after_all` group, while agent-waiting does **not** — an `after_all`
+coordinator always holds grouped outgoing watches on its own children, so
+gating the seal on agent-waiting would deadlock every group. The waiting
+classification (`Services::agent_is_waiting_on_agents` /
+`classify_agent_waiting`) bakes in a **2-cycle deadlock guard**: a mutual
+watch pair whose both sides are idle is not a waiting reason (the pair
+delivers as before); deeper cycles (A→B→C→A) are an accepted limitation,
+deferring until an external event breaks the cycle. Never deferred by any
+class: `agent:failed` / `agent:deleted`, the immediate `reportToParent`
+wake, and the attention (blocker/discussion) fan-out.
 
 Deferred idles record an interim-skip marker, and **redelivery backstops**
 re-run the deferred completion when the deferral reason disappears without a
 fresh idle: queue retraction/edit (queue interim), terminal hook transitions
-(hook-waiting), and — for agent-waiting — `agent.unwatch`,
-`agent.cancelSubscriptions`, and `after_all` group settlement, each of which
-may remove the agent's last outgoing watch. Restart paths share the same
-predicates: the startup watch reconcile, registration-time reconciliation
-(re-arming a watch on an already-idle target), and group rehydration all skip
-the synthetic completion for a deferred child — group rehydration via a
-durable variant that reads persisted `completion_watch` rows, since groups
-rehydrate before the in-memory watch registry loads.
+(hook-waiting), terminal PR-monitor transitions (PR-monitor-waiting), and —
+for agent-waiting — `agent.unwatch`, `agent.cancelSubscriptions`, and
+`after_all` group settlement, each of which may remove the agent's last
+outgoing watch. Restart paths share the same predicates: the startup watch
+reconcile, registration-time reconciliation (re-arming a watch on an
+already-idle target), and group rehydration all skip the synthetic
+completion for a deferred child — group rehydration via a durable variant
+that reads persisted `completion_watch` rows, since groups rehydrate before
+the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
