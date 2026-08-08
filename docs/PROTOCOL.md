@@ -1683,8 +1683,11 @@ slash-bearing non-codex ids (e.g. HuggingFace-style unsloth ids) are untouched.
 **Session-discovered effort levels — `effortLevels` *(additive; no version bump)*.**
 `effortLevels?: string[]` is an optional, daemon-owned field served on both the
 `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` / `agent.get` /
-`agent.create` / `agent.update` results) projections — presence-detected, **omitted when
-the provider advertises no such option** (absent, never `null` or `[]`). It is
+`agent.update` results) projections — presence-detected, **omitted when
+the provider advertises no such option** (absent, never `null` or `[]`). The
+`agent.create` result never carries it: a freshly created agent has no session yet, so
+discovery has not run — the field first appears after the first session open, via the
+`agent:updated` emit below and subsequent `agent.get` / `agent.list` reads. It is
 **session-scoped truth**: the values the provider's `category: "thought_level"`
 `configOptions` select advertised at the **most recent session open** (the same discovery
 that backs the `reasoningEffort` application above), with the adapter's `"default"`
