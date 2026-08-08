@@ -4680,13 +4680,17 @@ is routed on the settings-derived effective default provider — the provider pr
   whose adapter cannot be resolved → `{ available: false, reason }`.
 
 **`{ available: false, reason }` shapes.** A typed unavailable result, never an error, so
-clients hide the affordance gracefully. Exactly three reasons are emitted:
+clients hide the affordance gracefully. Three reasons cover the normal gating paths, plus
+two rare defensive shapes; clients must treat `reason` as an opaque display string and
+never parse or match on it:
 
 | Condition | `reason` |
 | --- | --- |
 | No decidable effective default provider (both `model.default` prefix and `providers.active` unset/unregistered) | `completeOnce requires a decidable effective default provider` |
 | Effective provider has no one-shot route (not auggie and not claude-code / codex / pi) | `completeOnce is not supported for the effective default provider: <providerId>` |
 | One-shot-capable provider whose adapter resolves to nothing (no binary, and no npx for the pinned package) | `<providerId>: no adapter could be resolved (binary not found and npx unavailable)` |
+| *(defensive)* ACP one-shot provider id missing from the provider registry — unreachable for the three hardcoded ids | `unknown provider: <providerId>` |
+| *(defensive)* codex only: creating the isolated throwaway `CODEX_HOME` tempdir fails | `codex: failed to create isolated CODEX_HOME: <error>` |
 
 Unset/undecidable settings resolve the gate **CLOSED** rather than falling through to the
 first registered provider (which would functionally reinstate the removed hardcoded auggie
