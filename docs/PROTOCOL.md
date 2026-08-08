@@ -4632,7 +4632,7 @@ the mode-specific parse.
 
 A stateless one-shot completion RPC (used for background requests such as slug
 generation and note-status checks). The daemon owns the full
-lifecycle: spawn the auggie CLI, collect its cleaned reply, reap the process on any
+lifecycle: spawn the provider, collect its cleaned reply, reap the process on any
 failure path (timeout, cancel, drop). **No agent session or in-memory state is
 created**, so no client-side create→send→read→delete orchestration is needed and
 there is nothing to garbage-collect on the error path. Part of the
@@ -4642,44 +4642,92 @@ there is nothing to garbage-collect on the error path. Part of the
 | --- | --- | --- |
 | agent.completeOnce | prompt (req), systemPrompt?, model?, workspaceId?, timeoutMs? | { text } — or { available: false, reason } when the provider gate is closed |
 
-**Provider gate ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Same gate as
-`agent.enhancePrompt` (§5.31): completion requires auggie as the settings-derived effective
-default provider (provider of `model.default`, else `providers.active`); any other — or
-unset/undecidable — settings return `{ available: false, reason }` instead of running the CLI.
+**Provider-neutral routing.** Unlike `agent.enhancePrompt` (§5.31, auggie-only), completion
+is routed on the settings-derived effective default provider — the provider prefix of
+`model.default` when compound and registry-valid, else `providers.active` (§5.12):
+
+- **auggie** → the `auggie --print` CLI path described under *Execution — auggie route*.
+- **claude-code / codex / pi** → an **ephemeral ACP session** (*Execution — ACP route*).
+- **anything else**, including unset/undecidable settings and a one-shot-capable provider
+  whose adapter cannot be resolved → `{ available: false, reason }`.
+
+**`{ available: false, reason }` shapes.** A typed unavailable result, never an error, so
+clients hide the affordance gracefully. Exactly three reasons are emitted:
+
+| Condition | `reason` |
+| --- | --- |
+| No decidable effective default provider (both `model.default` prefix and `providers.active` unset/unregistered) | `completeOnce requires a decidable effective default provider` |
+| Effective provider has no one-shot route (not auggie and not claude-code / codex / pi) | `completeOnce is not supported for the effective default provider: <providerId>` |
+| One-shot-capable provider whose adapter resolves to nothing (no binary, and no npx for the pinned package) | `<providerId>: no adapter could be resolved (binary not found and npx unavailable)` |
+
+Unset/undecidable settings resolve the gate **CLOSED** rather than falling through to the
+first registered provider (which would functionally reinstate the removed hardcoded auggie
+default) — same ruling as §5.31.
 
 **Params.**
 
-- `prompt` (required, non-empty) — the user prompt piped verbatim to the CLI over
-  stdin (composed with `systemPrompt` when supplied).
+- `prompt` (required, non-empty) — the user prompt sent verbatim to the provider (piped
+  over stdin on the auggie route, delivered as the single `session/prompt` text content
+  block on the ACP route; composed with `systemPrompt` when supplied).
 - `systemPrompt` — optional system prompt; when present the composed input becomes
   `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
-  used by §5.31. Absent/blank → `prompt` rides through unchanged.
-- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
-- `workspaceId` — optional; when present the CLI runs with the workspace's worktree
-  as its working directory (unknown workspace → `-32602`). Without it the CLI runs
-  without a `cwd`.
+  used by §5.31. Absent/blank → `prompt` rides through unchanged. Applies to both routes.
+- `model` — optional provider model id. On the auggie route it is passed as `--model`; on
+  the ACP route it rides the provider's own CLI model flag when it has one, and is ignored
+  silently by providers that select models through other mechanisms (claude-code and pi
+  use `session/set_config_option`) — a best-effort model is never an error.
+- `workspaceId` — optional; when present the provider runs with the workspace's worktree
+  as its working directory (also the ACP `session/new` `cwd`; unknown workspace →
+  `-32602`). Without it the auggie CLI runs without a `cwd` and the ACP adapter runs in
+  the system temp dir.
 - `timeoutMs` — optional positive integer, default `30000` (matches §5.31 default),
-  capped at `120000`. A hung CLI is reaped when the timeout elapses.
+  capped at `120000`. A hung provider is reaped when the timeout elapses. On the ACP route
+  this bounds the `session/prompt` phase; session setup uses the adapter's own staged
+  npx-aware budgets.
 
-**Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
-binary resolution (`Services.auggie_bin` test seam → `context.auggiePath` setting when
-set and non-empty (exclusive; an invalid path is an error, no silent discovery fallback)
-→ `find_auggie()` discovery via Intent-managed binary → enhanced PATH), then
+**Execution — auggie route.** Same one-shot CLI discipline as `agent.enhancePrompt`
+(§5.31): auggie binary resolution (`Services.auggie_bin` test seam → `context.auggiePath`
+setting when set and non-empty (exclusive; an invalid path is an error, no silent discovery
+fallback) → `find_auggie()` discovery via Intent-managed binary → enhanced PATH), then
 `auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
-tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
-(🤖-delimited response extraction plus tool-artifact line filtering, the FE
-`cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
-events, no persistence. The binary resolution order honors the existing
-`context.auggiePath` settings key so explicit user config is never ignored and hermetic
-e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
+tools) with the composed prompt piped over stdin. The binary resolution order honors the
+existing `context.auggiePath` settings key so explicit user config is never ignored and
+hermetic e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
 discovery.
+
+**Execution — ACP route (ephemeral session).** The adapter launch mirrors the model probe
+(§5.30): an npx-only provider (claude-code, pi) always runs its pinned package via
+`npx -y <package>`; otherwise the resolved binary wins (`providers.paths[<owning
+provider>]` → native install dir → enhanced PATH) with the pinned npx package as fallback.
+The daemon then drives one **ephemeral** ACP session and kills the child:
+
+1. `initialize` — no client filesystem capabilities.
+2. `session/new` — **no MCP servers**, `cwd` from `workspaceId` (else the system temp dir).
+3. one `session/prompt` carrying the composed prompt as a single text block; the reply is
+   accumulated from the streamed `agent_message_chunk` text updates (thoughts, tool calls
+   and plans are ignored).
+4. the child is reaped on **every** exit path (success, timeout, error, drop) — SIGTERM to
+   its process group, grace, SIGKILL, plus a descendant sweep.
+
+Non-interactive by construction: every agent→client request is answered immediately —
+`session/request_permission` resolves `cancelled`, anything else gets method-not-found — so
+a one-shot can never block on a human. No session id, agent row, transcript, or event is
+persisted; nothing survives the call.
+
+Both routes clean the reply identically (ANSI-strip, 🤖-delimited response extraction plus
+tool-artifact line filtering, the FE `cleanAgentMessage` port) before returning it verbatim
+as `text`. No streaming, no events, no persistence on either route.
 
 **Errors** (§9):
 
 - `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
-- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
-  `"…timed out after <n>ms"`); non-zero CLI exit. CLI absence is a **hard error** —
-  there is no fallback for completion.
+- `-32603` — auggie route: CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit. ACP route: a **resolved** adapter that
+  fails the turn — spawn failure, transport failure, setup or prompt timeout, an adapter
+  JSON-RPC error, an early adapter exit, or a turn that streamed no text — with `data`
+  prefixed by the provider id (`"<providerId>: …"`). Provider absence is a hard error only
+  once an adapter has been resolved; an unresolvable adapter is the
+  `{ available: false, reason }` case above, not a `-32603`.
 
 ```json
 // → request
