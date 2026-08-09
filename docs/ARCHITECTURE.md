@@ -158,22 +158,33 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
   users and to recent-repo derivation; the module never reads config — the caller passes
   the cache root). `ensure_cached_repo` is the single entry point: it serializes callers
-  on a per-repo lock, then clones fresh (miss) or refreshes (`git fetch --prune`,
-  `remote set-head origin --auto` so an upstream default-branch change is re-resolved,
-  hard reset to that branch, then `git clean -fdx` so untracked pollution is never
-  byte-copied into hydrated checkouts). **Refresh never fails the flow** — any anomaly
+  on a per-repo lock, then clones fresh (miss; `--recurse-submodules`, so the cache
+  carries populated submodule work trees and their module git dirs) or refreshes
+  (`git fetch --prune`, `remote set-head origin --auto` so an upstream default-branch
+  change is re-resolved, hard reset to that branch, `submodule sync` + `submodule update
+  --init --recursive --force` so gitlink bumps, URL changes, and newly added submodules
+  are followed, then `git clean -ffdx` plus a per-submodule recursive clean so untracked
+  pollution — including orphaned submodule checkouts — is never byte-copied into
+  hydrated checkouts). **Refresh never fails the flow** — any anomaly
   (diverged history, corrupt object store, an interrupted prior clone, a vanished
   `origin/HEAD`, a mismatched `origin`) deletes the cache dir and re-clones; only a
   failed clone surfaces as an error. `intent-services` uses the cache to hydrate
   `workspace.create` when a `githubUrl` arrives without a `clonePath` (PROTOCOL §5.1):
   the checkout is always **standalone** — a CoW clone of the cache (`cow`) or a plain
   local `git clone` of it (`direct`) — never a linked worktree against the cache, whose
-  hard-reset/re-clone refresh would corrupt linked worktrees. Provisioning holds the
-  per-repo cache lock, and afterwards `origin` is retargeted at the real URL so the
-  checkout is fully self-contained and the cache is always safe to delete. Network git
-  here shells out to system `git` (fail-fast `GIT_TERMINAL_PROMPT=0`, wall-clock
-  deadline kill) with any token offered through the env-backed credential helper, never
-  argv.
+  hard-reset/re-clone refresh would corrupt linked worktrees. Both paths populate
+  submodule work trees from the cache's local module git dirs alone (the CoW byte copy
+  carries them; `direct` copies `.git/modules` before the update), and the populating
+  `submodule update` runs **strictly offline** (`--no-fetch`, every clone transport
+  refused): hydration never touches the network — a gitlink the cache does not hold
+  degrades to an unpopulated submodule with a warning, and no submodule anomaly ever
+  fails `workspace.create`. Provisioning holds the per-repo cache lock, and afterwards
+  `origin` is retargeted at the real URL (submodule URLs re-synced to their
+  `.gitmodules` resolution) so the checkout is fully self-contained and the cache is
+  always safe to delete. Network git here shells out to system `git` (fail-fast
+  `GIT_TERMINAL_PROMPT=0`, wall-clock deadline kill) with any token offered through the
+  env-backed credential helper, never argv; the token propagates to submodule child
+  fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`.
 - **Capability surface.** The root→root probe is cached per workspaces root by the
   shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
   `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
