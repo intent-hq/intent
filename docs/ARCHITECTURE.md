@@ -383,12 +383,17 @@ polling. The subsystem lives in `intent-services`
   behavior is unchanged) makes dispatch **non-terminal**: the run wakes the
   owner as usual, bumps `dispatch_count`, and re-arms the hook to `scheduled`
   with a fresh `next_run_at`, so it keeps running on its cadence until TTL
-  expiry, cancel, or eviction. The wake states the **dual fact** — the hook
-  fired, and it remains active until its TTL (naming `expiresAt`) with a
-  `ws.hook.cancel` pointer — replacing the one-shot "retired" note; a
-  dispatch landing at/after `expiresAt` still wins but terminalizes the hook
-  (dispatch wake, then the expiry notice), and keeps the one-shot phrasing so
-  the two notices cannot contradict each other. Both paths resolve and
+  expiry, cancel, or eviction. The re-armed wake's state note says the hook
+  remains active until its `expiresAt` with a `ws.hook.cancel` pointer —
+  replacing the one-shot retired-with-reschedule-pointer note — and dispatch
+  wakes carry the `hookStillActive` boolean in the `hook_wake`
+  messageMetadata (`true` only for the re-armed perpetual branch; absent on
+  non-dispatch wakes) so consumers need not parse the note text
+  ([intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027));
+  a dispatch landing at/after `expiresAt` still wins but terminalizes the
+  hook (dispatch wake, then the expiry notice), and keeps the one-shot
+  phrasing so the two notices cannot contradict each other. Both paths
+  resolve and
   persist the post-dispatch state before emitting `hook:run-completed` /
   `hook:dispatched`, so those payloads carry the real outcome. `perpetual`
   and `dispatch_count` persist as defaulted columns
