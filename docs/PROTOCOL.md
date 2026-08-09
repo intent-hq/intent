@@ -2894,12 +2894,27 @@ in the bullet under this table).
   `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
   `openInEditor`, and — when available — a native chooser for `pickApplication`).
 - `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
-  commands itself. It uses `argv` only — **no shell interpolation** — spawns with the child in
-  its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree), enriches
-  `PATH` with the daemon's host PATH, and merges caller-supplied `env` on top. It is
-  **secret-safe**: no env values are logged or returned; only `stdout` / `stderr` / `exitCode`
-  (and `timedOut: true` on the timeout path) cross the wire. `cwd` requires `workspaceId` so
-  the daemon can enforce the same lexical within-workspace containment guard that `file.*` uses;
+  commands itself. It uses `argv` only — **no shell interpolation** — and spawns with the child
+  in its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree). The
+  **child-env contract** is a strict precedence: (1) the caller-supplied `env` map wins
+  outright (applied last, key by key); (2) the daemon's own process environment is inherited —
+  a var already set there is **never overridden** by a captured value; (3) allow-listed
+  credential env vars **captured from the user's login shell** fill the remaining gaps only
+  (the Dock/auto-update launch case, where the daemon's inherited env is stripped —
+  monorepo#1671); (4) `PATH` is enriched via the login-shell/known-dirs mechanism (a caller
+  `env["PATH"]` still wins). The capture is unix-only, cached per daemon process, run with a
+  short timeout, and empty on any failure (no shell, spawn error, timeout, non-unix). The
+  allow-list is exact names `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_PROFILE`,
+  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `HF_TOKEN`,
+  `HUGGING_FACE_HUB_TOKEN` plus the name prefixes `AUGGIE_*`, `CLAUDE_*`, `CODEX_*`,
+  `OPENCODE_*`, `DROID_*`, `CORTEX_*`; non-allow-listed vars are discarded at parse time and
+  never leave the capture. It is **secret-safe**: no env values — captured or otherwise — are
+  ever logged, traced, or returned; only `stdout` / `stderr` / `exitCode` (and
+  `timedOut: true` on the timeout path) cross the wire. The same captured credential gap-fill
+  applies to **ACP provider spawns** (the piped-stdio agent provider processes this section
+  opens with): provider registry env and per-spawn extras win, then the daemon's process env,
+  then captured vars fill gaps. `cwd` requires `workspaceId` so the daemon can enforce the same lexical
+  within-workspace containment guard that `file.*` uses;
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
   workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
   stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
@@ -2907,7 +2922,8 @@ in the bullet under this table).
   `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
   something neither the buffered `host.exec` nor the PTY-mangling `terminal.*` nor the
   workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
-  process-group + `kill_on_drop` + `timeoutMs` reap, enriched PATH, caller `env` on top,
+  process-group + `kill_on_drop` + `timeoutMs` reap, the child-env contract above — caller
+  `env` > daemon process env > captured credential gap-fill, plus enriched PATH,
   workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
   `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
   `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
