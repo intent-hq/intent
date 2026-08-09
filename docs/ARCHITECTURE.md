@@ -439,11 +439,22 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `prMonitor.pollSeconds` cadence, diffs the merge-requirements checklist
 (checks, reviews, threads, mergeability, branch rules — composed in
 `pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
-the monitor's persisted baseline, and wakes the owning agent with a single
+the monitor's persisted **emit baseline** (the PR state as of the last
+delivered wake, or registration), and wakes the owning agent with a single
 consolidated notification once the PR has been quiet for
-`prMonitor.debounceSeconds` (with a max-latency bound so a never-quiet PR is
-late, never starved). Monitors persist in the SQLite `pr_monitor` table
-(migration `0085_pr_monitor.sql`, rows cascade with their agent session),
+`prMonitor.debounceSeconds` (with a max-latency bound so a never-quiet PR
+whose pending set stays continuously non-empty is late, never starved — a
+full revert empties the set and re-arms the clock, by design). The pending
+set is a coalesced net diff, recomputed
+against the emit baseline on every poll rather than accumulated as a log: a
+field that moved A→B→C reports one initial→final line, a reverted field drops
+out, and a PR that fully reverts within the debounce window empties the set —
+anchors reset, no wake sent. Each delivered wake advances the baseline to the
+delivered snapshot. Monitors persist in the SQLite `pr_monitor` table
+(migration `0085_pr_monitor.sql`, rows cascade with their agent session; the
+emit baseline column arrived in `0089_pr_monitor_baseline.sql`, whose
+backfill pairs with a rehydration path that delivers any pre-coalescing
+pending log as-is rather than letting the first recomputing poll drop it),
 survive daemon restarts via boot rehydration with catch-up delivery, and
 terminalize on merge/close with an immediate final wake (`completed` rows are
 retained so merged PRs stay visible). Store writes are guarded
