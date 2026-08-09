@@ -183,8 +183,9 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `.gitmodules` resolution) so the checkout is fully self-contained and the cache is
   always safe to delete. Network git here shells out to system `git` (fail-fast
   `GIT_TERMINAL_PROMPT=0`, wall-clock deadline kill) with any token offered through the
-  env-backed credential helper, never argv; the token propagates to submodule child
-  fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`.
+  env-backed credential helper, never argv; the helper config propagates to submodule
+  child fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`, the token only
+  via the inherited env var.
 - **Capability surface.** The root→root probe is cached per workspaces root by the
   shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
   `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
