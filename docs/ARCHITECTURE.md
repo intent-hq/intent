@@ -158,22 +158,34 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
   users and to recent-repo derivation; the module never reads config — the caller passes
   the cache root). `ensure_cached_repo` is the single entry point: it serializes callers
-  on a per-repo lock, then clones fresh (miss) or refreshes (`git fetch --prune`,
-  `remote set-head origin --auto` so an upstream default-branch change is re-resolved,
-  hard reset to that branch, then `git clean -fdx` so untracked pollution is never
-  byte-copied into hydrated checkouts). **Refresh never fails the flow** — any anomaly
+  on a per-repo lock, then clones fresh (miss; `--recurse-submodules`, so the cache
+  carries populated submodule work trees and their module git dirs) or refreshes
+  (`git fetch --prune`, `remote set-head origin --auto` so an upstream default-branch
+  change is re-resolved, hard reset to that branch, `submodule sync` + `submodule update
+  --init --recursive --force` so gitlink bumps, URL changes, and newly added submodules
+  are followed, then `git clean -ffdx` plus a per-submodule recursive clean so untracked
+  pollution — including orphaned submodule checkouts — is never byte-copied into
+  hydrated checkouts). **Refresh never fails the flow** — any anomaly
   (diverged history, corrupt object store, an interrupted prior clone, a vanished
   `origin/HEAD`, a mismatched `origin`) deletes the cache dir and re-clones; only a
   failed clone surfaces as an error. `intent-services` uses the cache to hydrate
   `workspace.create` when a `githubUrl` arrives without a `clonePath` (PROTOCOL §5.1):
   the checkout is always **standalone** — a CoW clone of the cache (`cow`) or a plain
   local `git clone` of it (`direct`) — never a linked worktree against the cache, whose
-  hard-reset/re-clone refresh would corrupt linked worktrees. Provisioning holds the
-  per-repo cache lock, and afterwards `origin` is retargeted at the real URL so the
-  checkout is fully self-contained and the cache is always safe to delete. Network git
-  here shells out to system `git` (fail-fast `GIT_TERMINAL_PROMPT=0`, wall-clock
-  deadline kill) with any token offered through the env-backed credential helper, never
-  argv.
+  hard-reset/re-clone refresh would corrupt linked worktrees. Both paths populate
+  submodule work trees from the cache's local module git dirs alone (the CoW byte copy
+  carries them; `direct` copies `.git/modules` before the update), and the populating
+  `submodule update` runs **strictly offline** (`--no-fetch`, every clone transport
+  refused): hydration never touches the network — a gitlink the cache does not hold
+  degrades to an unpopulated submodule with a warning, and no submodule anomaly ever
+  fails `workspace.create`. Provisioning holds the per-repo cache lock, and afterwards
+  `origin` is retargeted at the real URL (submodule URLs re-synced to their
+  `.gitmodules` resolution) so the checkout is fully self-contained and the cache is
+  always safe to delete. Network git here shells out to system `git` (fail-fast
+  `GIT_TERMINAL_PROMPT=0`, wall-clock deadline kill) with any token offered through the
+  env-backed credential helper, never argv; the helper config propagates to submodule
+  child fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`, the token only
+  via the inherited env var.
 - **Capability surface.** The root→root probe is cached per workspaces root by the
   shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
   `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
@@ -371,12 +383,17 @@ polling. The subsystem lives in `intent-services`
   behavior is unchanged) makes dispatch **non-terminal**: the run wakes the
   owner as usual, bumps `dispatch_count`, and re-arms the hook to `scheduled`
   with a fresh `next_run_at`, so it keeps running on its cadence until TTL
-  expiry, cancel, or eviction. The wake states the **dual fact** — the hook
-  fired, and it remains active until its TTL (naming `expiresAt`) with a
-  `ws.hook.cancel` pointer — replacing the one-shot "retired" note; a
-  dispatch landing at/after `expiresAt` still wins but terminalizes the hook
-  (dispatch wake, then the expiry notice), and keeps the one-shot phrasing so
-  the two notices cannot contradict each other. Both paths resolve and
+  expiry, cancel, or eviction. The re-armed wake's state note says the hook
+  remains active until its `expiresAt` with a `ws.hook.cancel` pointer —
+  replacing the one-shot retired-with-reschedule-pointer note — and dispatch
+  wakes carry the `hookStillActive` boolean in the `hook_wake`
+  messageMetadata (`true` only for the re-armed perpetual branch; absent on
+  non-dispatch wakes) so consumers need not parse the note text
+  ([intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027));
+  a dispatch landing at/after `expiresAt` still wins but terminalizes the
+  hook (dispatch wake, then the expiry notice), and keeps the one-shot
+  phrasing so the two notices cannot contradict each other. Both paths
+  resolve and
   persist the post-dispatch state before emitting `hook:run-completed` /
   `hook:dispatched`, so those payloads carry the real outcome. `perpetual`
   and `dispatch_count` persist as defaulted columns
@@ -445,7 +462,7 @@ Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
 (`deliver_completion_to_watches` in `lib.rs`, the completion-watch registry in
 `agent_subscriptions.rs`): an `agent:idle` only counts as the agent's
 completion — firing its watchers' deliver-once wakes and recording `after_all`
-group settlement — when the agent has genuinely settled. Three deferral
+group settlement — when the agent has genuinely settled. Four deferral
 classes gate this, all probed **live at delivery time** (never from emit-time
 event stamps):
 
@@ -454,35 +471,43 @@ event stamps):
   are exempt (group accounting must see every completion).
 - **Hook-waiting** — the agent owns active background hooks. Defers both
   watch delivery and grouped settlement records; TTL-bounded by hook expiry.
+- **PR-monitor-waiting** (unified external-wait; intentd#1002) — the agent
+  owns active PR monitors (§Centralized PR monitoring). Defers watch delivery
+  and grouped settlement records exactly like hook-waiting, but has **no
+  TTL** of its own (PR monitors don't expire) — it resolves only via the
+  monitor's own terminal transitions (completion, owner `ws.pr.unmonitor`,
+  external `prMonitor.cancel`, or restart rehydration), each of which
+  re-runs the redelivery backstop.
 - **Agent-waiting** (monorepo#1468) — the agent itself holds live outgoing
   completion watches on other, unsettled agents (ungrouped or grouped; a
   coordinator with an open delegation group is waiting on its children).
   Defers watch delivery and grouped settlement records, like hook-waiting.
 
-Two interim notions are deliberately split: `seal_interim` (queue/busy/hook)
-also blocks sealing the agent's own open `after_all` group, while
-agent-waiting does **not** — an `after_all` coordinator always holds grouped
-outgoing watches on its own children, so gating the seal on agent-waiting
-would deadlock every group. The waiting classification
-(`Services::agent_is_waiting_on_agents` / `classify_agent_waiting`) bakes in a
-**2-cycle deadlock guard**: a mutual watch pair whose both sides are idle is
-not a waiting reason (the pair delivers as before); deeper cycles (A→B→C→A)
-are an accepted limitation, deferring until an external event breaks the
-cycle. Never deferred by any class: `agent:failed` / `agent:deleted`, the
-immediate `reportToParent` wake, and the attention (blocker/discussion)
-fan-out.
+Two interim notions are deliberately split: `seal_interim`
+(queue/busy/hook/PR-monitor) also blocks sealing the agent's own open
+`after_all` group, while agent-waiting does **not** — an `after_all`
+coordinator always holds grouped outgoing watches on its own children, so
+gating the seal on agent-waiting would deadlock every group. The waiting
+classification (`Services::agent_is_waiting_on_agents` /
+`classify_agent_waiting`) bakes in a **2-cycle deadlock guard**: a mutual
+watch pair whose both sides are idle is not a waiting reason (the pair
+delivers as before); deeper cycles (A→B→C→A) are an accepted limitation,
+deferring until an external event breaks the cycle. Never deferred by any
+class: `agent:failed` / `agent:deleted`, the immediate `reportToParent`
+wake, and the attention (blocker/discussion) fan-out.
 
 Deferred idles record an interim-skip marker, and **redelivery backstops**
 re-run the deferred completion when the deferral reason disappears without a
 fresh idle: queue retraction/edit (queue interim), terminal hook transitions
-(hook-waiting), and — for agent-waiting — `agent.unwatch`,
-`agent.cancelSubscriptions`, and `after_all` group settlement, each of which
-may remove the agent's last outgoing watch. Restart paths share the same
-predicates: the startup watch reconcile, registration-time reconciliation
-(re-arming a watch on an already-idle target), and group rehydration all skip
-the synthetic completion for a deferred child — group rehydration via a
-durable variant that reads persisted `completion_watch` rows, since groups
-rehydrate before the in-memory watch registry loads.
+(hook-waiting), terminal PR-monitor transitions (PR-monitor-waiting), and —
+for agent-waiting — `agent.unwatch`, `agent.cancelSubscriptions`, and
+`after_all` group settlement, each of which may remove the agent's last
+outgoing watch. Restart paths share the same predicates: the startup watch
+reconcile, registration-time reconciliation (re-arming a watch on an
+already-idle target), and group rehydration all skip the synthetic
+completion for a deferred child — group rehydration via a durable variant
+that reads persisted `completion_watch` rows, since groups rehydrate before
+the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
