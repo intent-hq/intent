@@ -202,10 +202,18 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite
+test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextest)
 
+# Runs under nextest so local full-suite runs pick up the same
+# .config/nextest.toml protections CI uses (timing-serial test group,
+# retries, slow-timeout). nextest does not run doctests; the workspace has
+# none, so nothing is lost.
 test-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && cargo test --workspace
+	@command -v cargo-nextest >/dev/null 2>&1 || { \
+		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	cd $(INTENTD_DIR) && cargo nextest run --workspace
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
