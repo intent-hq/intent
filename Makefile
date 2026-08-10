@@ -75,7 +75,8 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
+	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
+	run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
 
 all: build
 
@@ -273,6 +274,38 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 			echo "[sweep-all] skipping $$dir (no target/ dir)"; \
 		fi; \
 	done
+
+# Optional: inherit non-secret provider choices from the packaged seat into an
+# empty $(DEV_DATA_DIR). Existing contents always win; missing prod config is a
+# no-op. Not wired into `dev` / `dev-daemon` — run explicitly when you want it:
+#   make seed-dev-providers
+#   make seed-dev-providers DEV_DATA_DIR=...
+seed-dev-providers: ## Seed provider prefs from packaged intentd into empty $(DEV_DATA_DIR)
+	@python3 scripts/seed_dev_providers.py --dev-data-dir "$(DEV_DATA_DIR)"
+
+# Optional: copy workspace rows from the packaged intentd SQLite DB into the
+# dev seat. Creates/migrates $(DEV_DATA_DIR)/intentd.db via `intentd doctor`
+# when missing, then inserts Active (default) workspace metadata only — not
+# agents, notes, messages, or assets. Skips ids already present; does not
+# touch the on-disk worktrees (paths point at the shared ~/intent/workspaces).
+# Not wired into `dev` / `dev-daemon` — run explicitly, ideally with the dev
+# daemon stopped so WAL/locking stays quiet:
+#   make seed-dev-workspaces
+#   make seed-dev-workspaces SEED_INCLUDE_ARCHIVED=1
+#   make seed-dev-workspaces SEED_SOURCE_DB=/path/to/intentd.db
+SEED_INCLUDE_ARCHIVED ?= 0
+seed-dev-workspaces: ensure-intentd-submodule ## Seed workspace rows from packaged intentd.db into $(DEV_DATA_DIR)
+	@mkdir -p "$(DEV_DATA_DIR)"
+	@if [ ! -f "$(DEV_DATA_DIR)/intentd.db" ]; then \
+		echo "[seed-dev-workspaces] initializing empty dev DB via intentd doctor..."; \
+		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
+			cargo run -q -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- doctor >/dev/null; \
+	fi
+	@if [ "$(SEED_INCLUDE_ARCHIVED)" = "1" ]; then \
+			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" --include-archived; \
+		else \
+			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)"; \
+		fi
 
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
