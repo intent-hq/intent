@@ -546,8 +546,10 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
 - **Sub-agent question gate — top-level-only `ws.app.question.ask`
   ([intentd#1063](https://github.com/intent-hq/intentd/pull/1063)).** The same
   three layers also enforce a caller-identity gate (not a settings toggle):
-  `WorkspaceMcpServer`/`WorkspaceHost` carry an `is_sub_agent` flag
-  (`with_sub_agent`), derived once at bridge creation in `agent_manager` from
+  `WorkspaceMcpServer` carries an `is_sub_agent` flag (`with_sub_agent`),
+  threaded into the workspace-host dispatch via
+  `make_workspace_host_for_bridge`, derived once at bridge creation in
+  `agent_manager` from
   the persisted session (`parent_agent_id.is_some() || is_background`; same
   spawn-time snapshot semantics as the toggle capture — `is_background` can
   flip via `agent.update`, but the bridge keeps its surface until the next
@@ -566,8 +568,8 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
   `prelude_for_bridge` / `make_workspace_host_for_bridge` entry points, so a
   sub-agent-owned hook gets the same pruning and denial as its owner's
   bridge. A genuinely disabled `structuredQuestions` toggle keeps the
-  settings error for every caller, and a top-level bridge with the toggle on
-  is byte-identical to the pre-gate assembly.
+  settings error for every top-level caller, and a top-level bridge with the
+  toggle on is byte-identical to the pre-gate assembly.
 - **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
   per-bridge description assembly carries one dynamic segment: each visible
   specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
