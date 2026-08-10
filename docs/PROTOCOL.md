@@ -2023,8 +2023,11 @@ automatic deliveries park in the agent's pending queue instead of starting a tur
 [intentd#965](https://github.com/intent-hq/intentd/pull/965) (within v6.0) the pendingness the
 hold tracks is **persisted**, not re-derived from the transcript tail — see the derivation below.
 Since [intentd#1063](https://github.com/intent-hq/intentd/pull/1063) (within v6.4)
-`ws.app.question.ask` is **top-level-only** (§7), so a **new** hold can only arise on a top-level
-agent; a marker persisted by a pre-gate sub-agent turn keeps holding until released as below.
+`ws.app.question.ask` is **top-level-only** (§7), so a **new** hold can only arise on an agent
+whose MCP bridge was created top-level — per the §7 spawn-time snapshot semantics, an agent
+flipped to background via `agent.update` after bridge creation keeps its question-enabled bridge
+(and can still arm a hold) until it respawns; a marker persisted by a pre-gate sub-agent turn
+keeps holding until released as below.
 
 **Derivation (persisted marker; within v6.0, [intentd#965](https://github.com/intent-hq/intentd/pull/965)).**
 The hold is `true` iff the session's persisted `pendingQuestionsMessageId` marker is set AND
