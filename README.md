@@ -84,7 +84,7 @@ cd monorepo
 git submodule update --init --recursive packages/intentd packages/cloudlands-fe
 
 make check   # cargo fmt --check + cargo clippy -- -D warnings
-make test    # cargo test --workspace
+make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
 ```
 

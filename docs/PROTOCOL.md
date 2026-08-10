@@ -1,6 +1,6 @@
-# Intent Backend — JSON-RPC Protocol v3.4
+# Intent Backend — JSON-RPC Protocol v6.3
 
-**Protocol Version:** `3.4`
+**Protocol Version:** `6.3`
 
 This document is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy below, and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -21,14 +21,13 @@ This document is the canonical wire contract between Intent clients (desktop, iO
 
 ## Protocol Version & Compatibility
 
-**Version:** `3.4`
+**Version:** `6.3`
 
-Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 3.2 is an **additive** minor bump over 3.1: it adds the execution-environment profile surface (§5.5b) — the `sandbox.profiles.list` / `sandbox.profiles.update` / `sandbox.options` router methods (daemon-global — no `workspaceId`), the BE-owned `sandbox.*` settings group (§5.12), and the `system.capabilities.microvmSupported` field (presence-detected like `cowSupported`; see the §5 fast-path notes). Version 3.3 is an **additive** minor bump over 3.2: it adds execution-environment **selection** at workspace creation (§5.1) — the optional `workspace.create` `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`, validated against the enabled `sandbox.*` profiles and host availability), the persisted `Workspace.executionEnvironment` field (also derived from the legacy `skipIsolation`/`workspace.cowIsolation` path when the param is omitted), and the structured `execution-environment-unavailable` (`-32602`) / `execution-environment-not-implemented` (`-32603`) `error.data` payloads (§9) — no method-catalog change. Version 3.4 is an **additive** minor bump over 3.3: it adds the `sandbox.image.check` router method (§5.5b) — a daemon-global dry-run validity check of a microVM guest-image reference (manifest fetch + optional pin verify + contract check; no rootfs download, no cache mutation) returning `{ valid, imageId?, version?, arch?, manifestSha256?, error? }` with fetch/validation failures as results rather than RPC errors, intended for settings UIs validating a `sandbox.microvm.image` override before persisting it.
-
+Version 2.1 was an **additive** minor bump over 2.0: it added the `pr.capabilities` router method and the provider capability gating described in §5.7. Version 2.2 is an **additive** minor bump over 2.1: it adds the `system.importLegacy` fast-path method (UDS-only — see the §5 fast-path catalog). Version 2.3 is an **additive** minor bump over 2.2: it adds the `system.capabilities` **router** method (available on both UDS and WSS — unlike the UDS-only `system.*` fast-path controls; see the §5 fast-path notes). Version 2.4 is an **additive** minor bump over 2.3: it adds the `github.repoConfig.get` router method (§5.27) — a remote repository's `.intent/config.json` fetched via the GitHub contents API without a clone. Version 2.5 is an **additive** minor bump over 2.4: it adds the `system.gitCredential` fast-path method (UDS-only — see the §5 fast-path catalog), the daemon-backed git-credential endpoint consumed by the `intentd git-credential` helper (monorepo#884), and the `unsloth.status` / `unsloth.stop` router methods (§5.37) — observability and control for the daemon-managed singleton Unsloth server (monorepo#878 follow-up). Version 2.6 is an **additive** minor bump over 2.5: it adds the `providers.catalog` router method (§5.38) — the static provider registry served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. Version 2.7 is an **additive** minor bump over 2.6: it adds the `workspace.getAutoCommit` / `workspace.setAutoCommit` router methods (§5.1) — the persisted per-workspace auto-commit override resolved against the global `git.autoCommit` setting. Version 2.8 is an **additive** minor bump over 2.7: it adds the `agent.dismissQuestions` router method and the derived **question hold** on automatic deliveries (§5.5, question hold; intentd#751) — held sends surface the additive `heldForQuestions: true` result field and queue entries surface the additive `interruptPriority?: true` wire field. Version 2.9 is an **additive** minor bump over 2.8: it adds the `stats.getRateHistory` router method (§5.39) — the global per-minute token-rate history behind the HUD TOK/MIN chart — and the optional `parentAgentId` field on `agentSummary.agents[]` entries (§5.1 `WorkspaceAgentInfo`) — the delegation parent already surfaced as `metadata.createdByAgentId` on full agent loads — so clients can rebuild the delegation tree from the summary alone. Version 2.10 is an **additive** minor bump over 2.9: it adds the background-hook management router methods `hook.list` / `hook.cancel` / `hook.runNow` (§5.40) and the `hook:*` event family (§6.5) — hook **scheduling** deliberately stays MCP-only (`ws.hook.schedule`, per the §6.8 principle: hooks are agent-authored background work; the FE reads, triggers, and cancels but never authors). No existing method changed shape in any of the 2.x bumps. Version 3.0 is a **breaking** major bump over 2.10: it **removes** the `pr.waitForChanges` router method (§5.7) — superseded by background hooks (§5.40), which watch PR conditions without holding a request open — and additively extends the Hook shape with `lastState?` plus the run-to-run `state` carry-over contract (§5.40). Version 3.1 is an **additive** minor bump over 3.0: it adds the hook TTL (§5.40) — the optional `ttlMs` schedule param (clamped to the 60-minute cap), the `expiresAt` field on the Hook shape, the new terminal `expired` state, and the `hook:expired` event in the `hook:*` family (§6.5); on expiry the owner is woken (`reason: "expired"`) so it can consciously reschedule. Within 3.1 (additive response fields, presence-detected per the convention below): idle-visibility for hook-owning agents — `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` (active = `scheduled`/`running` hooks; light metadata only, omitted when empty) on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5) — so a parent or client can tell a hook-waiting idle agent from a stalled one; completion-watch and `after_all` **settlement additionally defers** on such an idle (the hook-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active hooks is not its completion — watches stay armed and groups stay open until the child settles for real (bounded by the hook TTL), while `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred. Version 4.0 is a **breaking** major bump over 3.1: it changes the `terminal.list` response shape (§5.9/§5.13; monorepo#1334) — the bare terminals array is retired in favor of the `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` envelope, where `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal `daemonBootId` values across responses prove the same daemon lifetime — which makes an **empty `terminals` list authoritative** for that lifetime (the terminals are really gone, as opposed to a restarted daemon that lost its PTYs). No method-catalog change. The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally, so the agent-visible contract stays the bare terminals array (§6.8). Version 4.1 is an **additive** minor bump over 4.0: it adds the `agent.listActive` router method (§5.5, monorepo#1395) — the daemon-global mid-turn agent list served from the runtime manager's in-memory busy set (no persisted-session scan). Within 4.1 (no wire change): the `agent.list`/`agent.get` store reads behind the `AgentLite` projection skip the `system_prompt` column entirely, and concurrent disk-usage walks are globally serialized (max 1 at a time) — both internal perf changes (intentd#881). Version 4.2 is an **additive** minor bump over 4.1: it adds the `workspace.diskUsage` router method (§5.1, monorepo#1396) — the on-demand poll for a workspace's cached disk footprint — and **stops populating** `Workspace.diskUsage` on `workspace.list` / `workspace.get` rows (and the workspace-subscription emit path). The field was optional (`skip_serializing_if`), so existing row decoders remain valid — it is simply never present anymore; clients that need the footprint call `workspace.diskUsage` instead. Within 4.2 (behavior only, no wire change): `workspace.archive` gracefully interrupts the workspace's in-flight agent turns and cancels its ACTIVE background hooks, queued messages and wakes park while the workspace stays archived (drained again after `workspace.unarchive`), and `workspace.delete` eagerly aborts live hook scheduler tasks before the store cascade — [intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); see the §5.1 archive active-work teardown / delete cascade blocks and §5.40. Version 4.3 is an **additive** minor bump over 4.2: it adds the `voice.transcribe` router method (§5.41) — daemon-owned speech-to-text behind a pluggable provider seam (ElevenLabs Scribe / OpenAI), with the provider API keys resolved from the daemon's file-backed secret store via the `voice.*` settings paths (§5.12) so they never reach clients. Within 4.3 (no method-catalog or wire-shape change — the notice rides the existing opaque `messageMetadata` per-message payload and the v2.8 `interruptPriority?` queue flag): `agent.dismissQuestions` now **notifies the model** of the dismissal (intentd#892; §5.5 "Question hold", §7) — after the marker persist and hold release, a system-origin notice ("User dismissed your N questions without answering. Do not re-ask; continue with your best judgment.", count-aware wording) is delivered to the agent, carrying `messageMetadata { type: "questions_dismissed", source: "system", dismissedQuestionsMessageId }`, visible on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row; idle agents get it as an immediate turn, busy/still-held agents get it promoted to the queue head with `interruptPriority: true`; idempotent (no duplicate notice on re-dismiss) and fail-soft (a notice delivery error never fails the RPC). This supersedes the pre-#892 "the model is NOT notified" contract documented since v2.8. Also within 4.3 (behavior only, no wire change; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)): the **agent-waiting deferral** — an `agent:idle` for a child that itself holds live outgoing completion watches on other, unsettled agents is not its completion; completion-watch delivery and `after_all` settlement records defer exactly like the hook-waiting case (§Completion-watch persistence), with a 2-cycle deadlock guard and without deferring the child's own `after_all` group seal. Version 4.4 is an **additive**-style minor bump over 4.3: the `voice.transcribe` **no-API-key** failure (§5.41) now carries structured `error.data` — `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }` — instead of the former plain string (monorepo#1448; intentd#902), following the `{ code, detail }` data-code precedent (`CloneFailed`, monorepo#826; `base-ref-unresolvable`, monorepo#761). The envelope is otherwise unchanged (`-32603`, `"Internal error"`), and `data.detail` is **byte-identical** to the pre-4.4 plain-string `data`, so clients that sniffed the message keep working; every other `voice.transcribe` failure is untouched (provider HTTP failures keep plain-string `data`, the `-32602` caller errors are unchanged). Version 4.5 is an **additive** minor bump over 4.4: it adds the `agent.markSeen` router method (§5.5) — the per-conversation **seen marker**: persists `lastSeenMessageId` (the id of the newest transcript message the user has seen) in the agent session metadata (survives daemon restarts), advances **monotonically** (naming a message older than the current marker is a no-op returning the current marker), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (presence-detected additive response field, omitted when nothing was marked seen). Within 4.5 (additive metadata/event-payload fields, presence-detected per the convention below; [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919)): the **interruption-reason contract** (§7.2) — every interrupted turn's persisted marker row and interrupt terminal `agent:stream:end` carry the machine-readable `interruptReason` (`user_stop` / `preempted_by_message` / `daemon_shutdown` / `agent_stopped`), `interruptedBy` (`{ kind: "user" }` or `{ kind: "agent", agentId, name? }`) rides along only on `preempted_by_message`, and every interruption that found a registered live-turn slot now **always persists** the interrupted assistant marker row (empty `contentBlocks` included) so the interrupt `agent:stream:end` reliably carries `messageId` — superseding the STAB-114 zero-output no-op flush; the monorepo#1014 zero-output combined delivery is preserved by excluding the still-empty marker row from the turn-progress check. Version 5.0 is a **breaking** major bump over 4.5: it **removes** 11 caller-less `pr.*` router methods (§5.7) — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — left dead after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)). `pr.status` and `pr.refresh` survive unchanged, and the explicit-addressing `github.*` surface (§5.27) and the MCP `ws.pr.snapshot` binding (§5.7) are untouched. Calling a removed method now returns `-32601` (Method not found). Follows the v3.0 `pr.waitForChanges` precedent — a caller-less method is deleted outright with a major bump rather than deprecated in place ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506). Version 5.1 is an **additive** minor bump over 5.0: it adds the optional `workspaceId?` param on `voice.transcribe` (§5.41) — when present, the daemon injects the workspace's auto-derived vocabulary into the transcription bias, merged as user `voice.vocabulary` → workspace auto-terms → request `context.keyterms` under the existing dedup/cap rules (case-insensitive dedup, first spelling wins, ≤ 100 terms total, ≤ 50 chars each); an absent or stale `workspaceId` is tolerated (never an error), a non-string value is `-32602` — plus the `voice.getWorkspaceVocabulary` router method (§5.41), serving the derived terms for client-side (OS-engine) transcription and Settings previews, and the `voice.workspaceVocabulary.maxTerms` settings-catalog entry (§5.12; number, default 50, min 0, max 100, TOML-backed under `[voice]`; `0` disables derivation and injection). Within 5.1 (behavior only, no method-catalog or wire-shape change — `name` remains a required string; only the schedule-time validation cap changed): the `ws.hook.schedule` hook-name cap is raised from 19 to 50 characters, and the name is reframed as a short human-readable, user-facing description of what the hook is waiting for (§5.40; [intent-hq/intentd#929](https://github.com/intent-hq/intentd/pull/929)). Within 5.1 (additive response field, presence-detected per the convention below; no method-catalog change, so no version bump — [intent-hq/intentd#932](https://github.com/intent-hq/intentd/pull/932)): the script **was-running marker** (§5.8) — `ScriptRuntimeState` gains the optional `previouslyRunning: true` field (omitted when false), served by `script.status`, the runtime part of `script.list` entries, and `script:state` events (§6.5), marking a **service-mode** script that was running when the daemon last stopped so clients can re-render its tab as idle after a restart. The marker is persisted on the script row (workspace-scoped), set on a service script's successful start/restart, cleared on user stop / natural exit / `script.remove` (and reset by a `script.create` upsert), and survives repeated daemon restarts until the script is started or explicitly stopped; `script.stop` on a non-running marked script is the **dismiss** affordance — it clears the marker (best-effort row write, like every other marker transition), emits a `script:state` snapshot, and returns ok instead of erroring. Version 5.2 is an **additive** minor bump over 5.1: it adds the first-class **`reasoningEffort` session field** (§5.5) — the reasoning-effort level requested for an agent session (e.g. `low` / `medium` / `high` / `xhigh`), stored **as-is** (providers own the vocabulary; the daemon never normalizes it) and applied on the next prompt send. Accepted as an optional `reasoningEffort?` param on `agent.create` (empty/whitespace-only collapses to unset; a non-empty level is validated against the resolved model's cached `effortLevels` under the §5.11 "Delegation reasoning-effort resolution" contract — `-32602` naming the valid values, before any side effect, and pass-through when there is no cached evidence), patchable via the `agent.update` `changes` whitelist (`reasoningEffort` — JSON `null` or an empty string clears it; no validation at the patch seam), and served as `reasoningEffort?` on both the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` / `agent.get` / `agent.create` / `agent.update` results) projections — presence-detected additive response field, **omitted when unset** (absent, never `null`). Legacy codex sessions whose stored model id embedded the effort as a compound `{base}/{effort}` suffix (the pre-5.2 codex effort-variant catalog rows) are normalized by a one-time store migration: the id splits into the base model plus `reasoningEffort`, guarded on a known codex effort suffix AND codex evidence (provider column, `codex:` compound prefix, or a known effort-variant base model) so slash-bearing non-codex ids (e.g. HuggingFace-style unsloth ids) are untouched. The codex spawn path applies the session field as the `-c model_reasoning_effort=…` config override (an effort still embedded in a compound model id wins over the session field; the `CODEX_REASONING_EFFORT` env seam remains the last-resort fallback). No method-catalog change. Within 5.2 (behavior only, no method-catalog or wire-shape change — the wire `hook.cancel` params/result are untouched; [intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953), monorepo#1563): **hook cancel is ownership-scoped on the MCP side** (§5.40) — hooks are agent-owned, so `ws.hook.cancel` now only cancels the calling agent's own hooks (a non-owner cancel fails with a tool error naming the owner, leaving the hook active and emitting no `hook:cancelled`; the binding requires an agent caller context, mirroring `ws.hook.schedule`), while the caller-less wire/FE path still cancels any hook in the workspace and wakes its owner with the cancellation notice; an owner's own cancel still delivers no self-wake. Version 6.0 is a **breaking** major bump over 5.2: it **removes** the `event.recentFiles` and `event.directoryChanges` router methods (§5.10) — superseded end-to-end by the hybrid `file:*` event persistence introduced in the same change ([intent-hq/intentd#951](https://github.com/intent-hq/intentd/pull/951)). Calling either removed method now returns `-32601` (Method not found). Follows the v3.0 `pr.waitForChanges` and v5.0 `pr.*` removal precedents — a superseded method is deleted outright with a major bump rather than deprecated in place ([intent-hq/intentd#967](https://github.com/intent-hq/intentd/pull/967)). Within 6.0 (additive content-block kind and response field, presence-detected per the convention below; no method-catalog change, so no version bump — [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)): **streamed reasoning** — ACP `agent_thought_chunk` updates now materialize as `thinking` content blocks (`{ type: "thinking", id, text }`) interleaved in stream order on the persisted assistant message and streamed live with `blockType: "thinking"` on `chat:stream:delta` / the §7.1 block deltas under the same stable `{messageId}:{blockIndex}` ids (§7.1); the server-derived live previews (`lastAgentResponse` / `digest`) deliberately **exclude** reasoning text; and `TokenUsageTotals` (§5.23) gains the optional `thoughtTokens` counter — camelCase `u64`, **omitted when zero/absent** (never `0`, never `null`), aggregated with the same saturating sum as the other counters, so clients that predate the field see the previous shape byte-for-byte. Also within 6.0 (additive settings-catalog entry, no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970), [intent-hq/intentd#974](https://github.com/intent-hq/intentd/pull/974)): the `model.defaultReasoningEffort` setting (§5.12; string, default unset, TOML-backed under `[model]` as `defaultReasoningEffort`, stored as-is with a blank value reading as unset) — the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applied only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings default chain; unlike the caller- and specialist-supplied rungs it is **lenient** — a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log instead of raising `-32602`. Also within 6.0 (additive settings-catalog entry plus an MCP-only tool binding and prompt decoration — no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#971](https://github.com/intent-hq/intentd/pull/971)): the **per-turn agent state snapshot** (§5.5 "Per-turn agent state snapshot") — the `ws.agent.snapshot()` MCP binding serving the calling agent's own compact state digest (`time` plus the non-zero `hooks` / `agentWatches` / `queuedMessages` / `eventSubscriptions` / `runningSubAgents` / `numQuestionsAsked` / `pendingAttention` fields) and the `current ws.agent.snapshot() => {…}` line prefixed to every outbound turn prompt (skipped when the snapshot is trivial, never persisted), gated by the new `agentFeatures.stateSnapshot` setting (§5.12; boolean, default `true`, TOML-backed under `[agentFeatures]`) — the first `agentFeatures` toggle read **LIVE each turn** rather than captured at session creation, and one that gates the injection only: the MCP tool itself is never gated. Also within 6.0 (no method-catalog change, so no version bump — [intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): **auggie folded onto the generic provider path** — `host.checkAuggie` is now resolution-only (§5 fast-path notes), serving `{ available, path? }` with the `version` field **retired** and no `--version` spawn (the field was best-effort/optional and its only consumer, the FE's auggie version gate, was removed in the same change, [intent-hq/cloudlands-fe#824](https://github.com/intent-hq/cloudlands-fe/pull/824)); and the auggie auth probe behind `host.providerAuthStatus` is now the registry `auth_check_args` command `auggie token print` on the generic exit-code arm (stdout/stderr discarded — the command's output is the auth session secret), replacing the bespoke `auggie model list` output-sniffing probe. Also within 6.0 (additive Hook/event fields plus an MCP-only schedule param; no method-catalog change, so no version bump — [intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)): **perpetual background hooks** (§5.40) — the optional `perpetual` param on `ws.hook.schedule` (default `false`; omitting it — or passing `false` — reproduces the one-shot *behavioral* contract, where the first dispatch retires the hook) makes a dispatch **non-terminal**, re-arming the hook to `scheduled` with a fresh `nextRunAt` until TTL expiry, cancel, or eviction, so `hook:dispatched` may repeat for one hook (§6.5); a dispatching schedule-time validation run on a perpetual hook wakes the owner AND persists the active schedule (`{ hook, dispatched: true }`); the Hook shape and every `hook:*` payload gain the always-present `perpetual` (bool) and `dispatchCount` (fires so far for every hook created or updated from v6.0 on — only a perpetual hook ever exceeds 1) fields, backed by the additive defaulted migration `0084_hook_perpetual.sql`, which backfills pre-existing rows to `perpetual: false` / `dispatchCount: 0` unconditionally (so a retained pre-migration row that had already dispatched reads back `dispatchCount: 0` despite having fired); and a perpetual hook's TTL-expiry notice reports `"N runs, M dispatches"` instead of the one-shot `"N runs completed without a dispatch"`. Also within 6.0 (behavior only, no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#987](https://github.com/intent-hq/intentd/pull/987)): the `models.list` catalog cache (§5.30) **drops its 5-minute TTL** — cached entries are served indefinitely, and a probe now runs only on a true cache miss (first use, or a registry version-key mismatch after e.g. an adapter pin bump) or `forceRefresh: true` (the picker's refresh button); the 60-second negative cache, single-flight, cross-restart persistence, empty-success-never-cached, and stale last-good fallback (+ `warning`) semantics are unchanged. Version 6.1 is an **additive** minor bump over 6.0: it adds **centralized PR monitoring** ([intent-hq/intentd#989](https://github.com/intent-hq/intentd/pull/989)) — the `prMonitor.list` / `prMonitor.cancel` / `prMonitor.flush` router methods (§5.42; the FE read/cancel/flush surface over the agent-owned monitors), the `prMonitor:*` event category (§6.5: `registered` / `changed` / `emitted` / `completed` / `cancelled`), the additive `requirements` merge-requirements checklist on the MCP `ws.pr.snapshot` result (§5.7), the agent-side MCP bindings `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` (§5.42 — registration deliberately stays MCP-only per the §6.8 principle, like `ws.hook.schedule`), the `[prMonitor]` settings (`prMonitor.debounceSeconds` / `prMonitor.pollSeconds`, §5.12), and the `agentFeatures.prMonitor` toggle (§5.12) — 270 router methods, 307 total. Within 6.1 (additive field on the opaque `hook_wake` `messageMetadata` payload, presence-detected per the convention below; no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027)): hook **dispatch wakes** carry `hookStillActive` (§5.40) — present only on `reason: "dispatched"` wakes (`true` for a re-armed perpetual dispatch that keeps running on its cadence, `false` for a retiring one: a one-shot fire, or a perpetual fire landing at/after `expiresAt`), absent on `evicted` / `expired` / `cancelled` wakes — so consumers can tell the two dispatch outcomes apart without parsing the note text; the two dispatched-wake state notes are also shortened (retiring: `[This hook is now retired and will not run again — reschedule via ws.hook.schedule if still needed.]`; re-armed perpetual: `[This hook remains active until <expiresAt> — cancel via ws.hook.cancel when no longer needed.]`), with the evicted/expired/cancelled note wording unchanged. Version 6.2 is an **additive** minor bump over 6.1: it unifies the external-wait classification, extending the v3.1 hook-waiting idle-visibility/deferral machinery to PR monitors ([intent-hq/intentd#1002](https://github.com/intent-hq/intentd/pull/1002), [intent-hq/intentd#1007](https://github.com/intent-hq/intentd/pull/1007)). Within 6.2 (additive response fields, presence-detected per the convention below): `waitingOnPrMonitors?: [{ monitorId, repo, prNumber, title? }]` — light metadata for the agent's ACTIVE PR monitors (§5.42), **omitted when empty** — on the `agent:idle` event payload (§6.5), the `AgentLite` projection served by `agent.list`/`agent.get` (§5.5), and `agent.diagnostics` agent rows (also §5.5), mirroring `waitingOnHooks` exactly so a parent or client can tell a PR-monitor-waiting idle agent from a stalled one. Completion-watch and `after_all` **settlement additionally defers** on such an idle (the pr-monitor-waiting deferral, §Completion-watch persistence): an `agent:idle` while the child still owns active PR monitors is not its completion — watches stay armed and groups stay open until the child settles for real. Unlike hook-waiting, PR monitors carry **no TTL** (§5.42), so this deferral is unbounded in principle rather than time-bounded; it resolves instead via one of the monitor's own **terminal transitions** — the monitor completing (PR merged/closed), the owner's own `ws.pr.unmonitor`, an external (FE) `prMonitor.cancel`, or owner-gone daemon-restart rehydration reconciliation — each of which re-runs the deferred-completion redelivery as a backstop even when that transition delivers no wake of its own. `agent:failed` / `agent:deleted` and the attention/report immediate wakes are never deferred, matching the hook-waiting precedent. Also within 6.2 (additive optional request param, presence-detected per the convention below; no method-catalog change and no new capability to gate, so no version bump — [intent-hq/intentd#1012](https://github.com/intent-hq/intentd/pull/1012)): **daemon-side quick-action model resolution** for `agent.completeOnce` (§5.32) — the optional `type` hint (`commit` / `pr` / `review` / `fast`; free-form, never validated) keys `quickActions.typeOverrides` in a daemon-owned chain (explicit `model` → `quickActions.typeOverrides[type]` → `quickActions.defaultModel` → provider CLI default, provider-guarded with every drop falling through on a warn log). Omitting `type` reproduces the pre-#1012 request byte-for-byte, and an older daemon that ignores it still serves the completion on its own default, so the param needs no client-side gate — clients that care whether the settings were honored read the model off the completion result path as before. Also within 6.2 (additive error code and settings-catalog entry; no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#1013](https://github.com/intent-hq/intentd/pull/1013), [monorepo#1745](https://github.com/intent-hq/monorepo/issues/1745)): the **outstanding-RPC cap** — one daemon-wide limiter shared by the UDS and WSS listeners bounds the detached-spawn slow paths (`host.*`, `browser.*`, and the router dispatcher), sized by the new `server.maxOutstandingRpcs` setting (§5.12; number, default 256, `0` = unlimited, range 0..=100000, TOML-backed under `[server]`, read at boot so a change requires a daemon restart). At the cap an id-bearing request is rejected immediately with the new `-32011` "Server overloaded" error (§9) echoing its id instead of being queued, and a notification-shaped frame is dropped without a response; envelope validation runs before a permit is claimed, so `-32700`/`-32600` frames are answered inline exactly as before under load, and the inline fast paths are never gated. Also within 6.2 (behavior only, no method-catalog or wire-shape change, so no version bump — [intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036), [monorepo#1814](https://github.com/intent-hq/monorepo/issues/1814)): **active PR monitors fold into the workspace `displayStatus` running promotion** (§5.1 step 3, mirroring the intentd#856 active-hook fold) — an idle agent still watching a PR via `ws.pr.monitor` reads as `in_progress` — and every monitor lifecycle transition that can move the derivation recomputes-and-compares `workspace:displayStatus-changed` (§6.5): register (including the idempotent re-arm), the owner (`ws.pr.unmonitor`) and FE (`prMonitor.cancel`) cancels, the poll loop's terminal completion (PR merged/closed), and the boot-rehydration owner-gone cancels. Also within 6.2 (additive response field, presence-detected per the convention below; no method-catalog change, so no version bump — [intent-hq/intentd#1041](https://github.com/intent-hq/intentd/pull/1041)): `UsageTotals` (§5.36) gains the optional `thoughtTokens` counter — camelCase `u64`, **omitted when zero/absent** (never `0`, never `null`), following the §5.23 `TokenUsageTotals.thoughtTokens` precedent — present on `totals` and every `byModel` / `byProvider` / `byHourOfDay` / `byMonth` cell, persisted in the hourly buckets via the additive defaulted migration `0087_usage_stats_thought_tokens.sql` (pre-migration buckets read back as zero and keep omitting the field), and counted by the `byModel` / `byProvider` "total tokens" ranking, which now sums all five counters ([monorepo#1635](https://github.com/intent-hq/monorepo/issues/1635)). Also within 6.2 (additive response field, presence-detected per the convention below; no method-catalog change, so no version bump — [intent-hq/intentd#1039](https://github.com/intent-hq/intentd/pull/1039), [monorepo#1597](https://github.com/intent-hq/monorepo/issues/1597)): the `AgentLite` `lastMessageId?` field (§5.5) — the id of the session's newest **user/assistant** transcript message (system rows transparent, omitted when absent), denormalized at message-write time alongside the v2.x-era `lastMessageRole` and served on `agent.list` / `agent.get`; deliberately **no live-turn overlay** (unlike `lastMessageRole`), it is the structured signal behind the client-side per-agent **unread** derivation against the v4.5 `metadata.lastSeenMessageId` seen marker — equality semantics, absent marker counts as unread; see the §5.5 `agent.list` entry for the full contract. Also within 6.2 — and the change that carries the daemon's `6.2` protocol-constant bump ([intent-hq/intentd#1040](https://github.com/intent-hq/intentd/pull/1040)) — the method catalog gains the `github.branches.listCached` router method (§5.27): the **read-only, no-network** branch listing served from the daemon's local repo cache (`.repo-cache/<owner>/<repo>`) — `{ cached, branches, defaultBranch? }` (`defaultBranch` omitted when unresolvable), with a cold cache or foreign-origin repo folding gracefully to `{ cached: false, branches: [] }` (never an error; invalid `owner`/`repo` path segments → `-32602`) — consumed cached-first by the FE branch picker ([intent-hq/cloudlands-fe#860](https://github.com/intent-hq/cloudlands-fe/pull/860)) — 271 router methods, 308 total. Also within 6.2 (additive response fields, presence-detected per the convention below; no method-catalog change, so no version bump — [intent-hq/intentd#1044](https://github.com/intent-hq/intentd/pull/1044), [monorepo#1662](https://github.com/intent-hq/monorepo/issues/1662)): the **`pi` CLI verdict fields** on the `host.providerDiscovery` pi row (§5 fast-path notes) — the daemon probes the real `pi` CLI (the binary the pinned pi-acp adapter spawns) once per discovery call and folds the verdict into the pi row: always-present `cliCommand` / `cliResolved` / `cliVersionOk` / `cliRequirement` plus `cliResolvedPath?` / `cliVersion?` when known; a **missing** or **confirmed-too-old** CLI (< 0.80.4) marks the row unavailable (never via `gatedOff`) — `installed` forced to `false` plus an actionable `unavailableReason` naming the found version, the requirement, and the adapter pin — while an **inconclusive** probe is permissive (WARN log, never gated), and the same gate fails Pi agent creation fast with a clear error instead of a silent hang. Version 6.3 is an **additive** minor bump over 6.2: it adds the execution-environment surface — the `sandbox.profiles.list` / `sandbox.profiles.update` / `sandbox.options` / `sandbox.image.check` router methods (§5.5b, daemon-global — no `workspaceId`), the BE-owned `sandbox.*` settings group (§5.12), the `system.capabilities.microvmSupported` field (presence-detected like `cowSupported`; see the §5 fast-path notes), execution-environment **selection** at workspace creation (§5.1) — the optional `workspace.create` `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`, validated against the enabled `sandbox.*` profiles and host availability) with the persisted `Workspace.executionEnvironment` field (also derived from the legacy `skipIsolation`/`workspace.cowIsolation` path when the param is omitted; the persisted field is the **isolation authority** for every agent in the workspace, §5.5) — and the structured `execution-environment-unavailable` (`-32602`) / `execution-environment-not-implemented` (`-32603`) `error.data` payloads (§9) — 275 router methods, 312 total.
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "3.3", server: { protocolVersion: "3.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "3.3", ... }`
+- `client.hello` response: `{ protocolVersion: "6.3", server: { protocolVersion: "6.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "6.3", ... }`
 
 ### Compatibility Policy
 
@@ -52,7 +51,9 @@ wss://<host>:<port>/ws
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
 
-> Unix-domain socket: The daemon **always** serves a UDS transport as the local-first default; the TCP/WSS listener is optional and toggled at runtime by the `server.wsApi.enabled` setting (the former `server.listenMode` setting and `--listen` serve flag are retired). The JSON-RPC envelope, method catalog, and event semantics are **identical** across UDS and TCP/TLS — only the listener differs. `system.status` reports a derived `listenMode` field (`"both"` while the WSS listener is up, `"uds"` otherwise) reflecting the live listener state.
+> Local transport (UDS / Windows named pipe): The daemon **always** serves a local transport as the local-first default — a **Unix-domain socket** on Unix, a **named pipe** on Windows (where UDS is unavailable); the TCP/WSS listener is optional and toggled at runtime by the `server.wsApi.enabled` setting (the former `server.listenMode` setting and `--listen` serve flag are retired). The JSON-RPC envelope, method catalog, event semantics, and the newline-delimited framing are **identical** across UDS, the named pipe, and TCP/TLS — only the listener differs; everywhere this document says "UDS" the Windows named pipe is implied. `system.status` reports a derived `listenMode` field (`"both"` while the WSS listener is up, `"uds"` otherwise) reflecting the live listener state.
+>
+> **Windows pipe-name contract:** the pipe name is derived from the resolved socket path, so every data dir (prod vs dev vs tests) gets its own isolated pipe with no extra coordination state: `\\.\pipe\intentd-<hash16>`, where `<hash16>` = the first 16 hex chars of the SHA-256 over the UTF-8 bytes of the socket path normalized as absolute form, backslash separators, lowercased. Both sides implement the derivation independently and must agree byte-for-byte: `intent-transport`'s `pipe_name_for_socket_path` (daemon + `intentd` CLI client) and cloudlands-fe's `intentd-pipe-name.ts` (FE local connect), each pinned by mirrored unit-test vectors.
 
 ### 1.2 TLS & fingerprint pinning
 
@@ -67,7 +68,7 @@ The server generates a **self-signed** EC (P-256) certificate on first start, pe
 Inbound JSON-RPC messages are capped at **40 MiB** (`MAX_INBOUND_MESSAGE_BYTES = 40 * 1024 * 1024` in `intent-transport`). The limit is the same on both transports; the behavior on violation differs by framing:
 
 - **WSS:** the limit is enforced on both the WebSocket frame size and the total message size, and the connection is closed on violation. The daemon attempts to send a close frame with code **1009 (Message Too Big)** before terminating. Delivery of the close frame is best-effort: a single over-limit frame fails fast on the frame header (its payload is not buffered), and the connection teardown may race with the client's in-flight write, so the client may not observe the close frame; a fragmented message is rejected once its accumulated fragments exceed the cap (so up to the limit may be buffered before rejection), and in that case the client typically does receive the 1009 close frame.
-- **UDS:** the daemon replies with a `-32600` error (`id: null`, since the request was never parsed) and then closes the connection, without draining the rest of the oversized line.
+- **UDS / named pipe:** the daemon replies with a `-32600` error (`id: null`, since the request was never parsed) and then closes the connection, without draining the rest of the oversized line.
 
 Outbound (server→client) messages are capped at the same size (`MAX_OUTBOUND_MESSAGE_BYTES = MAX_INBOUND_MESSAGE_BYTES`, 40 MiB — intentd#743; an unscoped `git.diffs` on a huge dirty worktree once produced a 277 MiB message that HOL'd the connection writer for ~38s). Like the inbound cap, the limit applies to the **serialized JSON-RPC message**, before any WebSocket fragmentation — fragmenting a message cannot bypass it. The cap is enforced at two layers:
 
@@ -125,10 +126,10 @@ All application messages are **JSON-RPC 2.0** text frames. The handler is transp
 ### 3.3 Error response
 
 ```json
-{ "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "Missing required parameter: noteId" } }
+{ "jsonrpc": "2.0", "id": 1, "error": { "code": -32602, "message": "Missing required parameter: noteId", "data": { "code": "invalid-params" } } }
 ```
 
-`error.data` is optional and carries extra context — for `-32603` it may carry the original internal error message (not guaranteed: many shims pass the underlying message through as `message` directly — §9), and some errors attach a structured machine-readable payload (e.g. the `-32005` conflict object, or the `workspace.create` base-ref failure data). See §9 for the code table.
+`error.data` is optional and carries extra context — for `-32603` it may carry the original internal error message (not guaranteed: many shims pass the underlying message through as `message` directly — §9), and some errors attach a structured machine-readable payload (e.g. the `-32005` conflict object, or the `workspace.create` base-ref failure data). **All** `-32602` errors carry an `error.data.code` discriminator: `"not-found"` (the addressed entity does not exist) or `"invalid-params"` (bad/missing parameters), except errors that already attach a more specific code (`base-ref-unresolvable`, `path-invalid`, `destination-exists-non-empty`), which keep theirs. Fast-path connection-scope methods handled before the dispatcher (subscriptions, `drafts.*`, `forward.*`, `host.*`, `browser.exec`, `client.hello`) always emit `"invalid-params"`. **Client rule:** the deleted-entity flow requires `error.data.code === "not-found"`; only that code may be treated as "entity deleted" — see §9. See §9 for the code table.
 
 ### 3.4 Notifications (no response)
 
@@ -156,45 +157,46 @@ Most methods operate within a workspace. `workspaceId` is read from `params.work
 
 ## 5. Method Catalog
 
-The API exposes **311 dispatchable method names** across the following categories:
+The API exposes **312 dispatchable method names** across the following categories:
 
 - **Router methods:** 275 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 34 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 35 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods (dual-role, counted within the 311 dispatchable names: `browser.exec`, `host.openExternal`, `host.openInEditor`, `host.pickApplication` — see §5.9 and §5.14)
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 312 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 311 dispatchable names + 1 notification. The 4 reverse-RPC names are dual-role: they are dispatchable client→server methods AND are also issued daemon→client as reverse RPCs on remote connections.
+**Total:** 312 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.40) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.42) carry each method's parameter and result contract.
 
-### Router methods by namespace (278 total)
+### Router methods by namespace (275 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
-| agent | 39 | appendMessage, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listInterrupted, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| agent | 41 | appendMessage, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
-| event | 5 | agentActivity, directoryChanges, query, recentFiles, workspaceSummary |
+| event | 3 | agentActivity, query, workspaceSummary |
 | file | 9 | delete, exists, list, mkdir, read, rename, stat, tree, write |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
-| github | 23 | authStatus, branches.list, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| github | 24 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 11 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update |
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
-| pr | 13 | capabilities, createReview, getReviews, listCheckRuns, listComments, listReviewComments, merge, postComment, refresh, replyToReviewComment, resolveThread, status, updateBranch |
+| pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
+| prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
 | repo | 2 | list, remove |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
-| sandbox | 6 | cow.discard, cow.merge (§5.5a), image.check, options, profiles.list, profiles.update — the `sandbox.profiles.*` / `sandbox.options` / `sandbox.image.check` execution-environment profile surface is daemon-global (no `workspaceId`; §5.5b; v3.2) |
+| sandbox | 6 | cow.discard, cow.merge (§5.5a), image.check, options, profiles.list, profiles.update — the `sandbox.profiles.*` / `sandbox.options` / `sandbox.image.check` execution-environment profile surface is daemon-global (no `workspaceId`; §5.5b; v6.3) |
 | script | 9 | create, list, output, remove, restart, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
@@ -206,15 +208,16 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | task | 14 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
-| workspace | 25 | archive, cleanup, create, delete, detectProjectType, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, unarchive, update, updateContext, updateUiContext |
+| voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
+| workspace | 26 | archive, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-### Fast-path methods (34 total)
+### Fast-path methods (35 total)
 
-The following 34 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 35 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGit, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.shutdown, system.status
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
@@ -230,7 +233,7 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, �
 ```
 
 - `cowSupported?: boolean` — the cached CoW-reflink probe of the **workspaces root** filesystem, the same probe that fills `Workspace.cowSupported` (§5.1): `true`/`false` when the probe ran, **omitted** (never `null`) when it could not run — clients detect by presence. Because it is workspace-independent, the FE gates the `workspace.cowIsolation` opt-in toggle (§5.12) on this method rather than reading `cowSupported` off a hydrated workspace payload. **Temporarily locked to macOS**: on every other OS the daemon reports `false` without running the filesystem probe.
-- `microvmSupported?: boolean` *(v3.2)* — whether the host can run microVM agent sandboxes (§5.5b): a platform check (macOS: Apple Silicon only; other OSes: false — the Linux/KVM path is temporarily locked out) ANDed with `cowSupported` — microVM requires CoW because each agent VM mounts its own reflink clone via virtio-fs. `false` on an incapable platform regardless of the CoW probe; on a capable platform it mirrors `cowSupported` and is **omitted** exactly when that probe could not run (presence-detected like `cowSupported`).
+- `microvmSupported?: boolean` *(v6.3)* — whether the host can run microVM agent sandboxes (§5.5b): a platform check (macOS: Apple Silicon only; other OSes: false — the Linux/KVM path is temporarily locked out) ANDed with `cowSupported` — microVM requires CoW because each agent VM mounts its own reflink clone via virtio-fs. `false` on an incapable platform regardless of the CoW probe; on a capable platform it mirrors `cowSupported` and is **omitted** exactly when that probe could not run (presence-detected like `cowSupported`).
 
 #### `drafts.*` — draft attachments (additive, optional)
 
@@ -368,6 +371,21 @@ Regenerates the bearer token (invalidating the previous one for new connections)
 - Rotation is rejected with `-32602 "cannot rotate token: INTENTD_AUTH_TOKEN is set (token is fixed by env)"` when the token is pinned via the `INTENTD_AUTH_TOKEN` environment variable.
 - **Local-only:** same `-32001` gating as `server.pairingInfo`.
 
+#### `host.checkAuggie`
+
+Resolves the auggie CLI on the daemon host. **Resolution-only** ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): no `--version` spawn and no `version` field.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```json
+{ "available": true, "path": "/Users/me/.local/bin/auggie" }
+```
+
+- `available` is `true` **iff** a path resolved; `path` accompanies it and is **omitted** when `available` is `false`.
+- Resolution precedence is unchanged: the `context.auggiePath` setting (accepted when it is an existing file or symlink) → `providers.paths.auggie` → auggie auto-detection. Because nothing is executed, `available: true` means "the binary is where we would launch it from", not "the binary runs" — readiness and auth are separate concerns served by `host.providerDiscovery` and `host.providerAuthStatus` below.
+
 #### `host.providerAuthStatus`
 
 Daemon-owned provider auth probes: reports whether each CLI-backed agent provider is authenticated, so clients consume verdicts instead of orchestrating auth-check commands themselves.
@@ -388,6 +406,7 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 
 - Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`. With `providerId`, the `providers` array contains only that provider.
 - `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it. Since intentd#725, the install gate also honors **valid `providers.paths` overrides** for the providers whose gate command is the registry primary — `auggie`, `opencode`, `droid`, `grok` — so an override-only install is probed, while an invalid override contributes nothing and the gate falls through to auto-detection. For `opencode` / `droid` / `grok` a valid override is an absolute path to an executable file (the same validation as spawn resolution); `auggie`'s gate instead follows the `host.checkAuggie` precedence (`context.auggiePath` setting → `providers.paths.auggie`, with checkAuggie's file/symlink validation) before falling through to auggie auto-detection. `claude-code`, `codex`, and `pi` gate on the real `claude` / `codex` / `pi` CLIs — distinct from the adapter binaries their `providers.paths` keys describe — so adapter overrides are ignored for their gates.
+- **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie`, `claude-code`, and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok` and `opencode` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, and `opencode models` requires at least one `provider/model` line beyond exit 0), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
 
 #### `host.providerDiscovery`
@@ -422,6 +441,23 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
       "hasNpxFallback": false,
       "npxOnly": true,
       "npxPackage": "@agentclientprotocol/claude-agent-acp@1.2.3"  // optional — npx-only providers only (pinned spec)
+    },
+    {
+      "id": "pi",
+      "displayName": "Pi",
+      "command": "npx",
+      "installed": false,
+      "resolvedPath": "/usr/local/bin/npx",
+      "hasNpxFallback": false,
+      "npxOnly": true,
+      "npxPackage": "pi-acp@0.0.33",
+      "cliCommand": "pi",                          // pi row only — the probed `pi` CLI command
+      "cliResolved": true,
+      "cliResolvedPath": "/usr/local/bin/pi",      // optional — present only when the CLI resolved
+      "cliVersion": "0.79.0",                      // optional — present only when the version probe succeeded
+      "cliVersionOk": false,
+      "cliRequirement": "Pi CLI 0.80.4+",
+      "unavailableReason": "pi CLI 0.79.0 is too old — Pi CLI 0.80.4+ is required by pi-acp@0.0.33"  // optional — present iff the CLI gate fires
     }
   ],
   "npx": { "resolvedPath": "/usr/local/bin/npx", "version": "10.2.4", "versionOk": true }
@@ -435,6 +471,8 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
 - `gatedOff` (optional string, not shown above) is present — with a human-readable reason — only when the provider is gated off (e.g. a required env var or feature code is missing). Gated providers skip binary probing entirely, so a gated entry never carries `resolvedPath`, `secondaryCommand`, `secondaryResolved`, or `secondaryResolvedPath` and always reports `installed: false`.
 - `npxOnly` is `true` for providers with no local-binary path at all (claude-code): they are launched via `npx <package>`, `installed` reflects npx resolution, and `resolvedPath` (when present) is the npx binary. `npxPackage` (the pinned package spec) is present **iff** `npxOnly` is `true`.
 - `hasNpxFallback` is `true` for providers that prefer a local binary but can fall back to an npx-launched adapter when the binary is absent — so a `hasNpxFallback: true` provider with `installed: false` may still be usable if the `npx` probe below reports `versionOk: true`.
+- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These fields appear **only** on the pi row, and only when it is not `gatedOff` (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the human-readable requirement, `"Pi CLI 0.80.4+"`). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
+- **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.80.4+ is required by pi-acp@0.0.33"`). An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
 - `npx` reports the daemon's npx probe: `resolvedPath` is `null` when npx is not found; `version` is `null` when npx is missing **or** the version probe fails (a failed probe leaves `resolvedPath` set); `versionOk` is whether the resolved version meets the minimum requirement (`false` whenever `version` is `null`).
 
 ### Method aliases (2 total)
@@ -446,12 +484,12 @@ The daemon accepts these 2 alias forms and dispatches them to their canonical co
 
 ### Client-served reverse RPCs (4 total)
 
-These methods are client-callable triggers whose real work happens on the connected frontend. The daemon validates the envelope, then dispatches a reverse RPC back to the client with a synthetic `rev-<n>` request id and echoes the client's result back to the original caller. These 4 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections.
+Of these 4 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal` and `host.pickApplication` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the intent directly on the daemon host without a reverse dispatch (§5.14).
 
-- `browser.exec` — browser automation (Chrome DevTools) — §5.9
-- `host.openExternal` — open a URL in the default browser — §5.14
-- `host.openInEditor` — open a file or directory in the user's editor — §5.14
-- `host.pickApplication` — prompt the user to select an application — §5.14
+- `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role)
+- `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
+- `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
+- `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads (§5.19) plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -469,17 +507,18 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v3.3 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v6.3 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
-| workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
-| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). -32602 if not found. |
-| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). -32602 if not found. |
+| workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks are NOT resurrected (see the archive active-work teardown block below). -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
+| workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 
 ```json
 // → request
@@ -516,7 +555,8 @@ slugified `repositoryName` (basename fallback) — checked out on the workspace 
 `refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
 any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
 local state. The returned `Workspace` carries `worktreePath`, `baseCommitSha` (the
-checked-out tip), and `checkoutMode` (`"worktree"` here; see the CoW note below). An
+checked-out tip), and `checkoutMode` (`"worktree"` here; see the CoW and cache-hydration
+notes below). An
 unresolvable `baseRef` on a valid repo fails with `-32602` carrying the
 `base-ref-unresolvable` `error.data` payload (§9).
 Provisioning is skipped — prior row-only behavior — for `skipIsolation: true`
@@ -530,8 +570,10 @@ and the persisted column keeps its historical `skip_worktree` name
 
 **CoW checkout provisioning (`workspace.create`, new in intentd).** The
 `workspace.cowIsolation` setting (§5.12, boolean, default `false`) selects the checkout
-mode, persisted on the returned `Workspace` as `checkoutMode` (`"worktree" | "cow"`;
-omitted whenever provisioning was skipped per the conditions above). Off ⇒ the
+mode, persisted on the returned `Workspace` as `checkoutMode`
+(`"worktree" | "cow" | "direct"`; omitted whenever provisioning was skipped per the
+conditions above — see the cache-hydration and new-repository notes below for the
+`"direct"` producers). Off ⇒ the
 linked-worktree behavior above (`checkoutMode: "worktree"`). On ⇒ the daemon first
 probes CoW support from the repository directory to `<root>/<workspaceId>`: when
 supported, the checkout is a **standalone copy-on-write clone** of the whole repository
@@ -553,15 +595,47 @@ removed in the background as usual.
 **Duplication (`workspace.duplicate`).** Duplicating a local workspace off a local git
 repository provisions a fresh checkout for the copy at `<root>/<newId>/<repo-slug>` on a
 branch named for the new id (uniquified against the source repo's local and
-remote-tracking branches), using the **same decision matrix as `workspace.create`**:
-`workspace.cowIsolation` off ⇒ linked worktree (`checkoutMode: "worktree"`); on ⇒ CoW
-probe from the repository directory to `<root>/<newId>` — supported ⇒ standalone CoW
-clone (`checkoutMode: "cow"`), Unsupported/probe error ⇒ the duplicate **falls back to
-a linked worktree** with a logged warning (same fallback semantics as create).
-Provisioning is skipped for remote / skip-isolation sources and for a `repositoryPath`
-that is not a local git repository. An ordinary provisioning failure is logged and
+remote-tracking branches). The decision depends on whether the **source** checkout is
+standalone:
+
+- **Standalone source** (the source's own `checkoutMode` is `"cow"` or `"direct"`, which
+  includes every cache-hydrated workspace and an `isNewRepo` `direct` workspace): the
+  duplicate is **always standalone too, and never a linked worktree**. The clone source
+  is the source's **own checkout** (`worktreePath`, or `repositoryPath` when the
+  repository itself is the checkout), not the source's `repositoryPath`. A CoW probe from
+  that checkout to `<root>/<newId>` decides the mode: supported ⇒ CoW clone
+  (`checkoutMode: "cow"`); Unsupported ⇒ a **plain local `git clone`** of the source
+  checkout (`checkoutMode: "direct"`), and the same local-clone fallback is taken — with a
+  logged warning — on a probe error or when a CoW clone still reports Unsupported despite a
+  passing probe. A source checkout whose `.git` is a gitfile skips the probe and goes
+  straight to the local clone (also warned). `workspace.cowIsolation`
+  is **ignored** for standalone sources (parity with cache-hydrated create). Like a
+  hydrated create, the checkout *is* the repository: the duplicate persists
+  `repositoryPath` = its **own** checkout path, so nothing in the row references the source
+  workspace's directory. The `direct` local-clone path additionally **resolves `origin`**
+  (a CoW clone is a byte copy and keeps the source's `.git/config` verbatim): a network URL
+  and an absolute local path carry over as-is, a relative local path is absolutized against
+  the source repository so it still names the same upstream, and the remote is **removed**
+  when the source has no `origin` or when `origin` resolves to the source checkout itself.
+  The local-clone fallback carries **committed state only** —
+  uncommitted/untracked work in the source is not copied. Rationale
+  ([intent-hq/monorepo#1560](https://github.com/intent-hq/monorepo/issues/1560)): a linked
+  worktree rooted in a sibling workspace's checkout is orphaned when that workspace is
+  deleted (the checkout dir is detached), and deleting the duplicate would mutate the
+  source's checkout.
+- **Shared-checkout source** (no `checkoutMode` — a worktree-mode or shared workspace):
+  the **same decision matrix as `workspace.create`** applies against the source's
+  `repositoryPath` — `workspace.cowIsolation` off ⇒ linked worktree
+  (`checkoutMode: "worktree"`); on ⇒ CoW probe from the repository directory to
+  `<root>/<newId>` — supported ⇒ standalone CoW clone (`checkoutMode: "cow"`),
+  Unsupported/probe error ⇒ fall back to a linked worktree with a logged warning.
+
+Provisioning is skipped for remote / skip-isolation sources and when the resolved source
+directory is not a local git repository. An ordinary provisioning failure is logged and
 swallowed (FE parity — "continue without worktree"): the row persists without
-`worktreePath`/`checkoutMode`.
+`worktreePath`/`checkoutMode`. For a standalone source the inherited `repositoryPath` is
+also **cleared** in that case, so a checkout-less duplicate never points at the source
+workspace's directory.
 
 **`checkoutMode` is immutable.** `workspace.cowIsolation` is consulted **only** at
 provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
@@ -569,7 +643,7 @@ provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
 Toggling the setting later affects only subsequently created workspaces — existing
 checkouts are not converted.
 
-**Execution-environment selection (`workspace.create`, v3.3).** The optional
+**Execution-environment selection (`workspace.create`, v6.3).** The optional
 `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`) selects the
 workspace's execution environment explicitly, overriding the legacy
 `skipIsolation`/`workspace.cowIsolation` derivation. Validation runs up front (before any
@@ -605,7 +679,7 @@ log a warning and fall back to the shared workspace checkout (isolation is best-
 never spawn-blocking). Agents created before this behavior (no sandbox in a `cow`
 workspace) get their sandbox on their next spawn, cloned from the checkout's state at
 that point. Workspaces with `checkoutMode: "cow"` but **no persisted**
-`executionEnvironment` (rows created before v3.3 introduced the field) keep the
+`executionEnvironment` (rows created before v6.3 introduced the field) keep the
 delegate-only isolation model.
 The selection is persisted on the returned `Workspace` as `executionEnvironment`
 (lowercase on the wire, immutable like `checkoutMode`); when the param is **omitted**,
@@ -614,8 +688,60 @@ keep it unset unless explicitly selected; provisioned rows record `worktree` or 
 matching `checkoutMode`; pre-existing rows omit it). Idempotent replays (same
 `idempotencyKey`) return the original result without re-validating.
 
-**Clone orchestration (`workspace.create`).** When `githubUrl` is set and
-`repositoryPath` is not already a local git repository, the daemon clones the URL
+**Cache-hydrated creation (`workspace.create`, new in intentd —
+[intent-hq/intentd#944](https://github.com/intent-hq/intentd/pull/944)).** When
+`githubUrl` is set, `repositoryPath` is not already a local git repository, and the
+caller supplies **no** `clonePath`, the daemon provisions the workspace from a hidden,
+daemon-managed **repo cache** instead of cloning into `<workspaces_root>/clones/`. The
+cache lives at `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays
+invisible to users and to recent-repo derivation) and holds a read-only clone with the
+remote's default branch checked out. Flow:
+
+1. **Ensure the cache** — the only network-bound phase. Cache miss ⇒ full clone; cache
+   hit ⇒ `git fetch --prune origin`, `git remote set-head origin --auto` (a fetch alone
+   never re-resolves `origin/HEAD`, so an upstream default-branch change is picked up
+   here), a hard reset to that remote default branch, and `git clean -fdx` (a hard reset
+   alone leaves untracked pollution — e.g. from a process killed mid-checkout — that
+   would be byte-copied into every hydrated checkout).
+   **Refresh never fails the flow:** any anomaly (diverged history, corrupt object store,
+   an interrupted prior clone, a vanished `origin/HEAD`, or an `origin` that no longer
+   matches the requested URL) deletes the cache directory and re-clones from scratch.
+   Only a failed *clone* surfaces as an error. Concurrent creates for the same repo
+   serialize on a per-repo lock; different repos never contend.
+2. **Provision a standalone checkout** at `<root>/<workspaceId>/<repo-slug>` — the same
+   location a linked worktree would use, but **never a linked worktree against the
+   cache** (a cache refresh hard-resets/re-clones the cache directory, which would
+   corrupt linked worktrees). A CoW probe from the cache into `<root>/<workspaceId>`
+   decides the mode: supported ⇒ a copy-on-write clone of the cache
+   (`checkoutMode: "cow"`, same reflink primitives as the CoW note above); unsupported,
+   probe error, or a CoW clone that still reports Unsupported ⇒ a plain local
+   `git clone <cache-path>` (`checkoutMode: "direct"`). Provisioning runs under the
+   per-repo cache lock so a concurrent create's refresh cannot mutate the cache
+   mid-copy.
+3. **Detach from the cache.** `origin` is retargeted at the real GitHub URL (the checkout
+   never references the cache, so deleting the cache is always safe), the cache's
+   remote-tracking refs are copied in so any `baseRef` resolves, and the workspace
+   `branch` is created + checked out with the same `baseRef` resolution order as the
+   worktree path above.
+
+The workspace's `repositoryPath` **is** the checkout (`worktreePath` carries the same
+path), `baseCommitSha` is the checked-out tip, and `repositoryOwner`/`repositoryName`
+derive from the URL when the caller left them blank. Progress streams through the same
+`git:clone:progress` / `git:clone:done` frame shapes as a network clone (scoped to the
+newly minted `workspaceId`), but as **synthetic milestones** rather than parsed git
+percentages: `starting` at 0% before the cache ensure, `checkout` at 90% once the cache
+is ready, then the terminal `git:clone:done` — the local checkout provisioning that
+follows emits nothing, matching the legacy flow where worktree provisioning runs after
+`git:clone:done`. A cache failure fails the whole create pre-insert with the
+same clone-failure taxonomy as below (no row persisted, no `workspace:created`).
+Hydration is skipped — the legacy network clone below applies unchanged — for an
+explicit non-empty `clonePath`, a URL carrying no `owner/repo` pair, and creates that
+provision no checkout (`isRemote: true`, `skipIsolation`/`skipWorktree`, or a
+caller-supplied `worktreePath`).
+
+**Clone orchestration (`workspace.create`).** When `githubUrl` is set,
+`repositoryPath` is not already a local git repository, and cache hydration above does
+not apply, the daemon clones the URL
 before branch naming and worktree provisioning, reusing the streaming `git.clone`
 pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
 else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
@@ -671,6 +797,16 @@ a no-op; when `.git` exists but HEAD does not resolve (a previously failed init 
 directory half-initialized), the init re-runs and completes it. Absent/`false` preserves
 the legacy behavior: a non-git `repositoryPath` skips provisioning and persists a
 row-only workspace (worktree-provisioning skip conditions above).
+An `isNewRepo` create that would otherwise be provisioned persists
+**`checkoutMode: "direct"`** (intentd#944): no worktree and no CoW clone is provisioned —
+the workspace works directly in the initialized repository folder, where the workspace
+`branch` is created (at `baseRef` when supplied, else from `HEAD`) and checked out so
+agents land on `branch` as in every other checkout mode. `worktreePath` stays unset;
+`repositoryPath` is the checkout. The `"direct"` arm is gated on the same
+provisioning-skip conditions as the worktree path above — an `isNewRepo` create with
+`isRemote: true`, `skipIsolation`/`skipWorktree`, or a caller-supplied `worktreePath`
+still initializes the repository but persists **no** `checkoutMode` and creates no
+workspace branch.
 
 **Spec note seeding (`workspace.create`).** Every successful create seeds the well-known
 `spec` note in the new workspace (reference `notes.service.ts ensureSpecExists` parity):
@@ -729,6 +865,49 @@ asynchronously (fire-and-forget) but the create call is not idempotent unless a
 (carrying the originally minted `initialAgent.id`) without re-creating the
 session or re-delivering the prompt.
 
+**Archive active-work teardown (`workspace.archive` / `workspace.unarchive`)**
+*([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); behavior only,
+no wire-shape change).* Archiving stops the workspace's active work without destroying
+any of it — unlike the delete cascade below, nothing is deleted:
+
+- **In-flight agents are gracefully interrupted.** After the archived row is persisted
+  (so a concurrent queue-drain kick observes the flag and parks instead of respawning a
+  turn), the daemon sweeps every agent with an in-flight turn in the workspace through
+  the `agent.stop` keep-alive semantics (§5.5): the turn is cancelled over the wire, the
+  draining worker is aborted, and the terminal `agent:stream:end` is emitted with
+  `stopReason: "interrupted"` (§7). The provider child process, ACP session, session
+  rows, transcripts, completion watches, and pending message queues all **survive for
+  unarchive to resume**; no `agent:deleted` fires. Read-only wiring (no agent manager
+  attached) still archives without error.
+- **Queued messages and wakes park while archived.** Both gated delivery arms check the
+  archived flag: the automatic queue drain and wake delivery (hook wakes,
+  `agent.wakeOrCreate` context messages) refuse to start a turn in an archived
+  workspace — entries stay parked in the pending queue (still visible via
+  `agent.getQueue`, §5.5). Completion-watch wakes take a different arm
+  (`send_message`) that carries no archived gate — a watched child completing elsewhere
+  can still wake an idle parent in an archived workspace. The virtual chief workspace
+  skips the row read (never archived), and a row-lookup error fails open so a transient
+  store error cannot strand a queue. `workspace.unarchive` re-kicks the drain for every
+  workspace agent with ready-to-send work (the drain re-checks its own gates), so
+  parked queues deliver after unarchive without a manual kick.
+- **Active background hooks are cancelled.** Every ACTIVE (`scheduled`/`running`) hook
+  in the workspace (§5.40) goes through the `hook.cancel` machinery: scheduler task
+  aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5), and the
+  owner woken with an archive-specific notice — the wake itself parks behind the
+  archived gate above, so it queues at most and never starts a turn while archived.
+  Terminal hooks are untouched, and **unarchive does not resurrect cancelled hooks** —
+  the notice ("This hook was cancelled because its workspace was archived.") explains
+  why the watch stopped; the owner is expected to reschedule if the condition still
+  matters. Best-effort per hook: a store failure is logged and the sweep moves on
+  (archiving never fails because one hook row would not update).
+
+One residual race is a deliberate trade-off: a drain that read the workspace row before
+the archive persisted can claim the in-flight slot after the sweep's busy-list snapshot,
+spawning one stray turn the sweep misses — the window is a few statements wide, the
+stray turn runs to completion once, and every subsequent drain/wake parks behind the
+archived gates, so the sweep accepts it rather than adding a post-claim re-check to the
+hot drain path.
+
 **Delete cascade (`workspace.delete`).** Before the store cascade drops the
 workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
 per-session state so recreating a workspace with the same slug never surfaces ghost agents
@@ -754,7 +933,14 @@ whose workers are still draining or whose completion watches are still firing:
   workspace (in-memory entries and persisted `completion_watch` rows), so no
   watch can reference the deleted workspace as child afterwards. Each parent
   affected by the backstop sweep gets a refreshed `agent:subscriptions-changed`
-  (§6.5) so clients converge on the shrunken watch set without polling.
+  (§6.5) so clients converge on the shrunken watch set without polling;
+- eagerly abort the workspace's live background-hook scheduler tasks
+  ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896)): the store
+  cascade drops the hook rows themselves, but without this sweep a live task would only
+  exit lazily at its next tick (the pre-run re-read finds the row gone). Task-abort
+  only — no `hook:cancelled` is emitted and no owner wake fires (unlike the archive
+  cancel sweep above); best-effort: a hook-list failure is logged and skipped, leaving
+  the lazy next-tick exit.
 
 Best-effort teardown recovers from poisoned mutexes via `into_inner()` — this is
 the last chance to unlink the workspace-scoped state, so recovery beats a panic.
@@ -773,8 +959,12 @@ each with a dedicated change event (§6.5) that carries the new value:
   `workspace:activity-changed` (§6.5).
 - `attention` — **dismissible (blue dot).** A small flag raised by BE transitions, e.g.
   `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
-  clears it for all clients. Cleared via `workspace.dismissAttention` / `workspace.markSeen`;
-  surfaces via `workspace:attention-changed` (§6.5). This is shared BE state rather than
+  clears it for all clients. The two clears are **not** interchangeable (intentd#945):
+  `workspace.dismissAttention` retires the flag whatever its value, while
+  `workspace.markSeen` is **guarded on `unread`** — it clears the turn-end blue dot and
+  leaves a persistent `review_required` in place (see the attention-flag write guard under
+  the derived `displayStatus` block below). Both surface via
+  `workspace:attention-changed` (§6.5). This is shared BE state rather than
   per-client local state (the daemon is single-user in v1; per-viewer cursors are a future
   extension).
 
@@ -783,7 +973,7 @@ string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/typ
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `archivedAt`, `cowSupported`, `checkoutMode`,
-`executionEnvironment`, `diskUsage`, repository/worktree fields, …) are
+`executionEnvironment`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
@@ -818,18 +1008,25 @@ filesystem than the workspaces root (reflinks cannot cross filesystems) can stil
 `workspace.create` on the worktree-fallback path (`checkoutMode: "worktree"`, §5.1)
 even when `cowSupported` is `true`; `cowSupported` is a toggle-gating advisory, not a
 per-repository guarantee.
-`checkoutMode` (`"worktree" | "cow"`, lowercase on the wire) records how
-`workspace.create` provisioned this workspace's checkout (§5.1) and is omitted for rows
-without a daemon-provisioned checkout (skip-isolation/direct, remote, caller-supplied
-`worktreePath`, non-git repository paths, pre-existing rows).
+`checkoutMode` (`"worktree" | "cow" | "direct"`, lowercase on the wire) records how
+`workspace.create` provisioned this workspace's checkout (§5.1): `"worktree"` a linked
+worktree, `"cow"` a standalone copy-on-write clone, `"direct"` a standalone plain local
+clone (the cache-hydration fallback when CoW is unsupported) or an `isNewRepo`
+initialization working in the repository folder itself. It is omitted for rows
+without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
+`worktreePath`, non-git repository paths, pre-existing rows). `"cow"` and `"direct"` are
+both **standalone** repositories: `workspace.delete` skips the worktree-registration
+prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
+(§5.5).
 
-**`executionEnvironment` (v3.3).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
+**`executionEnvironment` (v6.3).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
 on the wire) — the execution environment selected at creation (§5.1
 execution-environment selection): the explicit `workspace.create` `executionEnvironment`
 param when supplied, else derived from the legacy provisioning outcome (`worktree`/`cow`
 matching `checkoutMode` on provisioned rows). Persisted and immutable like
-`checkoutMode`; omitted for pre-existing rows created before v3.3 and for
-legacy-path rows that skipped provisioning without an explicit selection.
+`checkoutMode`; omitted for pre-existing rows created before v6.3 and for
+legacy-path rows that skipped provisioning without an explicit selection. The persisted
+field is the **isolation authority** for every agent in the workspace (§5.5).
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon
@@ -895,12 +1092,23 @@ omitted** (see its bullet below):
   it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
   workspace payload.
 
-**Workspace disk usage (`diskUsage`, new in intentd).** Alongside the card aggregates, the
-`workspace.list` / `workspace.get` read paths enrich each `Workspace` with a **cached**
+**Workspace disk usage (`workspace.diskUsage`, on-demand since v4.2).** The **cached**
 whole-workspace disk footprint —
 `diskUsage: { bytes, fileCount, computedAt, breakdown: [{ name, bytes, fileCount }] }` —
-decoded as optional and **omitted when no computed value exists yet** (`skip_serializing_if`)
-rather than emitted as `null` (never persisted; in-memory cache only):
+is served exclusively by the dedicated `workspace.diskUsage` method (the §5.1 table above);
+since v4.2 the `workspace.list` / `workspace.get` read paths (and the workspace-subscription
+emit path) **never populate** `Workspace.diskUsage` (monorepo#1396 — recomputing/serving it
+on every hot list pass was needless enrichment weight; the field stays on the row shape as
+optional for decoder compatibility, it is simply never present). The method returns
+`{ diskUsage?, refreshing }`: `diskUsage` is **omitted when no computed value exists yet**
+(absent, never `null`; the value is never persisted — in-memory cache only), and
+`refreshing: true` reports an in-flight background walk (first-ever poll, or a stale entry
+being revalidated) so clients know to poll again shortly. Only rows with a daemon-managed
+directory qualify: remote / skip-isolation rows and the virtual Chief workspace — plus any
+row whose directory was never provisioned on disk — answer `{ refreshing: false }` with the
+field omitted, without touching the cache (a walk against a missing directory would fail
+and report `refreshing` forever-true). An unknown `workspaceId` is `-32602` (NotFound).
+Payload and cache semantics:
 
 - **Scope — the whole per-workspace folder.** The walk covers
   `<workspaces_root>/<workspaceId>` in its entirety: the repo checkout **plus** tool
@@ -922,57 +1130,98 @@ rather than emitted as `null` (never persisted; in-memory cache only):
 - `breakdown` carries one `{ name, bytes, fileCount }` entry per **top-level directory**
   of the workspace folder, sorted by `bytes` descending (name ascending on ties), plus a
   synthetic `"other"` bucket aggregating loose top-level files when non-empty.
-- **~60s cache / stale-while-revalidate / single-flight.** The walk never runs on the
-  request path. Each workspace's value has a ~60-second TTL: a fresh entry is served
-  as-is; an expired entry is served **immediately** while a single background walk
-  refreshes it for the next poll (stale-while-revalidate); refreshes are single-flight
-  per workspace, so concurrent `workspace.list` / `workspace.get` polls coalesce into one
-  walk. The first-ever poll finds no entry — the field is **omitted** and the computed
-  value backfills for the next poll. A failed walk keeps the last-good value (retried on
-  the next poll); a missing workspace directory simply never produces the field.
+- **~60s cache / stale-while-revalidate / single-flight / serialized walks.** The walk
+  never runs on the request path. Each workspace's value has a ~60-second TTL: a fresh
+  entry is served as-is with `refreshing: false`; an expired entry is served
+  **immediately** with `refreshing: true` while a single background walk refreshes it for
+  the next poll (stale-while-revalidate); refreshes are single-flight per workspace, so
+  concurrent `workspace.diskUsage` polls coalesce into one walk — and walks across
+  **different** workspaces are additionally globally serialized (max 1 concurrent walk,
+  intentd#881: usage is stale-while-revalidate and first paint omits it, so concurrent
+  full-tree walks only create disk contention). The first-ever poll finds no entry — the
+  field is **omitted**, `refreshing: true` is reported, and the computed value backfills
+  for the next poll. A failed walk keeps the last-good value (retried on the next poll).
 
 **Derived display status (`displayStatus`, new in intentd).** Alongside the card aggregates, the
 same `workspace.list` / `workspace.get` emit path — and the lite `workspace.subscribe` seq-0
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"not_started" | "in_progress" | "needs_attention" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
-(`"idle"` new in intentd#793, `"needs_attention"` new in intentd). The field is
+`"failed" | "blocked" | "needs_attention" | "in_progress" | "unread" | "not_started" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
+(`"idle"` new in intentd#793, `"needs_attention"` new in intentd; `"failed"` / `"blocked"` /
+`"unread"` new in intentd#945 — added without a protocol bump per the same precedent, since
+clients degrade unrecognized values neutrally, see below). The field is
 **authoritative**: clients render it as-is and
 perform **no local derivation** (ios#59, cloudlands-fe#560; the former FE sidebar
 running/idle grouping overlay is deleted, cloudlands-fe#578). It is decoded as optional and
 **omitted when `taskStats` is not computable** (`skip_serializing_if`, e.g. a transient
-notes-read failure) rather than emitted as `null` — when the field is absent or carries an
-unknown value, clients default the display to `not_started`. The derivation folds the
-needs-attention signal and live agent activity around the "current cycle" rollup
-(intentd#793):
+notes-read failure) rather than emitted as `null`. The two degenerate cases are **distinct**
+(ios#81): an **absent** field defaults the display to `not_started`, while a **present but
+unrecognized** wire value — a newer daemon emitting a variant this client build predates —
+degrades to a **neutral unknown** treatment (a placeholder rendering, sorted last), never to
+`not_started` or any other real status. Clients must not conflate the two: a value the build
+does not know is not evidence that work has not started. The derivation is the
+**canonical precedence** (intentd#945) — `failed` > `blocked` > `needs_attention` >
+`in_progress` (running agent) > `unread` (idle/terminal base only, step 6 — the active
+`pr_ready` / `pr_open` stages outrank it) > the PR/task rollup — folding the attention axes
+and live agent activity around the "current cycle" rollup:
 
-0. **Needs attention** *(new in intentd)* — any **top-level foreground** agent in the
-   workspace is waiting on the user → `needs_attention`, **unconditionally** (step 0
-   outranks everything, including the step-1 agent-running promotion). A session counts
-   when it is top-level foreground — no `parentAgentId`, not background (`isBackground`),
-   and not deleted — and either (a) carries a pending **attention request**
-   (`attentionRequestKind` = `discussion`/`blocker`, raised via
-   `ws.agent.requestDiscussion` / `ws.agent.reportBlocker`, §5.5) or (b) has **pending
-   structured questions** — the same question-hold derivation as §5.5 (first non-system
-   transcript tail is a question-bearing assistant message whose id differs from the
-   `dismissedQuestionsMessageId` marker). Child (`parentAgentId` set) and background
-   sessions never count: their attention surface is the parent/subscriber (the §5.5
-   attention-retire taxonomy). The cheap session-metadata check (attention requests) runs
-   over every candidate first; transcript tail reads (question holds) only happen when no
-   session already flagged. Best-effort: a store read failure fails open to `false` (the
-   question-hold derivation fails open itself), so list/get emission is never wedged and
-   attention is never fabricated.
-1. **Agent running / active hooks** — any agent running in the workspace (the same
-   signal behind `activity == "agent_running"`), **or** any ACTIVE (`scheduled`/`running`)
-   background hook owned by the workspace (§5.40) → `in_progress`, **unconditionally**
-   (overrides the PR stages and `complete`). The hook signal is a within-version
-   derivation refinement (intentd#856) folded into this step only: an idle agent still
-   watching via a background hook reads as active work; step 0 still outranks the
-   promotion, the `activity` field's semantics are unchanged, and there is no
-   wire-shape change. The hook lookup is best-effort — a store read failure fails open
-   to `false` (mirroring step 0), so emission is never wedged.
-2. **Not running** — the "current cycle" precedence:
+The attention axes (steps 0–2 and the step-6 `unread` promotion) are probed per workspace
+over its **top-level foreground** sessions — no `parentAgentId`, not background
+(`isBackground`), and not deleted — plus the dismissible workspace `attention` flag. Child
+and background sessions never count: their attention surface is the parent/subscriber (the
+§5.5 attention-retire taxonomy). Best-effort: a store read failure fails open to `false`
+(the question-hold derivation fails open itself), so list/get emission is never wedged and
+attention is never fabricated.
+
+0. **Failed** *(new in intentd#945)* — a top-level foreground agent is parked in `error`
+   (the mid-turn failure park, awaiting `agent.retry` — §5.5) → `failed`,
+   **unconditionally** (outranks everything, including `blocked` and the running
+   promotion): the workspace cannot make progress until the user redrives.
+1. **Blocked** *(new in intentd#945)* — a top-level pending **blocker** attention request
+   (`attentionRequestKind = "blocker"`, raised via `ws.agent.reportBlocker`, §5.5 — an
+   infrastructure/environment problem) → `blocked`. Previously folded into
+   `needs_attention`; now its own rung above it.
+2. **Needs attention** *(new in intentd)* — a top-level foreground agent is waiting on
+   the user → `needs_attention`. A session counts when it either (a) carries a pending
+   non-blocker **attention request** (`attentionRequestKind = "discussion"`, raised via
+   `ws.agent.requestDiscussion`, §5.5) or (b) has **pending structured questions** — the
+   same question-hold derivation as §5.5 (the persisted `pendingQuestionsMessageId` marker
+   is set and differs from the `dismissedQuestionsMessageId` marker; within v6.0 this is a
+   metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
+   §5.5 — and pendingness survives later user messages
+   and agent turns) — or (c, new in intentd#945) the workspace
+   `attention` flag reads `review_required`. The cheap session-metadata check (attention
+   requests) runs over every candidate first; question-hold probes only
+   happen when no session already flagged.
+3. **Agent running / active hooks / active PR monitors / child completion watches** —
+   any agent running in
+   the workspace (the same signal behind `activity == "agent_running"`), **or** any
+   ACTIVE (`scheduled`/`running`) background hook owned by the workspace (§5.40),
+   **or** any ACTIVE PR monitor owned by the workspace (§5.42),
+   **or** any **top-level** agent — the same session filter as the attention probe —
+   holding at least one active **child
+   completion watch** (§Completion-watch persistence: the `agent.delegate` auto-watch,
+   `after_all` delegation-group membership, explicit `ws.agent.watch` — one registry
+   covers all) → `in_progress`, **unconditionally over everything below** (overrides the
+   PR stages, `complete`, and the `unread` flag — active work masks the blue dot). The
+   hook signal is a within-version derivation refinement (intentd#856)
+   folded into this step only: an idle agent still watching via a background hook reads
+   as active work; steps 0–2 still outrank the promotion, the `activity` field's
+   semantics are unchanged, and there is no wire-shape change. The PR-monitor signal
+   ([intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036);
+   [monorepo#1814](https://github.com/intent-hq/monorepo/issues/1814)) is the same
+   within-version refinement pattern, folded into this step only: an idle agent still
+   watching a PR via `ws.pr.monitor` reads as active work (a SQL-filtered
+   active-monitor lookup, so the hot list/get enrichment cost is O(active monitors),
+   not O(monitor history)). The watch signal (new in
+   intentd) follows the same pattern — an idle coordinator still awaiting delegated
+   children reads as active work — and anchors in the **parent's home workspace** (the
+   watch's `parent_workspace_id`, where the wake lands), never the child's; watches
+   held by child or background agents never promote. All three lookups are best-effort —
+   a store read failure fails open to `false` (mirroring the attention probe), so
+   emission is never wedged.
+4. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
       recently updated open/draft entry in `pullRequests` — yields `pr_ready`
       (`mergeable == true` and not draft) or `pr_open`.
@@ -982,15 +1231,33 @@ needs-attention signal and live agent activity around the "current cycle" rollup
       entry) → `pr_merged`.
    4. **All tasks complete** (`total > 0`, `completed == total`) → `complete`; else
       `not_started`.
-3. **Idle demotion** — when not running and step 2 yields `in_progress` or `not_started`,
+5. **Idle demotion** — when not running and step 4 yields `in_progress` or `not_started`,
    the result is demoted to `idle`; the PR stages and `complete` pass through.
+6. **Unread promotion** *(new in intentd#945)* — the workspace `attention` flag at
+   `unread` (the server-owned turn-end blue dot, §5.1 `attention`) promotes an
+   **idle/terminal base only** — `idle` (including the demoted task stages), `complete`,
+   or `pr_merged` — to `unread`. It **never** masks the active PR stages
+   (`pr_ready` / `pr_open`) or anything above them: those are actionable state that
+   outranks the blue dot. `workspace.markSeen` retires the flag (and the status).
 
 `not_started` and a non-running `in_progress` are therefore **no longer emitted**; those enum
 variants are retained for wire back-compat (older daemons / client decode paths — they still
-decode, and clients keep their `not_started` default for absent/unknown values).
+decode, and clients keep their `not_started` default for an **absent** field; an unrecognized
+value takes the neutral unknown treatment instead).
 
-A merged PR in history never masks an open PR (step 2.1 scans `pullRequests` for open/draft
-entries) or open tasks (step 2.2 precedes the merged check). Transitions are pushed as
+**Attention-flag write guard (intentd#945).** The turn-end automatic `unread` raise fires
+only when a **top-level foreground** agent's queue drains (intentd#1021): child agents
+(`parent_agent_id` set) and background agents never raise it — their completions surface
+to their parent/coordinator, not the user. A `NotFound` session load (deleted agent)
+skips the raise too, while a genuine store error fails open (raise + warn). The raise is
+further guarded on the stored flag being `none`: it never downgrades a persistent
+`review_required` (no `workspace:attention-changed`, no spurious
+`needs_attention → unread` demotion in the rollup), and `workspace.markSeen` — guarded on
+`unread` — leaves `review_required` in place; only `workspace.dismissAttention` retires
+that flag (its documented contract).
+
+A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` for open/draft
+entries) or open tasks (step 4.2 precedes the merged check). Transitions are pushed as
 `workspace:displayStatus-changed` (§6.5), which since intentd#793 also fires on agent
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
@@ -999,18 +1266,45 @@ a PR stage, or `complete`), so the two stay in lockstep. Hook lifecycle transiti
 recompute-and-compare too (intentd#856): a hook **schedule** (a newly persisted active
 hook can promote) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
 both the synchronous ops and the spawned-task run paths — so the demotion emits when the
-workspace's last active hook settles. The step-0 attention signal adds
-its own recompute-and-compare points: an attention **raise** (`ws.agent.requestDiscussion`
+workspace's last active hook settles. PR-monitor lifecycle transitions
+recompute-and-compare too ([intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036)):
+a monitor **register** (`ws.pr.monitor` — a newly persisted active monitor can promote;
+the idempotent re-arm recomputes too, staying a silent no-op) and every monitor
+**settlement** — an owner cancel (`ws.pr.unmonitor`), an external FE cancel
+(`prMonitor.cancel`), the poll loop's terminal completion (PR merged/closed), and the
+boot-rehydration owner-gone cancels — so the demotion emits when the workspace's last
+active monitor settles. Completion-watch lifecycle transitions
+recompute-and-compare too (new in intentd), always in the parent's home workspace: a
+watch **register/adopt** (the `agent.delegate` auto-watch, `after_all` group enrollment,
+explicit `ws.agent.watch` — a newly armed watch can promote) and every watch
+**settlement** — the deliver-once retirement at the child's completion, `after_all`
+group settlement (the aggregated wake clearing the grouped watches), a scoped or
+unscoped `agent.cancelSubscriptions` / `ws.agent.unwatch` cancel, and the
+workspace-delete subscription sweeps (a deleted child's watches settling on surviving
+parents) — the same choke points that publish `agent:subscriptions-changed` (§6.5) — so
+the demotion emits when the parent's last active watch settles. The attention axes add
+their own recompute-and-compare points: an attention **raise** (`ws.agent.requestDiscussion`
 / `ws.agent.reportBlocker` — a child/background raise stays silent, since the derivation
 ignores those sessions and the transition-only emission suppresses the no-op) and its
 **retire** (the turn-begin clear on a qualifying delivery, §5.5); a **question-asking turn
-end** (the persisted assistant tail flips the question-hold derivation either way) and
-each question-hold **release** — a persisted user-origin row superseding the question tail
-(`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s
-regenerated message, a drained user-origin queue entry), `agent.dismissQuestions`, a
-later assistant tail, or a transcript mutation via `agent.appendMessage` /
-`agent.replaceMessages` (§5.5), which recompute-and-compare after persisting
-(intentd#833). The emit-path enrichment (both the enriched list/get path and the lite
+end** (the turn-end `pendingQuestionsMessageId` marker write arms the question-hold
+derivation) and each question-hold **release** — within v6.0 only a `question_answers`-tagged
+user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing
+assistant turn releases it (§5.5). The recompute-and-compare still runs after every
+user-row persist (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`,
+`agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry) and
+every transcript mutation via `agent.appendMessage` / `agent.replaceMessages` (§5.5), but
+an untagged row leaves the marker armed, so those paths now emit only when the derivation
+actually flipped (intentd#833; intentd#965). The intentd#945 axes add theirs: the mid-turn **Error park** (the
+`failed` promotion — the recompute runs as the park persists, so the turn-end debounce
+never hides it) and its retires — `agent.retry` (the redrive clears the park and the
+recompute runs before the worker starts, emitting `failed → in_progress` immediately)
+and the fresh-`agent.sendMessage` recovery path (recomputed after the user-row persist —
+the earlier turn-begin recompute still reads `error` and would stay silent); every
+workspace **attention-flag write** — `raise_attention` (the turn-end unread raise; a
+guarded no-op when the flag is not `none`), `workspace.dismissAttention`,
+`workspace.markSeen`, and a `workspace.update` carrying `attention`. The emit-path
+enrichment (both the enriched list/get path and the lite
 snapshot path) also seeds the in-memory baseline that event's recompute-and-compare runs
 against (a seed never emits).
 
@@ -1059,7 +1353,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | Method | Params | Result |
 | --- | --- | --- |
 | note.list | workspaceId (req) | { notes: NoteSummary[] } |
-| note.get | noteId (req) | { note: Note } — -32602 if not found |
+| note.get | noteId (req) | { note: Note } — -32602 with `error.data.code: "not-found"` if not found |
 | note.create | title (req), content?, tags?: string[], parentId? | { note: Note } |
 | note.update | noteId (req); content? or title?/tags? | { note } — content present → full setContent; else metadata update |
 | note.add | noteId (req), content (req), heading?, position?: "end" | "start" |
@@ -1278,9 +1572,9 @@ non-authoritative.
 | task.updateNoteStatus | noteId (req), status (req: not_started | waiting |
 | task.update | noteId (req), line (req,int), text?, status?, expected? | { ok, lineNumber, ... } (atomic single-line edit) |
 | task.getMyTask | taskNoteId (req) | task note w/ metadata, dependencies, acceptance criteria |
-| task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort? | { ok, ... } |
-| task.convertBlocks | noteId (req) | { convertedCount, createdNoteIds } |
-| task.createPrerequisite | dependentNoteId (req), title (req), content?, status? | { ok, ... } |
+| task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort? | { ok, ... } — always emits `note:updated` (the task-ness/metadata flip; without it a mark was invisible to note-driven refetches until the next unrelated note write). On a note that was **not** already a task it additionally emits `task:created` (§6.5). Re-marking an **existing** task is a status move instead: a real status change emits `task:status-changed` + `task:ready-tasks-changed` (the same pair `task.updateNoteStatus` publishes) and **no** `task:created`; re-marking at the same status emits neither |
+| task.convertBlocks | noteId (req) | { convertedCount, createdNoteIds } — each converted `@@@task` block becomes a child task note emitting `note:created` + `task:created` (§6.5) |
+| task.createPrerequisite | dependentNoteId (req), title (req), content?, status? | { ok, ... } — the prerequisite note is born a task, emitting `note:created` + `task:created` (§6.5) |
 | task.assignAgent | noteId (req), agentId (req), force?: bool | { ok, noteId, agentId } — **Occupancy guard (intentd#774):** assigning a NEW agent to a task that already has a live assigned agent — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.delegate`'s pre-gate, §5.5) — while the task status is not `complete`/`cancelled` is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally assign a second agent. Re-assigning an already-assigned agent stays idempotent-ok (no `force` needed); `force: true` bypasses the guard |
 
 ```json
@@ -1337,28 +1631,30 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, lastMessageRole?, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, attentionRequestKind?, attentionRequestReason?, attentionRequestTimestamp?, delegationDepth?, initialMessage? } (the P3-1.2b persistence-gap fields plus the pending attention request raised by `ws.agent.requestDiscussion` / `ws.agent.reportBlocker` — see the agent-attention-requests block below; omitted when absent). `metadata.isBackground` is served from the persisted session flag (harvested at spawn; G-A1/P3-1.2c) so rehydrated background agents stay background. **Live-turn preview overlay ([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786), read-path):** while a turn is in flight (`isResponding` with the live-turn slot held by a busy worker — orphan slots without a busy worker are ignored, the same gate as the STAB-125 turn-liveness reads below), `lastAgentResponse`/`digest` are derived from the live turn's streamed-so-far text (the same extraction that derives the persisted-preview fields from the newest assistant row) instead of the persisted last-assistant-message preview, with a **per-field** fallback: a turn that has streamed no text (or no digest) yet keeps the persisted value, so an early turn never blanks the previous preview. Mid-turn `lastAgentResponse` is additionally **clipped at the last completed newline** ([intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795)) — the still-streaming trailing partial line is excluded, and a turn with no completed line yet keeps the persisted value (same per-field fallback); `digest` derives from the **unclipped** text, since its capture requires the closing tag (an unclosed opener never leaks). Terminal `agent:stream:end` and persisted previews are unclipped (§7). Read-path only — nothing new is persisted, and idle agents serve the persisted newest-assistant-message preview exactly as before. **`lastMessageRole` ([intent-hq/intentd#807](https://github.com/intent-hq/intentd/pull/807), additive):** `"user" \| "assistant"` — the role of the session's newest user/assistant transcript message; system (and any other) rows are transparent, and the field is **omitted** when the transcript has neither (absent, never `null`) — the structured signal behind conversation previews (was the last word the user's or the agent's?). Denormalized onto the session row at message-write time, so the full-transcript and transcript-free projection paths serve the same value. **Live-turn read-path overlay:** while a turn is in flight the field flips to `"assistant"` exactly when the live `lastAgentResponse` overlay applies (the in-flight turn has derivable streamed text — same per-field gate as above), since the newest live message is then the assistant's; a turn that has not streamed derivable text yet serves the persisted value (typically `"user"`) unchanged. **Turn-liveness (STAB-125, additive):** `turnInFlight: bool` is `true` while an active worker is draining a `session/prompt` turn for the agent, and `lastStreamActivityAt` (RFC-3339; omitted when no turn is in flight) is the timestamp of the most recent stream event observed for that turn — a long turn persists nothing until it ends, so these let a poller tell a long-but-alive turn (timestamp advancing) from a wedged agent (timestamp pinned) while `lastActivity` stays pinned at the last persisted message. Caveat: the stamp only advances on stream traffic, so during a long silent tool call it pins too — combine with `isWaitingOnTool` to avoid misclassifying a healthy-but-slow tool turn. **Corrupted-session flag ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940), additive):** `sessionCorrupted: true` is present only when the session is parked in `error` (`status == "error"` is required for BOTH causes) AND either (a) the failure classifies as session-fatal (provider safety block, deterministic `session/prompt` 400 `invalidArgument` rejection) or (b) the consecutive-identical-failure streak hit the poisoned threshold — the structured signal that `agent.retry` will recreate the provider session (fresh `session/new`) instead of resuming, or that spawning a fresh agent is the right recovery. **Derived on emit** over the persisted (status, stop_reason) + the in-memory failure streak — never persisted as a column — and **omitted when `false`** (absent ≠ present-false on the wire). **Idle-visibility (within v3.1, additive):** `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` — light metadata for the agent's ACTIVE (`scheduled`/`running`) background hooks (§5.40), **omitted when empty** (absent, never `[]`; no code/lastState/logs), overlaid at serve time from one workspace-batched hook query (per-agent on `agent.get`) so clients can tell a hook-waiting idle agent from a stalled one; the same list is stamped on the `agent:idle` event payload and `agent.diagnostics` agent rows (§6.5) |
-| agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list (including the intentd#786 live-turn preview overlay on `lastAgentResponse`/`digest`, the intentd#807 `lastMessageRole?` field with its live-turn flip, the STAB-125 `turnInFlight`/`lastStreamActivityAt` turn-liveness fields, and the derived monorepo#940 `sessionCorrupted?` flag); -32602 if not found (falls back to disk) |
+| agent.list | workspaceId (req) | { agents: AgentLite[] } — messages/systemPrompt stripped; adds messageCount, lastAgentResponse, lastUserMessage, lastMessageRole?, digest, lastActivity, isStreaming/isProcessing/isResponding, session-level contextReferences?/imageBlocks? (persisted at spawn; omitted when absent), the session-discovered `effortLevels?` (the provider's `thought_level` values captured at the most recent session open — see "Session-discovered effort levels" below; omitted when the provider advertises none), and a nested metadata { isBackground, specialist?, createdByAgentId?, taskNoteId?, completionReport?, completionReportTimestamp?, attentionRequestKind?, attentionRequestReason?, attentionRequestTimestamp?, delegationDepth?, initialMessage?, dismissedQuestionsMessageId?, lastSeenMessageId? } (the P3-1.2b persistence-gap fields plus the pending attention request raised by `ws.agent.requestDiscussion` / `ws.agent.reportBlocker` — see the agent-attention-requests block below — plus the v2.8 question-dismissal marker and the v4.5 per-conversation seen marker, `agent.markSeen`; omitted when absent). `metadata.isBackground` is served from the persisted session flag (harvested at spawn; G-A1/P3-1.2c) so rehydrated background agents stay background. **Live-turn preview overlay ([intent-hq/intentd#786](https://github.com/intent-hq/intentd/pull/786), read-path):** while a turn is in flight (`isResponding` with the live-turn slot held by a busy worker — orphan slots without a busy worker are ignored, the same gate as the STAB-125 turn-liveness reads below), `lastAgentResponse`/`digest` are derived from the live turn's streamed-so-far text (the same extraction that derives the persisted-preview fields from the newest assistant row) instead of the persisted last-assistant-message preview, with a **per-field** fallback: a turn that has streamed no text (or no digest) yet keeps the persisted value, so an early turn never blanks the previous preview. Mid-turn `lastAgentResponse` is additionally **clipped at the last completed newline** ([intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795)) — the still-streaming trailing partial line is excluded, and a turn with no completed line yet keeps the persisted value (same per-field fallback); `digest` derives from the **unclipped** text, since its capture requires the closing tag (an unclosed opener never leaks). Terminal `agent:stream:end` and persisted previews are unclipped (§7). Read-path only — nothing new is persisted, and idle agents serve the persisted newest-assistant-message preview exactly as before. **`lastMessageRole` ([intent-hq/intentd#807](https://github.com/intent-hq/intentd/pull/807), additive):** `"user" \| "assistant"` — the role of the session's newest user/assistant transcript message; system (and any other) rows are transparent, and the field is **omitted** when the transcript has neither (absent, never `null`) — the structured signal behind conversation previews (was the last word the user's or the agent's?). Denormalized onto the session row at message-write time, so the full-transcript and transcript-free projection paths serve the same value. **Live-turn read-path overlay:** while a turn is in flight the field flips to `"assistant"` exactly when the live `lastAgentResponse` overlay applies (the in-flight turn has derivable streamed text — same per-field gate as above), since the newest live message is then the assistant's; a turn that has not streamed derivable text yet serves the persisted value (typically `"user"`) unchanged. **`lastMessageId` ([intent-hq/intentd#1039](https://github.com/intent-hq/intentd/pull/1039), additive; [monorepo#1597](https://github.com/intent-hq/monorepo/issues/1597)):** the row id of the session's newest **user/assistant** transcript message — the same row whose role `lastMessageRole` reports, with the same transparency rule (system and any other rows are transparent) — and the field is **omitted** when the transcript has no user/assistant message (absent, never `null`). Denormalized onto the session row at message-write time alongside `lastMessageRole` (migration `0088_agent_session_last_message_id.sql`, one-time backfill from the newest user/assistant row; a NULL column degrades to omission without in-place repair and converges on the next user/assistant append), so the full-transcript and transcript-free projection paths serve the same value with no transcript hydration. **NO live-turn overlay** — deliberately unlike `lastMessageRole`: a streaming assistant message has no persisted row id yet, so mid-turn the field keeps naming the last persisted user/assistant row while `lastMessageRole` may already have flipped to `"assistant"` — the pair is NOT mutually consistent mid-turn. That staleness is acceptable by design: clients rank a running turn (`isResponding` / `turnInFlight`) above unread, so the field only needs to be right at rest. **Seen-marker comparison (equality semantics):** the intended client-side per-agent **unread** derivation against the v4.5 `metadata.lastSeenMessageId` seen marker (`agent.markSeen`, below) is `hasUnread = lastMessageRole === "assistant" && lastMessageId != null && lastMessageId !== metadata.lastSeenMessageId` — an **absent marker counts as unread**, and an absent `lastMessageId` (older daemon) derives `false` so pre-existing client heuristics keep working. Caveat: the seen marker names "the newest transcript message the user has seen", which can be a **system/tool row id** that `lastMessageId` never equals — a naive equality check against such a marker can stick unread forever. Clients should therefore prefer passing user/assistant row ids to `agent.markSeen` — equality is the ONLY sound comparison. Id ordering is deliberately NOT a fallback: message ids are not uniformly UUIDv7 (server-minted user rows are `user-msg-{uuid}`, and `agent.sendMessage` accepts arbitrary client-supplied `messageId` values), and even among v7 ids mint time is not persist order (an assistant id is minted at turn start but persisted at turn end, so a mid-turn system row's persist-time id can out-sort it) — use the transcript `seq`/position where ordering is needed, never the id. **Turn-liveness (STAB-125, additive):** `turnInFlight: bool` is `true` while an active worker is draining a `session/prompt` turn for the agent, and `lastStreamActivityAt` (RFC-3339; omitted when no turn is in flight) is the timestamp of the most recent stream event observed for that turn — a long turn persists nothing until it ends, so these let a poller tell a long-but-alive turn (timestamp advancing) from a wedged agent (timestamp pinned) while `lastActivity` stays pinned at the last persisted message. Caveat: the stamp only advances on stream traffic, so during a long silent tool call it pins too — combine with `isWaitingOnTool` to avoid misclassifying a healthy-but-slow tool turn. **Corrupted-session flag ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940), additive):** `sessionCorrupted: true` is present only when the session is parked in `error` (`status == "error"` is required for BOTH causes) AND either (a) the failure classifies as session-fatal (provider safety block, deterministic `session/prompt` 400 `invalidArgument` rejection) or (b) the consecutive-identical-failure streak hit the poisoned threshold — the structured signal that `agent.retry` will recreate the provider session (fresh `session/new`) instead of resuming, or that spawning a fresh agent is the right recovery. **Derived on emit** over the persisted (status, stop_reason) + the in-memory failure streak — never persisted as a column — and **omitted when `false`** (absent ≠ present-false on the wire). **Idle-visibility (within v3.1, additive):** `waitingOnHooks?: [{ hookId, name, nextRunAt?, expiresAt? }]` — light metadata for the agent's ACTIVE (`scheduled`/`running`) background hooks (§5.40), **omitted when empty** (absent, never `[]`; no code/lastState/logs), overlaid at serve time from one workspace-batched hook query (per-agent on `agent.get`) so clients can tell a hook-waiting idle agent from a stalled one; the same list is stamped on the `agent:idle` event payload and `agent.diagnostics` agent rows (§6.5). **Idle-visibility, unified external-wait (within v6.2, additive):** `waitingOnPrMonitors?: [{ monitorId, repo, prNumber, title? }]` — the same light-metadata treatment for the agent's ACTIVE PR monitors (§5.42), **omitted when empty**, overlaid at serve time from one workspace-batched monitor query (per-agent on `agent.get`), mirroring `waitingOnHooks` field-for-field; also stamped on `agent:idle` and `agent.diagnostics` agent rows |
+| agent.listActive *(v4.1)* | — (daemon-global; accepts an empty params object, no `workspaceId`) | { streams: [{ agentId, sessionId, workspaceId, startTime }] } — the daemon-global list of **mid-turn** agents, served from the runtime manager's in-memory busy set (never a persisted-workspace/session scan; monorepo#1395 — the cheap poll behind "which agents are streaming right now?"). `sessionId` mirrors `agentId` (one session per agent). `startTime` is **epoch milliseconds** (i64, not RFC-3339): derived from the session's `updated_at`, which the turn-claim (`try_begin`) touches when the Active transition persists — so it approximates the current turn's start without a dedicated column (claim-time semantics; the wire name is part of the 4.1 contract). Entries are sorted by `agentId`; a busy agent whose session row is gone (e.g. a concurrent `agent.delete` mid-turn) is skipped rather than failing the response. `{ "streams": [] }` when no manager is attached or nothing is mid-turn. |
+| agent.get | agentId (req), workspaceId? | { agent: AgentLite } — same projection as agent.list (including the intentd#786 live-turn preview overlay on `lastAgentResponse`/`digest`, the intentd#807 `lastMessageRole?` field with its live-turn flip, the intentd#1039 `lastMessageId?` field (deliberately no live-turn overlay), the STAB-125 `turnInFlight`/`lastStreamActivityAt` turn-liveness fields, the derived monorepo#940 `sessionCorrupted?` flag, and the session-discovered `effortLevels?`); -32602 with `error.data.code: "not-found"` if not found (falls back to disk) |
 | agent.getConversation | agentId (req), limit?: number, nextToken?: string, aroundMessageId?: string, workspaceId? | { agentId, messages, truncated, totalMessages, nextToken, turnInFlight, lastStreamActivityAt } (capped to most-recent limit; `nextToken` is the opaque cursor for the next older page — `null` when no more history remains, non-null iff `truncated` is `true`; pass it back as the `nextToken` input to fetch the next page). **Seek (`aroundMessageId`, additive):** when present it takes precedence over any token and resolves to the page **containing** that message — half the (clamped) page budget goes to rows older than the target and the rest to the target and newer rows, clamped at either edge so the page stays full whenever the transcript has ≥ `limit` rows. An unknown message id is rejected with `-32602` naming the id (`unknown message id: <id>`). Seek pages — and the forward continuations minted from them — additionally carry `prevToken`: an opaque **forward** cursor that walks newer toward the live tail (`null` once the newest message has been returned); pass its value back as the `nextToken` input to fetch the next newer page. Their `nextToken` stays the standard backward cursor, so older continuation is ordinary paging (and `truncated` remains tied to older history alone). Both cursors index from the oldest end, so both are append-stable. Absent the param (and any seek-minted forward token), the response is **byte-identical** to before — the `prevToken` key is never added on legacy backward pages. `turnInFlight`/`lastStreamActivityAt` are the STAB-125 turn-liveness fields (same semantics as `agent.get`; here `lastStreamActivityAt` is always present and `null` when no turn is in flight — a deliberate surface asymmetry with the `AgentLite` projection of `agent.list`/`agent.get`, which **omits** the field instead) so a conversation read mid-turn — when nothing has persisted yet — is distinguishable from a wedged agent. **Serve-time block ids ([monorepo#1114](https://github.com/intent-hq/monorepo/issues/1114), [intent-hq/intentd#781](https://github.com/intent-hq/intentd/pull/781)):** every served content block carries an `id` — a block persisted id-less (non-assistant rows: `user`/`system`/`tool`) is stamped with the stable synthetic `{messageId}:{index}` (the row id + the block's 0-based index in the served array, stamped after the anonymous-tool-block strip) at serve time; assistant blocks always persist with ids, so the pass is a no-op for them. Serve-time only — stored rows are untouched, reads stay idempotent, no migration. Because the §7.1 seq-0 chat snapshot and the delta path's re-read both go through this method, snapshots, `agent.getConversation`, and §7.1 deltas agree byte-for-byte on block identity |
-| agent.create | workspaceId (req), name?, nameExplicitlySet?: bool, model?, specialistId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, isBackground? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. The agent's id is **server-assigned**: the daemon always mints a fresh `agent-{uuid}`, and a request carrying `agentId` is rejected with `-32602` ("agent IDs are server-assigned and the field must be omitted") before any side effect; an `idempotencyKey` replay returns the stored result carrying the originally minted id. `provider` persists on the session; both the resolved provider (the explicit `provider` param or, when absent, the provider prefix derived from a compound `model` id) **and** — when the resolved model is a compound id (`provider:model`) — the model's provider prefix (validated even alongside a valid explicit `provider`, since the spawn path gives the model prefix precedence; a plain or absent `model` carries no prefix and adds no extra validation) must name a registered ACP provider: an unknown id is rejected with `-32602` (`agent.create: unknown provider: <id> (known providers: ...)`) **before any side effect** (no session row is persisted, no default-provider fallback occurs). An absent provider (defaulting) remains valid. A **bare** `model` (no `:` prefix) supplied by the client is additionally checked for ownership: evidence is the static model catalog **unioned with the daemon's cached dynamic catalogs** (the in-memory last-good `models.list` entries under each provider's current registry version key, §5.30 — read-only, never a live probe). A static-tier claim by another provider rejects with `-32602` (`agent.create: model <id> does not belong to provider <p> (providers with this model: ...)`) before any side effect, unless the effective provider (explicit `provider` param or the default) itself claims the id (static or cached). A cached-catalog claim by another provider rejects only when the effective provider's ownership is affirmatively disproven — no static claim AND its own cached catalog exists but lacks the id; with no cached entry for the effective provider (cold start) the bare id passes — absence of evidence is not a mismatch. Bare ids with no ownership evidence anywhere pass unchanged, and the literal id `"default"` is a CLI-default sentinel that passes for every provider. A mismatched bare model arriving from the **settings chain** (global default / specialist frontmatter) rather than the client is not rejected — it falls back to the provider's CLI default (`session.model` stays unset) with a daemon warn log. **Name default (specialist-derived).** When `name` is omitted but a specialist id is supplied, the agent's name defaults to the specialist's resolved display name (frontmatter `name`, 3-tier project > user > bundled — e.g. "Coordinator" for `spec-writer`); an unknown specialist or a resolution failure never fails the create — the name falls back to the generated `Agent {6-hex}` placeholder. The same derivation applies to `workspace.create`'s `initialAgent` (§5.1). `nameExplicitlySet` controls the persisted rename-guard flag: `false` marks a supplied `name` as a non-explicit placeholder so the agent's guarded opening-turn self-rename (`agent.rename` with `skipIfExplicitlySet: true`) still applies. The flag is honored independently of `name` — supplied without a `name`, it applies to the server-generated placeholder name (`nameExplicitlySet: true` with no `name` persists the guard on the placeholder). Omitted or JSON `null` both read as absent and keep the default (`true` whenever a `name` is supplied **or** a specialist-derived default name resolved — the derived default behaves like a client-supplied explicit name, matching the desktop FE which resolves it client-side; `false` otherwise, including the `Agent {6-hex}` fallback); any other non-boolean value is rejected with `-32602` ("nameExplicitlySet must be a boolean") — `null` is never rejected. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b — plus `isBackground`, G-A1/P3-1.2c) with the top-level `contextReferences`/`imageBlocks`/`isBackground` params winning over the `metadata` copies; `isBackground` defaults to `false` when absent from both. `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
-| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, behaviorPrompt?, waitMode?, skipAutoCommit?, isolation?, force?: bool, mergeOnTurnEnd?: bool, vmResources?: `{ vcpus?, memMib? }`) | `{ ok: true, agentId, name, effectiveIsolation? }` — the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b); delegated children always persist `isBackground: true` (matching the TS `DelegateTaskTool`; G-A1/P3-1.2c). **Occupancy guard (intentd#774).** A task note that already has a live assigned agent cannot be silently double-delegated: when the target task's newest assigned agent is live — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.wakeOrCreate`'s newest-first scan) — and the task status is not `complete`/`cancelled`, the call is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally add a second agent. The guard runs BEFORE any side-effectful work (child creation, group enrollment), so a rejection leaves no orphaned child. `force: true` bypasses the guard; `agent.wakeOrCreate`'s behavior is unchanged (it already routes to the existing live agent). `task.assignAgent` applies the same guard when assigning a NEW agent to an occupied task (§5.4). **Sandbox isolation (new in intentd).** `isolation` controls whether the delegated agent runs in an isolated sandbox: `"cow"` provisions a copy-on-write directory clone (requires CoW filesystem support; see below), `"direct"` runs in the shared workspace checkout. **The persisted `Workspace.executionEnvironment` (§5.1) is the authority.** Once a workspace is created, its execution environment decides delegate isolation — there is no turning per-agent sandboxing on or off on the fly within a workspace: `"cow"`/`"microvm"` ⇒ every delegate is sandboxed (the `isolation` param and the global `workspace.cowIsolation` setting are ignored — even an explicit `isolation: "direct"`/`"shared"` cannot opt a delegate out); `"direct"`/`"worktree"` ⇒ shared checkout, never sandboxed (an explicit `isolation: "cow"` is ignored, as is the global setting). Only **legacy rows** with no persisted `executionEnvironment` (created before v3.3 introduced the field) keep the original param-then-setting resolution: explicit `isolation` param wins, else `workspace.cowIsolation` (§5.12) enabled ⇒ `"cow"`, disabled ⇒ `"direct"`. CoW sandboxes are full-directory clones of the sandbox source (including `.git` and build caches) via OS-level copy-on-write primitives (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback on APFS, Linux `ioctl(FICLONE)` on Btrfs/XFS with reflink support); the sandbox directory layout is `<workspaces_root>/<workspaceId>/sandboxes/<agentId>/<repo-slug>` with a snapshot branch `sb/<agentId>` created in the sandbox's `.git`. **Sandbox eligibility & source (checkout-mode aware).** Direct-mode workspaces (`skipIsolation`/no provisioned checkout, with a `repositoryPath`) source the sandbox from the user's repository folder; CoW-checkout workspaces (`checkoutMode: "cow"`, §5.1) source it from the **workspace checkout** (`worktreePath`). Worktree-mode workspaces (`checkoutMode: "worktree"`) are not sandbox-eligible — the agent keeps the shared checkout and the delegation proceeds without a sandbox. **Asynchronous provisioning & `effectiveIsolation` (changed by intentd#636).** Sandbox provisioning runs OFF the delegate critical path: when `isolation: "cow"` resolves and the workspace is sandbox-eligible, the daemon registers a per-agent settlement gate, kicks off the CoW clone in a background task, and returns immediately with `effectiveIsolation: "pending"` — the only value the field carries today (`"cow"` and `"direct"` are no longer returned; a large clone can take tens of seconds, which previously starved the agent-facing MCP `workspace_api` tool's per-invocation wall-clock budget — `WORKSPACE_API_TIMEOUT`, default 30s, overridable via the `INTENTD_WORKSPACE_API_TIMEOUT_MS` env var: a positive integer in milliseconds, read at MCP-server construction; unset, non-numeric, or non-positive values keep the default). `effectiveIsolation` is omitted when no CoW isolation was resolved (explicit `"direct"`, setting disabled, the worktree-mode ineligibility skip, or no sandbox source). The settled outcome is observable rather than returned: on success the child session's TOP-LEVEL fields (not nested under metadata) `sandbox_id`, `sandbox_path`, and `sandbox_branch` are persisted and served in both `AgentSession` and `AgentLite`, and a `sandbox:cow:created` event is emitted with `data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha }`; when the filesystem does not support CoW reflinks — or provisioning fails — the daemon falls back to shared (`"direct"`) mode exactly as before (no bytes copied, log-only): the session keeps no sandbox fields and no `sandbox:cow:created` fires. A third settlement outcome covers the delete race: because the clone runs off the delegate critical path, `agent.delete` can race it — when the child session is gone or soft-deleted by settlement time, the daemon discards the just-provisioned sandbox (directory + store record) instead of stranding the clone on disk; again no sandbox fields persist and no `sandbox:cow:created` fires. The child's first ACP spawn is gated on settlement: its turn worker awaits the in-flight provisioning before spawning, so the child never runs against a half-copied sandbox. The sandbox directory is never auto-cleaned once settled — except for the delete-race discard above — cleanup is otherwise the responsibility of higher-level orchestration. All agent file/exec/terminal/search operations are restricted to the sandbox path when present (logical containment guards in `intent-services`), preventing escape to the main workspace or parent directories. **Per-agent microVM sizing.** `vmResources: { vcpus?, memMib? }` (also accepted on `agent.create`) sizes the child's microVM: bounds mirror the helper's limits (vcpus 1–16, memMib >= 128) and are validated at delegate/create time (`-32602` before any side effect, never at VM boot); the override persists on the child's session metadata so respawns keep the size; missing fields fall back to `sandbox.microvm.vcpus`/`memMib` (§5.12), then the built-in 2 vCPUs / 2048 MiB. Accepted-and-ignored on non-microVM workspaces (advisory, like `mergeOnTurnEnd`) |
+| agent.create | workspaceId (req), name?, nameExplicitlySet?: bool, model?, reasoningEffort? *(v5.2)*, specialistId?, idempotencyKey?, provider?, agentType?, metadata?, workspacePath?, workspaceContext?, contextReferences?, imageBlocks?, isBackground? | { agent: AgentLite } — full projection (same shape as `agent.get`); the pre-P2-12a `{ id, name }` snippet is a strict subset. `reasoningEffort` (v5.2) persists on the session **as-is** (the caller's spelling; providers interpret the level); an empty or whitespace-only value collapses to unset (an explicit clear that stops the resolution chain), and the created `AgentLite` echoes it. `effortLevels` is absent on the create result — the field is session-discovered at session open (see "Session-discovered effort levels" below), so it appears on subsequent `AgentLite` reads once the provider's first session open advertises its `thought_level` values. When the param is absent the effort resolves through the named specialist's model-option effort, then its `reasoningEffort` frontmatter scalar, then the settings `model.defaultReasoningEffort` (§5.12) — which applies only when the session's model itself resolved from the settings default chain, never alongside a caller-supplied `model` or a specialist model pin, and is dropped with a daemon warn log rather than rejected when the resolved model does not support it — then unset. The full chain is "Creation-time reasoning-effort resolution" below. A non-empty level is **validated against the resolved model's cached `effortLevels`** under the same contract as `agent.delegate` / `agent.wakeOrCreate` (§5.11 "Delegation reasoning-effort resolution"): evidence is the daemon's cached dynamic catalogs only (never a live probe), matching is case-insensitive, a level outside the listed values is rejected with `-32602` naming the model and the valid values **before any side effect** (no session row is persisted), and with no evidence — no resolved model, no cached row, or a row declaring no levels — the value passes through unvalidated. The agent's id is **server-assigned**: the daemon always mints a fresh `agent-{uuid}`, and a request carrying `agentId` is rejected with `-32602` ("agent IDs are server-assigned and the field must be omitted") before any side effect; an `idempotencyKey` replay returns the stored result carrying the originally minted id. `provider` persists on the session; both the resolved provider (the explicit `provider` param or, when absent, the provider prefix derived from a compound `model` id) **and** — when the resolved model is a compound id (`provider:model`) — the model's provider prefix (validated even alongside a valid explicit `provider`, since the spawn path gives the model prefix precedence; a plain or absent `model` carries no prefix and adds no extra validation) must name a registered ACP provider: an unknown id is rejected with `-32602` (`agent.create: unknown provider: <id> (known providers: ...)`) **before any side effect** (no session row is persisted, no default-provider fallback occurs). An absent provider (defaulting) remains valid. A **bare** `model` (no `:` prefix) supplied by the client is additionally checked for ownership: evidence is **the daemon's cached dynamic catalogs only** (the in-memory last-good `models.list` entries under each provider's current registry version key, §5.30 — read-only, never a live probe; the former static-tier evidence path went with the tier tables, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)). The effective provider for the check is the explicit `provider` param, else the settings-derived default (provider of `model.default`, else `providers.active`), bottoming out at the first registered provider. A cached-catalog claim by another provider rejects with `-32602` (`agent.create: model <id> does not belong to provider <p> (providers with this model: ...)`) before any side effect, but only when the effective provider's ownership is affirmatively disproven — its own cached catalog exists but lacks the id; with no cached entry for the effective provider (cold start) the bare id passes — absence of evidence is not a mismatch. Bare ids with no ownership evidence anywhere pass unchanged, and the literal id `"default"` is a CLI-default sentinel that passes for every provider. A mismatched bare model arriving from the **settings chain** (global default / specialist frontmatter) rather than the client is not rejected — it falls back to the provider's CLI default (`session.model` stays unset) with a daemon warn log. **Name default (specialist-derived).** When `name` is omitted but a specialist id is supplied, the agent's name defaults to the specialist's resolved display name (frontmatter `name`, 3-tier project > user > bundled — e.g. "Coordinator" for `spec-writer`); an unknown specialist or a resolution failure never fails the create — the name falls back to the generated `Agent {6-hex}` placeholder. The same derivation applies to `workspace.create`'s `initialAgent` (§5.1). `nameExplicitlySet` controls the persisted rename-guard flag: `false` marks a supplied `name` as a non-explicit placeholder so the agent's guarded opening-turn self-rename (`agent.rename` with `skipIfExplicitlySet: true`) still applies. The flag is honored independently of `name` — supplied without a `name`, it applies to the server-generated placeholder name (`nameExplicitlySet: true` with no `name` persists the guard on the placeholder). Omitted or JSON `null` both read as absent and keep the default (`true` whenever a `name` is supplied **or** a specialist-derived default name resolved — the derived default behaves like a client-supplied explicit name, matching the desktop FE which resolves it client-side; `false` otherwise, including the `Agent {6-hex}` fallback); any other non-boolean value is rejected with `-32602` ("nameExplicitlySet must be a boolean") — `null` is never rejected. `metadata` is harvested for the persisted gap fields (`delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`; P3-1.2b — plus `isBackground`, G-A1/P3-1.2c) with the top-level `contextReferences`/`imageBlocks`/`isBackground` params winning over the `metadata` copies; `isBackground` defaults to `false` when absent from both. `agentType`/`workspacePath`/`workspaceContext` remain accepted-but-unpersisted (deferred per the P2-12a audit). Emits `agent:created`. |
+| agent.delegate | workspaceId (req) + delegate opts (taskNoteId?, noteId?, taskText?, agentInstructions?, specialist?, model?, reasoningEffort?, behaviorPrompt?, waitMode?, skipAutoCommit?, isolation?, force?: bool, mergeOnTurnEnd?: bool, vmResources?: `{ vcpus?, memMib? }`) | `{ ok: true, agentId, name, effectiveIsolation? }` — **Reasoning effort (additive).** `reasoningEffort` sets the child session's reasoning level (§5.5); when omitted it resolves through the chosen specialist model option's `reasoningEffort`, then the specialist's `reasoningEffort` frontmatter scalar, then the settings `model.defaultReasoningEffort` (§5.12; only when the session's model itself resolved from the settings chain — and dropped with a warn instead of rejected when unsupported), then unset. Whatever resolves is validated against the cached catalog's `effortLevels` for the resolved model and a level outside that list is rejected with `-32602` naming the valid values **before any side effect**; with no cached evidence the value passes through (full contract in §5.11 "Delegation reasoning-effort resolution"). the child session persists `metadata.initialMessage` (the resolved first message) and `metadata.delegationDepth` (parent depth + 1) so a wake-up can resume (P3-1.2b); delegated children always persist `isBackground: true` (matching the TS `DelegateTaskTool`; G-A1/P3-1.2c). **Provider resolution when `model` is omitted (new in intentd).** `agent.delegate` has no `provider` param on the wire, so a caller that supplies no `model` resolves the delegated agent's provider itself, in order: (1) the specialist's frontmatter `codingAgent` (or, if unset, the provider prefix of its frontmatter `model` when compound) — 3-tier resolved (project > user > bundled); (2) otherwise the settings-derived default: the provider prefix of `model.default` when compound and registry-valid, else `providers.active` (§5.12; [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)); (3) if neither is set, `provider` is left unresolved and the spawn path's own last resort applies (the first registered provider — a neutral positional fallback; no provider carries a default designation). Whichever provider is resolved by (1) or (2) MUST be a known, available provider (per the daemon's provider discovery) — an unavailable resolved provider fails the call with `-32602` naming it, rather than silently substituting another provider. A `model` explicitly supplied by the caller (bare or compound) opts out of this resolution entirely, unchanged. **Occupancy guard (intentd#774).** A task note that already has a live assigned agent cannot be silently double-delegated: when the target task's newest assigned agent is live — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.wakeOrCreate`'s newest-first scan) — and the task status is not `complete`/`cancelled`, the call is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally add a second agent. The guard runs BEFORE any side-effectful work (child creation, group enrollment), so a rejection leaves no orphaned child. `force: true` bypasses the guard; `agent.wakeOrCreate`'s behavior is unchanged (it already routes to the existing live agent). `task.assignAgent` applies the same guard when assigning a NEW agent to an occupied task (§5.4). **Sandbox isolation (new in intentd).** `isolation` controls whether the delegated agent runs in an isolated sandbox: `"cow"` provisions a copy-on-write directory clone (requires CoW filesystem support; see below), `"direct"` runs in the shared workspace checkout. **The persisted `Workspace.executionEnvironment` (§5.1) is the authority.** Once a workspace is created, its execution environment decides delegate isolation — there is no turning per-agent sandboxing on or off on the fly within a workspace: `"cow"`/`"microvm"` ⇒ every delegate is sandboxed (the `isolation` param and the global `workspace.cowIsolation` setting are ignored — even an explicit `isolation: "direct"`/`"shared"` cannot opt a delegate out); `"direct"`/`"worktree"` ⇒ shared checkout, never sandboxed (an explicit `isolation: "cow"` is ignored, as is the global setting). Only **legacy rows** with no persisted `executionEnvironment` (created before v6.3 introduced the field) keep the original param-then-setting resolution: explicit `isolation` param wins, else `workspace.cowIsolation` (§5.12) enabled ⇒ `"cow"`, disabled ⇒ `"direct"`. CoW sandboxes are full-directory clones of the sandbox source (including `.git` and build caches) via OS-level copy-on-write primitives (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback on APFS, Linux `ioctl(FICLONE)` on Btrfs/XFS with reflink support); the sandbox directory layout is `<workspaces_root>/<workspaceId>/sandboxes/<agentId>/<repo-slug>` with a snapshot branch `sb/<agentId>` created in the sandbox's `.git`. **Sandbox eligibility & source (checkout-mode aware).** Shared-checkout workspaces (`skipIsolation`/no provisioned checkout, i.e. no `checkoutMode`, with a `repositoryPath`) source the sandbox from the user's repository folder; CoW-checkout workspaces (`checkoutMode: "cow"`, §5.1) source it from the **workspace checkout** (`worktreePath`); `checkoutMode: "direct"` workspaces (standalone plain clone) source it from the workspace checkout when one was provisioned (cache hydration), else from the repository folder itself (`isNewRepo` initialization). Worktree-mode workspaces (`checkoutMode: "worktree"`) are not sandbox-eligible — the agent keeps the shared checkout and the delegation proceeds without a sandbox. **Asynchronous provisioning & `effectiveIsolation` (changed by intentd#636).** Sandbox provisioning runs OFF the delegate critical path: when `isolation: "cow"` resolves and the workspace is sandbox-eligible, the daemon registers a per-agent settlement gate, kicks off the CoW clone in a background task, and returns immediately with `effectiveIsolation: "pending"` — the only value the field carries today (`"cow"` and `"direct"` are no longer returned; a large clone can take tens of seconds, which previously starved the agent-facing MCP `workspace_api` tool's per-invocation wall-clock budget — `WORKSPACE_API_TIMEOUT`, default 30s, overridable via the `INTENTD_WORKSPACE_API_TIMEOUT_MS` env var: a positive integer in milliseconds, read at MCP-server construction; unset, non-numeric, or non-positive values keep the default). `effectiveIsolation` is omitted when no CoW isolation was resolved (explicit `"direct"`, setting disabled, the worktree-mode ineligibility skip, or no sandbox source). The settled outcome is observable rather than returned: on success the child session's TOP-LEVEL fields (not nested under metadata) `sandbox_id`, `sandbox_path`, and `sandbox_branch` are persisted and served in both `AgentSession` and `AgentLite`, and a `sandbox:cow:created` event is emitted with `data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha }`; when the filesystem does not support CoW reflinks — or provisioning fails — the daemon falls back to shared (`"direct"`) mode exactly as before (no bytes copied, log-only): the session keeps no sandbox fields and no `sandbox:cow:created` fires. A third settlement outcome covers the delete race: because the clone runs off the delegate critical path, `agent.delete` can race it — when the child session is gone or soft-deleted by settlement time, the daemon discards the just-provisioned sandbox (directory + store record) instead of stranding the clone on disk; again no sandbox fields persist and no `sandbox:cow:created` fires. The child's first ACP spawn is gated on settlement: its turn worker awaits the in-flight provisioning before spawning, so the child never runs against a half-copied sandbox. The sandbox directory is never auto-cleaned once settled — except for the delete-race discard above — cleanup is otherwise the responsibility of higher-level orchestration. All agent file/exec/terminal/search operations are restricted to the sandbox path when present (logical containment guards in `intent-services`), preventing escape to the main workspace or parent directories. **Per-agent microVM sizing.** `vmResources: { vcpus?, memMib? }` (also accepted on `agent.create`) sizes the child's microVM: bounds mirror the helper's limits (vcpus 1–16, memMib >= 128) and are validated at delegate/create time (`-32602` before any side effect, never at VM boot); the override persists on the child's session metadata so respawns keep the size; missing fields fall back to `sandbox.microvm.vcpus`/`memMib` (§5.12), then the built-in 2 vCPUs / 2048 MiB. Accepted-and-ignored on non-microVM workspaces (advisory, like `mergeOnTurnEnd`) |
 | agent.sendToTask | taskNoteId (req), message (req), priority?, messageMetadata? | service result — `priority: "interrupt"` preempts the assignee's in-flight turn keep-alive (the agent process is never killed) and delivers immediately instead of the plain persist. `messageMetadata` is the same opaque per-message payload as `agent.sendMessage`, persisted on the assignee's user message row; it is threaded through both the runtime turn path and the store-only fallback (read-only wiring with no agent manager), so attribution is consistent across deployments. **Question hold (v2.8):** sendToTask is an automatic delivery by definition — while the assignee's question hold is active (see "Question hold" below) the message parks in the queue instead of delivering, `priority: "interrupt"` included (the interrupt skips the preemption entirely and parks front-of-queue with `interruptPriority: true`); the parked result is `{ success: true, queued: true, heldForQuestions: true, queuedMessage, turnId? }`, on the runtime and store-only paths alike |
-| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? \| queuedMessage?, turnId? } — **Unknown agent → fail closed.** A nonexistent `agentId` (e.g. a truncated id) is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE any state change — no phantom queue entry, no slot claim, no interrupt-dedup record — on both the runtime-manager and store-only paths, and the same guard applies to the SUB-1 sender auto-subscribe (the MCP `ws.agent.send` binding's caller→target completion watch is never registered for a nonexistent target). **SUB-1 sender auto-subscribe is one-directional (parent→child only).** The MCP `ws.agent.send` / `ws.agent.sendToTask` bindings register a caller→target completion watch for the sender UNLESS the sender is a **child of the target** — the caller session's `parent_agent_id` equals the target, falling back to the metadata `createdByAgentId` linkage — so a child messaging its own parent registers NO watch and the send result carries no `subscriptionId`/notification blurb (the watch op returns `{ ok: false, subscriptionId: null }`, the same skip shape as the delegated-background-task-sender and undelivered-`after_all`-group suppressions). The auto-queue-on-failure fallback below applies only to store-append failures on an EXISTING agent (e.g. a duplicate client-supplied `messageId`); an agent deleted mid-send (between the validation and the append) is also rejected with the same `-32602` instead of auto-queueing. `priority: "interrupt"` preempts an in-flight turn instead of queueing: the current turn is cancelled keep-alive (`session/cancel` + one terminal `agent:stream:end`; the agent process is never killed) and the message streams immediately as a fresh turn on the same session (`queued: false`); the pending queue is preserved and drains afterwards. On an idle agent, interrupt priority falls through to the normal send path. **Zero-output interrupt → combined delivery ([monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014)):** when the preempted turn produced no assistant output (the provider drops the cancelled prompt), the preempted user message's text and attachments are delivered AHEAD of the interrupt message inside the SAME `session/prompt`, so both messages are honored in original order — the original is NOT re-queued, the queue stays untouched, and both already-persisted user rows stay intact (the combined prompt is wire-only, never re-persisted). If the turn has already progressed (any assistant/tool/system row after the last user row), only the interrupt message is delivered. This combined-delivery behavior applies to ALL interrupt-priority sends — `agent.sendToTask` with `priority: "interrupt"` routes through the same preemption path and behaves identically. **Duplicate delivery** of the SAME interrupt (same client-supplied `messageId`) preempts exactly once: the duplicate is acknowledged idempotently as `{ success: true, queued: false, messageId, deduplicated: true }` — no second preemption, message NOT double-persisted (dedup keys on `messageId`; omit it and duplicates are indistinguishable from new sends). **During turn startup** (busy slot claimed but no cancellable turn live yet — spawn/`session/new` in flight) the preemption is skipped and the message queues keep-alive behind the starting turn (`queued: true`); the agent is never killed and never fails. **Per-turn prompt-assembly hints (Fidelity B).** `stdinContext` is prepended verbatim to the outbound prompt as a `Context:\n<stdin>\n\n---\n\n` block (reference-parity `acp-provider.ts`); when absent, one is synthesised from `contextReferences` (port of `agent-backend-handler.service.ts`’s builder — first-non-empty wins across `content` / `selectedText` / `taskText` / `codeChunk`, with per-`type` framing for `selection` / `task` / `code_chunk` / `file` / `linear-issue` / `github-issue` / `sentry-issue` / `terminal`; unknown types fall through to the raw content). `noteIds` are resolved to workspace-asset image content blocks: each note's markdown is scanned for `workspace-asset://<workspaceId>/<assetId>` URLs in the current workspace, the referenced bytes are appended as ACP `image` blocks, and a single system text notice is added noting how many images were inlined. `messageMetadata` is JSON persisted on the user message row (new `agent_message.metadata` column) and echoed on read — used by clients (e.g. `{ source: "system" }`) to distinguish daemon-initiated turns. Non-reserved fields are opaque (never inspected by the daemon), but a few reserved fields ARE read or written daemon-side: `fromAgentId`/`fromAgentName` are daemon-stamped on agent-origin sends (the sender-attribution block below) and `userAppMessageId` is validated/folded by the router (the client-message-identity block below). **Row identity + events.** A direct (non-queued) send persists the user row UNDER the client-supplied `messageId` when given (validated ≤ 256 bytes, `-32602` otherwise) — else a server-minted `user-msg-{uuid}` — the result `messageId` IS that persisted row id, and the daemon emits `agent:message` `{ agentId, messageId, role: "user", appMessageId? }` for the append (`appMessageId` present only when the row carries a `userAppMessageId`) (same event the queue-drain and wake-delivery persists emit), so clients converge on the canonical row without a refetch race. **Sender attribution (`agent_message`, new in intentd).** Agent-originated sends through the MCP host bindings — `ws.agent.send`, `ws.agent.sendToTask`, and the `ws.agent.create` kickoff message — are auto-tagged by the daemon with `messageMetadata = { "type": "agent_message", "fromAgentId": string, "fromAgentName": string \| null }` so recipients and clients can attribute who sent the message. An explicit caller-supplied `messageMetadata` keeps its own fields, but the attribution fields (`fromAgentId`/`fromAgentName`) are **daemon-stamped** for agent callers — always overwritten with the real caller identity, since [intentd#816](https://github.com/intent-hq/intentd/pull/816) made `fromAgentId` security-relevant (single-pending-send guard + `ws.agent.removeQueuedMessage` ownership; a `null` metadata value is treated as absent and does NOT suppress the auto-tag); `fromAgentName` is always present for a stable schema and is `null` when the sender's session lookup fails. Human-originated FE/RPC sends (no agent caller, no explicit metadata) stay untagged. The tag persists on the user message row and survives the busy-agent queued path — the enqueue captures it and the drain-time persist writes it — including the store-only fallback. **Client message identity (`userAppMessageId`).** The FE’s client-minted optimistic-message id is consumed by the router: it is trimmed, validated ≤ 256 bytes (`-32602` otherwise; whitespace-only reads as absent), folded into the row `messageMetadata` under `userAppMessageId` (the top-level param wins over a caller-supplied metadata copy; supplying it alongside a non-object `messageMetadata` is `-32602`), lifted back out as the top-level `appMessageId` field on `AgentMessage` reads (`agent.getConversation` / `agent.getSession`), and echoed as `appMessageId` on the user-row `agent:message` event — activating the FE’s optimistic-insert dedup guard. The id survives the busy-agent queued path (enqueue capture → drain-time persist) but is excluded from the drain persist’s in-block `messageMetadata` copy (row-level only) so queued rows’ content blocks match direct-send rows. Requests without it are byte-for-byte unchanged (no `appMessageId` key on rows or events). **Daemon-ignored fields (FE-forwarded, unwired daemon-side).** The assistant-side ids (`assistantMessageId` / `assistantAppMessageId`) are accepted by the router but not consumed: assistant rows are keyed on the server-minted row `id`. Per-turn `model` override is likewise accepted but **not extracted** by the daemon router today; the session-level model set at `agent.create` / `agent.setModel` remains authoritative (deferred pending an ACP-provider-side change to switch model mid-session). **Turn correlation (`turnId`, [monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022) / [intentd#699](https://github.com/intent-hq/intentd/pull/699)).** Every runtime result arm additionally carries `turnId` — the daemon-minted stable correlation id for the user-initiated turn. A direct (non-queued) send mints it at dispatch, BEFORE the persist, so the user-row `agent:message` echo, the RPC result, and the turn's lifecycle events all carry the SAME id; the queued arms (busy-agent, quarantined, auto-queue fallback) return the enqueued entry's `turnId` (= the entry `id` at first enqueue). The id is preserved across terminal-failure requeues — the requeued entry gets a NEW entry `id` but keeps the failed turn's ORIGINAL `turnId` — so the `agent:failed` / terminal `agent:stream:end` of the failed turn AND the `agent:queue:processing` / lifecycle events of an `agent.retry` redrive all correlate with the id the client keyed at send time (§6.5/§6.6). Exceptions: the idempotent duplicate-interrupt ack (`deduplicated: true`) and the store-only fallback's direct arm carry no `turnId` (the store-only auto-queue arm does). Always omitted when absent, never `null`. **Question hold (v2.8).** The FE/router `agent.sendMessage` front door is a **user-origin** send and is never held — it bypasses an active hold, delivers (or queues on the normal busy path), and its user row releases the hold. Internal **automatic** sends routed through the same turn machinery (MCP `ws.agent.send`, A2A wakes, event-subscription batches, internal continuations) ARE gated: while the target's hold is active they park in the queue with the result `{ success: true, queued: true, heldForQuestions: true, queuedMessage, turnId }` — `heldForQuestions: true` is the additive marker distinguishing a hold park from an ordinary busy-queue park, present only on held results (never `false`). An automatic `priority: "interrupt"` send is ALSO held — no exceptions — parking front-of-queue with `interruptPriority: true` (the interrupt-dedup record is still written first, so a duplicate replay while held — or after release — still acks `deduplicated: true` without double-enqueueing). See "Question hold" below the table for the derivation and release semantics |
-| agent.sendQueuedMessageNow | agentId (req), messageId (req), workspaceId (req) | { success: true, queued: false, messageId, turnId } on the atomic send — the normal outcome; the full result is a union with two `{ success: true, queued: true, queuedMessage }` variants (slot-race and quarantined, described below), which carry the wire-shape `queuedMessage` (the entry, as `agent.getQueue` serves it) INSTEAD of a `messageId`, so clients must branch on `queued`. Atomically dequeues the pending-queue entry named by `messageId` and delivers it immediately with interrupt priority, **preserving the rest of the queue**. The method takes no content params: the delivered turn carries the entry's own captured payload (content, `imageBlocks`/`fileBlocks`, `messageMetadata` from enqueue time), and the result `messageId` is the entry id — which is also the persisted user row id. **Fail closed / not idempotent.** A nonexistent `agentId` is rejected with `-32602` (`unknown agent id: <id>`) BEFORE the queue is touched (same guard as `agent.sendMessage`); an absent queue entry is rejected with `-32602` (`queued message not found: <id>`) with NO side effects — deliberately NOT idempotent (unlike `agent.removeQueuedMessage`), so the client knows the atomic send did not happen. **Atomic dequeue + interrupt delivery.** The removal happens under the queue lock (no concurrent drain can deliver the same entry twice), and the shrunk queue is republished as `agent:queue:updated` (write-through persisted) before the turn starts. A busy agent is preempted keep-alive — the same `session/cancel` + worker-abort as `agent.sendMessage` with `priority: "interrupt"`; the agent process is never killed — and the zero-output combined delivery ([monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014)) applies identically: a preempted zero-output user message rides the delivered turn's prompt AHEAD of the entry content (an entry already carrying its own requeued prepend payload keeps that payload first, in transcript order). An idle agent starts the turn directly. The user row is persisted UNDER the entry id and the standard user-row `agent:message` event (`role: "user"`) is emitted; a terminal-failure requeued entry whose user row already reached the transcript is not re-appended (the delivery reuses the existing row). Stale queued-message redrives on delegated agents keep the #576 semantics documented under `agent.reportToParent` (report-clear suppression + `[SYSTEM NOTE]` annotation). **Queued outcomes (success, not errors).** When the in-flight slot cannot be claimed (turn startup, or a concurrent send won the race) the entry is restored at the FRONT of the queue — next to drain — and the result is { success: true, queued: true, queuedMessage }. A quarantined (poisoned, monorepo#840) session is not redriven: the entry stays in the queue untouched and the result is { success: true, queued: true, quarantined: true, queuedMessage } (`agent.retry` is the deliberate redrive); the absent-entry case is still `-32602`. **Never-lost guarantee.** On a user-row persist failure the entry is restored at the FRONT of the queue (durability state untouched, so a retry re-appends correctly) and `agent:queue:updated` is republished before the error surfaces. The store-only fallback (no agent manager attached) honors the same atomic contract — dequeue, persist under the entry id, emit `agent:message`, restore-at-front on failure — without starting a turn. This path emits **no** `agent:queue:processing` (§6.5 — that drain-start signal belongs to the queue-drain loop). **`turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)):** the delivered arm is `{ success: true, queued: false, messageId, turnId }` — `turnId` is the entry's preserved turn correlation id (the same id the enqueueing RPC returned), stamped on both the `agent:message` echo this delivery emits and the delivered turn's lifecycle events; the queued/quarantined arms' `queuedMessage` carries the entry's `turnId?` field per the `agent.queueMessage` wire shape; the store-only fallback's result carries no `turnId`. **Question hold (v2.8):** `agent.sendQueuedMessageNow` is an explicit user action — it is NOT gated by an active question hold, and the user row its delivery appends supersedes the pending questions (the hold derivation flips false), releasing the rest of the queue |
-| agent.dismissQuestions *(v2.8)* | agentId (req), messageId (req), workspaceId (req) | { success: true, dismissedQuestionsMessageId } — dismiss the pending question set of the assistant message named by `messageId` (the message carrying the trailing `application/vnd.intent.question+json` resource blocks, §7) WITHOUT answering: persists the dismissal marker `dismissedQuestionsMessageId` in the session metadata (survives daemon restarts, so the dismissed set never re-surfaces), emits `agent:updated` with `{ agentId, dismissedQuestionsMessageId }`, and kicks the queue drain so deliveries parked by the question hold resume immediately (no waiting for the next end-of-turn drain). **The model is NOT notified** — no message is appended to the transcript, no turn starts, and the agent never learns the questions were dismissed (contrast with an answer, which is an ordinary user message). Idempotent: re-dismissing the same `messageId` succeeds and rewrites the same marker. Validation: an empty `messageId` or one exceeding 256 bytes is `-32602`; a nonexistent `agentId` or a workspace mismatch is a not-found error (fail closed, no metadata write). The `messageId` is NOT checked against the transcript — dismissing an id that carries no questions is a harmless no-op marker write (the hold derivation only consults the marker when the last non-system message actually bears question blocks) |
+| agent.sendMessage | agentId (req), content (req), workspaceId (req), messageId?, imageBlocks?, fileBlocks?, priority?, noteIds?, stdinContext?, contextReferences?, messageMetadata?, model?, assistantMessageId?, assistantAppMessageId?, userAppMessageId? | { success, queued, messageId? \| queuedMessage?, turnId? } — **Unknown agent → fail closed.** A nonexistent `agentId` (e.g. a truncated id) is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE any state change — no phantom queue entry, no slot claim, no interrupt-dedup record — on both the runtime-manager and store-only paths, and the same guard applies to the SUB-1 sender auto-subscribe (the MCP `ws.agent.send` binding's caller→target completion watch is never registered for a nonexistent target). **SUB-1 sender auto-subscribe is one-directional (parent→child only).** The MCP `ws.agent.send` / `ws.agent.sendToTask` bindings register a caller→target completion watch for the sender UNLESS the sender is a **child of the target** — the caller session's `parent_agent_id` equals the target, falling back to the metadata `createdByAgentId` linkage — so a child messaging its own parent registers NO watch and the send result carries no `subscriptionId`/notification blurb (the watch op returns `{ ok: false, subscriptionId: null }`, the same skip shape as the delegated-background-task-sender and undelivered-`after_all`-group suppressions). The auto-queue-on-failure fallback below applies only to store-append failures on an EXISTING agent (e.g. a duplicate client-supplied `messageId`); an agent deleted mid-send (between the validation and the append) is also rejected with the same `-32602` instead of auto-queueing. `priority: "interrupt"` preempts an in-flight turn instead of queueing: the current turn is cancelled keep-alive (`session/cancel` + one terminal `agent:stream:end`; the agent process is never killed) and the message streams immediately as a fresh turn on the same session (`queued: false`); the pending queue is preserved and drains afterwards. On an idle agent, interrupt priority falls through to the normal send path. **Zero-output interrupt → combined delivery ([monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014)):** when the preempted turn produced no assistant output (the provider drops the cancelled prompt), the preempted user message's text and attachments are delivered AHEAD of the interrupt message inside the SAME `session/prompt`, so both messages are honored in original order — the original is NOT re-queued, the queue stays untouched, and both already-persisted user rows stay intact (the combined prompt is wire-only, never re-persisted). If the turn has already progressed (any assistant/tool/system row after the last user row — excluding the still-empty interrupted marker row the preemption itself just persisted, §7.2 always-persist semantics within v4.5), only the interrupt message is delivered. This combined-delivery behavior applies to ALL interrupt-priority sends — `agent.sendToTask` with `priority: "interrupt"` routes through the same preemption path and behaves identically. **Duplicate delivery** of the SAME interrupt (same client-supplied `messageId`) preempts exactly once: the duplicate is acknowledged idempotently as `{ success: true, queued: false, messageId, deduplicated: true }` — no second preemption, message NOT double-persisted (dedup keys on `messageId`; omit it and duplicates are indistinguishable from new sends). **During turn startup** (busy slot claimed but no cancellable turn live yet — spawn/`session/new` in flight) the preemption is skipped and the message queues keep-alive behind the starting turn (`queued: true`); the agent is never killed and never fails. **Per-turn prompt-assembly hints (Fidelity B).** `stdinContext` is prepended verbatim to the outbound prompt as a `Context:\n<stdin>\n\n---\n\n` block (reference-parity `acp-provider.ts`); when absent, one is synthesised from `contextReferences` (port of `agent-backend-handler.service.ts`’s builder — first-non-empty wins across `content` / `selectedText` / `taskText` / `codeChunk`, with per-`type` framing for `selection` / `task` / `code_chunk` / `file` / `linear-issue` / `github-issue` / `sentry-issue` / `terminal`; unknown types fall through to the raw content). `noteIds` are resolved to workspace-asset image content blocks: each note's markdown is scanned for `workspace-asset://<workspaceId>/<assetId>` URLs in the current workspace, the referenced bytes are appended as ACP `image` blocks, and a single system text notice is added noting how many images were inlined. `messageMetadata` is JSON persisted on the user message row (new `agent_message.metadata` column) and echoed on read — used by clients (e.g. `{ source: "system" }`) to distinguish daemon-initiated turns. Non-reserved fields are opaque (never inspected by the daemon), but a few reserved fields ARE read or written daemon-side: `fromAgentId`/`fromAgentName` are daemon-stamped on agent-origin sends (the sender-attribution block below) and `userAppMessageId` is validated/folded by the router (the client-message-identity block below). **Row identity + events.** A direct (non-queued) send persists the user row UNDER the client-supplied `messageId` when given (validated ≤ 256 bytes, `-32602` otherwise) — else a server-minted `user-msg-{uuid}` — the result `messageId` IS that persisted row id, and the daemon emits `agent:message` `{ agentId, messageId, role: "user", appMessageId? }` for the append (`appMessageId` present only when the row carries a `userAppMessageId`) (same event the queue-drain and wake-delivery persists emit), so clients converge on the canonical row without a refetch race. **Sender attribution (`agent_message`, new in intentd).** Agent-originated sends through the MCP host bindings — `ws.agent.send`, `ws.agent.sendToTask`, and the `ws.agent.create` kickoff message — are auto-tagged by the daemon with `messageMetadata = { "type": "agent_message", "fromAgentId": string, "fromAgentName": string \| null }` so recipients and clients can attribute who sent the message. An explicit caller-supplied `messageMetadata` keeps its own fields, but the attribution fields (`fromAgentId`/`fromAgentName`) are **daemon-stamped** for agent callers — always overwritten with the real caller identity, since [intentd#816](https://github.com/intent-hq/intentd/pull/816) made `fromAgentId` security-relevant (single-pending-send guard + `ws.agent.removeQueuedMessage` ownership; a `null` metadata value is treated as absent and does NOT suppress the auto-tag); `fromAgentName` is always present for a stable schema and is `null` when the sender's session lookup fails. Human-originated FE/RPC sends (no agent caller, no explicit metadata) stay untagged. The tag persists on the user message row and survives the busy-agent queued path — the enqueue captures it and the drain-time persist writes it — including the store-only fallback. **Client message identity (`userAppMessageId`).** The FE’s client-minted optimistic-message id is consumed by the router: it is trimmed, validated ≤ 256 bytes (`-32602` otherwise; whitespace-only reads as absent), folded into the row `messageMetadata` under `userAppMessageId` (the top-level param wins over a caller-supplied metadata copy; supplying it alongside a non-object `messageMetadata` is `-32602`), lifted back out as the top-level `appMessageId` field on `AgentMessage` reads (`agent.getConversation` / `agent.getSession`), and echoed as `appMessageId` on the user-row `agent:message` event — activating the FE’s optimistic-insert dedup guard. The id survives the busy-agent queued path (enqueue capture → drain-time persist) but is excluded from the drain persist’s in-block `messageMetadata` copy (row-level only) so queued rows’ content blocks match direct-send rows. Requests without it are byte-for-byte unchanged (no `appMessageId` key on rows or events). **Daemon-ignored fields (FE-forwarded, unwired daemon-side).** The assistant-side ids (`assistantMessageId` / `assistantAppMessageId`) are accepted by the router but not consumed: assistant rows are keyed on the server-minted row `id`. Per-turn `model` override is likewise accepted but **not extracted** by the daemon router today; the session-level model set at `agent.create` / `agent.setModel` remains authoritative (deferred pending an ACP-provider-side change to switch model mid-session). **Turn correlation (`turnId`, [monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022) / [intentd#699](https://github.com/intent-hq/intentd/pull/699)).** Every runtime result arm additionally carries `turnId` — the daemon-minted stable correlation id for the user-initiated turn. A direct (non-queued) send mints it at dispatch, BEFORE the persist, so the user-row `agent:message` echo, the RPC result, and the turn's lifecycle events all carry the SAME id; the queued arms (busy-agent, quarantined, auto-queue fallback) return the enqueued entry's `turnId` (= the entry `id` at first enqueue). The id is preserved across terminal-failure requeues — the requeued entry gets a NEW entry `id` but keeps the failed turn's ORIGINAL `turnId` — so the `agent:failed` / terminal `agent:stream:end` of the failed turn AND the `agent:queue:processing` / lifecycle events of an `agent.retry` redrive all correlate with the id the client keyed at send time (§6.5/§6.6). Exceptions: the idempotent duplicate-interrupt ack (`deduplicated: true`) and the store-only fallback's direct arm carry no `turnId` (the store-only auto-queue arm does). Always omitted when absent, never `null`. **Question hold (v2.8).** The FE/router `agent.sendMessage` front door is a **user-origin** send and is never held — it bypasses an active hold and delivers (or queues on the normal busy path). Bypassing is **not** releasing (within v6.0, [intentd#965](https://github.com/intent-hq/intentd/pull/965)): a plain user row leaves the hold armed, and only a row whose `messageMetadata` is `{ type: "question_answers", answeredQuestionsMessageId }` naming exactly the marked assistant message retires it (the answer intake runs on every user-row persist path, so an answer that auto-queued behind a busy turn still releases on drain). Internal **automatic** sends routed through the same turn machinery (MCP `ws.agent.send`, A2A wakes, event-subscription batches, internal continuations) ARE gated: while the target's hold is active they park in the queue with the result `{ success: true, queued: true, heldForQuestions: true, queuedMessage, turnId }` — `heldForQuestions: true` is the additive marker distinguishing a hold park from an ordinary busy-queue park, present only on held results (never `false`). An automatic `priority: "interrupt"` send is ALSO held — no exceptions — parking front-of-queue with `interruptPriority: true` (the interrupt-dedup record is still written first, so a duplicate replay while held — or after release — still acks `deduplicated: true` without double-enqueueing). See "Question hold" below the table for the derivation and release semantics |
+| agent.sendQueuedMessageNow | agentId (req), messageId (req), workspaceId (req) | { success: true, queued: false, messageId, turnId } on the atomic send — the normal outcome; the full result is a union with two `{ success: true, queued: true, queuedMessage }` variants (slot-race and quarantined, described below), which carry the wire-shape `queuedMessage` (the entry, as `agent.getQueue` serves it) INSTEAD of a `messageId`, so clients must branch on `queued`. Atomically dequeues the pending-queue entry named by `messageId` and delivers it immediately with interrupt priority, **preserving the rest of the queue**. The method takes no content params: the delivered turn carries the entry's own captured payload (content, `imageBlocks`/`fileBlocks`, `messageMetadata` from enqueue time), and the result `messageId` is the entry id — which is also the persisted user row id. **Fail closed / not idempotent.** A nonexistent `agentId` is rejected with `-32602` (`unknown agent id: <id>`) BEFORE the queue is touched (same guard as `agent.sendMessage`); an absent queue entry is rejected with `-32602` (`queued message not found: <id>`) with NO side effects — deliberately NOT idempotent (unlike `agent.removeQueuedMessage`), so the client knows the atomic send did not happen. **Atomic dequeue + interrupt delivery.** The removal happens under the queue lock (no concurrent drain can deliver the same entry twice), and the shrunk queue is republished as `agent:queue:updated` (write-through persisted) before the turn starts. A busy agent is preempted keep-alive — the same `session/cancel` + worker-abort as `agent.sendMessage` with `priority: "interrupt"`; the agent process is never killed — and the zero-output combined delivery ([monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014)) applies identically: a preempted zero-output user message rides the delivered turn's prompt AHEAD of the entry content (an entry already carrying its own requeued prepend payload keeps that payload first, in transcript order). An idle agent starts the turn directly. The user row is persisted UNDER the entry id and the standard user-row `agent:message` event (`role: "user"`) is emitted; a terminal-failure requeued entry whose user row already reached the transcript is not re-appended (the delivery reuses the existing row). Stale queued-message redrives on delegated agents keep the #576 semantics documented under `agent.reportToParent` (report-clear suppression + `[SYSTEM NOTE]` annotation). **Queued outcomes (success, not errors).** When the in-flight slot cannot be claimed (turn startup, or a concurrent send won the race) the entry is restored at the FRONT of the queue — next to drain — and the result is { success: true, queued: true, queuedMessage }. A quarantined (poisoned, monorepo#840) session is not redriven: the entry stays in the queue untouched and the result is { success: true, queued: true, quarantined: true, queuedMessage } (`agent.retry` is the deliberate redrive); the absent-entry case is still `-32602`. **Never-lost guarantee.** On a user-row persist failure the entry is restored at the FRONT of the queue (durability state untouched, so a retry re-appends correctly) and `agent:queue:updated` is republished before the error surfaces. The store-only fallback (no agent manager attached) honors the same atomic contract — dequeue, persist under the entry id, emit `agent:message`, restore-at-front on failure — without starting a turn. This path emits **no** `agent:queue:processing` (§6.5 — that drain-start signal belongs to the queue-drain loop). **`turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)):** the delivered arm is `{ success: true, queued: false, messageId, turnId }` — `turnId` is the entry's preserved turn correlation id (the same id the enqueueing RPC returned), stamped on both the `agent:message` echo this delivery emits and the delivered turn's lifecycle events; the queued/quarantined arms' `queuedMessage` carries the entry's `turnId?` field per the `agent.queueMessage` wire shape; the store-only fallback's result carries no `turnId`. **Question hold (v2.8):** `agent.sendQueuedMessageNow` is an explicit user action — it is NOT gated by an active question hold. Within v6.0 the delivered row releases the hold only when it carries the `question_answers` answer tag for the marked message (the same intake as every other user-row persist path); an untagged entry delivers with the hold still armed |
+| agent.dismissQuestions *(v2.8; model notice added within v4.3, intentd#892)* | agentId (req), messageId (req), workspaceId (req) | { success: true, dismissedQuestionsMessageId } — dismiss the pending question set of the assistant message named by `messageId` (the message carrying the trailing `application/vnd.intent.question+json` resource blocks, §7) WITHOUT answering: persists the dismissal marker `dismissedQuestionsMessageId` in the session metadata (survives daemon restarts, so the dismissed set never re-surfaces), emits `agent:updated` with `{ agentId, dismissedQuestionsMessageId }`, and kicks the queue drain so deliveries parked by the question hold resume immediately (no waiting for the next end-of-turn drain). **The model IS notified** (intentd#892; supersedes the pre-#892 no-notify contract): after the marker persist and hold release, the daemon delivers a **system-origin notice** to the agent — "User dismissed your N questions without answering. This is an informative notice only — do not re-ask and do not proceed with any work; end your turn and wait for the user's next message." (informative-only wording since intentd#930; the pre-#930 notice told the agent to "continue with your best judgment") — with count-aware wording (singular "1 question", plural "N questions", and a countless fallback when the dismissed message's question-block count cannot be derived; the count is computed at bounded cost — index seek + single-row page, no transcript hydration). The notice carries `messageMetadata { "type": "questions_dismissed", "source": "system", "dismissedQuestionsMessageId": "<id>" }`, exposed on the queued entry while undelivered (`agent.getQueue`) and persisted on the delivered user row (row `metadata` and served block metadata). Delivery: an **idle** agent receives the notice as an immediate turn (the wake-delivery path); when it must queue (agent busy, or a NEWER question still holds automatic deliveries), the entry is **promoted to the absolute queue head** (position 0) with `interruptPriority: true` — unlike the normal interrupt insertion order (which slots behind existing interrupt-priority entries, see `agent.queueMessage`), the promotion places the notice ahead of EVERY parked entry, including pre-existing interrupts. The ordering is best-effort under a concurrent drain race: the promotion is a separate queue-lock acquisition from the enqueue, so a racing drain may pop a previously parked entry (or the notice itself) in the window between them — the notice still delivers, just not strictly first. **Idempotent**: re-dismissing the same `messageId` succeeds, rewrites the same marker, and sends NO duplicate notice — guarded by the persisted dismissal marker (written before the notice is enqueued so the hold cannot re-park it) plus an in-memory per-agent notice registry that also covers re-dismissing an OLDER message id after the single-slot marker was overwritten by a newer dismissal (the registry is process-local; the marker alone guards across restarts). **Fail-soft**: notice delivery errors are logged; the RPC never fails because of the notice. Validation: an empty `messageId` or one exceeding 256 bytes is `-32602`; a nonexistent `agentId` or a workspace mismatch is a not-found error (fail closed, no metadata write). The `messageId` is NOT checked against the transcript — dismissing an id that carries no questions is a harmless no-op marker write (the hold releases only when the dismissal marker matches the `pendingQuestionsMessageId` marker the asking turn wrote) |
+| agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — advance the per-conversation **seen marker** to `messageId` (the newest transcript message the user has seen): persists `lastSeenMessageId` in the session metadata (survives daemon restarts), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (omitted when nothing was marked seen). Clients use it to render a "New messages" divider after the last-seen message on conversation entry; marker updates from other clients converge via `agent:updated`. The marker is also one side of the client-side per-agent **unread** derivation against `lastMessageId` (intentd#1039 — see the `agent.list` row above): `hasUnread = lastMessageRole === "assistant" && lastMessageId != null && lastMessageId !== lastSeenMessageId`, with an **absent marker counting as unread**; because the newest user/assistant id can differ from the marker via system/tool rows, clients should mark user/assistant row ids seen where possible — equality is the only sound comparison; id ordering is NOT a valid fallback (ids are not uniformly UUIDv7 and v7 mint time is not persist order — see the `agent.list` row above). **Monotonic**: when both the named message and the current marker resolve to transcript positions and the named one is OLDER, the call is a no-op returning the CURRENT marker (`lastSeenMessageId` in the result is the unchanged current value; no write, no event) — the marker never moves backwards, including under concurrent callers (the persist is an atomic single-key compare-and-set on the marker's current value; a raced write re-reads and re-applies the gate). **Idempotent**: re-marking the already-persisted id succeeds without a write or a duplicate event. **Dangling ids are tolerated** (same laxity as `agent.dismissQuestions`): the `messageId` is NOT checked against the transcript — an unknown id (or one whose row was truncated by `agent.editAndRegenerate`) is persisted as a dangling marker (clients fall back to their no-marker behavior when the id no longer resolves), and a dangling CURRENT marker never blocks an advance (the monotonicity comparison only applies when both sides resolve). Bounded cost: a metadata-only session lookup plus at most two index seeks — no transcript hydration. Validation: an empty `messageId` or one exceeding 256 bytes is `-32602`; a nonexistent `agentId` or a workspace mismatch is a not-found error (fail closed, no metadata write). Does NOT touch the workspace-level `unread` attention flag — `workspace.markSeen` (§5.1) stays independent |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks?, model? | { success, queued: false, messageId, truncatedCount } — edit a past **user** message and regenerate from that point (additive `agent.*` extension). The result `messageId` is the freshly-minted server id of the NEW regenerated user message — NOT the input `messageId`, which names the edit target whose row (and everything after it) is dropped by the truncation; the two are never the same id. Orchestrated daemon-side, in order: (1) `messageId` is validated FIRST (must reference an existing user message in the transcript — unknown or non-user ids are rejected with `-32602` before any state changes; the transcript is untouched); (2) any in-flight turn is stopped (hard-cancel: the worker is aborted and the agent process killed) and the pending queue is discarded (a previously non-empty queue republishes `agent:queue:updated` as empty); (3) with `model` supplied, the session model is switched (same semantics as `agent.setModel`) before the regenerated turn; (4) the transcript is truncated to just BEFORE the edited message — the edited message and everything after it are dropped (destructive; fresh row ids / 0-based `seq` via the replaceMessages store machinery) and `agent:updated` is emitted with `{ truncatedCount, remainingCount }`; (5) the agent's ACP session is flagged for forced recreation — the next prompt SKIPS the `session/load` resume, opens a fresh `session/new`, and prepends the truncated prior history as `<supervisor>` XML (the provider must not retain the truncated turns in context; the forced-recreate flag survives intervening `agent.stop`s and is only consumed when a fresh session opens); (6) `content` is sent as a fresh user message (normal `agent.sendMessage` semantics; `imageBlocks`/`fileBlocks` ride along; the usual `agent:message` / `agent:stream:*` events follow) |
 | agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? | { success, queuedMessage, turnId } — **Unknown agent → fail closed.** A nonexistent `agentId` is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE enqueueing — no phantom queue entry that can never drain, no `agent:queue:updated` event (same guard contract as `agent.sendMessage`). QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority? } — `interruptPriority: true` (additive, v2.8) marks an entry that entered the queue via an interrupt-priority fallback (a held or slot-raced `priority: "interrupt"` send): it was inserted at the FRONT of the queue, **behind any existing interrupt-priority entries and ahead of every normal entry** (interrupts stay arrival-ordered among themselves); omitted (never `false`) on normal entries. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is the entry's turn correlation id: equal to the entry `id` for a fresh enqueue, but a terminal-failure requeue mints a NEW entry `id` while KEEPING the failed turn's original `turnId`, so a retry redrive's lifecycle events still correlate with the turn the client keyed at send time. Omitted only when the entry has no id set (every enqueue path mints one today; legacy pre-#1022 persisted rows rehydrate with `turnId = id`), never `null`. `messageMetadata` is only present when the entry was enqueued with per-message metadata (e.g. an internal wake's `event_notification` payload, or an agent-to-agent send's `agent_message` sender-attribution tag, captured while the agent was busy); user-typed `agent.queueMessage` entries never carry it. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req) | { success, queuedMessage } (QueuedMessage shape as above) |
 | agent.removeQueuedMessage | agentId (req), messageId (req) | service result |
-| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority? } (shape as `agent.queueMessage`, including the monorepo#1022 `turnId?` correlation id and the v2.8 `interruptPriority?` flag) |
+| agent.getQueue | agentId (req) | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority? } (shape as `agent.queueMessage`, including the monorepo#1022 `turnId?` correlation id and the v2.8 `interruptPriority?` flag). A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
 | agent.stop | agentId (req) | { success: true } |
-| agent.setModel | agentId (req), modelId (req), workspaceId (req) | service result — emits `agent:updated`. A compound `modelId` (`provider:model`) whose provider prefix is not a registered ACP provider is rejected with `-32602` (`agent.setModel: unknown provider: <id> (known providers: ...)`) before any mutation — `session.model` / `session.provider` are left untouched and no default-provider fallback occurs. A **bare** `modelId` is validated against the session's effective provider (`session.provider` → default, with legacy default-provider aliases normalized) using the same ownership check as `agent.create` — static tiers unioned with cached dynamic catalogs, with the same asymmetric-evidence rule: a bare id provably owned by other provider(s) is rejected with `-32602` (`agent.setModel: model <id> does not belong to provider <p> (providers with this model: ...)`) before any mutation; bare ids with no ownership evidence and the `"default"` sentinel pass unchanged. **Model-change transcript notice (new in intentd).** `agent.setModel` itself never writes to the transcript — the notice is deferred to the next turn start (`ensure_started`), when the turn's spawn-resolved model/provider is compared against the last **committed** turn's identity (persisted `agent_session.last_turn_model` / `last_turn_provider`, written on `ensure_started`'s success paths once the child + ACP session are up). A difference (and at least one committed prior turn) persists ONE informational row: `role: "system"`, one text block (`"Model changed from <from> to <to>."`), row `metadata = { "type": "model_changed", "from": string \| null, "to": string \| null, "fromProvider": string, "toProvider": string }` (`from`/`to` are spawn-resolved model ids; `null` = provider default), and emits the standard `agent:message` event (`role: "system"`) so clients update live. Picker toggles reverted before any message produce NO notice (nothing was committed in between); the agent's very first turn produces NO notice (no committed prior identity, the baseline just commits); a failed spawn/switch commits nothing (the notice only lands once the turn provably starts under the new identity). The row is transcript-only: system-role rows are excluded from supervisor-XML history replay (which renders only user/assistant/error) and never reach any outbound provider prompt. Covers same-provider respawn, cross-provider recreate, and idle-agent (no live handle) respawn paths alike — detection is store-based. Best-effort: a notice persist failure is logged and the turn proceeds. |
-| agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI, static fallback) |
+| agent.setModel | agentId (req), modelId (req), workspaceId (req), providerId? | service result — emits `agent:updated`. A compound `modelId` (`provider:model`) whose provider prefix is not a registered ACP provider is rejected with `-32602` (`agent.setModel: unknown provider: <id> (known providers: ...)`) before any mutation — `session.model` / `session.provider` are left untouched and no default-provider fallback occurs. A **bare** `modelId` (with no `providerId`) is validated against the session's effective provider (`session.provider` → settings-derived default, with legacy default-provider aliases normalized) using the same ownership check as `agent.create` — cached dynamic catalogs only ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)), with the same asymmetric-evidence rule: a bare id provably owned by other provider(s) is rejected with `-32602` (`agent.setModel: model <id> does not belong to provider <p> (providers with this model: ...); pass providerId to select the intended provider` — the trailing hint is new with the `providerId` param, [intent-hq/intentd#986](https://github.com/intent-hq/intentd/pull/986)) before any mutation; bare ids with no ownership evidence and the `"default"` sentinel pass unchanged. **Explicit provider (`providerId`, additive — [intent-hq/intentd#986](https://github.com/intent-hq/intentd/pull/986), [intent-hq/monorepo#1657](https://github.com/intent-hq/monorepo/issues/1657)).** `providerId` optionally names the intended provider explicitly, so a client that knows which provider group the user picked (e.g. the FE model picker, whose default-provider options carry bare ids) can state it on the wire instead of relying on compound-id encoding or session-provider inference. Optional string: JSON `null`, an empty string, and a whitespace-only value all read as absent (the value is trimmed), keeping older clients that send a blank field on the historical path; a present non-string value is rejected with `-32602` (`agent.setModel: providerId must be a string`) at the router boundary. When present it must name a registered ACP provider — an unknown id is rejected with `-32602` (`agent.setModel: unknown provider: <id> (known providers: ...)`) before any mutation. A compound `modelId`'s provider prefix must agree with it (after prefix normalization) — a conflict is rejected with `-32602` (`agent.setModel: modelId <id> names provider <p> but providerId is <q>`) before any mutation, rather than guessing which provider was meant. A **bare** `modelId` is then validated against the GIVEN provider instead of the session's effective one (same cached-catalog asymmetric-evidence ownership check as above), and on success `session.provider` is reconciled to `providerId` — the same narrow `set_agent_session_model` write path as the compound-prefix reconcile — so the next spawn runs the intended binary. Absent `providerId` ⇒ prior behavior unchanged byte-for-byte. **Model-change transcript notice (new in intentd).** `agent.setModel` itself never writes to the transcript — the notice is deferred to the next turn start (`ensure_started`), when the turn's spawn-resolved model/provider is compared against the last **committed** turn's identity (persisted `agent_session.last_turn_model` / `last_turn_provider`, written on `ensure_started`'s success paths once the child + ACP session are up). A difference (and at least one committed prior turn) persists ONE informational row: `role: "system"`, one text block (`"Model changed from <from> to <to>."`), row `metadata = { "type": "model_changed", "from": string \| null, "to": string \| null, "fromProvider": string, "toProvider": string }` (`from`/`to` are spawn-resolved model ids; `null` = provider default), and emits the standard `agent:message` event (`role: "system"`) so clients update live. Picker toggles reverted before any message produce NO notice (nothing was committed in between); the agent's very first turn produces NO notice (no committed prior identity, the baseline just commits); a failed spawn/switch commits nothing (the notice only lands once the turn provably starts under the new identity). The row is transcript-only: system-role rows are excluded from supervisor-XML history replay (which renders only user/assistant/error) and never reach any outbound provider prompt. Covers same-provider respawn, cross-provider recreate, and idle-agent (no live handle) respawn paths alike — detection is store-based. Best-effort: a notice persist failure is logged and the turn proceeds. |
+| agent.getModels | — (no workspaceId) | { models: [{ id, name, provider, description? }] } (from auggie CLI; an unavailable CLI yields an **empty** list — no static fallback catalog, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)) |
 | agent.rename | agentId (req), name (req, non-empty), skipIfExplicitlySet? | { success: true, name } — an applied rename emits `agent:renamed`. With `skipIfExplicitlySet: true`, a session whose name was already explicitly set is left untouched and the result is { success: true, name: <existing>, skipped: true } (no event) |
 | agent.delete | agentId (req), workspaceId? | { success: true } |
-| agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds?, subscriptionId?, message? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. Skipped poisoned sessions (repeated restore failures, monorepo#840) are quarantined out of candidate selection; on both wake and create branches each one's parked queue is migrated to the woken/created agent via an atomic durable hand-off (one transaction moves the persisted rows, so a crash leaves the messages on exactly one queue; delivery stays at-least-once) and the session is then hard-deleted with one `agent:deleted` emitted — `cleanedUpAgentIds` still lists them (monorepo#847). A failed migration is non-fatal to the wake but that id is withheld from `cleanedUpAgentIds` and its task assignment survives (messages stay durable on the poisoned queue), so the next `agent.wakeOrCreate` retries the migration + GC. **`callerAgentId`-present responses (SUB-1 auto-subscription, monorepo#926/#933):** when `callerAgentId` is provided, ALL THREE actions additionally carry `subscriptionId` — the id of the deliver-once completion watch registered for the caller against the target agent — and `message`, a human-readable summary of the action taken ending with "You will be notified when the agent responds.". The queued branch (`message_queued_to_active_agent`) needs no special watch mode: queue-aware completion (§Completion-watch persistence) means the target's `agent:idle` for its in-flight turn is an interim idle (the queued message is still pending) and neither delivers nor retires the watch — the wake fires at the real completion after the queued turn, with no leak-guard timer. Repeated calls for the same caller/target pair reuse (or adopt, per the pair-uniqueness invariant in §Completion-watch persistence) the existing watch under the same `subscriptionId` instead of stacking duplicates; the create branch always registers a fresh watch (the child id was freshly minted this call). Both fields are absent when `callerAgentId` is omitted, and likewise when the named caller's session is Deleted — no completion watch is registered for a deleted caller (intentd#667). |
+| agent.wakeOrCreate | taskNoteId (req), contextMessage (req), model?, reasoningEffort?, callerAgentId?, delegationDepth?, messageMetadata?, create? { name?, specialist?, provider?, agentType?, model?, reasoningEffort?, contextReferences?, metadata?, skipAutoCommit? } | { ok, agentId, agentName, created, action: "message_queued_to_active_agent" \| "woke_existing" \| "created_new", taskTitle, result, cleanedUpAgentIds?, subscriptionId?, message? } — depth-guard rejects `delegationDepth >= MAX_DELEGATION_DEPTH` with `-32602` (`MAX_DELEGATION_DEPTH` cap = 2; caller depth is otherwise inherited from `callerAgentId`'s session metadata + 1). Pre-widening 3-required-params callers stay wire-compatible; `create.*` is only consulted on the create branch and specialist/model from the newest assigned session takes precedence over `create.specialist`/`create.model` when a resumable candidate is found. **Reasoning effort (additive, create branch only):** the top-level `reasoningEffort` wins over `create.reasoningEffort`, then the chosen specialist model option's effort, then the specialist's `reasoningEffort` frontmatter scalar, then the settings `model.defaultReasoningEffort` (§5.12) — which applies only when the child's model itself resolved from the settings default chain, never alongside a caller-supplied model or a specialist model pin — then unset. A level from the param / model-option / frontmatter rungs is validated against the cached catalog's `effortLevels` for the resolved model exactly as on `agent.delegate` (§5.11 "Delegation reasoning-effort resolution"), with the `-32602` raised before the child is created; a settings-derived level is instead dropped with a daemon warn log when unsupported, never rejected. The wake branch never changes an existing session's effort. Skipped poisoned sessions (repeated restore failures, monorepo#840) are quarantined out of candidate selection; on both wake and create branches each one's parked queue is migrated to the woken/created agent via an atomic durable hand-off (one transaction moves the persisted rows, so a crash leaves the messages on exactly one queue; delivery stays at-least-once) and the session is then hard-deleted with one `agent:deleted` emitted — `cleanedUpAgentIds` still lists them (monorepo#847). A failed migration is non-fatal to the wake but that id is withheld from `cleanedUpAgentIds` and its task assignment survives (messages stay durable on the poisoned queue), so the next `agent.wakeOrCreate` retries the migration + GC. **`callerAgentId`-present responses (SUB-1 auto-subscription, monorepo#926/#933):** when `callerAgentId` is provided, ALL THREE actions additionally carry `subscriptionId` — the id of the deliver-once completion watch registered for the caller against the target agent — and `message`, a human-readable summary of the action taken ending with "You will be notified when the agent responds.". The queued branch (`message_queued_to_active_agent`) needs no special watch mode: queue-aware completion (§Completion-watch persistence) means the target's `agent:idle` for its in-flight turn is an interim idle (the queued message is still pending) and neither delivers nor retires the watch — the wake fires at the real completion after the queued turn, with no leak-guard timer. Repeated calls for the same caller/target pair reuse (or adopt, per the pair-uniqueness invariant in §Completion-watch persistence) the existing watch under the same `subscriptionId` instead of stacking duplicates; the create branch always registers a fresh watch (the child id was freshly minted this call). Both fields are absent when `callerAgentId` is omitted, and likewise when the named caller's session is Deleted — no completion watch is registered for a deleted caller (intentd#667). |
 | agent.summary | agentId (req) | quick summary of what the agent did |
-| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` (P3-1.2b). Delivery: a non-grouped delegated child delivers the single immediate parent wake at reportToParent time (directly to `session.parent_agent_id`, no watch required); the parent's ungrouped watches on the child are marked `report_delivered` (synced through to the persisted `completion_watch` row) so the child's later `agent:idle` is suppressed for that parent — the suppressed watch is still retired at the child's completion. The marking is scoped to the parent's watches ONLY, so third-party watchers — including explicit `ws.agent.watch` watchers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229), §Completion-watch persistence) — still receive the idle-driven completion wake. `agent:failed` / `agent:deleted` after a report still deliver wakes. Children that never report keep the idle-driven wake with `lastResponseSummary`. Grouped children (`after_all`) do not get an immediate wake — the persisted report reaches the parent only inside the group's single aggregated wake (as that child's `Report:` line, which wins over `lastResponseSummary`); a late report after group delivery wakes immediately. All internal parent wakes (completion watches, the aggregated group wake, immediate reports) run a real parent turn through the runtime send-message path — normal `agent:stream:*` / `agent:idle` lifecycle, queued if the parent is mid-turn. **Stale queued-message redrives (new in intentd, #576):** a message queued to a delegated child while it was mid-turn, but drained only AFTER the child's completion report was persisted and delivered, is **stale** (the entry's `queuedAt` — the same wire field served by `agent.getQueue` — predates the session's `completionReportTimestamp`). A stale redrive's turn (1) **skips the turn-begin report clear** — the delivered report stays queryable via `agent.get`/`agent.list` and no `agent:updated` with `completionReportCleared: true` fires for that turn (a genuine re-report still overwrites it through `agent.reportToParent`) — and (2) the redriven message content gains a deterministic `[SYSTEM NOTE]` annotation (appended before the transcript persist, so the persisted user row and the provider prompt match) telling the child its report was already delivered and to re-report only if the message materially changes the outcome. The annotation is idempotent across requeues; for a requeued entry whose user row already reached the transcript (persisted requeue) the annotation is skipped — persisted rows are never mutated — but the report clear is **still suppressed**. Staleness fails open: session-lookup or timestamp-parse failures treat the message as fresh, and fresh messages / non-delegated agents keep the pre-existing behavior (report cleared at next turn begin) |
+| agent.reportToParent | report (req) | service result — -32603 if caller is not a delegated agent. Persists `metadata.completionReport` / `completionReportTimestamp` on the child session (re-served by agent.get/agent.list) and emits `agent:updated` (P3-1.2b). Delivery: a non-grouped delegated child delivers the single immediate parent wake at reportToParent time (directly to `session.parent_agent_id`, no watch required); the parent's ungrouped watches on the child are marked `report_delivered` (synced through to the persisted `completion_watch` row) so the child's later `agent:idle` is suppressed for that parent — the suppressed watch is still retired at the child's completion. A `report_delivered` watch is also excluded from the parent's waiting projection — the `AgentLite` `isWaitingForOtherAgents` / `waitingForAgentIds` flags, the emit-time `agent:idle` stamp, and the `agent:subscriptions-changed` snapshot (§6.5) — the same exclusion the settlement predicate applies ([monorepo#1649](https://github.com/intent-hq/monorepo/issues/1649), [intent-hq/intentd#1017](https://github.com/intent-hq/intentd/pull/1017)), so a parent whose only remaining watches are `report_delivered` no longer displays as waiting on the already-reported child. The marking is scoped to the parent's watches ONLY, so third-party watchers — including explicit `ws.agent.watch` watchers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229), §Completion-watch persistence) — still receive the idle-driven completion wake. `agent:failed` / `agent:deleted` after a report still deliver wakes. Children that never report keep the idle-driven wake with `lastResponseSummary`. Grouped children (`after_all`) do not get an immediate wake — the persisted report reaches the parent only inside the group's single aggregated wake (as that child's `Report:` line, which wins over `lastResponseSummary`); a late report after group delivery wakes immediately. All internal parent wakes (completion watches, the aggregated group wake, immediate reports) run a real parent turn through the runtime send-message path — normal `agent:stream:*` / `agent:idle` lifecycle, queued if the parent is mid-turn. **Stale queued-message redrives (new in intentd, #576):** a message queued to a delegated child while it was mid-turn, but drained only AFTER the child's completion report was persisted and delivered, is **stale** (the entry's `queuedAt` — the same wire field served by `agent.getQueue` — predates the session's `completionReportTimestamp`). A stale redrive's turn (1) **skips the turn-begin report clear** — the delivered report stays queryable via `agent.get`/`agent.list` and no `agent:updated` with `completionReportCleared: true` fires for that turn (a genuine re-report still overwrites it through `agent.reportToParent`) — and (2) the redriven message content gains a deterministic `[SYSTEM NOTE]` annotation (appended before the transcript persist, so the persisted user row and the provider prompt match) telling the child its report was already delivered and to re-report only if the message materially changes the outcome. The annotation is idempotent across requeues; for a requeued entry whose user row already reached the transcript (persisted requeue) the annotation is skipped — persisted rows are never mutated — but the report clear is **still suppressed**. Staleness fails open: session-lookup or timestamp-parse failures treat the message as fresh, and fresh messages / non-delegated agents keep the pre-existing behavior (report cleared at next turn begin) |
 | agent.getSubscriptions | agentId (req), workspaceId (req) | { subscriptions, delegationGroups, agentStatuses, eventSubscriptions } (filter fields flattened as top-level actorIds/eventTypes per subscription; no legacy filter object). `eventSubscriptions` (additive, monorepo#947) lists the caller's live `event.subscribe`/`agent.subscribe` registrations — `{ id, workspaceId, subscriberAgentId, eventTypes, excludeSelf, batchWindow, createdAt }` per entry — so an agent can recover a lost `subscriptionId` |
 | agent.cancelSubscriptions | agentId (req), workspaceId (req), subscriptionId?, groupId? | { success: true } — unscoped (neither optional param) cancels EVERYTHING the agent registered (all completion watches, all delegation groups it parents — persisted `delegation_group` rows are swept best-effort so cancelled groups don't rehydrate on restart — and all event subscriptions), idempotent, exactly as before the params existed. Scoped *(new in intentd)*: `subscriptionId` cancels exactly that completion watch; `groupId` cancels that delegation group plus its grouped watches (removed together in one registry critical section); both may be combined. Cancelling a GROUPED watch by `subscriptionId` also drops that child from its group's expected set — group settlement is driven by the grouped watches, so the group must not stall on a cancelled child — then attempts to fire the group, since the shrunk group may now be sealed and complete; a group whose expected set becomes empty is removed outright. Each scoped removal deletes the matching persisted `completion_watch` / `delegation_group` row(s) — the group-row delete is durable-before-observable (awaited before any in-memory removal; a failed delete errors the call with the registry untouched) — and publishes the standard `agent:subscriptions-changed` snapshot (§6.5) in the parent's home workspace; event subscriptions are untouched (use `agent.unsubscribe`). An id that does not name a watch/group owned by `agentId` is rejected with `-32602` (`unknown subscription id: <id>` / `unknown delegation group id: <id>`) BEFORE anything is removed, so a combined call is all-or-nothing; a present-but-non-string id is likewise rejected with `-32602` (`subscriptionId must be a string` / `groupId must be a string`) rather than being coerced into an unscoped cancel |
 | agent.subscribe (deprecated) | eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — not the WS streaming surface (use events.subscribe). Registers a real internal subscription: when `agentId` names a subscriber agent, matching workspace events (category wildcards or exact types) are coalesced over `batchWindow` ms (default 500) and delivered as one `[WORKSPACE EVENTS]` wake message per batch, with `event_notification` message metadata; `excludeSelf` (default true) drops the subscriber's own events. **Agent events are off-limits to agent subscribers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229)):** when the call carries a subscriber agent, every explicit `agent:`-prefixed entry — exact types, the `agent:*` wildcard itself, and the observability events — plus `chat:stream:delta` is rejected with `-32602` at subscribe time, atomically (a mixed list like `["note:*", "agent:*"]` registers NOTHING; the error text redirects to `ws.agent.watch(agentId)` and lists the non-agent categories that remain available). A bare `*` is NOT rejected: it silently narrows to the non-agent category wildcards at resolution time (front-door `*` expansion is unchanged and still includes `agent:*`). A **match-time guard** backs the subscribe-time one: agent-owned delivery filters set `exclude_agent_events`, so legacy `agent:*` rows persisted before the guard existed never deliver agent events after a daemon restart. Subscriber-less (FE front-door) subscriptions are exempt from all of this and keep the full stream. Agent-owned subscriptions persist across daemon restarts (rows whose subscriber is gone — or whose workspace no longer exists, `__chief__` exempt — are pruned at startup, monorepo#947). Live subscriptions are listed via `agent.getSubscriptions` (`eventSubscriptions`) and reported by `agent.diagnostics`. `workspace.delete` drops the workspace's event subscriptions (delivery tasks aborted, rows deleted). Without `agentId` (FE front door) the subscription is match-only in memory — no wake target. Over the MCP seam (`ws.agent.subscribe` / `ws.event.subscribe`) the subscriber is the calling agent automatically (so the restriction applies; the MCP binding's `*` expansion moved into the daemon for the per-subscriber resolution). |
@@ -1374,30 +1670,134 @@ Precedence, first match wins:
 1. **Explicit client `model`** — validated per the `agent.create` rules above (unknown
    compound provider prefix / provably-mismatched bare id → `-32602` before any side effect).
 2. **Specialist frontmatter `model`** (3-tier resolved, project > user > bundled) — used only
-   if it belongs to the resolved provider (static tiers ∪ cached dynamic catalogs, same
-   ownership evidence as `agent.create`); a model owned by another provider falls through
-   instead of leaking cross-provider.
-3. **Specialist frontmatter `modelTier`** (`fast` \| `balanced` \| `smart`) — resolved
-   **strictly within the resolved provider's static tier table** (§5.38 `modelTiers`), never
-   another provider's. Providers without a tier table (dynamic-model providers like
-   `opencode`, `droid`, `grok`), an unrecognized tier value, and claude-code's smart-tier
-   `"default"` sentinel ("use the CLI default", not a model id) all fall through.
-4. **Settings chain** — for background/delegated sessions
-   `backgroundAgents.typeOverrides[agentType]` (the specialist id doubles as the type key)
-   then `backgroundAgents.defaultModel`; then `model.providerDefaults[resolved provider]`;
-   then `model.default` (§5.12). Provider-guarded like step 2: a configured default owned by
-   another provider is dropped with a daemon warn log (falling to step 5) rather than
-   rejected — a `-32602` here would reject a model the caller never sent.
-5. **None** — `session.model` stays unset; the provider CLI's own default applies.
+   if it belongs to the resolved provider (cached dynamic catalogs, same ownership evidence
+   as `agent.create`); a model owned by another provider falls through instead of leaking
+   cross-provider.
+3. **Settings chain** — `model.providerDefaults[resolved provider]`, then `model.default`
+   (§5.12). Provider-guarded like step 2: a configured default owned by
+   another provider is dropped with a daemon warn log (falling to step 4) rather than
+   rejected — a `-32602` here would reject a model the caller never sent. The chain is
+   background-agnostic ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)):
+   the `quickActions.*` model settings scope to single-shot quick actions only and are
+   never consulted for an agent session, delegated ones included — the former
+   `backgroundAgents.typeOverrides[agentType]` / `backgroundAgents.defaultModel` rungs are
+   **removed**.
+4. **None** — `session.model` stays unset; the provider CLI's own default applies.
+
+The former specialist frontmatter `modelTier` step is **retired** (tolerated-and-ignored,
+§5.11): a specialist's model is either an explicit frontmatter `model` pin or inherited via
+the settings chain. The static tier tables themselves are **removed** ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922))
+— `providers.catalog` (§5.38) no longer serves `modelTiers`, and no tier concept
+participates anywhere in resolution.
+
+Specialist `modelOptions` (§5.11) likewise adds **no resolver step**: the list is advisory
+— surfaced to delegating agents in the `workspace_api` tool description's
+`ws.agent.delegate` docs — and a chosen option is sent as the explicit client `model`, i.e.
+step 1 above, which remains the first-match step exactly as before. A caller that omits
+`model` resolves through steps 2–4 unchanged, regardless of any `modelOptions`. The
+per-option `reasoningEffort` (§5.11) is likewise not a resolver step for `model` — it only
+feeds the separate delegation reasoning-effort resolution.
 
 The resolved provider is the explicit `provider` param, else the compound-`model` prefix,
-else the daemon default (legacy default-provider aliases normalized). The resolved model is
+else the **settings-derived default** — the provider prefix of `model.default` when compound
+and registry-valid, else `providers.active`, each validated against the provider registry so
+a stale or mistyped id falls through — bottoming out at the first registered provider (a
+neutral positional last resort; no provider carries a hardcoded default designation,
+[intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)). Legacy
+default-provider aliases are normalized. The resolved model is
 persisted to `session.model` at creation time, **pinning it for the session's lifetime**:
 later settings/specialist changes only affect agents created afterwards, and an existing
 agent's model changes only via explicit `agent.setModel`. Bundled specialists ship with no
-`modelTier`, so they inherit the user's configured default (step 4) or the provider CLI
-default. `specialist.get`/`specialist.list` preview this resolution via the additive
+frontmatter `model`, so they inherit the user's configured default (step 3) or the provider
+CLI default. `specialist.get`/`specialist.list` preview this resolution via the additive
 `resolvedModel`/`resolvedProvider` fields (§5.11), computed by the same resolver.
+
+**Creation-time reasoning-effort resolution (daemon-owned, [intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970) / [#974](https://github.com/intent-hq/intentd/pull/974)).**
+Every creation path resolves the session's `reasoningEffort` through one daemon-side chain,
+parallel to the default-model resolver above. Precedence, first match wins:
+
+1. **Explicit caller `reasoningEffort`** (`agent.create`, `agent.delegate`,
+   `agent.wakeOrCreate`'s create branch — where the top-level param wins over
+   `create.reasoningEffort`). A **present** value is the caller's decision and never falls
+   through: an empty or whitespace-only value is an explicit clear that leaves the session
+   effort unset (it does not reach the rungs below).
+2. **Specialist `modelOptions` effort** — the `reasoningEffort` of the chosen model option
+   whose `model` matches the resolved model (§5.11).
+3. **Specialist frontmatter `reasoningEffort`** scalar (3-tier resolved).
+4. **Settings `model.defaultReasoningEffort`** (§5.12) — applied only when no rung above
+   decided AND the session's **model itself resolved from the settings chain** (step 3 of
+   the default-model resolver above). A caller-supplied model, a specialist frontmatter pin,
+   or a fall-through to the provider CLI default all leave the effort unset here.
+5. **Unset** — the provider's own default applies.
+
+Rungs 2–3 apply on `agent.create` too when it names a `specialistId` and the caller supplied
+no `reasoningEffort` (the delegate / wakeOrCreate seams pre-resolve them and pass the result
+down as the param, so they are resolved exactly once).
+
+**Validation is asymmetric by source.** A level resolved from rungs 1–3 is validated against
+the resolved model's cached `effortLevels` and a level outside that list is rejected with
+`-32602` naming the model and the valid values, before any side effect (§5.11 "Delegation
+reasoning-effort resolution"). The **settings** rung is lenient in the same way the settings
+default-model chain is: a level the resolved model's cached catalog provably does not list is
+**dropped with a daemon warn log** (the session effort stays unset), never a `-32602` — a
+rejection there would fail a creation over a value the caller never sent. With no cached
+evidence — no resolved model, no cached row, or a row declaring no `effortLevels` — the level
+passes through unvalidated on every rung.
+
+**Reasoning effort — session field & application *(v5.2)*.** `reasoningEffort` is a
+first-class `AgentSession` field (set at `agent.create` / `agent.delegate` /
+`agent.wakeOrCreate`'s create branch, patchable via `agent.update`, served on both the
+`AgentSession` and `AgentLite` projections, omitted when unset). It is persisted **as-is** —
+providers own the level vocabulary (`effortLevels`, §5.30) and the daemon never normalizes
+the caller's spelling. Application is **generic and provider-agnostic**: at session open (and
+resume) the daemon records whichever `configOptions` entry the adapter advertised under
+`category: "thought_level"` (e.g. claude-agent-acp's `effort`, codex-acp's
+`reasoning_effort`) and applies the stored level through
+`session/set_config_option` under that adapter's own config id — no provider capability flag,
+and a provider that advertises no such option silently ignores the field. The application is
+idempotent and change-driven: the daemon tracks the value the adapter is on, skips a re-apply
+when nothing changed, and skips a level the select does not accept (so a stale level from
+another provider's vocabulary is never sent). Matching against the advertised values is
+**case-insensitive** and the adapter's own spelling is what gets sent — the stored level keeps
+the caller's spelling (validation is case-insensitive too), so a persisted `"HIGH"` reaches a
+`["low","high"]` select as `"high"`. **Clearing** `reasoningEffort` restores the provider's own
+default — the value the adapter reported at session open — so the clear takes effect on the
+live session instead of leaving the last applied level in place. A mid-session `reasoningEffort` change needs
+**no respawn** — it is re-applied on the live session at the next turn start, so it takes
+effect for the next prompt. Failures are logged and never fail session startup or the turn:
+the provider simply keeps its current effort. The codex spawn path additionally passes the
+level as the `-c model_reasoning_effort=…` config override (an effort still embedded in a
+compound model id wins over the session field; the `CODEX_REASONING_EFFORT` env seam remains
+the last-resort fallback). **Legacy compound ids.** Pre-5.2 codex sessions whose
+`session.model` embedded the effort as a `{base}/{effort}` suffix (the retired effort-variant
+catalog rows, §5.30) are normalized by a one-time store migration into the base model plus
+`reasoningEffort`; the split is guarded on a known codex effort suffix AND codex evidence
+(the provider column, a `codex:` compound prefix, or a known effort-capable base model), so
+slash-bearing non-codex ids (e.g. HuggingFace-style unsloth ids) are untouched.
+
+**Session-discovered effort levels — `effortLevels` *(additive; no version bump)*.**
+`effortLevels?: string[]` is an optional, daemon-owned field served on both the
+`AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` / `agent.get` /
+`agent.update` results) projections — presence-detected, **omitted when
+the provider advertises no such option** (absent, never `null` or `[]`). The
+`agent.create` result never carries it: a freshly created agent has no session yet, so
+discovery has not run — the field first appears after the first session open, via the
+`agent:updated` emit below and subsequent `agent.get` / `agent.list` reads. It is
+**session-scoped truth**: the values the provider's `category: "thought_level"`
+`configOptions` select advertised at the **most recent session open** (the same discovery
+that backs the `reasoningEffort` application above), with the adapter's `"default"`
+sentinel filtered out case-insensitively — clients render their own leading "Default"
+step that maps to a clear — and an empty post-filter list treated as no-support (field
+omitted). The persisted set is **replaced wholesale at every session open/resume/recreate**
+(cleared when the new session advertises no `thought_level` option), so a provider/model
+switch never leaves stale levels, and when an open changes the persisted set the daemon
+emits `agent:updated` so clients pick up the change without a reload. The field is
+daemon-discovered, never client-written: `effortLevels` is not in the `agent.update`
+`changes` whitelist. **Client precedence:** session-advertised `effortLevels` are
+authoritative for the reasoning-effort picker on a live session; the catalog `effortLevels`
+on `ModelInfo` (§5.30) remain the static/probe metadata the daemon validates
+delegation/create-time levels against (§5.11 "Delegation reasoning-effort resolution") and
+the picker fallback when the session advertises none.
 
 **Agent attention requests *(new in intentd)*.** Two MCP `workspace_api` bindings —
 `ws.agent.requestDiscussion(reason)` (`kind: "discussion"`) and `ws.agent.reportBlocker(reason)`
@@ -1432,7 +1832,8 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    (skipped silently when none is pending); no new wire surface is introduced by the
    child/background automatic retire. Both the raise and the retire also
    recompute-and-compare the workspace's derived `displayStatus` — a top-level foreground
-   agent's pending request promotes it to `needs_attention` (§5.1 step 0), pushed as
+   agent's pending request promotes it to `blocked` (kind `blocker`) or `needs_attention`
+   (kind `discussion`) (§5.1 steps 1–2), pushed as
    `workspace:displayStatus-changed` on an actual transition (§6.5).
 2. **Transcript notice** — a system-role message is appended with a single text block carrying
    the reason and `meta.kind = "discussion-request"` / `"blocker-report"` (the
@@ -1538,24 +1939,154 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
 - **`agent.diagnostics` queues fill** — the per-agent `queues` snapshots are now real
   (previously hardcoded `[]`), using the same drain-order sorting.
 
+#### Per-turn agent state snapshot *(new in intentd, [intentd#971](https://github.com/intent-hq/intentd/pull/971))*
+
+Outbound turn prompts are prefixed with a compact, machine-readable digest of the agent's own
+runtime state — unless the toggle is off, the digest is trivial, or building it failed (all
+three skip cases below) — and the same digest is callable on demand. **MCP-only surface** (§6.8
+principle) — there is **no wire method**: the FE neither reads nor renders snapshots, and none
+are persisted.
+
+- **`ws.agent.snapshot()` MCP binding** → the CALLER's own digest as a plain JSON object (no
+  target argument — always self-scoped; an invocation without an agent caller context is
+  rejected). Fields: `time` (current UTC, whole-second RFC-3339 — **always present**),
+  `hooks` (active `scheduled`/`running` background hooks owned by the caller, §5.40),
+  `agentWatches` (the caller's active outgoing completion watches, §Completion-watch
+  persistence), `queuedMessages` (pending entries in the caller's OWN delivery queue),
+  `eventSubscriptions` (the caller's active workspace event subscriptions, §5.5
+  `agent.subscribe`), `runningSubAgents` (delegated children not yet settled — counted over
+  the caller's `parent_agent_id` children **unscoped by workspace**, so a chief parent's
+  cross-workspace delegates count too), `numQuestionsAsked` (structured questions still
+  pending presentation/answer, §5.5 question hold), and `pendingAttention`
+  (`"blocker"` / `"discussion"` when the caller has an unresolved attention request, §5.5
+  attention-request flow). Every field except `time` is **omitted when zero/absent** (never
+  `0`, never `null`). A workspace mismatch on the resolved session fails closed as
+  `NotFound` (defense-in-depth against bare-id probes, like `getSessionStats`). The cheap
+  counterpart to `ws.agent.diagnostics`, which is unchanged and remains the deep-dive tool.
+- **Per-turn injection** — when not skipped, `build_turn_prompt` prefixes the outbound prompt
+  with the single line `current ws.agent.snapshot() => {json}` (the same JSON object,
+  serialized on one line), followed by a blank line. It is the outermost **recurring** per-turn
+  decoration — ahead of the context block, naming, and the specialist role reminder, and inside
+  only the fire-once first-turn `<system>` prepend — is rebuilt every turn for **all** agents
+  (specialist and non-specialist, unlike the role reminder), and is **never persisted**: the
+  transcript's user row keeps the undecorated content.
+- **Skipped when trivial** — when every field other than `time` would be omitted (all counts
+  zero, no pending attention) the whole line is dropped, so `time` alone never forces an
+  injection and an idle agent's prompt stays byte-identical to pre-feature output. Building
+  the snapshot **fails open**: a store error yields no line rather than failing the turn.
+- **Toggle** — the injection (and only the injection) is gated by
+  `agentFeatures.stateSnapshot` (§5.12), read **LIVE each turn**: flipping it off removes the
+  line from the very next turn of **every** session, existing ones included — a deliberate
+  deviation from the captured-at-creation `agentFeatures` convention. The
+  `ws.agent.snapshot()` tool itself is **never** gated and stays callable either way.
+
+#### Queued-message flush — combined turn on idle *(new in intentd, [intentd#876](https://github.com/intent-hq/intentd/pull/876); mode enum added in [intentd#895](https://github.com/intent-hq/intentd/pull/895))*
+
+When an agent goes idle with **more than one** ready-to-send queued entry, the queue drain may
+deliver several of them as ONE combined provider turn instead of one turn per message. The mode
+is controlled by the `agents.flushQueuedMessages` setting (§5.12 — enum `"all" | "systemOnly" |
+"off"`, default `"all"`, mutable via `settings.update`; read at drain time). `settings.update`
+only accepts the three string values (validated as an enum — a boolean `value` is rejected with
+`-32602`); the legacy boolean shape (`true` → `"all"`, `false` → `"off"`) is accepted **only**
+when parsing an on-disk `config.toml` written by an older daemon, so an existing boolean survives
+upgrade but a client cannot write one back over the wire:
+
+- **`"all"`** — every ready entry batches into one combined turn (≥2 ready entries required; the
+  original boolean-`true` behavior).
+- **`"systemOnly"`** — when ≥2 ready **system-origin** entries exist anywhere in the queue, ALL
+  of them batch into one combined turn, preserving their relative order but skipping over any
+  interleaved user-origin entries — a system batch may therefore deliver ahead of an
+  earlier-queued user message. User-origin entries always deliver individually, FIFO among
+  themselves, and are never folded into a system batch. A single ready system entry — even
+  with other ready user entries also present — has nothing to batch with, so it delivers via
+  the same single-entry drain path as `"off"` (one turn for just that entry); only ≥2 ready
+  system entries trigger a combined batch.
+- **`"off"`** — the legacy one-message-per-turn drain: every ready entry starts its own turn
+  (the original boolean-`false` behavior).
+
+With only a single ready entry — regardless of mode — the legacy one-message-per-turn drain path
+runs exactly as before. Interrupt-priority preemption, `agent.sendQueuedMessageNow`,
+question-hold derivation, and queue persistence/rehydration are all untouched by any mode.
+
+- **Wire-only combined prompt.** The model receives ONE message beginning with the header
+  `N queued messages while you were working`, followed by each entry under a `Message #k:`
+  label in delivery order. Entry contents already carry their per-entry annotations — the
+  dequeue-wait note (original `queuedAt` + wait duration) and, where applicable, the #576
+  stale-redrive note — applied per entry in the same order as the single-entry drain arms.
+  The combined prompt exists **only on the wire**: it is never persisted as a transcript row.
+- **Per-entry transcript rows.** Each flushed entry persists as its own user message row (own
+  id, own `messageMetadata` including the `queueInfo` stamp), so the transcript and UI show
+  the same N messages as individual stacked user rows — identical to what a one-at-a-time
+  drain would have persisted. Entries already persisted by a terminal-failure requeue
+  (`persisted: true`) are not re-appended.
+- **Events.** A flush emits ONE `agent:queue:updated` (the fully-shrunk queue snapshot) and
+  ONE `agent:queue:processing` for the HEAD entry — the combined turn's drain-start signal —
+  then each row persist emits its normal `agent:message` echo (§6.5), so clients render N
+  stacked user rows.
+- **Turn correlation (monorepo#1022).** The combined turn runs under the HEAD entry's
+  `turnId`, and ALL flushed rows persist — and their `agent:message` echoes are stamped —
+  under that same combined `turnId` (not each entry's own), so all N echoes correlate with
+  the single `agent:queue:processing` / `agent:stream:*` lifecycle. The queue entries
+  themselves keep their own `turnId`s (entry ids / `messageMetadata` / `queueInfo` are
+  untouched). The merged turn options carry attachments and prepend payloads from all entries
+  in message order, the head entry's `queuedAt` / `interruptPriority` / `messageMetadata`,
+  and a user origin when ANY flushed entry is user-origin (a user message is being
+  delivered); the turn-begin report clear is suppressed only when EVERY entry is a #576
+  stale redrive.
+- **Editing-entry exclusion.** Entries flagged `editing: true` are never flushed and remain
+  queued (same rule as the single-entry drain).
+- **Question hold.** Under an active question hold (below), only **user-origin** ready
+  entries are eligible to flush — the hold contract for automatic entries is unchanged. In
+  `"all"` mode this still batches ≥2 eligible user-origin entries into one combined turn; in
+  `"systemOnly"` mode, since only system-origin entries are ever batched, the hold's
+  user-origin-only eligibility means no batching occurs at all — eligible user-origin entries
+  drain solo, FIFO, exactly like the single-entry path.
+- **Never-lost requeue.** If an entry's row append exhausts the bounded persist retry
+  (#547), the agent parks in `Error` and the drained entries are requeued in their original
+  order — the failed entry at the queue front of its slice with `persisted: false`, entries
+  whose rows already reached the transcript carrying `persisted: true` so the retry drain
+  never double-appends (STAB-51) — and the fully-restored queue is republished as
+  `agent:queue:updated`. Queued messages are never dropped.
+
 #### Question hold — automatic deliveries parked behind a pending Q&A *(v2.8, [intentd#751](https://github.com/intent-hq/intentd/pull/751))*
 
 When an agent ends a turn by asking structured questions (§7 — the final assistant message
-carries trailing `application/vnd.intent.question+json` resource blocks), delivering an automatic
-message would append a user row that supersedes the pending Q&A: the FE derives pending-vs-answered
-purely from "does a user message exist after the question-bearing assistant message", so the
-composer wizard would silently vanish. The **question hold** closes this gap: while the hold is
-active, automatic deliveries park in the agent's pending queue instead of starting a turn.
+carries trailing `application/vnd.intent.question+json` resource blocks), an automatic delivery
+would start an unrelated turn on top of the pending Q&A, burying the composer wizard behind the
+agent's subsequent output. The **question hold** closes this gap: while the hold is active,
+automatic deliveries park in the agent's pending queue instead of starting a turn. Since
+[intentd#965](https://github.com/intent-hq/intentd/pull/965) (within v6.0) the pendingness the
+hold tracks is **persisted**, not re-derived from the transcript tail — see the derivation below.
 
-**Derivation (never stored).** The hold is `true` iff, walking back from the tail of the
-transcript **past any trailing `system` rows** (e.g. the resume-interruption marker — system rows
-are transparent to the derivation, same as the FE's pending-questions logic, which only resolves
-on a `user` or `assistant` row), the first non-system message is an **assistant** message carrying
-at least one `application/vnd.intent.question+json` resource block AND its id differs from the
-session's persisted `dismissedQuestionsMessageId` marker. It is re-derived from the transcript on
-every check — there is no stored hold flag or lifecycle status; an agent under hold remains
+**Derivation (persisted marker; within v6.0, [intentd#965](https://github.com/intent-hq/intentd/pull/965)).**
+The hold is `true` iff the session's persisted `pendingQuestionsMessageId` marker is set AND
+differs from the `dismissedQuestionsMessageId` marker. The marker is written at turn end whenever
+the just-persisted assistant tail carries `application/vnd.intent.question+json` resource blocks
+(single slot — a newer question-bearing turn overwrites an older marker, which is the "newest set
+supersedes" rule), and written as the **empty string** to clear (authoritative "nothing pending",
+and still marker-aware). So pendingness **survives** later plain user messages, the agent's
+subsequent turns, and daemon restarts — the check is a bounded single-row metadata read, not a
+transcript walk. There is still no hold flag or lifecycle status: an agent under hold remains
 `idle`/`completed` as usual. The derivation fails open (`false`) on store read errors so a
-transient failure can never wedge deliveries.
+transient failure can never wedge deliveries. Unlike `dismissedQuestionsMessageId` /
+`lastSeenMessageId` the marker is NOT lifted into the structured `AgentLite` `metadata`
+projection (`agent.list` / `agent.get`). It does ride the raw free-form `metadata` object
+`agent.getSession` serves — like every session-metadata key, whether set or cleared to the
+empty string — but it is **daemon-internal**: clients must NOT derive pendingness from it.
+They derive it from the transcript plus the answer tag below (and read the daemon's verdict
+through `displayStatus`, §5.1 step 2).
+
+*Pre-upgrade fallback.* A session whose marker key is **absent entirely** (the daemon never wrote
+it) falls back once to the legacy transcript tail walk — walking back past any trailing `system`
+rows, hold when the first non-system row is an un-dismissed question-bearing assistant message —
+and the derived hold is immediately **materialized** as a marker, so a hold that was live across
+the upgrade is not lost on the next plain user row. A marker written as the empty string does NOT
+fall back.
+
+*Marker re-derivation on transcript swaps.* `agent.editAndRegenerate` truncation and
+`agent.replaceMessages` re-mint row ids, so any surviving marker is dangling by construction: both
+re-derive it over the post-swap transcript (newest question-bearing assistant row not answered
+below it) and clear it when there is none, then recompute displayStatus and kick the drain.
 
 **What is held (message origin).** Only **automatic** deliveries are gated: A2A sends (the MCP
 `ws.agent.send` binding / internal send paths), parent wakes (completion watches, aggregated group
@@ -1571,23 +2102,35 @@ hold is checked BEFORE the busy check, so even an idle agent parks automatic del
 gate applies inside the queue-drain loop: while the hold is active the drain skips (parked entries
 stay parked across turns and daemon restarts — the queue is the same durable `agent_queue` table),
 EXCEPT that a parked **user-origin** entry (a user send that lost a busy race before the hold
-began) still drains — the user answer is the hold's documented release, so it supersedes the
-questions by design.
+began) still drains — it may itself carry the answer that releases the hold.
 
-**What bypasses (user origin).** User-origin actions are never held and their user row releases
-the hold: `agent.sendMessage` (the FE/router front door — the flattened `Q:`/`A:` answer message
-is the normal resolution), `agent.sendQueuedMessageNow` (explicit user action on a parked entry),
-and `agent.editAndRegenerate`. Any later user or assistant message flips the derivation false.
+**What bypasses (user origin).** User-origin actions are never held: `agent.sendMessage` (the
+FE/router front door), `agent.sendQueuedMessageNow` (explicit user action on a parked entry), and
+`agent.editAndRegenerate`. Bypassing is **not** releasing (within v6.0): a plain user row leaves
+the marker exactly as it was, and the agent's reply to it does too — only the answer tag below
+retires the hold.
 
-**Release.** The hold ends when (1) a **user message** lands after the question-bearing assistant
-message (answering or otherwise), (2) **`agent.dismissQuestions`** persists the dismissal marker
-for that message id, or (3) a later assistant message becomes the transcript tail. Both the
+**Release.** The hold ends when (1) a user row lands whose `messageMetadata` is
+`{ "type": "question_answers", "answeredQuestionsMessageId": "<marked assistant message id>" }`
+naming **exactly** the marked message — the FE composer wizard tags its flattened `Q:`/`A:` answer
+message this way; the daemon never inspects the answer TEXT, and a missing / foreign / stale
+`answeredQuestionsMessageId` (e.g. an answer for a set a newer turn already superseded) is a no-op,
+so a late answer can neither release a newer hold nor re-arm an old one. The intake runs on every
+user-row persist path (direct send, queue drain, wake delivery), so an answer that was auto-queued
+behind a busy turn still releases on drain; (2) **`agent.dismissQuestions`** persists the dismissal
+marker for that message id — since intentd#892 (within v4.3) the dismissal additionally delivers the
+system-origin **dismissal notice** to the model (immediate turn when idle; otherwise promoted to
+the absolute queue head with `interruptPriority: true`, ahead of every parked entry including
+pre-existing interrupts, so the model learns of the dismissal before the released backlog drains
+— best-effort under a concurrent drain race; see the `agent.dismissQuestions` row for
+the wording, `questions_dismissed` metadata, ordering, idempotency, and fail-soft contract); or (3)
+a **newer** question-bearing assistant turn overwrites the single-slot marker. Both the
 dismissal RPC and the end-of-turn path re-kick the queue drain, so parked entries resume promptly
 FIFO (interrupt-priority entries first) without waiting for an unrelated trigger; the send-path
 hold gates also re-check the hold after enqueueing and self-kick the drain if it cleared
 concurrently, so a racing dismissal/answer cannot strand a just-parked entry. The hold also
 feeds the workspace's derived `displayStatus`: a top-level foreground agent under hold
-promotes it to `needs_attention` (§5.1 step 0), and each hold flip — the question-asking
+promotes it to `needs_attention` (§5.1 step 2), and each hold flip — the question-asking
 turn end and every release path above — recomputes-and-compares, pushed as
 `workspace:displayStatus-changed` on an actual transition (§6.5).
 
@@ -1606,7 +2149,11 @@ turn end and every release path above — recomputes-and-compares, pushed as
 // → dismiss the pending questions without answering
 { "jsonrpc":"2.0","id":31,"method":"agent.dismissQuestions",
   "params":{ "workspaceId":"ws-abc","agentId":"agent-123","messageId":"0190a1b2-assistant" } }
-// ← marker persisted; agent:updated emitted; queue drain kicked (parked entries resume)
+// ← marker persisted; agent:updated emitted; queue drain kicked (parked entries resume);
+//    dismissal notice delivered to the model (immediate turn when idle, else promoted to the
+//    absolute queue head with interruptPriority, ahead of pre-existing interrupts — intentd#892),
+//    carrying messageMetadata:
+//    { "type":"questions_dismissed", "source":"system", "dismissedQuestionsMessageId":"0190a1b2-assistant" }
 { "jsonrpc":"2.0","id":31,"result":{ "success": true, "dismissedQuestionsMessageId":"0190a1b2-assistant" } }
 ```
 
@@ -1651,9 +2198,9 @@ turn end and every release path above — recomputes-and-compares, pushed as
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.diagnostics | workspaceId (req), agentId?, taskNoteId?, staleRespondingAfterMs? | { diagnostics, text } — JSON snapshot plus a pre-formatted text rendering; optional filters narrow to one agent or task. The snapshot includes `eventSubscriptions` (monorepo#947): the workspace's live `event.subscribe` registrations (same per-entry shape as `agent.getSubscriptions` plus `orphaned`), counted in `summary.eventSubscriptions` and per-agent as `eventSubscriptionCount`; a subscription whose subscriber is missing or deleted raises an `orphaned-event-subscription` stuck-risk signal (live chief cross-workspace subscribers are not flagged). The `queues` snapshots are real ([intentd#816](https://github.com/intent-hq/intentd/pull/816) — previously hardcoded `[]`): each agent's pending entries in drain order (interrupt-priority first, then FIFO; `editing: true` entries last), `content` truncated to 200 chars with a `…` ellipsis, bulky `imageBlocks`/`fileBlocks` dropped, attribution left in `messageMetadata` (the services-layer presentation — see the agent-facing queue visibility block above the Question hold section). Agent rows carry `waitingOnHooks?` (idle-visibility, within v3.1) — the same active-hook metadata list as the §5.5 `AgentLite` projection, omitted when empty |
-| agent.getSession | agentId (req), workspaceId? | { session: AgentSession } — full projection (superset of `AgentLite`): includes `systemPrompt`, `specialist`, the persisted metadata block, and the full `messages` log (chronological). Also carries the derived monorepo#940 `sessionCorrupted?` flag (same derive-on-emit + omitted-when-false semantics as the `AgentLite` projection, §5.5 `agent.list`) so a client rehydrating after a terminal-failure `agent:status-changed` still sees it. Both projections serve the persisted top-level `stopReason?` and — additive — `stopReasonTimestamp?` (the ISO timestamp the stop reason was recorded; persisted alongside `stop_reason`, cleared wherever it clears — turn begin, `agent.retry` — and omitted when absent, never `null`), so clients can render how long ago a parked-in-error session failed. Backs the FE-side `loadAgent` rehydration path. `-32602 "Agent not found"` when the session is unknown |
-| agent.update | agentId (req), workspaceId?, changes (req) | { success: true, agent: AgentLite } — partial update of the persisted `AgentSession` from a `changes` object. Whitelisted fields: `status`, `isActive`, `acpSessionId`, `backendSessionId`, `name`, `nameExplicitlySet`, `model`, `provider`, `systemPrompt`, `specialist`, `taskNoteId`, `skipAutoCommit`, `completionReport`, `completionReportTimestamp`, `delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`, `isBackground`. Optional-string fields accept a JSON `null` to clear. Write-once (`acpSessionId`) and immutable (`provider`) invariants are still enforced by the store. Emits `agent:updated` (or `agent:renamed` when `name` is the only mutated field). Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"` |
+| agent.diagnostics | workspaceId (req), agentId?, taskNoteId?, staleRespondingAfterMs? | { diagnostics, text } — JSON snapshot plus a pre-formatted text rendering; optional filters narrow to one agent or task. The snapshot includes `eventSubscriptions` (monorepo#947): the workspace's live `event.subscribe` registrations (same per-entry shape as `agent.getSubscriptions` plus `orphaned`), counted in `summary.eventSubscriptions` and per-agent as `eventSubscriptionCount`; a subscription whose subscriber is missing or deleted raises an `orphaned-event-subscription` stuck-risk signal (live chief cross-workspace subscribers are not flagged). The `queues` snapshots are real ([intentd#816](https://github.com/intent-hq/intentd/pull/816) — previously hardcoded `[]`): each agent's pending entries in drain order (interrupt-priority first, then FIFO; `editing: true` entries last), `content` truncated to 200 chars with a `…` ellipsis, bulky `imageBlocks`/`fileBlocks` dropped, attribution left in `messageMetadata` (the services-layer presentation — see the agent-facing queue visibility block above the Question hold section). Agent rows carry `waitingOnHooks?` (idle-visibility, within v3.1) — the same active-hook metadata list as the §5.5 `AgentLite` projection, omitted when empty — and `waitingOnPrMonitors?` (idle-visibility, unified external-wait, within v6.2) — the same active-PR-monitor metadata list, omitted when empty |
+| agent.getSession | agentId (req), workspaceId? | { session: AgentSession } — full projection (superset of `AgentLite`): includes `systemPrompt`, `specialist`, the persisted metadata block, and the full `messages` log (chronological). Also carries the derived monorepo#940 `sessionCorrupted?` flag (same derive-on-emit + omitted-when-false semantics as the `AgentLite` projection, §5.5 `agent.list`) so a client rehydrating after a terminal-failure `agent:status-changed` still sees it. Both projections serve the persisted top-level `stopReason?` and — additive — `stopReasonTimestamp?` (the ISO timestamp the stop reason was recorded; persisted alongside `stop_reason`, cleared wherever it clears — turn begin, `agent.retry` — and omitted when absent, never `null`), so clients can render how long ago a parked-in-error session failed. Both projections also serve the top-level `reasoningEffort?` (v5.2) — the session's persisted reasoning-effort level, omitted when unset — and the session-discovered `effortLevels?` (§5.5 "Session-discovered effort levels"; omitted when the provider advertises none). Backs the FE-side `loadAgent` rehydration path. `-32602 "Agent not found"` when the session is unknown |
+| agent.update | agentId (req), workspaceId?, changes (req) | { success: true, agent: AgentLite } — partial update of the persisted `AgentSession` from a `changes` object. Whitelisted fields: `status`, `isActive`, `acpSessionId`, `backendSessionId`, `name`, `nameExplicitlySet`, `model`, `reasoningEffort` *(v5.2)*, `provider`, `systemPrompt`, `specialist`, `taskNoteId`, `skipAutoCommit`, `completionReport`, `completionReportTimestamp`, `delegationDepth`, `initialMessage`, `contextReferences`, `imageBlocks`, `isBackground`. Optional-string fields accept a JSON `null` to clear; `reasoningEffort` additionally treats an empty/whitespace-only string as a clear (stored as-is otherwise — no vocabulary validation, providers interpret the level; applied on the next prompt send). `effortLevels` is NOT whitelisted (daemon-discovered at session open, never client-written — §5.5 "Session-discovered effort levels"); the result `AgentLite` still serves it when present. Write-once (`acpSessionId`) and immutable (`provider`) invariants are still enforced by the store. Emits `agent:updated` (or `agent:renamed` when `name` is the only mutated field). Unknown fields → `-32602`; unknown agent → `-32602 "Agent not found"` |
 | agent.appendMessage | agentId (req), role (req, `user`\|`assistant`\|`tool`\|`system`), contentBlocks (req), workspaceId?, metadata? | { success: true, message: AgentMessage } — append a single message to the transcript. `metadata` persists verbatim on the row and round-trips on reads. Emits `agent:message`. Rejected with `-32602` when the agent is mid-turn (transcript mutations must not race the streaming writer) |
 | agent.replaceMessages | agentId (req), messages (req, `AgentMessage[]`), workspaceId? | { success: true, messages: AgentMessage[] } — atomically swap the entire transcript. Each entry needs `role` + `contentBlocks`; `metadata` / `timestamp` are optional. Row ids and `seq` values (`0..n`) are minted by the store so callers cannot smuggle stale ids across the swap. Emits `agent:updated` with `{ replacedCount }`. Rejected with `-32602` when the agent is mid-turn (same rationale as `agent.appendMessage`) |
 | agent.retry | workspaceId (req), agentId (req) | { ok: true, redriven, turnId? } \| { ok: false } — redrive a failed agent spawn. Only valid when the session status is `error`; returns the bare `{ ok: false }` otherwise. `redriven` is ALWAYS present on the `ok: true` arm (both values) and always absent on the `ok: false` arm, so clients may branch on it unconditionally once `ok` is `true`. `redriven` (STAB-54) distinguishes "a queued message is being redriven" (`true` — status cleared to `pending`, drain started) from "the queue was empty, nothing to redrive" (`false` — status cleared to `idle`; the next `agent.sendMessage` starts a fresh turn). `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is present ONLY when `redriven: true`: the head ready-to-send entry's turn correlation id, peeked BEFORE the drain pops it — because a terminal-failure requeue preserves the failed turn's original `turnId`, this is the SAME id the original send/enqueue RPC returned, so the redrive's `agent:queue:processing` and lifecycle events correlate with the turn the client already keyed (omitted when absent, never `null`). Clears the error status back to pending, emits `agent:status-changed`, tears down any stale child handle, and attempts to redrive the front-of-queue message (requeued at exhaustion) plus any subsequent messages. Reuses the spawn-retry/backoff machinery, so a retry that fails again lands back in the `error` state with the full event sequence (`agent:stream:status` retry hints, terminal `agent:failed` + `agent:stream:end`, `agent:status-changed` persisting `error`). **Poisoned-session recreate ([monorepo#940](https://github.com/intent-hq/monorepo/issues/940)):** when the parked session classifies as corrupted/poisoned (the same classification that emits `sessionCorrupted: true` — session-fatal provider block, deterministic `session/prompt` 400 `invalidArgument` rejection, or the identical-failure streak at threshold), the retry arms the forced-recreate flag (same mechanism as `agent.editAndRegenerate`) BEFORE clearing the streak, so the redrive's session setup SKIPS the `session/load` resume — which would replay the exact context the provider deterministically rejects — and opens a fresh `session/new` with the prior history prepended as `<supervisor>` XML. Retry also clears the identical-failure streak and failure-wake dedup records (the deliberate quarantine escape hatch, monorepo#840) |
@@ -1663,7 +2210,7 @@ turn end and every release path above — recomputes-and-compares, pushed as
 
 > **Namespace.** The `sandbox.cow.*` methods manage CoW (copy-on-write) sandboxed agent workspaces. When `agent.delegate` provisions a CoW sandbox (§5.5 — asynchronously: the delegate result reports `effectiveIsolation: "pending"` and the clone settles in a background task), the agent works in an isolated repository clone. When the agent completes, `sandbox.cow.merge` attempts to automatically merge the sandbox commits back to the canonical repository, preserving agent attribution. If the merge encounters conflicts or the canonical repository has uncommitted overlapping changes, the agent is bounced with resolution instructions or the merge is deferred to manual resolution. All `sandbox.cow.*` methods require `workspaceId`. Renamed from `sandbox.*` (intentd#730, no aliases); the bare `sandbox.*` namespace is reserved for the upcoming agentOS sandbox surface.
 
-**Canonical repository (checkout-mode aware).** The directory a sandbox is cloned from and merged back into follows the workspace's checkout mode (§5.1): for **direct-mode** workspaces (skip-isolation / no provisioned checkout) it is the user's repository folder (`repositoryPath`); for **CoW-checkout** workspaces (`checkoutMode: "cow"`) it is the **workspace checkout** (`worktreePath`) — agent commits merge back into the workspace's own checkout, not the user's repo folder. Worktree-mode workspaces (`checkoutMode: "worktree"`) do not support sandboxes (sandbox provisioning is rejected; agents share the checkout).
+**Canonical repository (checkout-mode aware).** The directory a sandbox is cloned from and merged back into follows the workspace's checkout mode (§5.1): for **shared-checkout** workspaces (skip-isolation / no provisioned checkout, no `checkoutMode`) it is the user's repository folder (`repositoryPath`); for **CoW-checkout** workspaces (`checkoutMode: "cow"`) it is the **workspace checkout** (`worktreePath`) — agent commits merge back into the workspace's own checkout, not the user's repo folder; for **`checkoutMode: "direct"`** workspaces (standalone plain clone) it is the workspace checkout when one was provisioned (cache hydration), else the repository folder itself (`isNewRepo` initialization). Worktree-mode workspaces (`checkoutMode: "worktree"`) do not support sandboxes (sandbox provisioning is rejected; agents share the checkout).
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -1695,9 +2242,9 @@ turn end and every release path above — recomputes-and-compares, pushed as
 { "jsonrpc":"2.0","id":81,"result":{ "ok":true } }
 ```
 
-### 5.5b `sandbox.profiles.*` / `sandbox.options` (execution-environment profiles) *(v3.2)*
+### 5.5b `sandbox.profiles.*` / `sandbox.options` (execution-environment profiles) *(v6.3)*
 
-> **Namespace.** The execution-environment profile surface: which environment types (`direct`, `worktree`, `cow`, `microvm`) are offered at workspace creation, which one is preselected, and what the host can actually run. All three methods are **daemon-global** — no `workspaceId` (like `providers.catalog`). The backing state is the BE-owned `sandbox.*` settings group (§5.12): `sandbox.profiles.update` is a typed façade over `settings.update`, so changes persist to `config.toml`, emit `settings:changed` (§6.5), and are equally reachable through the raw `settings.*` methods.
+> **Namespace.** The execution-environment profile surface: which environment types (`direct`, `worktree`, `cow`, `microvm`) are offered at workspace creation, which one is preselected, and what the host can actually run. All the methods are **daemon-global** — no `workspaceId` (like `providers.catalog`). The backing state is the BE-owned `sandbox.*` settings group (§5.12): `sandbox.profiles.update` is a typed façade over `settings.update`, so changes persist to `config.toml`, emit `settings:changed` (§6.5), and are equally reachable through the raw `settings.*` methods.
 
 **Types (fixed catalog order):** `direct` (in-repo, no isolation), `worktree` (linked git worktree), `cow` (standalone CoW clone + per-agent CoW sandboxes, §5.5a), `microvm` (libkrun Linux guests running agents against their own CoW clone via virtio-fs — requires CoW; v1 is macOS Apple Silicon, local-only).
 
@@ -1742,7 +2289,7 @@ turn end and every release path above — recomputes-and-compares, pushed as
 | git.status | workspaceId (req) | { modified, staged, untracked, deleted, ... } |
 | git.stage | paths (req, CSV string or array) | { ok, paths } — staging ./*/--all is rejected (-32603) |
 | git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
-| git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } — commit-set selection below |
+| git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } — commit-set selection below; `userRequested: true` also bypasses the auto-commit-disabled gate (wrap-up semantics below) |
 | git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
 | git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
 
@@ -1762,9 +2309,13 @@ turn end and every release path above — recomputes-and-compares, pushed as
 3. **No `files`, agent-initiated** (an agent context is present) — commits only the paths the file-tracking attribution pipeline (§5.19) credits to the committing agent: `tracked_changes` rows at stage unstaged/staged for that `agentId`, **intersected with the actual uncommitted changes** (`git.status` files — staged, unstaged, and untracked alike), so a stale attribution row never resurrects a committed/reverted file. An empty attributed set commits nothing (`-32603` "No uncommitted changes found for this agent"). Post-commit, the committed paths' attribution rows advance unstaged/staged → committed, keeping the audit trail consistent.
 4. **No `files`, no `userRequested`, no agent context** — attribution is impossible, so the commit is **refused** (`-32603`) rather than sweeping the worktree.
 
-**Per-workspace auto-commit resolution.** The auto-commit gate (`git.commit`, `git.agentCommit`, the idle auto-commit path below, and system-prompt assembly) resolves auto-commit **per workspace**: the persisted workspace override (§5.1 `workspace.getAutoCommit` / `workspace.setAutoCommit`) when set, else the global `git.autoCommit` setting (§5.12). `workspace.create` and `workspace.duplicate` seed the override from the effective value at creation time (mirror-at-creation), so later global changes never retroactively flip existing workspaces; pre-migration rows have no override and keep following the global.
+**Per-workspace auto-commit resolution.** The auto-commit gate (`git.commit`, `git.agentCommit`, the idle wrap-up path below, and system-prompt assembly) resolves auto-commit **per workspace**: the persisted workspace override (§5.1 `workspace.getAutoCommit` / `workspace.setAutoCommit`) when set, else the global `git.autoCommit` setting (§5.12). `workspace.create` and `workspace.duplicate` seed the override from the effective value at creation time (mirror-at-creation), so later global changes never retroactively flip existing workspaces; pre-migration rows have no override and keep following the global.
 
-**Auto-commit on `agent:idle` (daemon-internal, not wire surface).** When an agent turn completes (`agent:idle` event) and the workspace has uncommitted changes with auto-commit enabled (per-workspace resolution above; and the session did not set `skip_auto_commit`), the daemon automatically generates a conventional-commit-formatted message via `agent.completeOnce` (§5.32) with the bundled `commit-message` instruction as system prompt. The prompt context includes: the uncommitted diff (truncated), recent commit subjects (for style mimicry), the repo-root `AGENTS.md` when present (truncated), and the task title / agent name as hints. The generated output is parsed for `<<<COMMIT_MESSAGE>>>` tags. On any generation failure, timeout, or malformed output, the daemon falls back to the deterministic subject chain (`taskTitle` → agent name → `"Agent changes"`) so auto-commit is never blocked or skipped because generation failed. The `agent.completeOnce` binary resolution order (§5.32 Execution) honors the `context.auggiePath` setting when set, ensuring hermetic e2e tests and explicit user config are respected. This internal auto-commit path has no wire RPC — clients only observe the resulting `git:commit` event (§6.5).
+**Wrap-up semantics (what the auto-commit state means).** Auto-commit is an **end-of-turn wrap-up** model, not a prohibition on agent commits. **ON:** when the agent's turn ends, the daemon commits the agent's remaining attributed changes — the paths the attribution pipeline credits to that agent, per commit-set rule 3 above, not the whole worktree (the idle wrap-up path below), and agents are also free to commit mid-turn themselves via `git.commit` / `git.agentCommit` (the agent-facing MCP `ws.git.commit`). **OFF:** no wrap-up runs, and agent-initiated commits are **rejected by the gate** (`-32603`) — the rejection message tells the agent the user has turned off agent commits for this workspace, not to work around the gate (no raw `git commit` or other means), and to retry with `userRequested: true` only when the user has explicitly asked for a commit. `userRequested: true` is that explicit-user-ask bypass: it is the only way an agent-initiated commit lands while auto-commit is OFF.
+
+**Commit-policy prompt layer (status-neutral).** The system prompt's commit-policy layer does **not** branch on the auto-commit state (and ignores the session `skipAutoCommit` flag): every agent receives the same single clause in both states — commit through `ws.git.commit` (never raw `git commit` unless the user explicitly asks for a git workflow it cannot express), commit when it makes sense for the work, and the system may automatically commit any remaining changes when the turn ends. Enforcement of the OFF state lives entirely in the gate above, not in the prompt; the effective state (per-workspace resolution, provided the session has not opted out via `skipAutoCommit`) still drives the top-level-agent suggested-prompts footer. A user who wants zero agent commits expresses that through rules/`AGENTS.md`, not this layer.
+
+**Wrap-up on `agent:idle` (daemon-internal, not wire surface).** When an agent turn completes (`agent:idle` event) and the workspace has uncommitted changes with auto-commit enabled (per-workspace resolution above; and the session did not set `skip_auto_commit`), the daemon automatically generates a conventional-commit-formatted message via `agent.completeOnce` (§5.32) with the bundled `commit-message` instruction as system prompt. The prompt context includes: the uncommitted diff (truncated), recent commit subjects (for style mimicry), the repo-root `AGENTS.md` when present (truncated), and the task title / agent name as hints. The generated output is parsed for `<<<COMMIT_MESSAGE>>>` tags. On any generation failure, timeout, or malformed output, the daemon falls back to the deterministic subject chain (`taskTitle` → agent name → `"Agent changes"`) so auto-commit is never blocked or skipped because generation failed. The `agent.completeOnce` binary resolution order (§5.32 Execution) honors the `context.auggiePath` setting when set, ensuring hermetic e2e tests and explicit user config are respected. This internal auto-commit path has no wire RPC — clients only observe the resulting `git:commit` event (§6.5).
 
 **Working-tree & branch operations.** The inverse of `git.stage` plus working-tree/branch reads. `git.diff` is accepted as an alias for the wire-canonical `git.diffs`, and `git.log` as an alias for `git.commits`.
 
@@ -1809,51 +2360,18 @@ turn end and every release path above — recomputes-and-compares, pushed as
 
 ### 5.7 `pr.*`
 
-All `pr.*` methods require an active pull request on the workspace — otherwise the underlying service throws → `-32603` — **except `pr.refresh`**, which exists to establish/repair the link and works without one (see its semantics note below), **and `pr.capabilities`** (v2.1), which reports the active provider's capability flags before any PR exists (see below).
+The namespace holds the **two** workspace/active-PR-scoped methods that survived the v5.0 removal: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
 
 > Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
+> **Removed in v5.0 ([intent-hq/intentd#921](https://github.com/intent-hq/intentd/pull/921); monorepo#1506).** The 11 other `pr.*` methods — `pr.capabilities`, `pr.createReview`, `pr.getReviews`, `pr.listCheckRuns`, `pr.listComments`, `pr.listReviewComments`, `pr.merge`, `pr.postComment`, `pr.replyToReviewComment`, `pr.resolveThread`, and `pr.updateBranch` — were left caller-less after agent GitHub workflows moved to the `gh` CLI and the `ws.pr.*` MCP surface shrank to snapshot-only ([intent-hq/intentd#918](https://github.com/intent-hq/intentd/pull/918)), and are deleted from the wire (calling one returns `-32601` Method not found — same precedent as the v3.0 `pr.waitForChanges` removal). The v2.1 provider capability gating went with them (no gated `pr.*` operation remains). Equivalent PR read/write operations live on the explicit-addressing `github.*` surface (§5.27 — e.g. `github.pulls.merge`, `github.pulls.updateBranch`, `github.getReviewThreads`, `github.listReviewComments`, `github.replyReviewComment`, `github.resolveThread` / `github.unresolveThread`); agents use `gh` on the host plus the read-only MCP `ws.pr.snapshot` binding (below).
+
 | Method | Params | Result |
 | --- | --- | --- |
-| pr.merge | mergeMethod?: "merge" | "squash" |
 | pr.status | — | { prNumber, title, url, state, mergeable, mergeableState, hasConflicts, isDraft, isMerged, isClosed, summary } |
-| pr.updateBranch | — | service result |
-| pr.listReviewComments | path?, status?: "unresolved" | "resolved" |
-| pr.replyToReviewComment | commentId (req), body (req) | service result |
-| pr.resolveThread | threadId (req), action?: "resolve" | "unresolve" |
-| pr.listComments | count? | conversation-level comments |
-| pr.postComment | body (req) | service result |
+| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state. Forces the same PR discovery/refresh the daemon's background sweep runs for one workspace, on demand |
 
-**Review & CI methods.** Five further methods round out the `pr.*` namespace. Three
-review/CI methods map onto the `SourceControl` trait (`list_reviews` / `check_runs` /
-`submit_review`) and stay host-agnostic. `pr.refresh` forces the same PR
-discovery/refresh the daemon's background sweep runs for one workspace, on demand.
-`pr.capabilities` (v2.1) exposes the active provider's capability flags.
-
-| Method | Params | Result |
-| --- | --- | --- |
-| pr.getReviews | prNumber? (defaults to the workspace's active PR) | { reviewDecision: "APPROVED" \| "CHANGES_REQUESTED" \| null, approvalCount, changesRequestedCount, approvedBy: string[], reviews: Review[] } — see Review (§5.18 schemas) |
-| pr.listCheckRuns | ref? (commit SHA; defaults to PR head) | { total, passed, failed, pending, runs: CheckRun[] } — see CheckRun (§5.18 schemas). Gated on the `checkRuns` capability (see capability gating below) |
-| pr.createReview | verdict (req): "approve" \| "request-changes" \| "comment", body? | { review: Review } — submits a review on the active PR. A `"request-changes"` verdict is gated on the `reviewRequiredChanges` capability (see capability gating below); `"approve"` / `"comment"` are ungated |
-| pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state |
-| pr.capabilities | — (workspaceId only, per §3.6) | { provider, capabilities: { draftPrs, squashMerge, rebaseMerge, reviewRequiredChanges, checkRuns, issues } } — the active provider's id (e.g. `"github"`) and its boolean capability flags, so clients can gate UI before invoking gated operations |
-
-> **`pr.capabilities` semantics (v2.1).** Requires a resolvable source-control provider but
-> **not** an active PR — clients gate UI on the flags before any PR exists. The
-> `workspaceId` is still validated (unknown workspace → not-found error like every other
-> workspace-scoped method).
-
-> **Capability gating (v2.1).** Operations a provider does not support fail with
-> `-32603 "Internal error"` whose `error.data` carries a message with the stable prefix
-> `unsupported by provider:` (per the §3.3/§9 envelope, `error.data` holds the original
-> internal message for `-32603`). Gated operations: `pr.merge` with
-> `mergeMethod: "squash"` (`squashMerge` flag) or `"rebase"` (`rebaseMerge` flag — a plain
-> `"merge"` is ungated), `pr.createReview` with `verdict: "request-changes"`
-> (`reviewRequiredChanges` flag), and `pr.listCheckRuns` (`checkRuns` flag). Clients should
-> match on the `unsupported by provider:` prefix to distinguish capability failures from
-> other internal errors.
-
-> **`pr.refresh` semantics.** Unlike the rest of `pr.*`, `pr.refresh` does **not** require an
+> **`pr.refresh` semantics.** Unlike `pr.status`, `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
@@ -1880,13 +2398,76 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
-// → request — submit an approving review on the active PR
-{ "jsonrpc":"2.0","id":40,"method":"pr.createReview",
-  "params":{ "workspaceId":"ws-abc","verdict":"approve","body":"LGTM" } }
+// → request — the active PR's status
+{ "jsonrpc":"2.0","id":40,"method":"pr.status","params":{ "workspaceId":"ws-abc" } }
 // ← response
-{ "jsonrpc":"2.0","id":40,"result":{ "review":{
-  "author":"octocat","verdict":"approve","body":"LGTM","submittedAt":"2026-06-17T05:00:00.000Z" } } }
+{ "jsonrpc":"2.0","id":40,"result":{ "prNumber":12,"title":"Add review wire surface",
+  "url":"https://github.com/octo/repo/pull/12","state":"open","mergeable":true,
+  "mergeableState":"clean","hasConflicts":false,"isDraft":false,"isMerged":false,
+  "isClosed":false,"summary":"..." } }
 ```
+
+> **`ws.pr.snapshot(prNumber, { repo? })` — agent MCP binding *(new in intentd,
+> [intentd#887](https://github.com/intent-hq/intentd/pull/887); repo override + echo
+> [intentd#911](https://github.com/intent-hq/intentd/pull/911))*.** Since
+> [intentd#918](https://github.com/intent-hq/intentd/pull/918) the snapshot is the
+> read-only one-shot `ws.pr.*` MCP binding: agent GitHub workflows are **`gh`-CLI-based**
+> (PR creation, status/checks, reviews, comments, thread resolution, branch updates, and
+> merging all go through `gh` on the host). Since v6.1 the `ws.pr.*` family also carries
+> the monitoring bindings `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` (§5.42)
+> — for PR *watching* agents prefer `ws.pr.monitor` (daemon-run polling, no TTL);
+> the snapshot survives as the current-state-once read and remains usable from
+> **hook-based PR monitoring**
+> (§5.40): a hook calls it each run, compares the result against the previous run's
+> carry-over `hookState`, and dispatches only on meaningful change. There is **no wire
+> method** (MCP-only, per the §6.8 principle — PR watching is agent-authored background
+> work; FE clients keep using `pr.status` and the explicit-addressing `github.*` reads, §5.27).
+> `prNumber` is **required** (a positive number —
+> missing, non-numeric, or `<= 0` values are rejected with a validation error) and
+> there is **no active-PR fallback**: the snapshot is scoped to the workspace's
+> repository unless `repo: "owner/name"` overrides it (e.g. a submodule's repo), and
+> the result echoes the resolved `repo` so a wrong-repo read is detectable.
+> Result shape: `{ repo, prNumber, title, url, state, isDraft, isMerged, isClosed, headSha,
+> updatedAt, mergeable, mergeableState, mergeBlockedReason, checks: { total, passed,
+> failed, pending, failedNames }, reviews: { decision, approvals, changesRequested },
+> comments: { conversationCount, reviewCommentCount, unresolvedThreadCount,
+> totalCount }, requirements: MergeRequirements }`. **`requirements`** *(additive in v6.1,
+> [intentd#989](https://github.com/intent-hq/intentd/pull/989))* is the full
+> merge-requirements checklist (§5.42 — "what is still needed to merge this PR"), the
+> SAME canonical object `ws.pr.monitor` returns (its `requirements` result field) and
+> the monitor loop's change detection diffs — `ws.pr.monitors` rows carry only the
+> reduced `lastSnapshot` summary of it (§5.42), and monitor wakes carry the derived
+> change lines; the top-level `checks` / `reviews` / `comments` blocks are the compact
+> projection of the same read. `mergeBlockedReason` is a human-readable
+> reason and is non-`null` exactly when the PR is open (draft included) and cannot be
+> merged. `checks` tallies the runs on the PR head (SHA, else source branch); a
+> provider without the `checkRuns` capability — or a PR whose head cannot be
+> determined — reports an empty tally rather than failing the snapshot.
+> **`reviews.decision`** *(changed in intentd,
+> [intentd#942](https://github.com/intent-hq/intentd/pull/942);
+> [intent-hq/monorepo#1524](https://github.com/intent-hq/monorepo/issues/1524))*
+> is derived from the forge's authoritative review-requirement verdict (GitHub's
+> GraphQL `reviewDecision`) when available: `approved`, `changes_requested`, or
+> `review_required` (the last only for an open PR, draft included) map directly.
+> When the provider signal is unavailable — no review requirement configured on
+> the base branch, a host without the capability, or a failed fetch — the
+> decision falls back to the aggregated actionable reviews; a provider
+> `review_required` on a merged/closed PR is likewise discarded and falls back
+> to the aggregate. That fallback yields `changes_requested`,
+> else `approved`, else `none`; the fallback path never yields
+> `review_required`. REST `mergeable_state` is **no longer consulted** for this
+> field — its `blocked` value conflates required checks, merge queues, and
+> token-access gaps with an actual review requirement, and previously caused
+> `review_required` to appear on PRs with no reviews or requirement at all.
+> `comments.reviewCommentCount` counts every inline thread comment **including
+> replies** (threads come from GraphQL when available, else the REST list
+> grouped by reply parent), and `totalCount = conversationCount +
+> reviewCommentCount`, so a new reply anywhere moves the counter a hook can
+> diff. `comments.unresolvedThreadCount` reflects real per-thread resolution
+> state from the GraphQL threads; on the REST fallback (grouped by reply parent)
+> no resolution state is available, so every thread counts as unresolved — that
+> fallback is logged at warn level with the underlying GraphQL error
+> *(intentd, [intentd#949](https://github.com/intent-hq/intentd/pull/949))*.
 
 ### 5.8 `script.*`
 
@@ -1896,10 +2477,10 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears `previouslyRunning` (in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
-| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, ... } |
+| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, previouslyRunning?, ... } — the `ScriptRuntimeState` snapshot; the runtime status value is one of `idle \| running \| restarting \| exited`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a script that was running when the daemon last stopped — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
 
 > **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
@@ -1909,6 +2490,45 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > `script.output` / `script.status` remain the historical poll reads. Service/command modes,
 > auto-restart, and URL/port detection are preserved — a detected dev-server URL feeds the
 > `forward.*` hook when the connection is remote (§5.14).
+>
+> **Runtime status values.** The `ScriptRuntimeState` served by `script.status` (and as the
+> runtime part of `script.list` entries) and carried on `script:state` events reports one of
+> `idle | running | restarting | exited`. `restarting` (new in intentd, monorepo#1318) covers
+> the restart-in-flight window — a service auto-restart's backoff between an exit and the next
+> spawn attempt, and `script.restart`'s stop→start gap — distinguishing it from a final exit;
+> the respawn flips it back to `running`.
+>
+> **Was-running marker (`previouslyRunning?`, new in intentd, within v5.1).** Closing the app
+> stops the daemon and kills every running script, and boot hydration previously loaded all
+> persisted definitions as plain `idle` — so clients could not tell which scripts were live
+> before the shutdown. The daemon now persists a was-running marker on the script row
+> (stored-on-write) and surfaces it as the optional `previouslyRunning: true` field on
+> `ScriptRuntimeState` — served by `script.status`, the runtime part of `script.list` entries,
+> and `script:state` events (§6.5). It is **omitted when false**, so clients detect it by
+> presence, not by protocol version.
+>
+> Semantics:
+>
+> - **Service-mode only.** A successful start/restart of a `service` script sets the marker;
+>   `command`-mode scripts never set it.
+> - **Cleared** on a user `script.stop`, on natural exit, and on `script.remove` (the row goes
+>   with it); a `script.create` upsert resets it. Starting a marked script clears it — the
+>   hydrated `previouslyRunning` drops as the state flips to `running` (an auto-restart's
+>   respawn re-sets the marker).
+> - **Survives repeated daemon restarts** untouched: a marked row keeps hydrating as `idle`
+>   with `previouslyRunning: true` until the script is started or explicitly stopped.
+> - **Dismiss:** `script.stop` on a non-running script that carries the marker clears it —
+>   in memory and, via the same best-effort persist as every other transition, on the row —
+>   and returns ok (instead of erroring), and **emits a `script:state` event** carrying the
+>   cleared state, so other subscribers do not retain a stale `previouslyRunning: true`.
+> - **Workspace-scoped.** The runtime registry permits the same client-supplied `scriptId` in
+>   separate workspaces, so marker reads and writes are qualified by `workspaceId` — setting
+>   or clearing the marker in one workspace never touches a same-id script in another.
+> - Marker writes are **best-effort**: a failed bookkeeping write is logged and never fails the
+>   runtime transition or its `script:state` event. Persistence is therefore not guaranteed on
+>   any path, dismiss included — if the clearing write fails, the marker stays on the row and
+>   rehydrates as `previouslyRunning: true` after the next daemon restart, and the client can
+>   dismiss it again.
 
 ### 5.9 `browser.*`, `terminal.*`, `file.*`
 
@@ -1916,7 +2536,7 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 | --- | --- | --- |
 | browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
-| terminal.list | workspaceId (req) | bare array `[{ id, name, cwd, isExecutingCommand }]` — `name` is **always present** on the wire: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively) |
+| terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
 | file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
 | file.write | path (req), content (req) | { ok, path, size } |
@@ -1981,8 +2601,9 @@ discovery/refresh the daemon's background sweep runs for one workspace, on deman
 > read-only methods. The daemon also serves interactive
 > `terminal.create` / `write` / `resize` / `kill` / `getBuffer` (base64 framing) — see §5.13.
 > PTYs carry an optional daemon-assigned display name (set at spawn; not a
-> `terminal.create` parameter) that `terminal.list` surfaces as `name` with a
-> `"Terminal"` fallback — see the `terminal.list` row above.
+> `terminal.create` parameter) that `terminal.list` surfaces as `name` (on each
+> `terminals[]` entry of the v4.0 envelope) with a `"Terminal"` fallback — see the
+> `terminal.list` row above.
 
 ### 5.10 `event.*` (query/aggregation)
 
@@ -2015,13 +2636,18 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 > itself), and a one-time `VACUUM` at daemon startup rebuilds the file to apply it, so space
 > reclamation applies to all databases.
 
+> **`file:*` hybrid persistence** ([intentd#951](https://github.com/intent-hq/intentd/pull/951)).
+> `file:changed` / `file:created` / `file:deleted` events are only written to the event
+> table when agent-attributed (`ActorType::Agent`) — these back `event.agentActivity` and
+> `event.workspaceSummary`. Watcher-observed (system/user) `file:*` events are
+> **broadcast-only**: delivered live over the streaming channel (§6) with no SQLite write,
+> so they are not queryable historically via `event.query` or any other §5.10 method.
+
 | Method | Params | Result |
 | --- | --- | --- |
-| event.recentFiles | limit? | recently modified files |
 | event.agentActivity | agentId?, minutesAgo? | activity events |
 | event.workspaceSummary | minutesAgo? | aggregated activity summary |
-| event.directoryChanges | dir (req), limit? | recent changes under a directory prefix |
-| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. |
+| event.query | workspaceId (req), filter opts (eventType?, actorType?, actorId?, path?, minutesAgo?, limit?), paginate?: boolean, nextToken?: string | matching events — **legacy shape** (bare array, newest→oldest) when pagination is not engaged; **paginated envelope** `{ items, nextToken }` when either `paginate: true` or a `nextToken` is supplied (opt-in). `nextToken` is an opaque cursor for the next older page (`null` on the last page); pass it back as `nextToken` to fetch the next page. `limit` is clamped by the pagination policy when engaged. `eventType` accepts the **same glob syntax as `event.subscribe`** ([intentd#938](https://github.com/intent-hq/intentd/pull/938)): bare `*` = no type filter, `prefix:*` = category prefix match (e.g. `note:*` matches `note:created` / `note:updated` / `note:deleted`), anything else = exact match; matching is **case-sensitive** (`NOTE:*` matches nothing), mirroring subscribe's `starts_with` semantics — a `prefix:*` compiles to an index-served half-open range scan, not a `LIKE`, so `%` / `_` in a pattern are literal bytes. |
 | event.subscribe (deprecated) | eventTypes (req, array), excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — use events.subscribe for WS streaming. Shares the one real subscription implementation with the `agent.subscribe` alias of §5.5 (matching, batching, subscriber wakes, restart persistence) — **including the [monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229) agent-subscriber restriction** (explicit `agent:`-prefixed types and `chat:stream:delta` rejected atomically with `-32602`; bare `*` silently narrowed to the non-agent categories; match-time `exclude_agent_events` guard on rehydrated legacy rows — see the §5.5 row); over the MCP seam the subscriber is the calling agent, so `ws.event.subscribe` callers are directed to `ws.agent.watch(agentId)` for agent monitoring. Note: the singular `event.subscribe` / `event.unsubscribe` methods are NOT routable on the wire (MCP bindings only) — wire callers use the `agent.subscribe` alias. |
 | event.unsubscribe (deprecated) | subscriptionId (req) | service result `{ ok: true, subscriptionId }` — stops delivery; unknown id errors |
 
@@ -2050,7 +2676,8 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 // ← response — resolvedModel/resolvedProvider omitted when the provider CLI default applies
 { "jsonrpc":"2.0","id":50,"result":{ "specialists": [
   { "id":"implementor","name":"Implementor","description":"...","source":"bundled",
-    "resolvedModel":"gpt-5.3-codex/high","resolvedProvider":"codex" } ] } }
+    "reasoningEffort":"high",
+    "resolvedModel":"gpt-5.3-codex","resolvedProvider":"codex" } ] } }
 ```
 
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
@@ -2060,29 +2687,36 @@ These are **historical/aggregate read** helpers — distinct from live streaming
 resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
-- **SpecialistDef** — `{ id, name, description, codingAgent?, model?,
-  modelTier?: "fast"|"balanced"|"smart", roleReminder?, agentType?, prompt?, hidden?: boolean,
+- **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
+  roleReminder?, agentType?, prompt?, hidden?: boolean,
+  modelOptions?: [{ model, hint, reasoningEffort? }],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
-  scalars (`codingAgent`, `model`,
-  `modelTier`, `roleReminder`, `agentType`) are first-class **string** fields on the wire, not
+  scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`) are
+  first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
   `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
-  target tier. `modelTier` is stored/echoed verbatim as a string; an unrecognized value is not
-  rejected — it simply falls through at resolution time (§5.5 step 3).
+  target tier.
+- **`modelTier` is retired** (tolerated-and-ignored, like the retired
+  `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
+  in an existing file's frontmatter never errors, but the key is stripped on parse — never
+  echoed by `list`/`get`, never written by `create`/`edit` (an existing frontmatter line is
+  dropped on the file's next rewrite) — and never participates in model resolution (§5.5).
 - **`resolvedModel?` / `resolvedProvider?` (additive preview, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852))** —
   on `list`/`get` only, the daemon decorates each definition with the model a **no-model
   `agent.create`** for that specialist would actually pin, computed by the same daemon-side
-  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
+  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–4 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
-  request param supplies the resolution context: absent/empty defaults to the daemon's
-  default provider; an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
+  request param supplies the resolution context: absent/empty defaults to the
+  settings-derived default provider (provider of `model.default`, else `providers.active`,
+  else the first registered provider — [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
+  an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
   methods. **Both fields are omitted** (never `null`) when resolution falls to the provider
-  CLI default — clients render "Provider default". Previews are context-free
-  (`isBackground = false`), so the background-only `backgroundAgents.*` settings steps never
-  apply; a specialist with no model config still previews the user's `model.providerDefaults`
-  / `model.default` settings chain. Over the WSS router, `specialist.list` resolves with no
+  CLI default — clients render "Provider default". A specialist with no model config
+  previews the user's `model.providerDefaults` / `model.default` settings chain (the
+  quick-action model settings never participate,
+  [intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)). Over the WSS router, `specialist.list` resolves with no
   project tier (no `workspacePath` param, matching its live wire signature); `specialist.get`
   passes its `workspacePath?` through to the resolver.
 - **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
@@ -2096,8 +2730,8 @@ non-existent or `bundled` definition → `-32602`.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
-- **Config scalars (`codingAgent` / `model` / `modelTier` / `agentType`)** — the four optional
-  config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
+- **Config scalars (`codingAgent` / `model` / `reasoningEffort` / `agentType`)** — the four
+  optional config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
   independently, across the tiers (embedded bundled floor → bundled dir → user → project): a
   file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
   value in a higher tier overrides it. An explicit **empty string** (`""`) clears the inherited
@@ -2109,6 +2743,63 @@ non-existent or `bundled` definition → `-32602`.
   **winner-takes-all** (not inherited): it is coupled to the prompt body (itself
   winner-takes-all), so the derive-from-body fallback remains correct when a higher tier
   rewrites the body.
+  `reasoningEffort` is the specialist's default reasoning level (§5.5) — stored as-is, no
+  vocabulary validation at this seam; it is the frontmatter rung of the delegation
+  reasoning-effort resolution below.
+- **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
+  [intent-hq/intentd#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
+  model options** a specialist's author suggests: `[{ model, hint, reasoningEffort? }]` entries where `model` is
+  the model id to pass on delegation — typically an internal compound id (e.g.
+  `opencode:kimi-k3`); validation requires only a non-empty string — and `hint` is the author's
+  free-text guidance for choosing that option (`""` when none was given). Carried additively on
+  `specialist.get`/`list`/`create`/`edit` — emitted when the resolved list is non-empty, omitted
+  otherwise (never `null`/`[]` on the wire) — and accepted in `create`/`edit` `spec` bodies. In
+  the file it is a frontmatter scalar encoded as a **single-line JSON array**
+  (`modelOptions: [{"model":"opencode:kimi-k3","hint":"cheap"}]`) so it fits the line-based
+  frontmatter parser and round-trips parse→write→parse losslessly. Resolution follows the same
+  3-tier **inherit-on-omit** fold as the config scalars above, with **`[]` as the explicit
+  clear** (the array analogue of `key: ""`): an omitted key inherits the lower tiers' effective
+  list, an explicit `[]` clears it, and a non-empty list overrides **wholesale** — entries never
+  merge across tiers. Reads are **lenient** (files are never rejected): an unparseable scalar or
+  a non-array is treated as an omitted key (inherits), and unusable entries — non-objects, or no
+  non-empty string `model` — are skipped individually (a non-string `hint` alone does not make
+  an entry unusable on read — it is coerced to `""`); only a **literal `[]`** clears — a
+  non-empty array whose entries are ALL unusable is treated as omitted (falls through to
+  inheritance), so one bad hand-authored entry never silently drops an inherited list. Writes
+  are **strict**: `create`/`edit` validate the `spec` value before writing — it must be a JSON
+  array of objects, each with a non-empty string `model`; `hint` must be a string when present
+  (defaults to `""`), and `reasoningEffort` must be a string when present — and any invalid
+  shape → `-32602` with nothing written. An entry's optional `reasoningEffort` is the effort
+  level that option implies; it is carried only when non-empty (omitted otherwise) and is
+  rendered in the injected docs block as `effort: <level>` inside the option's parenthetical.
+  The list adds
+  **no resolver step** (§5.5 "Creation-time default-model resolution"): it is advisory — the
+  daemon injects each visible specialist's options into the delegating agent's `workspace_api`
+  tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
+  the explicit `model` param (resolution step 1).
+- **Delegation reasoning-effort resolution (additive)** — `agent.delegate` and
+  `agent.wakeOrCreate`'s create branch resolve the child's `reasoningEffort` (§5.5) in this
+  order: (1) the caller's explicit `reasoningEffort` param — an empty/whitespace-only value is
+  an explicit clear and does **not** fall through; (2) the `reasoningEffort` of the chosen
+  specialist model option whose `model` matches the resolved model; (3) the specialist's
+  `reasoningEffort` frontmatter scalar; (4) the settings `model.defaultReasoningEffort`
+  (§5.12), applied only when the session's model itself resolved from the settings chain;
+  (5) unset. The resolved level is then **validated
+  against cached-catalog evidence**: when the resolved model has a non-empty `effortLevels`
+  list in the daemon's cached model catalog (§5.30 — read-only, never a live probe), a level
+  outside that list is rejected with `-32602` naming the valid values, before any side effect
+  (no child session is created). Matching is case-insensitive and the caller's spelling is
+  what persists. With **no evidence** — no resolved model, no cached row, or a row that
+  declares no `effortLevels` — the value passes through unvalidated, mirroring the
+  bare-model ownership guard's "absence of evidence is not a mismatch" rule (§5.5). The
+  settings rung (4) is the one exception to the rejection: a level the resolved model provably
+  does not support is **dropped with a daemon warn log** rather than rejected — only
+  caller-supplied and specialist-derived levels raise `-32602`.
+  `agent.create` walks the **same chain** against its own resolved model (§5.5
+  "Creation-time reasoning-effort resolution"): its `reasoningEffort` param is step (1), a
+  `specialistId` it names supplies steps (2)–(3), and the settings default is step (4) — the
+  delegate / wakeOrCreate seams simply pre-resolve (2)–(3) and hand the result down as the
+  param, so the rungs are resolved exactly once.
 - The daemon watches the user (`~/.intent/specialists/`) and project
   (`<workspace>/.intent/specialists/`) tiers (using `notify` watchers, the same infrastructure as
   workspace `file:changed` events); when a specialist file is created/modified/deleted under a
@@ -2124,10 +2815,10 @@ non-existent or `bundled` definition → `-32602`.
 { "jsonrpc":"2.0","id":51,"method":"specialist.create",
   "params":{ "id":"reviewer","scope":"project",
     "spec":{ "id":"reviewer","name":"Reviewer","description":"Reviews diffs",
-      "modelTier":"smart","prompt":"You review code changes…" } } }
+      "model":"opus4.5","prompt":"You review code changes…" } } }
 // ← response
 { "jsonrpc":"2.0","id":51,"result":{ "specialist":{
-  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","modelTier":"smart",
+  "id":"reviewer","name":"Reviewer","description":"Reviews diffs","model":"opus4.5",
   "source":"project","path":".intent/specialists/reviewer.md" } } }
 ```
 
@@ -2170,8 +2861,8 @@ entry) carries an additive `origin` field naming the layer the effective value c
 boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
 machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
 `hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
-`endUserRules`) have **no** `origin` — they never live in config.toml (secrets stay in
-`secrets.json`, state blobs stay in SQLite).
+`endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
+(secrets stay in `secrets.json`, state blobs stay in SQLite).
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
 comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
 re-parse, debounced; invalid content keeps last-good values) and emit the same
@@ -2181,23 +2872,26 @@ the overriding flag ("overridden by startup flag …").
 
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
-- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `backgroundAgents.defaultModel`,`backgroundAgents.typeOverrides`, `backgroundAgents.providerSettings`, `specialists.default`. Background-agent model resolution walks `backgroundAgents.typeOverrides[agentType]` → `backgroundAgents.defaultModel` → `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model`/`modelTier` take precedence over this chain, and every result is provider-guarded). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
-- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoFetch`,`workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted — legacy rows only: in workspaces carrying a persisted `executionEnvironment` the environment is the authority and this toggle is ignored (§5.5); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1), and flipping the toggle never changes an existing workspace's isolation; requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
-- **Execution environments (v3.2):** `sandbox.defaultType` *(enum `direct`|`worktree`|`cow`|`microvm`, default `worktree` — the environment preselected at workspace creation; must name an enabled type: the typed schema rejects a batch that leaves the default disabled)*, `sandbox.direct.enabled` *(boolean, default `true`)*, `sandbox.worktree.enabled` *(boolean, default `true`)*, `sandbox.cow.enabled` *(boolean, default `false`)*, `sandbox.microvm.enabled` *(boolean, default `false`)*, `sandbox.microvm.image` *(object `{ manifestUrl, sha256 }`, no default — optional guest-image override, §5.5b)*, `sandbox.microvm.vcpus` *(number, default `2`, range 1–16 — default vCPU count for spawned agent VMs; a per-agent `vmResources` override on `agent.delegate`/`agent.create` beats it)*, `sandbox.microvm.memMib` *(number, default `2048`, min `128` — default guest memory in MiB for spawned agent VMs; same override order)*. The sizing bounds mirror the microVM helper's limits (`MAX_VCPUS` = 16, `MIN_MEM_MIB` = 128); out-of-range values are rejected by normal `settings.update` validation. The group backs the `sandbox.profiles.*` / `sandbox.options` surface (§5.5b — sizing rides the `microvm` profile row like `image`) and is seeded once at boot from a `workspace.cowIsolation = true` legacy opt-in (see §5.5b, Migration).
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel`,`quickActions.typeOverrides`, `quickActions.providerSettings`, `specialists.default`. `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset). It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11). Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded). The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages, PR descriptions, quick tasks) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped. These two keys also derive the **effective default provider** ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)): the provider prefix of `model.default` when it is a compound id naming a registered provider, else `providers.active` (registry-validated, so a stale/mistyped value falls through), else no derived default — resolution bottoms out at the first registered provider (no provider carries a hardcoded default designation). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted — legacy rows only: in workspaces carrying a persisted `executionEnvironment` the environment is the authority and this toggle is ignored (§5.5); ignored by cache-hydrated creation and by `workspace.duplicate` of a standalone-checkout source, which are always standalone (§5.1); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1), and flipping the toggle never changes an existing workspace's isolation; requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
+- **Execution environments (v6.3):** `sandbox.defaultType` *(enum `direct`|`worktree`|`cow`|`microvm`, default `worktree` — the environment preselected at workspace creation; must name an enabled type: the typed schema rejects a batch that leaves the default disabled)*, `sandbox.direct.enabled` *(boolean, default `true`)*, `sandbox.worktree.enabled` *(boolean, default `true`)*, `sandbox.cow.enabled` *(boolean, default `false`)*, `sandbox.microvm.enabled` *(boolean, default `false`)*, `sandbox.microvm.image` *(object `{ manifestUrl, sha256 }`, no default — optional guest-image override, §5.5b)*, `sandbox.microvm.vcpus` *(number, default `2`, range 1–16 — default vCPU count for spawned agent VMs; a per-agent `vmResources` override on `agent.delegate`/`agent.create` beats it)*, `sandbox.microvm.memMib` *(number, default `2048`, min `128` — default guest memory in MiB for spawned agent VMs; same override order)*. The sizing bounds mirror the microVM helper's limits (`MAX_VCPUS` = 16, `MIN_MEM_MIB` = 128); out-of-range values are rejected by normal `settings.update` validation. The group backs the `sandbox.profiles.*` / `sandbox.options` surface (§5.5b — sizing rides the `microvm` profile row like `image`) and is seeded once at boot from a `workspace.cowIsolation = true` legacy opt-in (see §5.5b, Migration).
 - **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
-- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
+- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`, `server.maxOutstandingRpcs` *(number, default `256`, min `0`, max `100000`, TOML-backed under `[server]` — the daemon-wide cap on outstanding slow-path RPCs shared across every connection and both transports; over-limit requests are rejected with `-32011` "Server overloaded" (§9) and `0` disables the cap. Read once at boot: a change applies on daemon restart)*. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
 - **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
 - **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
 - **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Voice (new in intentd):** `voice.provider` (enum: `elevenlabs` | `openai`, default `elevenlabs`) — the transcription provider `voice.transcribe` uses when the call carries no per-call `provider` override (§5.41); `voice.language` *(string, optional — no default)* — the default transcription language hint (ISO-639-1 code, e.g. `"en"`) applied when a `voice.transcribe` call carries no per-call `language` (or a blank one — per-call values are trimmed and blank behaves like omitted; §5.41 "Language resolution"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; unset or blank means provider auto-detection); `voice.openai.model` (enum: `gpt-4o-transcribe` | `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`) — the transcription model the OpenAI provider posts (§5.41 "Providers"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`); `voice.vocabulary` *(object, non-sensitive — a JSON string array; default = `["Intent"]`, see §5.41 "Context mapping")* — the user-editable vocabulary biased into every `voice.transcribe` call, read per call and merged ahead of `context.keyterms` (§5.41; SQLite-backed like the other opaque bags — no `origin`; a stored value exactly matching the retired 17-term seed default is deleted on daemon start so the new default applies — user-modified lists are never touched); `voice.workspaceVocabulary.maxTerms` *(number, default `50`, min `0`, max `100`; v5.1)* — the cap on the auto-derived workspace vocabulary injected into `voice.transcribe` calls carrying a `workspaceId` and served by `voice.getWorkspaceVocabulary` (§5.41 "Workspace vocabulary"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; `0` disables workspace vocabulary entirely — no derivation, no injection; a change takes effect on the next derivation); `voice.elevenlabs.apiKey` *(sensitive)* and `voice.openai.apiKey` *(sensitive)* — the provider API keys, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) like `linear.token`. Key resolution is secret store first, then the `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` environment variable fallback; the keys are never logged, echoed, or returned over the wire (redacted in `settings.list` / `settings.get` like every sensitive path).
 - **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
 - **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
 - **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
 - **Hardware console (new in intentd):** `hardwareConsole.state` *(object, non-sensitive, default `{}`)* — persisted hardware-console device configuration (key assignments, action mappings, prompt-picker limit), opaque bag owned by the FE.
 - **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
-- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`.
+- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.idleReapMinutes`, `agents.flushQueuedMessages` *(enum `"all" | "systemOnly" | "off"`, default `"all"` — controls how the queue drain batches ready-to-send queued messages into a combined provider turn when an agent goes idle; §5.5 "Queued-message flush". `"all"`: batch every ready entry into ONE combined turn. `"systemOnly"`: batch ALL ready system-origin entries (anywhere in the queue, relative order preserved) into ONE combined turn while user-origin entries still deliver individually, FIFO. `"off"`: the legacy one-message-per-turn drain. Read at drain time, so a `settings.update` takes effect on the next drain. `settings.update` validates the `value` as one of the three strings and rejects a boolean with `-32602`; the legacy boolean shape (`true` → `"all"`, `false` → `"off"`) is accepted only when parsing an existing on-disk `config.toml` from an older daemon, not over `settings.update`)*.
 - **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
 - **Workspace API tool output (new in intentd):** `workspaceApi.maxOutputChars` *(number, default `100000`; `0` = unlimited, otherwise `1000..=10000000` — a non-zero value below 1000 rejects with `-32602`)*, `workspaceApi.toonOutput` *(boolean, default `true`)*. TOML-backed under a `[workspaceApi]` config.toml section; they shape the plain success body of the agent-facing MCP `workspace_api` tool — the oversized-output redirect and TOON encoding described in §5.22.
 - **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
+- **Agent features (new in intentd):** `agentFeatures.backgroundHooks`, `agentFeatures.hostExec`, `agentFeatures.scripts`, `agentFeatures.terminalAccess`, `agentFeatures.browserAutomation`, `agentFeatures.richChatBlocks`, `agentFeatures.structuredQuestions`, `agentFeatures.attentionRequests`, `agentFeatures.stateSnapshot`, `agentFeatures.prMonitor` *(v6.1)* — ten booleans, all default `true`, TOML-backed under an `[agentFeatures]` config.toml section. Per-feature toggles for what agents see and may call: background hooks (`ws.hook.*`), one-shot host command execution (`ws.host.exec`), saved scripts (`ws.script.*`), terminal read access (`ws.terminal.*`), browser automation (`ws.browser.*`), rich chat block prompt guidance (mermaid / ws-block / nav-link), structured questions (`ws.app.question.ask`), attention requests (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` — `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated), the per-turn agent state snapshot injection (the `current ws.agent.snapshot() => {…}` prompt prefix; §5.5 "Per-turn agent state snapshot"), and centralized PR monitoring (`ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors`, §5.42 — `ws.pr.snapshot` stays un-gated, and turning the toggle off also scrubs the "prefer `ws.pr.monitor`" cross-references from the `ws.hook.schedule` and `ws.pr.snapshot` doc entries). Toggles are captured at agent-session creation (system prompt) and at per-agent MCP bridge creation (tool surface) — never live-read per call — so a change applies to **new sessions only** unless noted otherwise below; existing sessions keep the surface they were created with. Two deliberate exceptions: `hook.schedule` also checks `agentFeatures.backgroundHooks` live in the services layer, so flipping it off denies **new** hook schedules immediately from all sessions (including pre-flip ones that still advertise `ws.hook.*`); already-active hooks are unaffected and run to their terminal state/TTL. And `agentFeatures.stateSnapshot` is read **LIVE each turn**, so flipping it takes effect on the very next turn of **every** session, existing ones included; it gates the prompt injection only — the `ws.agent.snapshot()` MCP tool is never gated and stays callable either way.
+- **PR monitor (v6.1):** `prMonitor.debounceSeconds` *(number, default `60`, minimum `10`)* — the quiet window a changed PR must observe before its consolidated wake is delivered — and `prMonitor.pollSeconds` *(number, default `30`, minimum `10`)* — how often the centralized loop polls each monitored PR (§5.42). TOML-backed under a `[prMonitor]` config.toml section. Both are read **live** by the loop (no daemon restart needed); sub-floor values are clamped at read time, and `settings.update` rejects values below the floor.
 
 **Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `linear.issueFilter`.
 
@@ -2243,7 +2937,8 @@ the overriding flag ("overridden by startup flag …").
 
 ### 5.13 Interactive `terminal.*`
 
-> Alongside the read-only methods (`terminal.list` / `terminal.readOutput`, §5.9), the
+> Alongside the read-only methods (`terminal.list` — the v4.0 `{ terminals, daemonBootId }`
+> envelope — and `terminal.readOutput`, §5.9), the
 > interactive methods below let a thin client open, drive, resize, and tear down PTYs that
 > run on the **daemon host**. Terminals and scripts (§5.8) share one **unified PTY/terminal
 > host** (`portable-pty`), each with a server-side scrollback ring buffer for replay on
@@ -2313,6 +3008,7 @@ in the bullet under this table).
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. On a local daemon returns `applicationId?` (or nothing when no chooser is available); on a remote daemon dispatches to the connected client and echoes its selection |
 | host.listDirectory | client → daemon | path? | { path, parent, home, entries: [{ name, path, isDirectory, isGitRepo }] } — directory listing for the FE directory picker. `path` defaults to the daemon-host home when absent/empty, and a leading `~` / `~/` is **expanded to the daemon-host home on the daemon** (`~user` forms pass through verbatim) — so clients may send a raw typed `~/sub` even when they have no `home` to expand against (monorepo#824). `home` is always present (never null/omitted): it is the daemon-host home, falling back to `/` when no home can be resolved from the environment — the defaulted `path` and `~` expansion then resolve against `/` too. The returned `path`/`parent`/entry paths are always fully expanded; `parent` is `null` at the filesystem root; entries include hidden files (the FE filters), sorted directories-first then by name. IO failures surface as `-32603` |
+| host.createDirectory | client → daemon | path (req) | { path } — creates the directory on the daemon host with parents (`create_dir_all` semantics); succeeding when the directory already exists is deliberate (idempotent). A leading `~` / `~/` is **expanded to the daemon-host home on the daemon**, exactly like `host.listDirectory` (`~user` forms pass through verbatim), and the returned `path` is always the fully expanded created path so the FE can navigate into it. `-32602` on a missing/empty `path`; IO failures surface as `-32603` with the error message |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 | host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
 | host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
@@ -2335,12 +3031,27 @@ in the bullet under this table).
   `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
   `openInEditor`, and — when available — a native chooser for `pickApplication`).
 - `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
-  commands itself. It uses `argv` only — **no shell interpolation** — spawns with the child in
-  its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree), enriches
-  `PATH` with the daemon's host PATH, and merges caller-supplied `env` on top. It is
-  **secret-safe**: no env values are logged or returned; only `stdout` / `stderr` / `exitCode`
-  (and `timedOut: true` on the timeout path) cross the wire. `cwd` requires `workspaceId` so
-  the daemon can enforce the same lexical within-workspace containment guard that `file.*` uses;
+  commands itself. It uses `argv` only — **no shell interpolation** — and spawns with the child
+  in its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree). The
+  **child-env contract** is a strict precedence: (1) the caller-supplied `env` map wins
+  outright (applied last, key by key); (2) the daemon's own process environment is inherited —
+  a var already set there is **never overridden** by a captured value; (3) allow-listed
+  credential env vars **captured from the user's login shell** fill the remaining gaps only
+  (the Dock/auto-update launch case, where the daemon's inherited env is stripped —
+  monorepo#1671); (4) `PATH` is enriched via the login-shell/known-dirs mechanism (a caller
+  `env["PATH"]` still wins). The capture is unix-only, cached per daemon process, run with a
+  short timeout, and empty on any failure (no shell, spawn error, timeout, non-unix). The
+  allow-list is exact names `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_PROFILE`,
+  `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `HF_TOKEN`,
+  `HUGGING_FACE_HUB_TOKEN` plus the name prefixes `AUGGIE_*`, `CLAUDE_*`, `CODEX_*`,
+  `OPENCODE_*`, `DROID_*`, `CORTEX_*`; non-allow-listed vars are discarded at parse time and
+  never leave the capture. It is **secret-safe**: no env values — captured or otherwise — are
+  ever logged, traced, or returned; only `stdout` / `stderr` / `exitCode` (and
+  `timedOut: true` on the timeout path) cross the wire. The same captured credential gap-fill
+  applies to **ACP provider spawns** (the piped-stdio agent provider processes this section
+  opens with): provider registry env and per-spawn extras win, then the daemon's process env,
+  then captured vars fill gaps. `cwd` requires `workspaceId` so the daemon can enforce the same lexical
+  within-workspace containment guard that `file.*` uses;
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
   workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
   stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
@@ -2348,7 +3059,8 @@ in the bullet under this table).
   `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
   something neither the buffered `host.exec` nor the PTY-mangling `terminal.*` nor the
   workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
-  process-group + `kill_on_drop` + `timeoutMs` reap, enriched PATH, caller `env` on top,
+  process-group + `kill_on_drop` + `timeoutMs` reap, the child-env contract above — caller
+  `env` > daemon process env > captured credential gap-fill, plus enriched PATH,
   workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
   `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
   `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
@@ -2489,7 +3201,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 | --- | --- | --- |
 | search.inFiles | workspaceId (req), query (req), opts? { caseSensitive?, regex?, globs?, maxResults? }, requestId? | { requestId, matches: SearchMatch[], truncated } — ripgrep content search |
 | search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
-| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
+| search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
 | search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
 | search.memories | query (req), workspaceId?, requestId? | { requestId, matches: MemoryMatch[] } — over the BE memories store |
 | search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
@@ -2537,8 +3249,13 @@ not indexed), ranked by bm25 — matches order by adjusted rank, then newest-fir
 matching message (no per-agent collapse). `preferWorkspaceId` subtracts a fixed boost from the
 bm25 rank (lower = better) of matches owned by the preferred workspace: large enough to lift a
 preferred-workspace match above equally-relevant matches elsewhere, small enough that a
-decisively better match from another workspace still wins. **User-typed queries never error:**
-the raw query is never handed to the FTS5 query parser verbatim — it is reduced to its
+decisively better match from another workspace still wins. Symmetrically, matches owned by
+**archived** workspaces get a fixed penalty (same bm25-unit scale as the boost) added to their
+rank — applied regardless of whether `preferWorkspaceId` is set — so the default tier order is
+preferred workspace → other active workspaces → archived workspaces. Both adjustments are
+**soft**: a decisively more relevant match still overrides tier order, and nothing is excluded.
+**User-typed queries never error:** the raw query is never handed to the FTS5 query parser
+verbatim — it is reduced to its
 alphanumeric tokens, each matched as a quoted phrase joined with `AND`, with the final token —
 presumed mid-typing — also matching as a prefix; operators, quotes, and punctuation are
 stripped rather than surfacing `fts5: syntax error`, and a query with no searchable tokens
@@ -2582,8 +3299,8 @@ final, complete answer is the `search:done` event (or the inline result when not
 (`search.inFiles` / `search.fileNames` / `search.codebase`) — → `-32602`. `search.cancel`
 with an unknown or already-finished `requestId` is a no-op success (`{ ok: true }`). A malformed
 `opts.regex` pattern yields `-32602 "Invalid regex"`. Host-API searches (PR/issue/repo) are
-**not** part of `search.*` — they stay under `pr.*` / the provider-agnostic `SourceControl`
-(§5.7, host-agnostic).
+**not** part of `search.*` — they live on the explicit-addressing `github.*` surface
+(`github.pulls.search` / `github.issues.search` / `github.repos.search`, §5.27).
 
 ### 5.16 `drafts.*`
 
@@ -2672,7 +3389,7 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"3.2"`), and
+  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"6.3"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of
@@ -2684,18 +3401,18 @@ bookkeeping and never crosses the wire.
 { "jsonrpc":"2.0","id":1,"method":"client.hello",
   "params":{ "clientId":"cli-7f3a","name":"Intent Desktop","capabilities":{ "forward":true,"openExternal":true } } }
 // ← response — capabilities of the daemon host
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"3.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-7f3a","protocolVersion":"6.3",
   "server":{ "locality":"remote","hasDisplay":false,"osArch":"linux/x86_64","version":"0.1.0",
-    "protocolVersion":"3.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"6.3","capabilities":{ "liveState":true } } } }
 ```
 
 ```json
 // → first-ever connect: no clientId yet, server mints one
 { "jsonrpc":"2.0","id":1,"method":"client.hello","params":{ "name":"Intent Desktop" } }
 // ← server returns a clientId for the client to persist
-{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"3.2",
+{ "jsonrpc":"2.0","id":1,"result":{ "clientId":"cli-9b21","protocolVersion":"6.3",
   "server":{ "locality":"local","hasDisplay":true,"osArch":"darwin/arm64","version":"0.1.0",
-    "protocolVersion":"3.2","capabilities":{ "liveState":true } } } }
+    "protocolVersion":"6.3","capabilities":{ "liveState":true } } } }
 ```
 
 **Errors.** A malformed `clientId` (non-string) → `-32602`. The handshake is idempotent:
@@ -2735,7 +3452,7 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
   "files":[{ "path":"docs/rust-backend/PROTOCOL.md","additions":140,"deletions":12,"staged":true }] } }
 ```
 
-**Shared schemas (Code Changes Review).** Defined once here; referenced by §5.7, §5.19, §5.20.
+**Shared schemas (Code Changes Review).** Defined once here; referenced by §5.19, §5.20.
 
 - **WorkspaceGitStatus** — `{ branch, trunkBranch, aheadOfTrunk, behindTrunk, hasRemote,
   isPushed, uncommittedCount, stagedCount, localCommits: CommitWithAttribution[],
@@ -3015,20 +3732,45 @@ neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsag
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
 byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
-**TokenUsageTotals** is the four consumption counters
-`{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens }`. `byAgentId` keys are
+**TokenUsageTotals** is the consumption counters plus an optional cost —
+`{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
+cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
 the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
 (`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
+
+**Cost** is sourced from the ACP `usage_update` session notification's `cost` object
+(`{ amount, currency }`, `currency` an ISO 4217 code) and is therefore present **only for
+providers that report it** — the field is **omitted** (never `null`, never a fabricated `0`)
+on any bucket no contributing session reported a cost for, so clients written against the
+pre-cost shape are unaffected. Like the token counters, `usage_update` cost is **cumulative
+per ACP session**, so each report REPLACES the session's previous cost and an ACP session
+recreate folds it into the same internal baseline as the counters (no reset-to-zero loss, no
+double count). The two reports are independent: a turn carrying only a cost never zeroes the
+counters, and a turn carrying only counters never drops a cost already reported. Aggregation
+sums amounts per currency within each bucket (`totals`, each `byAgentId` entry, each `byModel`
+entry); in the pathological case of a bucket mixing currencies, the currency with the largest
+sum wins — the daemon never converts between currencies.
+
+**`thoughtTokens`** *(additive within v6.0, [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973))*
+is the cumulative reasoning ("thought") token count, sourced from the ACP `usage_update`
+report's `thoughtTokens` field for the providers that break reasoning out of `outputTokens`.
+It is a `u64` in camelCase, **omitted when zero or unreported** (never a fabricated `0`, never
+`null`), so clients written against the pre-`thoughtTokens` shape are unaffected. It aggregates
+exactly like the other counters — saturating sum into `totals` / each `byAgentId` entry / each
+`byModel` entry, saturating subtraction for the per-turn delta against the previous cumulative
+snapshot (clamped ≥ 0), and folded into the ACP-session-recreate baseline the same way. A tally
+whose ONLY non-zero counter is `thoughtTokens` still counts as a real token report, so it does
+not fall through to the legacy per-message usage fallback.
 
 ```json
 // → request
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
 // ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
-  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
-  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 } },
-  "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200 },
+  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
 
@@ -3125,12 +3867,13 @@ script's exit code (§5.1).
 
 ### 5.27 `github.*` namespace
 
-> The `github.*` namespace is served **daemon-owned** against `api.github.com` — 23 methods, with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
+> The `github.*` namespace is served **daemon-owned** against `api.github.com` — 24 methods (23 network reads/writes plus the local-cache-only `github.branches.listCached`, v6.2), with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
 > that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
-> **auth** and GitHub-**derived identity** live on `github.*`. The existing `pr.*` methods (§5.7) are
-> deliberately **workspace/active-PR scoped** (`ws` → owner/repo/number) and are left **untouched**;
+> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.*` methods (§5.7 —
+> `pr.status` / `pr.refresh` since the v5.0 removal) are deliberately **workspace/active-PR scoped**
+> (`ws` → owner/repo/number) and are left **untouched**;
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
 
@@ -3144,6 +3887,10 @@ script's exit code (§5.1).
 > the `gh auth token` fallback (§5.12) — so every `github.*` / `pr.*` consumer picks it up with
 > zero resolution changes. Because the daemon owns the poll loop, the flow **survives client
 > refreshes**: a reconnecting client re-reads the in-flight state from `github.authStatus`.
+> On authorize the daemon also **best-effort** authenticates a locally installed `gh` CLI with the
+> stored token (piped via stdin only, never argv or logs; skipped when `gh` is absent or already
+> logged in — an existing `gh` login is never overwritten; a sync failure never affects the device
+> flow — behavior-only, no wire-shape change).
 >
 > - `github.authStatus` validates the resolved token via `GET /user` and reports connection state,
 >   plus the in-flight device flow (if any) under `deviceFlow`.
@@ -3186,6 +3933,7 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.repos.search | query (req), limit?, nextToken? | { repos: GithubRepo[], nextToken? } — `GET /search/repositories` (FE rewrites `owner/name` → `name user:owner`, sorted by stars) |
 | github.repos.get | owner (req), repo (req) | { repo: GithubRepo \| null } — `GET /repos/{owner}/{repo}` (repo metadata incl. `defaultBranch`) |
 | github.branches.list | owner (req), repo (req), limit?, nextToken? | { branches: string[], nextToken? } — **remote** branch names (`GET /repos/{owner}/{repo}/branches`) |
+| github.branches.listCached | owner (req), repo (req) | { cached: boolean, branches: string[], defaultBranch? } — **read-only, no network I/O**: branch names from the daemon's local repo cache (`.repo-cache/{owner}/{repo}`) — remote-tracking names (`refs/remotes/origin/*`, the `HEAD` symref excluded), sorted; `defaultBranch` derives from the `origin/HEAD` symref — recorded at clone time and re-resolved on every cache refresh (`git remote set-head origin --auto`), so it tracks upstream default-branch changes — and is **omitted when unresolvable**. A cold cache or foreign-origin repo → `{ cached: false, branches: [] }` — graceful, **never an error** (an explicit exception to the namespace's error conventions above, like `github.repoConfig.get`); invalid `owner`/`repo` path segments → `-32602`. FE consumption is cached-first: the branch picker renders this result instantly, then falls back to `github.branches.list` (and the repo's `defaultBranch`) when uncached (v6.2) |
 | github.repoConfig.get | owner (req), repo (req), ref? | { config: RepoConfig \| null, exists: boolean } — the repo's `.intent/config.json` fetched via the contents API (`GET /repos/{owner}/{repo}/contents/.intent/config.json`, no clone; `ref` defaults to the default branch). A missing file (or missing repo/ref) → `{ config: null, exists: false }` — an **explicit exception** to the namespace's 404→`-32602` convention above: all 404s are graceful "no config" outcomes, never errors (transport/auth failures still surface as `-32603` like the other `github.*` methods). A present but invalid/mis-shaped file folds **tolerantly** to `{ config: {}, exists: true }` (mirrors the `repoConfig.get` §5.33 parse semantics). Same camelCase `RepoConfig` shape as §5.33, unknown keys preserved (v2.4) |
 
 #### Auth & identity
@@ -3195,7 +3943,7 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
 | github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
 | github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
-| github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched |
+| github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
 
 #### Pulls
@@ -3929,6 +4677,18 @@ workspace initializers, onboarding). It is the **richer, additive sibling** of `
 (`displayName`/`label`); the optional fields carry the picker metadata clients
 consume (group/within-group ordering, cost tier `1..3`, badges, effort levels,
 default flag). Optional fields are omitted when the provider does not report them.
+`effortLevels` (v5.2) is the model's reasoning-effort vocabulary — the values a
+client may offer for the `reasoningEffort` session field (§5.5) and the evidence
+the daemon validates delegation/create-time levels against (§5.11 "Delegation
+reasoning-effort resolution"). It is sourced from the adapter-advertised
+`supportedEffortLevels` on the raw ACP model entry, with codex's known
+effort-capable base models falling back to their fixed level set; effort-capable
+models are served as **one base row** carrying the list — the pre-5.2 codex
+`{model}/{effort}` variant rows are retired. Catalog `effortLevels` are
+static/probe metadata, distinct from the session-scoped `effortLevels` served on
+the `AgentSession`/`AgentLite` projections (§5.5 "Session-discovered effort
+levels") — clients prefer the session-advertised levels for a live session's
+picker and fall back to the catalog when the session advertises none.
 
 **Per-provider catalog.**
 
@@ -3950,14 +4710,14 @@ default flag). Optional fields are omitted when the provider does not report the
 
 **Semantics:**
 
-- **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)` with a **5-minute TTL**, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
-- `forceRefresh: true` skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently.
-- **Non-forced reads** within the TTL serve the cache; expired reads await a fresh probe (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
+- **One generic per-provider cache.** All `models.list` requests — with or without `providerId` — go through a shared cache keyed on `(providerId, versionKey)`, persisted in the daemon data dir (`models-cache.json`) so it survives restarts. Cached entries have **no TTL** and are served indefinitely (behavior within v6.0, [intent-hq/intentd#987](https://github.com/intent-hq/intentd/pull/987) — previously a 5-minute TTL). The version key is registry-defined per provider (e.g. the full pinned npx package spec for claude-code); a pin bump (or package rename) invalidates cached entries automatically — the only automatic invalidation. The no-`providerId` legacy path resolves the same registered auggie source as `providerId: "auggie"` — same key, same cache — so the two can never diverge.
+- `forceRefresh: true` skips the cache read, awaits a fresh probe, and stores the result on success. On failure it returns the **last-good** list labeled `stale: true` plus a `warning` — stale data is never served silently. It is the FE model picker's refresh button — the only client-driven way to re-probe a cached provider.
+- **Non-forced reads** serve any cached entry regardless of age; a probe runs only on a **true cache miss** — first use, or a version-key mismatch (e.g. after an adapter pin bump) — awaited inline (no stale-while-revalidate) with the same last-good + `warning` fallback on failure.
 - **Probe guards.** Concurrent probes for the same provider are single-flighted (one spawn, shared result), and a failed probe is negatively cached for **60 seconds**: non-forced reads within the window serve the failed probe's degradation (static/stale) without re-probing; `forceRefresh` bypasses the negative entry.
-- **Registered sources:** nine providers are registered — `auggie` (CLI discovery, below); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"`); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); `opencode` and `grok` (native CLI discovery — each binary is resolved from its native installer location first, `~/.opencode/bin/opencode` and `~/.grok/bin/grok` respectively, **ahead of** the `PATH` scan, so a daemon spawned with a minimal `PATH` — e.g. from a packaged app — still finds a natively installed CLI; `~` denotes the daemon's resolved home directory (`$HOME`, or `%USERPROFILE%` on Windows), not shell expansion; on Windows only runnable `.exe`/`.cmd`/`.bat` entry points are probed — never the bare extensionless name); and `unsloth` (HTTP fetch, below — no CLI/adapter probe). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
+- **Registered sources:** nine providers are registered — `auggie` (CLI discovery, below); `cortex` (feature-code-gated; when gated it returns an empty list + `warning` under `source: "cortex"` — and with the static tier catalog retired, an open gate also serves an empty list: the provider CLI owns model selection); `claude-code`, `codex`, `pi`, and `droid` (live ACP adapter probes); `opencode` and `grok` (native CLI discovery — each binary is resolved from its native installer location first, `~/.opencode/bin/opencode` and `~/.grok/bin/grok` respectively, **ahead of** the `PATH` scan, so a daemon spawned with a minimal `PATH` — e.g. from a packaged app — still finds a natively installed CLI; `~` denotes the daemon's resolved home directory (`$HOME`, or `%USERPROFILE%` on Windows), not shell expansion; on Windows only runnable `.exe`/`.cmd`/`.bat` entry points are probed — never the bare extensionless name); and `unsloth` (HTTP fetch, below — no CLI/adapter probe). Version keys are per-provider (e.g. the claude-code/codex/pi adapter version pins); the registry is designed for further providers to be added.
 - **The `unsloth` source** fetches the Hugging Face `unsloth` org's GGUF repos (`https://huggingface.co/api/models?author=unsloth&filter=gguf&limit=1000`, 10s timeout) and builds **one row per repo, never per quant**: `id` is the full HF repo id (e.g. `unsloth/gemma-3-27b-it-GGUF` — the compound model id is `unsloth:<repo-id>`), `name` is the bare repo name with the trailing `-GGUF` stripped, and `description` reports the HF download count (the ranking signal); rows are sorted by downloads, ties broken by `trendingScore`. **Memory-fit filtering:** the total parameter count is parsed from the repo name (dense `27B`; MoE `35B-A3B` uses the total `35B`), the footprint is estimated at ~0.6 bytes/param (Q4-class) + 1 GiB headroom, and repos estimated to exceed **~70% of total system RAM** — or whose size cannot be parsed — are dropped, with the existing `warning` field reporting the count (`unsloth: <n> repo(s) hidden (estimated to exceed available memory, or size unknown)`); when RAM detection is unavailable the filter is skipped entirely — every repo is served, including size-unknown ones, and no hidden-count `warning` is emitted. When the filter hides **every** repo (or the response parses to zero repos), the source degrades to the "no models reported" unavailable path — matching the opencode/grok convention — rather than serving an empty success, so an empty catalog is never cached as valid. No new wire fields — the result reuses the standard `{ models, source, stale?, warning? }` shape and cache semantics.
-- **Unknown/unregistered **`providerId` degrades to that provider's static tier rows (empty when it has none) with `source: "static"` and a `warning` — never an error, so model pickers keep working.
-- **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: within the TTL the cache is served; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to the static catalog (`{ models, source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
+- **Unknown/unregistered **`providerId` degrades to an **empty list** with `source: "static"` and a `warning` — never an error, so model pickers keep working. (The former static tier rows went with the tier tables, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922); `source: "static"` survives as the degradation label only.)
+- **Legacy path.** Without `providerId`, the response omits the `providerId` field (legacy shape) but follows the same cache semantics as `providerId: "auggie"`: a cached entry is served indefinitely; on a failed probe the last-good list is served labeled `stale: true` + `warning` (forced or not), falling back to an **empty list** (`{ models: [], source: "static" }`, exactly those keys) only when no last-good list exists. Because the cache is persisted, last-good entries survive daemon restarts on this path too.
 
 **Auggie discovery** (the registered `auggie` source):
 
@@ -3966,11 +4726,11 @@ default flag). Optional fields are omitted when the provider does not report the
    description) when the JSON form fails or parses empty.
 3. Rows flagged `isLegacyModel` are **filtered out server-side**; the survivors are sorted by
    `modelGroupPriority`, then `priority`, then `name` (missing priorities sort last). A
-   successful CLI result is cached per the generic 5-minute cache above.
+   successful CLI result is cached per the generic per-provider cache above.
 4. When the auggie CLI is unavailable or yields nothing parseable (and no last-good entry
-   exists), the static `PROVIDER_MODEL_TIERS` catalog is returned with `source: "static"`
-   (same fallback as `agent.getModels`), so the result is never empty — clients can key honest
-   "live vs fallback" UI off `source`.
+   exists), an **empty list** is returned with `source: "static"` — there is no static
+   fallback catalog (the provider CLI owns model discovery, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
+   clients can key honest "live vs fallback" UI off `source`.
 
 Errors: `-32603` only on internal failure; probe/CLI failures degrade as described above.
 
@@ -3994,7 +4754,16 @@ namespace (§5.5).
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } |
+| agent.enhancePrompt | prompt (req), mode?: "enhance" \| "layout", model?, workspaceId?, timeoutMs? | { enhanced, original, mode } — or { available: false, reason } when the provider gate is closed |
+
+**Provider gate ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Enhance-prompt is an
+auggie-specific capability, gated on auggie being the **settings-derived effective default
+provider** — the provider prefix of `model.default` when compound and registry-valid, else
+`providers.active` (§5.12). When the effective provider is not auggie — **including
+unset/undecidable settings, which resolve the gate CLOSED** rather than falling through to
+the first registered provider (which would functionally reinstate the removed hardcoded
+auggie default) — the method returns `{ available: false, reason }` (a typed unavailable
+result, not an error) so clients hide the affordance gracefully.
 
 **Params.**
 
@@ -4027,8 +4796,8 @@ the mode-specific parse.
 - `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
   `"…timed out after <n>ms"`); non-zero CLI exit; in `mode: "enhance"`, a reply missing the
   `<augment-enhanced-prompt>` tags (`data`: `"Failed to parse enhanced prompt from response"`).
-  CLI absence is a **hard error** here (unlike §5.30) — there is no meaningful static fallback
-  for enhancement.
+  CLI absence is a **hard error** here (unlike §5.30, which degrades to an empty list) —
+  there is no meaningful fallback for enhancement.
 
 ```json
 // → request
@@ -4045,7 +4814,7 @@ the mode-specific parse.
 
 A stateless one-shot completion RPC (used for background requests such as slug
 generation and note-status checks). The daemon owns the full
-lifecycle: spawn the auggie CLI, collect its cleaned reply, reap the process on any
+lifecycle: spawn the provider, collect its cleaned reply, reap the process on any
 failure path (timeout, cancel, drop). **No agent session or in-memory state is
 created**, so no client-side create→send→read→delete orchestration is needed and
 there is nothing to garbage-collect on the error path. Part of the
@@ -4053,41 +4822,131 @@ there is nothing to garbage-collect on the error path. Part of the
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.completeOnce | prompt (req), systemPrompt?, model?, workspaceId?, timeoutMs? | { text } |
+| agent.completeOnce | prompt (req), systemPrompt?, model?, type?, workspaceId?, timeoutMs? | { text } — or { available: false, reason } when the provider gate is closed |
+
+**Provider-neutral routing.** Unlike `agent.enhancePrompt` (§5.31, auggie-only), completion
+is routed on the settings-derived effective default provider — the provider prefix of
+`model.default` when compound and registry-valid, else `providers.active` (§5.12):
+
+- **auggie** → the `auggie --print` CLI path described under *Execution — auggie route*.
+- **claude-code / codex / pi** → an **ephemeral ACP session** (*Execution — ACP route*).
+- **anything else**, including unset/undecidable settings and a one-shot-capable provider
+  whose adapter cannot be resolved → `{ available: false, reason }`.
+
+**`{ available: false, reason }` shapes.** A typed unavailable result, never an error, so
+clients hide the affordance gracefully. Three reasons cover the normal gating paths, plus
+two rare defensive shapes; clients must treat `reason` as an opaque display string and
+never parse or match on it:
+
+| Condition | `reason` |
+| --- | --- |
+| No decidable effective default provider (both `model.default` prefix and `providers.active` unset/unregistered) | `completeOnce requires a decidable effective default provider` |
+| Effective provider has no one-shot route (not auggie and not claude-code / codex / pi) | `completeOnce is not supported for the effective default provider: <providerId>` |
+| One-shot-capable provider whose adapter resolves to nothing (no binary, and no npx for the pinned package) | `<providerId>: no adapter could be resolved (binary not found and npx unavailable)` |
+| *(defensive)* ACP one-shot provider id missing from the provider registry — unreachable for the three hardcoded ids | `unknown provider: <providerId>` |
+| *(defensive)* codex only: creating the isolated throwaway `CODEX_HOME` tempdir fails | `codex: failed to create isolated CODEX_HOME: <error>` |
+
+Unset/undecidable settings resolve the gate **CLOSED** rather than falling through to the
+first registered provider (which would functionally reinstate the removed hardcoded auggie
+default) — same ruling as §5.31.
 
 **Params.**
 
-- `prompt` (required, non-empty) — the user prompt piped verbatim to the CLI over
-  stdin (composed with `systemPrompt` when supplied).
+- `prompt` (required, non-empty) — the user prompt sent verbatim to the provider (piped
+  over stdin on the auggie route, delivered as the single `session/prompt` text content
+  block on the ACP route; composed with `systemPrompt` when supplied).
 - `systemPrompt` — optional system prompt; when present the composed input becomes
   `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
-  used by §5.31. Absent/blank → `prompt` rides through unchanged.
-- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
-- `workspaceId` — optional; when present the CLI runs with the workspace's worktree
-  as its working directory (unknown workspace → `-32602`). Without it the CLI runs
-  without a `cwd`.
+  used by §5.31. Absent/blank → `prompt` rides through unchanged. Applies to both routes.
+- `model` — optional provider model id. On the auggie route it is passed as `--model`; on
+  the ACP route it rides the provider's own CLI model flag when it has one, and is ignored
+  silently by providers that select models through other mechanisms (claude-code and pi
+  use `session/set_config_option`) — a best-effort model is never an error. When omitted
+  (or blank), the daemon resolves one from the quick-action settings — see *Model
+  resolution* below.
+- `type` — optional quick-action type hint keying `quickActions.typeOverrides` in the model
+  resolution below; conventionally `commit`, `pr`, `review`, or `fast`. Free-form on the
+  wire — the key set is client-owned and never validated, so an unknown key simply misses
+  the override map and falls through. Ignored entirely when `model` is supplied.
+- `workspaceId` — optional; when present the provider runs with the workspace's worktree
+  as its working directory (also the ACP `session/new` `cwd`; unknown workspace →
+  `-32602`). Without it the auggie CLI runs without a `cwd` and the ACP adapter runs in
+  the system temp dir.
 - `timeoutMs` — optional positive integer, default `30000` (matches §5.31 default),
-  capped at `120000`. A hung CLI is reaped when the timeout elapses.
+  capped at `120000`. A hung provider is reaped when the timeout elapses. On the ACP route
+  this bounds the `session/prompt` phase; session setup uses the adapter's own staged
+  npx-aware budgets.
 
-**Execution** — same one-shot CLI discipline as `agent.enhancePrompt` (§5.31): auggie
-binary resolution (`Services.auggie_bin` test seam → `context.auggiePath` setting when
-set and non-empty (exclusive; an invalid path is an error, no silent discovery fallback)
-→ `find_auggie()` discovery via Intent-managed binary → enhanced PATH), then
+**Model resolution** ([intent-hq/monorepo#1734](https://github.com/intent-hq/monorepo/issues/1734)).
+The daemon — not the client — resolves the user's quick-action model settings, so **every**
+client gets them for free:
+
+1. An explicit non-blank `model` param always wins.
+2. `quickActions.typeOverrides[type]` (§5.12) when `type` is supplied and the entry is
+   non-blank.
+3. `quickActions.defaultModel` when non-blank.
+4. Otherwise none — the provider CLI's own default applies.
+
+Steps 2–3 are provider-guarded — the settings value is user-authored and easily outlives a
+provider switch, so it is never fed to a foreign CLI. A **compound** id
+(`{provider}:{model}`) must name the resolved effective provider, and is passed on **bare**
+(prefix stripped) since the one-shot launch takes a raw model id; a prefix that is not a
+registered provider id counts as foreign. A **bare** id reuses §5.5's asymmetric
+cached-catalog evidence rule: it is dropped only when the effective provider's own cached
+catalog affirmatively disproves ownership, so a cold start passes it through. Every drop
+falls to step 4 with a daemon warn log rather than being rejected — a `-32602` here would
+reject a model the caller never sent. `quickActions.providerSettings` is deliberately **not** a rung: it is
+the client's opaque per-provider snapshot cache, not a precedence tier. This chain is scoped
+to one-shot quick actions; agent sessions (delegated ones included) keep the
+background-agnostic creation-time chain of §5.5
+([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)).
+
+The daemon-internal auto-commit path (§5.10 wrap-up) calls `agent.completeOnce` with
+`type: "commit"`, so it too honors the user's commit-message quick-action override.
+
+**Execution — auggie route.** Same one-shot CLI discipline as `agent.enhancePrompt`
+(§5.31): auggie binary resolution (`Services.auggie_bin` test seam → `context.auggiePath`
+setting when set and non-empty (exclusive; an invalid path is an error, no silent discovery
+fallback) → `find_auggie()` discovery via Intent-managed binary → enhanced PATH), then
 `auggie --print --mcp-config {"mcpServers":{}}` (MCP skipped — completion needs no
-tools) with the composed prompt piped over stdin. Stdout is ANSI-stripped and cleaned
-(🤖-delimited response extraction plus tool-artifact line filtering, the FE
-`cleanAgentMessage` port) before being returned verbatim as `text`. No streaming, no
-events, no persistence. The binary resolution order honors the existing
-`context.auggiePath` settings key so explicit user config is never ignored and hermetic
-e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
+tools) with the composed prompt piped over stdin. The binary resolution order honors the
+existing `context.auggiePath` settings key so explicit user config is never ignored and
+hermetic e2e tests (with `auggiePath` set to a fake fixture) never fall back to PATH-based
 discovery.
+
+**Execution — ACP route (ephemeral session).** The adapter launch mirrors the model probe
+(§5.30): an npx-only provider (claude-code, pi) always runs its pinned package via
+`npx -y <package>`; otherwise the resolved binary wins (`providers.paths[<owning
+provider>]` → native install dir → enhanced PATH) with the pinned npx package as fallback.
+The daemon then drives one **ephemeral** ACP session and kills the child:
+
+1. `initialize` — no client filesystem capabilities.
+2. `session/new` — **no MCP servers**, `cwd` from `workspaceId` (else the system temp dir).
+3. one `session/prompt` carrying the composed prompt as a single text block; the reply is
+   accumulated from the streamed `agent_message_chunk` text updates (thoughts, tool calls
+   and plans are ignored).
+4. the child is reaped on **every** exit path (success, timeout, error, drop) — SIGTERM to
+   its process group, grace, SIGKILL, plus a descendant sweep.
+
+Non-interactive by construction: every agent→client request is answered immediately —
+`session/request_permission` resolves `cancelled`, anything else gets method-not-found — so
+a one-shot can never block on a human. No session id, agent row, transcript, or event is
+persisted; nothing survives the call.
+
+Both routes clean the reply identically (ANSI-strip, 🤖-delimited response extraction plus
+tool-artifact line filtering, the FE `cleanAgentMessage` port) before returning it verbatim
+as `text`. No streaming, no events, no persistence on either route.
 
 **Errors** (§9):
 
 - `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
-- `-32603` — auggie CLI not found / spawn failure; timeout (`data` carries
-  `"…timed out after <n>ms"`); non-zero CLI exit. CLI absence is a **hard error** —
-  there is no static fallback for completion.
+- `-32603` — auggie route: CLI not found / spawn failure; timeout (`data` carries
+  `"…timed out after <n>ms"`); non-zero CLI exit. ACP route: a **resolved** adapter that
+  fails the turn — spawn failure, transport failure, setup or prompt timeout, an adapter
+  JSON-RPC error, an early adapter exit, or a turn that streamed no text — with `data`
+  prefixed by the provider id (`"<providerId>: …"`). Provider absence is a hard error only
+  once an adapter has been resolved; an unresolvable adapter is the
+  `{ available: false, reason }` case above, not a `-32603`.
 
 ```json
 // → request
@@ -4264,7 +5123,7 @@ No RPC surface changes: `agent.getQueue`, `agent:queue:updated`, and the edit/re
 
 #### Completion-watch persistence
 
-**Deliver-once, queue- and busy-aware completion.** Every ungrouped completion watch — whatever path registered it (`agent.delegate` auto-watch, `agent.wakeOrCreate` SUB-1, `ws.agent.create` auto-subscribe, the sender auto-subscribe, explicit `ws.agent.watch`, the chief-only MCP `ws.app.agents.waitFor` binding) — delivers exactly one completion wake and is then retired (removed before delivery, per STAB-18). **Completion** is the target reaching `agent:idle` with an EMPTY ready-to-send pending queue AND no in-flight turn worker, or `agent:failed` / `agent:deleted` regardless of queue/busy state (a failed child is parked; its queue never self-drains). An `agent:idle` while the target still holds ready-to-send queued messages (entries under edit don't count — the same `has_ready_to_send` gate as the idle-emit invariant), or while the target's worker is already busy in a new turn ([monorepo#1297](https://github.com/intent-hq/monorepo/issues/1297): an enqueue that raced the idle emit may have been dequeued and started before delivery, leaving the queue empty but the busy slot held), is an **interim idle**: the watch neither delivers nor retires, staying armed for the real completion after the queue drains / running turn ends — this is what makes the wakeOrCreate queued branch work with no special watch mode and no leak-guard timer. Grouped (`after_all`) watches are exempt from the interim-idle gate (group settlement accounting must see every completion) and are owned by group settlement. **Hook-waiting deferral (idle-visibility, within v3.1).** An `agent:idle` while the target still owns ACTIVE (`scheduled`/`running`) background hooks (§5.40) is likewise **not** its completion — the child will run again when a hook dispatches, fails, or expires — so completion-watch delivery for that idle is **deferred**: the watch neither delivers nor retires (no "child completed" wake fires while the child is merely waiting on a hook), and — unlike the queue-interim case — grouped (`after_all`) watches defer too: a hook-waiting child does **not** count as settled and its group stays open until the child's genuine settlement (deferral is TTL-bounded: hooks expire within 60 minutes and every terminal hook transition wakes the owner, whose next hookless idle settles the watch/group — so no deferral outlasts the last hook's expiry plus one child turn). The classification probes the hook store live at delivery time (an emit-time `waitingOnHooks` stamp alone never defers a child whose hooks already settled), and a probe failure reads as no hooks (fail-open: a missed deferral only yields the pre-deferral early wake). Never deferred: `agent:failed` / `agent:deleted`, the immediate `agent.reportToParent` wake, and the attention fan-out (blocker/discussion) — only the plain `agent:idle` settlement path defers. Edge cases: an **external `hook.cancel`** (the FE path) on an idle child whose last active hook it cancels fires the deferred watch at that moment (every terminal hook transition re-runs the deferred-completion redelivery as a backstop, so a cancel with no owner wake — or a failed wake delivery — still settles it); **daemon-restart rehydration** consults active hooks the same way — the reconciliation pass and registration-time reconciliation both skip the synthetic idle-completion refire for a child that is idle with active hooks (resumed hooks keep their original `expiresAt`, so the deferral stays bounded across restarts), while failed/deleted children still reconcile immediately. Attention events (blocker raised / discussion requested) fan out to `wake_on_attention` watchers WITHOUT consuming the watch — attention is not a completion; the watch still ends at the target's next completion. An agent that wants wakes for a target's future turns must re-arm (sending/waking auto-subscribes, or call `ws.agent.watch` again). **Completion watches survive restarts.** Watches are persisted in the `completion_watch` SQLite table via a best-effort spawned async write (NOT durable-before-observable; `ws.app.agents.waitFor` and `ws.agent.watch` alone AWAIT the write because registration-time reconciliation may fire the watch immediately — but both remain fail-open on a persist error: a failed write only logs, and the in-memory watch still delivers live), and deleted when the watch fires or is cancelled. At daemon startup, surviving rows are rehydrated into the in-memory registry: rows whose parent agent is gone (or whose delegation group already settled) are pruned; each remaining watch's child is then reconciled against current agent state, so a child that completed / failed / was deleted while the daemon was down delivers a synthetic completion wake immediately instead of leaving the parent waiting forever. `ws.app.agents.waitFor` runs the same reconciliation at registration time, so waiting on an already-settled target wakes the caller right away. No RPC surface changes: the watches remain visible via `agent.getSubscriptions` and removable via `agent.cancelSubscriptions`; the subscription registry itself is daemon-level, so chief-workspace (`__chief__`) parents can hold watches on children in any workspace (non-chief parents remain scoped to their own workspace). **Watch registration fails closed on a nonexistent child.** The watch-registration op behind the `ws.agent.create` auto-subscribe (`agent.watchCompletion`) rejects a nonexistent child agent with `-32602` naming the id BEFORE any watch is registered — it no longer falls back to the call's workspace and registers a watch that can never fire (a phantom `waitingForAgentIds` entry on the parent); this mirrors the sender auto-subscribe guard on `agent.sendMessage` (§5.5). The existing deleted-parent guard (`ok: false`, no watch) is unchanged, and the child guard takes precedence when both the parent is deleted and the child is nonexistent.
+**Deliver-once, queue- and busy-aware completion.** Every ungrouped completion watch — whatever path registered it (`agent.delegate` auto-watch, `agent.wakeOrCreate` SUB-1, `ws.agent.create` auto-subscribe, the sender auto-subscribe, explicit `ws.agent.watch`, the chief-only MCP `ws.app.agents.waitFor` binding) — delivers exactly one completion wake and is then retired (removed before delivery, per STAB-18). **Completion** is the target reaching `agent:idle` with an EMPTY ready-to-send pending queue AND no in-flight turn worker, or `agent:failed` / `agent:deleted` regardless of queue/busy state (a failed child is parked; its queue never self-drains). An `agent:idle` while the target still holds ready-to-send queued messages (entries under edit don't count — the same `has_ready_to_send` gate as the idle-emit invariant), or while the target's worker is already busy in a new turn ([monorepo#1297](https://github.com/intent-hq/monorepo/issues/1297): an enqueue that raced the idle emit may have been dequeued and started before delivery, leaving the queue empty but the busy slot held), is an **interim idle**: the watch neither delivers nor retires, staying armed for the real completion after the queue drains / running turn ends — this is what makes the wakeOrCreate queued branch work with no special watch mode and no leak-guard timer. Grouped (`after_all`) watches are exempt from the interim-idle gate (group settlement accounting must see every completion) and are owned by group settlement. **Hook-waiting deferral (idle-visibility, within v3.1).** An `agent:idle` while the target still owns ACTIVE (`scheduled`/`running`) background hooks (§5.40) is likewise **not** its completion — the child will run again when a hook dispatches, fails, or expires — so completion-watch delivery for that idle is **deferred**: the watch neither delivers nor retires (no "child completed" wake fires while the child is merely waiting on a hook), and — unlike the queue-interim case — grouped (`after_all`) watches defer too: a hook-waiting child does **not** count as settled and its group stays open until the child's genuine settlement (deferral is TTL-bounded: hooks expire within 60 minutes and every terminal hook transition wakes the owner, whose next hookless idle settles the watch/group — so no deferral outlasts the last hook's expiry plus one child turn). The classification probes the hook store live at delivery time (an emit-time `waitingOnHooks` stamp alone never defers a child whose hooks already settled), and a probe failure reads as no hooks (fail-open: a missed deferral only yields the pre-deferral early wake). Never deferred: `agent:failed` / `agent:deleted`, the immediate `agent.reportToParent` wake, and the attention fan-out (blocker/discussion) — only the plain `agent:idle` settlement path defers. Edge cases: an **external `hook.cancel`** (the FE path) on an idle child whose last active hook it cancels fires the deferred watch at that moment (every terminal hook transition re-runs the deferred-completion redelivery as a backstop, so a cancel with no owner wake — or a failed wake delivery — still settles it); **daemon-restart rehydration** consults active hooks the same way — the reconciliation pass and registration-time reconciliation both skip the synthetic idle-completion refire for a child that is idle with active hooks (resumed hooks keep their original `expiresAt`, so the deferral stays bounded across restarts), while failed/deleted children still reconcile immediately. **PR-monitor-waiting deferral (idle-visibility, unified external-wait, within v6.2; [intent-hq/intentd#1002](https://github.com/intent-hq/intentd/pull/1002)).** An `agent:idle` while the target still owns ACTIVE PR monitors (§5.42) is likewise **not** its completion — the child will run again when its monitored PR changes, merges/closes, or the monitor is cancelled — so completion-watch delivery for that idle **defers exactly like the hook-waiting case**: the watch neither delivers nor retires, and grouped (`after_all`) watches defer too — a pr-monitor-waiting child does **not** count as settled and its group stays open until the child's genuine settlement. The classification probes the monitor store live at delivery time (an emit-time `waitingOnPrMonitors` stamp alone never defers a child whose monitors already settled), and a probe failure reads as no monitors (fail-open, same as the hook probe). Never deferred: `agent:failed` / `agent:deleted`, the immediate `agent.reportToParent` wake, and the attention fan-out. **Key difference from hook-waiting: no TTL.** Unlike background hooks (bounded by their 60-minute cap), PR monitors have **no TTL** (§5.42) — a monitor can sit ACTIVE indefinitely while a PR sits unreviewed — so this deferral has **no time bound of its own**. It resolves instead via one of the monitor's **terminal transitions**, each of which re-runs the deferred-completion redelivery as a backstop even when the transition itself delivers no wake: the monitor **completing** (PR merged/closed — an immediate, undebounced wake), the owner's own **`ws.pr.unmonitor`** (which delivers no self-wake, so the backstop is what settles the deferred watch), an **external `prMonitor.cancel`** (the FE path — mirrors the hook-waiting `hook.cancel` edge case; the owner does get a cancellation-notice wake here, but the backstop still runs as a safety net), and **daemon-restart rehydration** (reconciliation skips the synthetic idle-completion refire for a child that is idle with active monitors, exactly like the hook case — resumed monitors keep polling independently after restart, so there is no bounded re-arm window to preserve). Because there is no TTL, an abandoned PR with a permanently-open monitor can in principle defer forever; this mirrors the accepted trade-off already documented for the deeper agent-waiting deadlock cycles below. **Agent-waiting deferral (behavior-only within v4.3; [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)).** An `agent:idle` while the target itself holds live outgoing completion watches on other, unsettled agents is likewise **not** its completion — the target will run again when a watched agent completes (the motivating case: an implementor idling while it waits on its PR reviewer must not wake its coordinator into a no-progress loop). Such an agent-waiting idle defers WATCH delivery exactly like a hook-waiting one: ungrouped watches on the target neither deliver nor retire, and the target's grouped (`after_all`) memberships skip the settlement record, so its group stays open until it settles for real. The classification is probed **live at delivery time** (the emit-time `isWaitingForOtherAgents` stamp alone never defers a target whose watches already settled), counting both the target's ungrouped outgoing watches and its grouped ones (a coordinator idling while its own delegation group is open is genuinely waiting on its children); a persisted-row read failure on the startup path fails open (not waiting — a missed deferral only yields the pre-deferral early wake). **Seal-interim vs. watch-interim split:** unlike the queue/busy/hook cases, agent-waiting does NOT defer the target's OWN `after_all` group **seal** — an `after_all` coordinator always holds grouped outgoing watches on its own children, so gating the seal on agent-waiting would deadlock the group (the seal is what closes the coordinator's delegating turn); only watch delivery to the target's watchers and the target's settlement records defer. **2-cycle deadlock guard:** a mutual watch pair (A⇄B) in which BOTH sides are idle (not busy, empty ready-to-send queue) would defer forever, so an outgoing watch on a target that watches this agent back and is itself idle is NOT counted as a waiting reason — the deadlocked pair delivers as before (both watchers fire); a mutual pair whose counterpart is still busy is a genuine wait and still defers. Deeper cycles (A→B→C→A) are a **documented limitation**: they are not detected and will defer until an external event (watch removal, failure, deletion) breaks the cycle. **Redelivery backstops:** the deferral has no TTL of its own, so every path that removes the target's outgoing watches re-runs the deferred-completion redelivery — `agent.unwatch` / `ws.agent.unwatch`, `agent.cancelSubscriptions` (both the scoped and the remove-all forms), and `after_all` group settlement (which drops the parent's grouped watches) — so a deferred watcher settles when the target's last outgoing watch disappears without producing a wake (e.g. the aggregated group wake's delivery failed). Never deferred (same as hook-waiting): `agent:failed` / `agent:deleted`, the immediate `agent.reportToParent` wake, and the attention fan-out. **Reconciliation paths across restarts:** the startup rehydration reconcile, registration-time reconciliation (`ws.agent.watch` re-arm on an already-idle target, `ws.app.agents.waitFor`), and the group-rehydration pre-publish records all apply the same predicate — an idle child holding outgoing completion watches records the interim-skip marker and leaves the watch armed / skips the group record instead of firing a synthetic completion; group rehydration uses a durable variant that falls back to persisted `completion_watch` rows because groups rehydrate before the watch registry loads. Synthetic idles from these paths stamp `isWaitingForOtherAgents` consistently with live emits; failed/deleted children still reconcile immediately. Attention events (blocker raised / discussion requested) fan out to `wake_on_attention` watchers WITHOUT consuming the watch — attention is not a completion; the watch still ends at the target's next completion. An agent that wants wakes for a target's future turns must re-arm (sending/waking auto-subscribes, or call `ws.agent.watch` again). **Completion watches survive restarts.** Watches are persisted in the `completion_watch` SQLite table via a best-effort spawned async write (NOT durable-before-observable; `ws.app.agents.waitFor` and `ws.agent.watch` alone AWAIT the write because registration-time reconciliation may fire the watch immediately — but both remain fail-open on a persist error: a failed write only logs, and the in-memory watch still delivers live), and deleted when the watch fires or is cancelled. At daemon startup, surviving rows are rehydrated into the in-memory registry: rows whose parent agent is gone (or whose delegation group already settled) are pruned; each remaining watch's child is then reconciled against current agent state, so a child that completed / failed / was deleted while the daemon was down delivers a synthetic completion wake immediately instead of leaving the parent waiting forever. `ws.app.agents.waitFor` runs the same reconciliation at registration time, so waiting on an already-settled target wakes the caller right away. No RPC surface changes: the watches remain visible via `agent.getSubscriptions` and removable via `agent.cancelSubscriptions`; the subscription registry itself is daemon-level, so chief-workspace (`__chief__`) parents can hold watches on children in any workspace (non-chief parents remain scoped to their own workspace). **Watch registration fails closed on a nonexistent child.** The watch-registration op behind the `ws.agent.create` auto-subscribe (`agent.watchCompletion`) rejects a nonexistent child agent with `-32602` naming the id BEFORE any watch is registered — it no longer falls back to the call's workspace and registers a watch that can never fire (a phantom `waitingForAgentIds` entry on the parent); this mirrors the sender auto-subscribe guard on `agent.sendMessage` (§5.5). The existing deleted-parent guard (`ok: false`, no watch) is unchanged, and the child guard takes precedence when both the parent is deleted and the child is nonexistent.
 
 **Pair uniqueness — at most one active watch per (parent, child)** *(new in intentd)*. A parent holds at most ONE active completion watch on a given child, across ungrouped watches and `after_all` delegation-group membership, so duplicate waits (and duplicate wakes for one completion) can never appear on the wire. Enforcement is per registration path: **explicit** registrations reject — `ws.app.agents.waitFor` on a target the caller already watches (grouped or not) is rejected with `-32602` naming the target (`already waiting on agent <id>: …`), in the same up-front validation loop as the scope gate, so the rejection is side-effect free (no group, no watches; the pre-existing watch survives unchanged; cancel it via `agent.cancelSubscriptions` to re-register). **Auto-subscribe** paths that piggyback on another operation (`agent.delegate` auto-watch, `agent.wakeOrCreate`, `ws.agent.create` auto-subscribe, the sender auto-subscribe on `agent.sendMessage`/`agent.sendToTask`) never fail the parent operation on a duplicate: the shared registration path silently ADOPTS the existing watch for the pair — returning its `subscriptionId` — and only ever strengthens it, never weakens it: a grouped (`after_all`) registration converts the existing watch into the group watch (`group_id` set) because group settlement accounting requires the grouped watch to exist — the group always wins a collision; an ungrouped registration against an existing grouped watch is a no-op; `wake_on_attention` is strengthen-only (an explicit `ws.agent.watch` sets it; a later auto registration never clears it). The adopted watch's strengthened mode is persisted (upsert on the same row id). Startup rehydration coalesces pre-invariant duplicate persisted rows: rows are loaded grouped-first (then by `created_at`, oldest first) and a row whose (parent, child) pair is already watched in memory is pruned (deleted), so the invariant holds after upgrade. The coalescing rank need not consider `wake_on_attention`: pair uniqueness shipped before the attention flag existed (migration 0072), so pre-invariant duplicate rows always carry `wake_on_attention = 0` and the ordering can never prune an attention-enabled watch in favor of a weaker one.
 
@@ -4315,16 +5174,18 @@ rendered in local time.
 **UsageStats** — `{ totals: UsageTotals, runs, sessions, longestRunMs, linesAdded, linesDeleted,
 byModel: ByModelEntry[], byProvider: ByProviderEntry[], byHourOfDay: HourEntry[24],
 byMonth: MonthEntry[12], availablePeriods: { months: string[], years: string[] } }`, where
-**UsageTotals** is the four consumption counters `{ inputTokens, outputTokens, cacheReadTokens,
-cacheCreationTokens }`:
+**UsageTotals** is the consumption counters `{ inputTokens, outputTokens, cacheReadTokens,
+cacheCreationTokens, thoughtTokens? }`:
 
 - **totals / runs / sessions / longestRunMs / linesAdded / linesDeleted** — period rollups:
-  the four token counters, completed prompt turns, agent sessions started, the longest single
+  the token counters, completed prompt turns, agent sessions started, the longest single
   turn in milliseconds (MAX), and agent-attributed line churn.
 - **byModel** — `{ model, runs } & UsageTotals` per normalized model name, sorted descending by
-  total tokens (ties break on model name ascending).
+  total tokens — the sum of all five counters, `thoughtTokens` included (ties break on model
+  name ascending).
 - **byProvider** — `{ provider, runs } & UsageTotals` per resolved agent-provider id, sorted
-  descending by total tokens (ties break on provider id ascending). The wire carries **raw
+  descending by the same five-counter total-token sum (ties break on provider id ascending).
+  The wire carries **raw
   provider ids** (`claude-code`, `codex`, `auggie`, …) — display-name mapping is a client
   concern. Rows recorded before provider attribution existed (pre-migration) — and any usage
   whose provider could not be resolved — aggregate under the id `"unknown"`; there is no
@@ -4342,18 +5203,31 @@ cacheCreationTokens }`:
 Empty periods return zeroed shapes — zero totals, empty `byModel` / `byProvider`, 24 zeroed
 hours, 12 zeroed months — never an error.
 
+**`thoughtTokens`** *(additive within v6.2, [intent-hq/intentd#1041](https://github.com/intent-hq/intentd/pull/1041))*
+is the cumulative reasoning ("thought") token count — the per-bucket counterpart of the
+`TokenUsageTotals.thoughtTokens` counter (§5.23) and the `RateSample.thoughtTokens` counter
+(§5.39), persisted in the hourly buckets via the additive defaulted migration
+`0087_usage_stats_thought_tokens.sql` (pre-migration buckets read back as zero, exactly like an
+hour in which no provider broke reasoning out of `outputTokens`). It is a `u64` in camelCase,
+**omitted when zero or unreported** (never a fabricated `0`, never `null`) — on `totals` and on
+every `byModel` / `byProvider` / `byHourOfDay` / `byMonth` cell alike — so clients written
+against the pre-`thoughtTokens` shape see the previous response byte-for-byte. It aggregates
+exactly like the other counters (the same clamped-≥ 0 per-turn delta folded into the same
+buckets), and it counts toward the `byModel` / `byProvider` "total tokens" ranking, which sums
+all five counters.
+
 ```json
 // → request
 { "jsonrpc":"2.0","id":94,"method":"stats.getUsage","params":{ "period":"month","key":"2026-07","tzOffsetMinutes":-420 } }
 // ← response (arrays elided to the interesting entries)
 { "jsonrpc":"2.0","id":94,"result":{
-  "totals":{ "inputTokens":130,"outputTokens":45,"cacheReadTokens":0,"cacheCreationTokens":0 },
+  "totals":{ "inputTokens":130,"outputTokens":45,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 },
   "runs":3,"sessions":1,"longestRunMs":9000,"linesAdded":10,"linesDeleted":3,
   "byModel":[
-    { "model":"Opus 4.8","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0 },
+    { "model":"Opus 4.8","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 },
     { "model":"Sonnet 5","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
   "byProvider":[
-    { "provider":"claude-code","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0 },
+    { "provider":"claude-code","runs":2,"inputTokens":100,"outputTokens":40,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":25 },
     { "provider":"unknown","runs":1,"inputTokens":30,"outputTokens":5,"cacheReadTokens":0,"cacheCreationTokens":0 } ],
   "byHourOfDay":[ { "hour":0,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 24 entries … */ ],
   "byMonth":[ { "month":1,"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 }, /* … 12 entries … */ ],
@@ -4424,7 +5298,7 @@ confirmation should check `unsloth.status`'s `attachedAgentCount` first. A later
 { "jsonrpc":"2.0","id":98,"result":{ "stopped":true } }
 ```
 
-### 5.38 Provider catalog — `providers.catalog` *(v2.6)*
+### 5.38 Provider catalog — `providers.catalog` *(v2.6; wire shape changed by [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922))*
 
 The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global**: no params and no `workspaceId` (like `system.capabilities`), available on both UDS and WSS. The data is **compiled into the daemon** — there is no cache or TTL; the result only changes when the daemon binary does.
 
@@ -4440,34 +5314,29 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "displayName": "Augment Auggie",
       "shortName": "Auggie",
       "command": "auggie",
-      "isDefault": true,
       "canBeDisabled": true,
       "loginCommandHint": "auggie login",           // optional
+      "loginDocsUrl": "https://docs.augmentcode.com/cli/overview",  // optional
       "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
-      "visible": true,
-      "modelTiers": { "fast": "haiku4.5", "balanced": "sonnet4.5", "smart": "opus4.7" }  // optional — static-tier providers only
+      "visible": true
     },
     {
       "id": "claude-code",
       "displayName": "Anthropic Claude Code",
       "shortName": "Claude Code",
       "command": "claude-agent-acp",
-      "isDefault": false,
       "canBeDisabled": true,
       "loginDocsUrl": "https://code.claude.com/docs/en/quickstart#step-2-log-in-to-your-account",  // optional
-      "visible": true,
-      "modelTiers": { "fast": "haiku", "balanced": "sonnet", "smart": "default" }
+      "visible": true
     },
     {
       "id": "cortex",
       "displayName": "Snowflake Cortex",
       "shortName": "Cortex",
       "command": "cortex-acp",
-      "isDefault": false,
       "canBeDisabled": true,
       "requiresFeatureCode": "cortex",              // optional — raw gating field passed through
-      "visible": false,                             // daemon-evaluated: a configured feature code default-denies
-      "modelTiers": { "fast": "claude-sonnet-4-5", "balanced": "claude-opus-4-5", "smart": "claude-opus-4-5" }
+      "visible": false                              // daemon-evaluated: a configured feature code default-denies
     },
     // ... one row per registered provider (opencode, unsloth, pi, droid, grok, ...) ...
     {
@@ -4475,22 +5344,19 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "displayName": "Mock (E2E)",
       "shortName": "Mock",
       "command": "node",
-      "isDefault": false,
       "canBeDisabled": true,
       "requiresEnvVar": "MOCK_AGENT_SCRIPT_PATH",   // optional — raw gating field passed through
       "visible": false                              // daemon-evaluated: env var absent in the daemon environment
     }
-  ],
-  "defaultProviderId": "auggie"
+  ]
 }
 ```
 
 - `providers` carries **all** registered providers — gated-off rows included — one row per registry entry, in **registry order**. The order is informational, not a contract: clients must key rows by `id`, never by array position.
 - `command` is the registry's **logical CLI name** (the `ACP_PROVIDERS` `command` field, e.g. `claude-agent-acp` for `claude-code`) — provider metadata, **not** necessarily the binary the daemon spawns. Launch resolution belongs to `host.providerDiscovery` (§5.14), whose `command` reports what the daemon actually resolves and launches — so the two can differ: an npx-only provider like `claude-code` launches via `npx <npxPackage>` and reports `command: "npx"` there. Clients must not assume the values match across the two methods.
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; the same gate `models.list` applies to `cortex`, §5.30). The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
-- The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`, `modelTiers`) are **omitted when unset, never null** — clients detect by presence.
-- `modelTiers` — the `{ fast, balanced, smart }` tier→model-id map — is present **only** for providers with a static tier table (`auggie`, `claude-code`, `codex`, `cortex`). Dynamic-model providers (`opencode`, `unsloth`, `pi`, `droid`, `grok`, `mock`) omit it; their models come from `models.list` (§5.30).
-- `defaultProviderId` mirrors the registry's `isDefault` entry (`auggie`).
+- The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
+- **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: the provider prefix of `model.default` when it is a compound id naming a registered provider, else `providers.active` (§5.12), else the first registered provider — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
 ### 5.39 Token-rate history — `stats.getRateHistory` *(v2.9)*
 
@@ -4511,7 +5377,7 @@ at ≤ 1440 rows. Only the **read** crosses the wire — recording has no RPC.
 | stats.getRateHistory | limit: integer 1–1440, default 60 — the number of trailing minute samples | `{ samples: RateSample[] }` — -32602 on a non-integer or out-of-range limit |
 
 **RateSample** — `{ bucketUtc, inputTokens, outputTokens, cacheReadTokens,
-cacheCreationTokens }`:
+cacheCreationTokens, thoughtTokens }`:
 
 - **samples** — exactly `limit` entries in **chronological order** (oldest first), one per
   minute, ending at the **current UTC minute floor**. Minutes with no recorded activity
@@ -4519,8 +5385,15 @@ cacheCreationTokens }`:
   store returns all-zero samples, never an error.
 - **bucketUtc** — the sample's UTC minute floor (`"2026-07-30T14:07:00Z"`). Keys sort
   lexicographically in chronological order.
-- The four token counters are the minute's accumulated per-turn deltas (same clamped-≥ 0
+- The token counters are the minute's accumulated per-turn deltas (same clamped-≥ 0
   semantics as §5.36's UsageTotals).
+- **thoughtTokens** *(additive within v6.0, [intent-hq/intentd#976](https://github.com/intent-hq/intentd/pull/976))*
+  — the minute's accumulated reasoning ("thought") token deltas, the per-minute counterpart
+  of the `TokenUsageTotals.thoughtTokens` counter (§5.31). Unlike that omitted-when-zero
+  field, samples here are **dense**: every counter is always present, so a minute with no
+  reasoning tokens (including every bucket recorded before this field shipped) emits
+  `"thoughtTokens": 0`. Clients written against the pre-`thoughtTokens` shape are
+  unaffected — the counter is additional, never carved out of `outputTokens` by the daemon.
 
 Note the trailing-window semantics: like §5.36's `24h` period this is an **absolute
 rolling window** ending at the current minute; there is no timezone parameter — samples
@@ -4531,9 +5404,9 @@ are UTC and any local-time rendering is a client concern.
 { "jsonrpc":"2.0","id":95,"method":"stats.getRateHistory","params":{ "limit":3 } }
 // ← response
 { "jsonrpc":"2.0","id":95,"result":{ "samples":[
-  { "bucketUtc":"2026-07-30T14:05:00Z","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0 },
-  { "bucketUtc":"2026-07-30T14:06:00Z","inputTokens":7,"outputTokens":2,"cacheReadTokens":0,"cacheCreationTokens":0 },
-  { "bucketUtc":"2026-07-30T14:07:00Z","inputTokens":100,"outputTokens":40,"cacheReadTokens":20,"cacheCreationTokens":10 } ] } }
+  { "bucketUtc":"2026-07-30T14:05:00Z","inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":0 },
+  { "bucketUtc":"2026-07-30T14:06:00Z","inputTokens":7,"outputTokens":2,"cacheReadTokens":0,"cacheCreationTokens":0,"thoughtTokens":0 },
+  { "bucketUtc":"2026-07-30T14:07:00Z","inputTokens":100,"outputTokens":40,"cacheReadTokens":20,"cacheCreationTokens":10,"thoughtTokens":15 } ] } }
 ```
 
 ### 5.40 Background hooks — `hook.*` *(v2.10)*
@@ -4542,35 +5415,61 @@ A **background hook** is a small agent-authored JS script the daemon runs on a f
 interval until it *dispatches* (wakes its owning agent with a message and ends), fails
 (is *evicted* and wakes the owner with the error), is *cancelled*, or *expires* (its
 TTL passes — v3.1). Hooks let an agent
-watch for a condition (CI results, file changes) without burning turns polling.
+watch for a condition (CI results, file changes) without burning turns polling. (For PR
+watching specifically, agents are steered to the centralized `ws.pr.monitor` instead —
+§5.42, v6.1 — since a hook's TTL expires while a PR sits blocked and a monitor's does
+not.)
 Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
-agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 19 chars, code, delayMs ≥
-10000, ttlMs? }`; the first run happens immediately as validation — a failing script rejects the
-call, a dispatching one wakes without persisting a schedule; per-agent cap on active
+agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 50 chars, code, delayMs ≥
+10000, ttlMs?, perpetual? }` — `name` is a short human-readable description shown to the user
+(cap raised from 19 within v5.1, intentd#929); the first run happens immediately as validation — a failing script rejects the
+call, a dispatching one wakes without persisting a schedule — unless the hook is
+**perpetual**, whose dispatching validation run wakes the owner AND persists the active
+schedule (see the perpetual block below); per-agent cap on active
 hooks, default 5). Every hook carries a **TTL** (v3.1) counted from creation, not the
 last run: `ttlMs` defaults to and is capped at 3 600 000 (60 minutes; values are
 clamped into `[10000, 3600000]`, never rejected), and `expiresAt = createdAt + ttlMs`
 persists on the Hook. When the deadline passes the daemon stops the hook (terminal
 state `expired`, `nextRunAt` cleared), emits `hook:expired` (§6.5), and wakes the owner
 (`messageMetadata.reason: "expired"`) naming the hook and its `runCount` so the model
-can consciously reschedule. A run is never *started* at/after `expiresAt`; a run already
+can consciously reschedule — a perpetual hook, which may have fired repeatedly before
+expiring, reports both tallies instead (`"N runs, M dispatches"` in place of the
+one-shot `"N runs completed without a dispatch"`). A run is never *started* at/after
+`expiresAt`; a run already
 in flight when the TTL passes completes normally — its dispatch still wins, but a
-`{ dispatch: false }` return expires the hook instead of rescheduling it. Restarts do
+`{ dispatch: false }` return expires the hook instead of rescheduling it; a **perpetual**
+dispatch landing at/after `expiresAt` likewise wins and is then terminalized rather than
+re-armed (owner woken with the dispatch, then the expiry notice). Restarts do
 not reset the TTL (a resumed hook keeps its original `expiresAt`; a hook whose deadline
-passed while the daemon was down is expired at boot, owner woken then too). The FE
+passed while the daemon was down is expired at boot, owner woken then too). Workspace
+teardown also ends hooks ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896)):
+`workspace.archive` cancels every ACTIVE hook in the workspace (`hook:cancelled`
+emitted, owner woken with an archive notice; unarchive does not resurrect them — §5.1
+archive active-work teardown), and `workspace.delete` eagerly aborts live hook
+scheduler tasks before the store cascade drops their rows (no event, no wake — §5.1
+delete cascade). The FE
 **reads, triggers, and cancels**:
 
 | Method | Params | Result |
 | --- | --- | --- |
 | hook.list | workspaceId (req) | `{ hooks: Hook[] }` — every hook in the workspace, all states |
-| hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake) |
+| hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the wire path may cancel **any** hook in the workspace and the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake — see the ownership scoping below) |
 | hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run |
 
 **Hook** — `{ hookId, workspaceId, agentId, name, code, delayMs, state, createdAt,
-expiresAt?, lastRunAt?, nextRunAt?, runCount, lastError?, lastLogs?, lastState? }` with
+expiresAt?, lastRunAt?, nextRunAt?, runCount, perpetual, dispatchCount, lastError?,
+lastLogs?, lastState? }` with
 `state ∈ scheduled | running | dispatched | evicted | cancelled | expired`
 (`scheduled`/`running` are the active states;
 `runCount` includes the schedule-time validation run; `lastError` is set on eviction).
+`perpetual` (bool) and `dispatchCount` (number) are the perpetual-hook fields
+([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)): `dispatchCount`
+counts **fires so far** for every hook created or updated from v6.0 on — a one-shot hook's
+sole fire counts too, so only a perpetual hook ever exceeds 1 — and both are always present
+(the additive defaulted migration backfills pre-existing rows to `perpetual: false` /
+`dispatchCount: 0` unconditionally, so a retained pre-migration row that had already
+dispatched reads back `dispatchCount: 0` despite having fired — the "fires so far" contract
+only holds going forward, not retroactively for that one field on migrated rows).
 `expiresAt` (v3.1) is the TTL deadline (`createdAt` + clamped `ttlMs`, ≤ 60 minutes from
 creation); it is set on every hook scheduled from v3.1 on and absent only on pre-TTL
 legacy rows, which never expire.
@@ -4585,7 +5484,73 @@ an omitted `state` keeps the previous value, `state: null` clears it, and a valu
 JSON serialization exceeds ~16 KiB is dropped (the previous state is kept and a warning
 line is appended to that run's `lastLogs`). The schedule-time validation run persists
 its returned state too. `hook:*` event payloads (§6.5) stay light
-and do **not** carry `lastLogs` or `lastState`; clients read them via `hook.list`.
+and do **not** carry `lastLogs` or `lastState` (they do carry `perpetual`/`dispatchCount`);
+clients read the heavy fields via `hook.list`.
+
+**Perpetual hooks: dispatch is non-terminal** (behavior only, no method-catalog or
+wire-shape change beyond the two additive Hook/event fields above;
+[intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)). The optional
+`perpetual` schedule param (MCP-only, like the rest of `ws.hook.schedule`) defaults to
+`false`; omitting it — or passing `false` — reproduces the one-shot **behavioral** contract
+above (the first dispatch retires the hook) — the two additive Hook/event fields above are
+the only wire-shape change, present on every hook and payload regardless of `perpetual`:
+
+- **Dispatch re-arms instead of retiring.** A `{ dispatch: true, message }` run on a
+  perpetual hook wakes the owner exactly as usual (`messageMetadata.reason: "dispatched"`,
+  `[hook logs]` conventions unchanged), bumps `dispatchCount`, and returns the hook to
+  `scheduled` with a fresh `nextRunAt`, keeping its scheduler loop alive. The hook ends
+  only on TTL expiry, cancel, or eviction — one hook can therefore report a stream of
+  changes rather than a single fire.
+- **Wake note distinguishes the two dispatch outcomes** (wording shortened within v6.1;
+  [intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027)). The one-shot
+  dispatch wake's state note reads `[This hook is now retired and will not run again —
+  reschedule via ws.hook.schedule if still needed.]`; a re-armed perpetual dispatch
+  instead ends with `[This hook remains active until <expiresAt> — cancel via
+  ws.hook.cancel when no longer needed.]`. The dispatch-at-expiry case is exempt: a fire
+  that terminalizes the hook keeps the retiring phrasing so it cannot contradict the
+  expiry notice that follows.
+- **`hookStillActive` metadata** (additive within v6.1;
+  [intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027)). Dispatch
+  wakes carry `hookStillActive` (boolean) in the `hook_wake` `messageMetadata` — present
+  ONLY on `reason: "dispatched"` wakes: `true` for the re-armed perpetual branch, `false`
+  for a retiring dispatch (a one-shot fire, or a perpetual fire landing at/after
+  `expiresAt`); absent on `evicted` / `expired` / `cancelled` wakes — so consumers can
+  tell a re-armed dispatch from a retiring one without parsing the note text.
+- **Dispatching validation run persists.** Unlike one-shot, a perpetual hook whose
+  schedule-time validation run dispatches wakes the owner **and** persists the active
+  schedule — `ws.hook.schedule` returns `{ hook, dispatched: true }` with the hook
+  `scheduled` (`dispatchCount: 1`) and `hook:scheduled` emitted after the dispatch.
+- **Event ordering.** On both the validation and scheduler-loop dispatch paths the
+  post-dispatch outcome (`scheduled` with a fresh `nextRunAt`, or `expired`) is resolved
+  and persisted **before** `hook:run-completed` / `hook:dispatched` are emitted, so those
+  payloads carry the real post-dispatch `state`, never the transient `running`.
+- **Everything else is unchanged.** TTL semantics (60-minute cap; perpetual does not
+  extend it), eviction, cancel, the per-agent active-hook cap (a perpetual hook counts
+  once, like any other active hook), the cadence floor, and the `hookState` carry-over
+  contract all behave exactly as documented above.
+
+**Cancel is ownership-scoped on the MCP side** (within v5.2, behavior only;
+[intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953)). Hooks are
+agent-owned (`Hook.agentId`), and the cancel operation takes the cancelling agent as an
+optional caller:
+
+- **MCP `ws.hook.cancel` (agent caller).** An agent may cancel only its **own** hooks.
+  Cancelling a hook owned by another agent fails with a tool error naming the owning
+  agent, raised before any state change — the hook stays active with its scheduler task
+  alive, and no `hook:cancelled` is emitted. Like `ws.hook.schedule`, the binding
+  **requires** an agent caller context: a call without one is rejected rather than
+  falling back to the unscoped path. An owner cancelling its own hook is **not** woken
+  (no self-wake) — the cancel is already an act of the owner.
+- **Wire `hook.cancel` (no agent caller, the FE/system path).** Unchanged: it may cancel
+  **any** hook in the workspace, and the owning agent **is** woken with a cancellation
+  notice so the model learns its watch stopped. The archive sweep (§5.1) rides the same
+  unscoped path.
+
+The wire contract is untouched (`hook.cancel` params/result unchanged); the scoping is
+purely on the agent-facing MCP binding. Cross-agent hook cleanup is therefore a
+coordination act, not a unilateral one: `hook.list` returns every hook in the workspace
+with its owning `agentId`, so an agent that wants a sibling's hook stopped asks the owner
+(or the user does it from the FE) instead of cancelling it silently.
 
 Errors: a missing `workspaceId`/`hookId` and an unknown, foreign-workspace, or inactive
 (`cancel`/`runNow` on a non-active state) `hookId` all surface as `-32602` (§9;
@@ -4603,10 +5568,257 @@ wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
 // ← response
 { "jsonrpc":"2.0","id":96,"result":{ "hooks":[
   { "hookId":"hook-01…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch",
-    "code":"const s = await ws.pr.status(); …","delayMs":60000,"state":"scheduled",
+    "code":"const s = await ws.pr.snapshot(887); if (hookState && JSON.stringify(s) !== JSON.stringify(hookState)) return { dispatch: true, message: 'PR #887 changed' }; return { dispatch: false, state: s };","delayMs":60000,"state":"scheduled",
     "createdAt":"2026-07-31T10:00:00Z","expiresAt":"2026-07-31T11:00:00Z",
     "lastRunAt":"2026-07-31T10:05:00Z",
-    "nextRunAt":"2026-07-31T10:06:00Z","runCount":6 } ] } }
+    "nextRunAt":"2026-07-31T10:06:00Z","runCount":6,"perpetual":false,"dispatchCount":0 } ] } }
+```
+
+### 5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` *(v4.3; workspace vocabulary v5.1)*
+
+Daemon-owned speech-to-text behind a pluggable provider seam: the client records audio
+(e.g. the desktop push-to-talk flow), ships it base64-encoded, and the daemon calls the
+configured transcription provider — **ElevenLabs Scribe** (`scribe_v2`) or **OpenAI**
+(the configured `voice.openai.model`, default `gpt-4o-transcribe`; `whisper-1`
+fallback) — and returns the transcript. Daemon-owned so the provider API keys live in
+the daemon's file-backed secret store and **never reach clients** (the same 🔒 secret
+guardrail as `linear.token`, §5.28: keys are never logged, echoed, or returned over the
+wire). **Daemon-global**: no required `workspaceId` (like `stats.getRateHistory`,
+§5.39) — since v5.1 `voice.transcribe` accepts an **optional** `workspaceId?` that
+opts the call into workspace-vocabulary injection (see "Workspace vocabulary" below),
+and the companion read RPC `voice.getWorkspaceVocabulary` is workspace-scoped
+(`workspaceId` req).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| voice.transcribe | audio (req), mimeType?, language?, provider?, context?, workspaceId? *(v5.1)* | `{ text, provider, durationMs }` — `durationMs` always present, `null` when unknown |
+| voice.getWorkspaceVocabulary *(v5.1)* | workspaceId (req) | `{ terms: string[] }` — the auto-derived workspace vocabulary, derived terms only (the user's `voice.vocabulary` is not merged in) |
+
+**Params:**
+
+- `audio` (req) — the recorded audio bytes, **base64-encoded** (standard alphabet,
+  padded). Typically webm/opus (the FE `MediaRecorder` default) or wav; the daemon
+  forwards the bytes to the provider unchanged. Missing, blank, invalid base64, or a
+  payload that decodes to zero bytes → `-32602`. Capped at **25 MB decoded**
+  (`26,214,400` bytes), enforced twice — pre-decode on the base64 text length and
+  post-decode on the byte length — so an over-cap payload is rejected before any
+  provider call (see errors below).
+- `mimeType?` — the audio container MIME type (e.g. `"audio/webm"`, `"audio/wav"`);
+  defaults to `"audio/webm"` when omitted or blank.
+- `language?` — optional language hint, forwarded to the provider. When absent or
+  blank, the `voice.language` setting (§5.12) fills the gap — see "Language
+  resolution" below.
+- `provider?` — per-call provider override: `"elevenlabs" | "openai"` (the same enum as
+  the `voice.provider` setting); any other value → `-32602`. Absent → the
+  `voice.provider` setting (§5.12) selects the provider.
+- `context?` — `{ prompt?: string, keyterms?: string[] }` — optional domain-vocabulary
+  hints for transcription accuracy (e.g. workspace title, branch name, agent names).
+  `keyterms` must be an array of strings (a non-array or non-string element →
+  `-32602`; an explicit `null` is treated as absent). Mapped per provider — see
+  "Context mapping" below.
+- `workspaceId?` *(v5.1)* — opt-in workspace-vocabulary injection: when present and
+  naming a known workspace, the daemon merges that workspace's auto-derived
+  vocabulary into the transcription bias (see "Workspace vocabulary" below).
+  **Tolerant by design**: an absent, unknown, or stale `workspaceId` (e.g. a
+  workspace deleted since the client cached it) is never an error — the call behaves
+  exactly like a no-`workspaceId` call; only a wrong **type** (a non-string value)
+  → `-32602`.
+
+**Result:**
+
+- `text` — the transcript.
+- `provider` — the provider that actually served the request (`"elevenlabs"` or
+  `"openai"`), so clients can attribute the result when the setting (not a per-call
+  override) chose it.
+- `durationMs` — the transcribed **audio duration** in milliseconds as reported by the
+  provider (ElevenLabs: the last word's `end` timestamp; OpenAI: the response
+  `duration` field — not request latency). **Always present, `null` when the provider
+  does not report it** (unlike the §5.39-style omitted-when-unset convention).
+
+**Context mapping (per provider).** The daemon biases every transcription with the
+user-editable **`voice.vocabulary`** setting (§5.12 — a string array defaulting to
+`["Intent"]`; users add their own terms, the shipped default is minimal),
+**read per call** — an absent or non-array stored value degrades to an empty list and
+non-string elements are skipped, never an error — plus a fixed style hint ("Technical dictation in a
+software-engineering app; preserve code identifiers and file paths verbatim.") — and,
+when the call carries a `workspaceId` naming a known workspace, the auto-derived
+**workspace vocabulary** (v5.1; see "Workspace vocabulary" below) — and merges the
+request's `context` into it, in the fixed order user `voice.vocabulary` → workspace
+auto-terms → `context.keyterms`:
+
+- **OpenAI** — composed into the API's single free-form `prompt` parameter: the style
+  hint, then `" Vocabulary: <terms comma-joined>."` (configured vocabulary +
+  workspace auto-terms + `context.keyterms`, in that order), then `context.prompt`
+  appended.
+- **ElevenLabs** — the configured vocabulary and `context.keyterms` feed Scribe v2
+  **keyterm prompting** (repeated `keyterms` form fields; requires `model_id:
+  scribe_v2`): vocabulary first, then workspace auto-terms, then request keyterms;
+  case-insensitive dedup (first
+  spelling wins); blank and > 50-char terms skipped; hard cap of 100 total.
+  `context.prompt` has no ElevenLabs equivalent and is **ignored** for this provider.
+
+**Workspace vocabulary (v5.1).** When `voice.transcribe` carries a `workspaceId`, the
+daemon injects that workspace's **auto-derived vocabulary** — unique/non-dictionary
+and rare terms mined from the workspace's own docs, so project-specific identifiers
+(e.g. "intentd", "clippy") transcribe correctly with no manual `voice.vocabulary`
+entry — into the merge, between the user vocabulary and the request keyterms: user
+`voice.vocabulary` → workspace auto-terms → `context.keyterms`, under the existing
+rules above (case-insensitive dedup, first spelling wins; blank and > 50-char terms
+skipped; hard cap of 100 total). Derivation sources are the workspace's root
+`README` / `AGENTS` docs, the same docs one directory level down (e.g.
+`packages/*/README.md`-style direct children), and the workspace's spec note; the
+derived list is capped by the `voice.workspaceVocabulary.maxTerms` setting (§5.12 —
+default 50, `0` disables derivation and injection entirely) and **content-hash
+cached**: unchanged sources mean no re-extraction on subsequent calls (a source edit
+or a `maxTerms` change takes effect on the next derivation). Per the `workspaceId?`
+param above, a stale or unknown id degrades to no injection — never an error.
+
+**Providers.** Both are typed REST engines over `reqwest` (the `intent-linear` /
+`intent-sentry` pattern):
+
+- **ElevenLabs** — multipart `POST https://api.elevenlabs.io/v1/speech-to-text` with
+  `model_id: scribe_v2` (required for keyterm prompting).
+- **OpenAI** — multipart `POST https://api.openai.com/v1/audio/transcriptions` with
+  `model:` the configured `voice.openai.model` setting (§5.12; `gpt-4o-transcribe` |
+  `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`), with a one-shot
+  `whisper-1` fallback when the selected model is unavailable on the account (404 /
+  model-not-found) — skipped when `whisper-1` itself is the selected model.
+
+**Language resolution.** The language hint the daemon forwards to the provider is
+resolved as: per-call `language` → the `voice.language` setting (§5.12) → none
+(provider auto-detection). Both rungs are trimmed and a blank value behaves like
+omitted — a whitespace-only per-call `language` falls through to the setting, and a
+blank stored setting is treated as unset. The setting is an optional ISO-639-1 string
+with no default, TOML-backed under `[voice]` like `voice.provider`.
+
+**Settings & secrets (§5.12).** `voice.provider` (enum: `elevenlabs` | `openai`, default
+`elevenlabs`; an invalid stored value silently falls back to the default) selects the
+provider when the call carries no override — selection order: per-call `provider` →
+`voice.provider` setting → `elevenlabs`. `voice.language` supplies the default
+transcription language hint (see "Language resolution" above). `voice.openai.model`
+selects the OpenAI
+transcription model (see "Providers" above). `voice.workspaceVocabulary.maxTerms`
+caps the auto-derived workspace vocabulary (v5.1; see "Workspace vocabulary" above).
+The API keys are the **sensitive** catalog
+entries `voice.elevenlabs.apiKey` / `voice.openai.apiKey`, persisted to the daemon's
+file-backed secret store (`~/intent/secrets.json`, `0600`) and settable via
+`settings.update` — the FE "connect" flow, exactly like `linear.token`. Key resolution
+is **secret store first, then env fallback** (`ELEVENLABS_API_KEY` / `OPENAI_API_KEY`);
+empty/whitespace-only values are treated as absent at both levels.
+
+**Errors** (§9):
+
+- Caller-input problems — missing/blank/invalid-base64/zero-byte `audio`, an unknown
+  `provider` value, a malformed `context.keyterms`, a non-string `workspaceId`
+  *(v5.1)* — → `-32602` with the generic `error.data.code: "invalid-params"`
+  discriminator (no voice-specific `-32602` data codes). A **stale or unknown**
+  `workspaceId` is deliberately NOT among these — it is tolerated (see "Workspace
+  vocabulary" above); only the wrong type errors.
+- **Audio too large** (over the 25 MB cap, either enforcement point) → `-32602`
+  (`"audio exceeds the 25 MB limit"`) — rejected before any provider call.
+- **No API key configured** for the selected provider → `-32603` with the generic
+  `"Internal error"` message and **structured** `error.data` *(v4.4;
+  monorepo#1448)*: `{ "code": "voice-no-api-key", "detail": "<descriptive message>" }`.
+  Clients match `data.code` to surface an actionable "configure in Settings" hint
+  (the `detail` names the provider and both key sources), keeping a message sniff on
+  the detail text only as a fallback for pre-4.4 daemons — whose `error.data` was the
+  same descriptive text as a plain string, byte-identical to today's `data.detail`:
+
+  ```json
+  { "code": -32603, "message": "Internal error",
+    "data": { "code": "voice-no-api-key",
+      "detail": "voice not configured: voice: no API key found for elevenlabs (set voice.elevenlabs.apiKey or ELEVENLABS_API_KEY)" } }
+  ```
+
+  This is the **only** voice-specific data code; no other `voice.transcribe` failure
+  carries one.
+- **Provider HTTP failure** (auth rejection, rate limit, 5xx, decode errors) →
+  `-32603` with the provider's error detail in `error.data` (a plain string,
+  unchanged in 4.4 — e.g.
+  `"voice auth error: elevenlabs returned 401 Unauthorized: …"`); the API key
+  never appears in the error.
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":97,"method":"voice.transcribe","params":{
+  "audio":"GkXfo59ChoEBQveBAULygQRC…","mimeType":"audio/webm","language":"en",
+  "workspaceId":"ws-abc",
+  "context":{ "keyterms":["cloudlands-fe","submodule","clippy"] } } }
+// ← response
+{ "jsonrpc":"2.0","id":97,"result":{
+  "text":"Bump the cloudlands-fe submodule and rerun clippy.",
+  "provider":"elevenlabs","durationMs":3200 } }
+```
+
+**`voice.getWorkspaceVocabulary` *(v5.1)*.** The read RPC serving a workspace's
+auto-derived vocabulary — the **derived terms only** (the user's `voice.vocabulary`
+is a separate §5.12 setting and is not merged in) — for clients that transcribe
+**outside** the daemon (e.g. the desktop OS-engine dictation path) and for Settings
+previews, so both engines bias with the same terms. The response is served from the
+same content-hash cache the `voice.transcribe` injection uses (unchanged sources ⇒
+no re-extraction), already capped by `voice.workspaceVocabulary.maxTerms`
+(`{ "terms": [] }` when the setting is `0` or nothing derives). Unlike the tolerant
+`workspaceId?` on `voice.transcribe`, the param here is **required** and validated:
+an unknown `workspaceId` is the standard not-found error (`-32602` with
+`error.data.code: "not-found"`, §9).
+
+```json
+// → request
+{ "jsonrpc":"2.0","id":98,"method":"voice.getWorkspaceVocabulary","params":{
+  "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":98,"result":{
+  "terms":["intentd","clippy","cloudlands-fe","TOON"] } }
+```
+
+### 5.42 Centralized PR monitoring — `prMonitor.*` *(v6.1)*
+
+Centralized PR monitoring ([intent-hq/intentd#989](https://github.com/intent-hq/intentd/pull/989)): an agent registers a **daemon-run monitor** on a PR via the MCP `ws.pr.monitor` binding, and one shared daemon loop polls every active monitor (every `prMonitor.pollSeconds`, §5.12, read live, floor 10s), diffs a **merge-requirements checklist** against the monitor's persisted **emit baseline** — the PR state as of the last delivered wake (or registration) — and wakes the owning agent with a **single consolidated, debounced notification** once the PR has been quiet for `prMonitor.debounceSeconds` (§5.12) — a busy PR that never goes quiet still gets its wake via the max-latency bound (5 debounce windows since the oldest un-emitted change; late, never starved — conditional on the coalesced set staying continuously non-empty: a full revert empties the set and re-arms the clock, by design). The pending set is a **coalesced net diff, recomputed against the emit baseline on every poll — never an accumulated log**: a field that moved A→B→C reports one initial→final line, a field that reverted to its baseline value drops out of the set, and a PR that fully reverts within the debounce window empties the set — nothing pending, debounce anchors reset, **no wake sent**. Each delivered wake advances the baseline to the delivered snapshot, so the next wake reports only what moves from there; a merged/closed PR terminalizes the monitor with an immediate, undebounced final wake (state `completed` — the row is retained so merged PRs stay visible) whose "changes since the last report" section coalesces the same way. Monitors are persisted (SQLite `pr_monitor` table), **survive daemon restarts** via boot rehydration with catch-up delivery (the net diff against the pre-restart baseline fires on the first post-restart poll — only when non-empty), and have **no TTL** — this is why agents are steered to `ws.pr.monitor` over a self-authored §5.40 snapshot-diffing hook. Store writes are guarded compare-and-swap, so concurrent flush / cancel / re-register / poll never clobber each other. Safe when source control is unconfigured (the tick logs and returns).
+
+**Registration is MCP-only** (per the §6.8 principle — PR watching is agent-authored background work; the same split as `hook.*` vs `ws.hook.schedule`): `ws.pr.monitor(prNumber, { repo? })` registers (or idempotently re-arms, refreshing the baseline — never a second monitor) the caller's monitor, scoped to the workspace repo unless `repo: "owner/name"` overrides it, and returns `{ ok, monitor, requirements }`; active monitors are capped at 5 per agent (`-32602`-style validation error beyond the cap). `ws.pr.unmonitor(prNumber, { repo? })` cancels the caller's **own** active monitor (unknown/foreign PR → not-found error; an owner's own cancel never self-wakes). `ws.pr.monitors()` lists the caller's active and completed monitors. The three bindings are gated by `agentFeatures.prMonitor` (§5.12).
+
+The **wire surface is read/cancel/flush only** (the FE view over agent-owned monitors):
+
+| Method | Params | Result |
+| --- | --- | --- |
+| prMonitor.list | workspaceId | { monitors: PrMonitor[] } — the workspace-wide view (every agent's monitors); `cancelled` rows are excluded, `completed` rows retained so merged PRs stay visible |
+| prMonitor.cancel | workspaceId, monitorId | { ok, monitor } — cancels **any** monitor in the workspace by id and wakes the owning agent with a cancellation notice (unlike the agent's own `ws.pr.unmonitor`, which never self-wakes — the same one-directional visibility as `hook.cancel`, §5.40) |
+| prMonitor.flush | workspaceId, monitorId | { ok, flushed } — delivers a monitor's pending consolidated wake **now**, bypassing the remaining debounce window; `flushed: false` when nothing was pending (a no-op, not an error) |
+
+**`PrMonitor` wire shape** (shared by `prMonitor.list`, the `ws.pr.monitor` / `ws.pr.unmonitor` results, and `ws.pr.monitors` rows): `{ monitorId, workspaceId, agentId, repo, prNumber, state, pendingChanges, hasPendingChanges, createdAt, updatedAt, pendingSince?, lastChangeAt?, lastPolledAt?, lastError?, title?, url?, lastSnapshot? }` — `repo` is the combined `"owner/name"` string; `state ∈ { active, completed, cancelled }`; `pendingChanges` is the human-readable **net** change lines since the last delivered wake — the coalesced diff against the emit baseline, recomputed each poll (awaiting the debounce window; it shrinks or empties when changes revert; `[]` when nothing is pending); `lastError` is the most recent forge-poll error (cleared by a successful poll — a failing poll never kills the loop); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved, resolutionRequired }, rulesKnown }`.
+
+**`MergeRequirements` checklist** — "what is needed to merge this PR", the reusable object backing `ws.pr.monitor` (the `requirements` result field), the monitor loop's change detection, and the additive `requirements` block on `ws.pr.snapshot` (§5.7) — one canonical shape across all three surfaces. Shape: `{ state, isDraft, hasConflicts, isBehind, mergeable?, checks: { total, passed, failed, pending, items: [{ name, status, required, url? }], failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed?, changesRequested }, threads: { unresolved, resolutionRequired? }, mergeStateStatus?, mergeBlockedReason?, rulesKnown }`. `state` is the 4-value lifecycle word; `mergeable` is the forge's tri-state (omitted while still computing); each `checks.items[]` entry reports `status ∈ { passed, failed, pending }` and its own `required` flag, with `failingRequired` / `pendingRequired` naming the required checks that are failing/still running; `approvals.decision` is the §5.7 `ws.pr.snapshot` decision wire word, `have` counts distinct approving reviewers, `needed` the base branch's required approvals; `mergeStateStatus` is the host's raw merge-state status (GitHub GraphQL `mergeStateStatus`) — the residual signal for rules with no finer detail (merge queue, signed commits, hooks). Degradation is **per-signal, never fatal**: a host that reports no check rollup yields `checks.requiredKnown: false` (every `required` flag `false`, tallies fall back to the REST check runs), unreadable branch rules yield `rulesKnown: false` with `approvals.needed` / `threads.resolutionRequired` omitted, and a fully failed probe still produces the state / conflicts / approvals / threads rows from the snapshot alone.
+
+**Wake deliveries** ride the automatic `agent.sendMessage` path (queued behind an in-flight turn, never interrupting) and tag the persisted user block with `messageMetadata { type: "pr_monitor_wake", monitorId, repo, prNumber, reason, url? }` — `repo` is the combined `"owner/name"` string, `reason ∈ { changed, completed, cancelled }` names why the owner was woken (the consolidated change emit — debounce elapsed, max-latency bound, restart catch-up, or a `prMonitor.flush` —, the PR-merged/closed final wake, or an FE `prMonitor.cancel` notice), and `url` *(additive, presence-detected)* is the PR's HTML URL read off the monitor's persisted baseline snapshot — the key is **omitted** (never `null`) when the monitor has no baseline yet.
+
+Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each agent's per-turn snapshot lists its active monitors (one `"owner/name#number"` label per monitor, suffixed `" (changes pending)"` while a debounced emit is accumulating).
+
+**Idle-visibility & completion-watch deferral (unified external-wait, v6.2; [intent-hq/intentd#1002](https://github.com/intent-hq/intentd/pull/1002), [intent-hq/intentd#1007](https://github.com/intent-hq/intentd/pull/1007)).** An agent's ACTIVE PR monitors are surfaced the same way as its active background hooks (§5.40): the light `waitingOnPrMonitors?: [{ monitorId, repo, prNumber, title? }]` list on `agent:idle` (§6.5), the `AgentLite` projection (§5.5), and `agent.diagnostics` agent rows — and completion-watch / `after_all` settlement defers on such an idle exactly like the hook-waiting case (§Completion-watch persistence), with one key difference: PR monitors have **no TTL**, so the deferral is unbounded except by the monitor's own terminal transitions (complete, owner `ws.pr.unmonitor`, external `prMonitor.cancel`, or owner-gone restart rehydration).
+
+```json
+// → request — the FE's workspace-wide monitor list
+{ "jsonrpc":"2.0","id":99,"method":"prMonitor.list","params":{ "workspaceId":"ws-abc" } }
+// ← response
+{ "jsonrpc":"2.0","id":99,"result":{ "monitors":[ {
+  "monitorId":"prm-1","workspaceId":"ws-abc","agentId":"agent-1",
+  "repo":"octo/repo","prNumber":12,"state":"active",
+  "pendingChanges":["check ci: pending → failed"],"hasPendingChanges":true,
+  "pendingSince":"2026-08-07T12:00:00.000Z","lastChangeAt":"2026-08-07T12:00:00.000Z",
+  "lastPolledAt":"2026-08-07T12:00:30.000Z","title":"Add review wire surface",
+  "url":"https://github.com/octo/repo/pull/12",
+  "lastSnapshot":{ "state":"open","isDraft":false,"hasConflicts":false,"isBehind":false,
+    "mergeable":true,"mergeBlockedReason":"1 required check failing (ci)",
+    "checks":{ "total":3,"passed":2,"failed":1,"pending":0,
+      "failingRequired":["ci"],"pendingRequired":[],"requiredKnown":true },
+    "approvals":{ "decision":"approved","have":1,"needed":1,"changesRequested":0 },
+    "threads":{ "unresolved":0,"resolutionRequired":true },"rulesKnown":true },
+  "createdAt":"2026-08-07T11:58:00.000Z","updatedAt":"2026-08-07T12:00:30.000Z" } ] } }
+
+// → request — deliver the pending consolidated wake now
+{ "jsonrpc":"2.0","id":100,"method":"prMonitor.flush","params":{
+  "workspaceId":"ws-abc","monitorId":"prm-1" } }
+// ← response
+{ "jsonrpc":"2.0","id":100,"result":{ "ok":true,"flushed":true } }
 ```
 
 ## 6. Events & Subscriptions
@@ -4681,15 +5893,15 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | file | file:changed, file:created, file:deleted, file:renamed | `file:changed` is the canonical type — discriminate on `data.action = create\|modify\|delete\|rename`. `file:created` and `file:deleted` are emitted by the watcher alongside `file:changed` (new in intentd); `file:renamed` is registered in the taxonomy but **reserved-but-unused** (no emitter today — `rename` is surfaced through `file:changed` with `data.action = rename`). |
 | note | note:created, note:updated, note:deleted | data.noteId, data.title, data.action — `{ noteId, title, action }` payload built by `note_change_event` (`intent-services/src/lib.rs`). No `path` field (never emitted). |
 | line-attribution (new in intentd) | line-attribution:updated | Emitted after the daemon recomputes per-line attributions for a note (§5.2.1). data = { workspaceId, noteId, attributions } where `attributions` is the FE-parity `Record<lineNumber, { timestamp, author? }>`. Self-sufficient payload (§6.7) so the FE gutter re-renders without a follow-up `note.lineAttribution.load`. **Transient / broadcast-only** (same publish path as `chat:stream:delta`): never persisted to the event table, so it is invisible to `event.query` / §5.10 historical reads — the durable snapshot lives in `note_line_attribution` and is served by `note.lineAttribution.load` (§5.2.1). |
-| task | task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
-| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel`, the `agent.reportToParent` completion-report persist, the `agent.dismissQuestions` marker persist (v2.8; data `{ agentId, dismissedQuestionsMessageId }`, §5.5 question hold), and the agent-attention-request raise/clear (§5.5: raise → `data { agentId, attentionRequestKind, attentionRequestTimestamp }`; turn-begin clear → `data { agentId, attentionRequestCleared: true }`); the `agent` collection channel maps it to an `updated` delta. `agent:idle` data is enriched with `agentName` (so subscribers don't fall back to a generic "Agent" label), `isBackground` (boolean, sourced from the session's persisted `is_background` flag — the same flag served as `metadata.isBackground` on `agent.list`/`agent.get`, §5.5 — so subscribers such as iOS notification routing can branch on it without a follow-up `agent.get`), and — when the child persisted one via `agent.reportToParent` — the completion report, emitted under both `completionReport` (canonical; readers should prefer it) and `report` (legacy alias, kept for back-compat) with identical values; the enrichment is emitted from both the turn-end idle and the STAB-28 interrupt-path synthetic idle, and a session-read failure is swallowed (the event still fires with the base payload, enrichment fields absent). `agent:idle` data also carries `isWaitingForOtherAgents` (boolean) — computed **at emit time** from the idle agent's pending completion watches (the same derivation as the §5.5 `AgentLite` flag) so notification clients can suppress "agent finished" alerts snapshot-consistently: a follow-up `agent.list`/`agent.get` read can race the awaited child's completion consuming the watch, but the flag frozen into the idle payload cannot. Emitted on both the prompt-turn idle and the harness-wake idle (§6.6); independent of the session read, so it is present even when the other enrichment fields are absent. **`agent:idle` carries `waitingOnHooks?`** (idle-visibility, within v3.1): `[{ hookId, name, nextRunAt?, expiresAt? }]` — light metadata for the idle agent's ACTIVE (`scheduled`/`running`) background hooks (§5.40), stamped **at emit time** on every idle emit site (prompt-turn idle, harness-wake idle, STAB-28 interrupt-path idle, the queue-retraction synthesized idle, and rehydration-reconciliation synthetic idles) so subscribers can tell a hook-waiting idle agent (it will wake again when a hook dispatches, fails, or expires) from a stalled one; **omitted when the agent owns no active hook** (absent, never `[]`), payload deliberately excludes code/lastState/logs, and a hook-store read failure is swallowed (the event fires without the field). For completion watches and `after_all` groups such an idle is **not** a completion at all — delivery/settlement defers until the child goes idle with no active hooks (the hook-waiting deferral, §Completion-watch persistence), so no parent wake carries the stamp mid-wait. The same `waitingOnHooks` list is served on the §5.5 `AgentLite` projection (`agent.list`/`agent.get`, one workspace-batched hook query for list) and on `agent.diagnostics` agent rows, omitted when empty in all three surfaces. The immediate `agent.reportToParent` wake's `event_notification` metadata (§5.5) carries the same dual keys on its `events[0].data`. The terminal-failure `agent:status-changed` (emitted when a spawn/turn failure parks the session in `error`) carries `data { agentId, status: "error", isActive: false, stopReason, stopReasonTimestamp }` — `stopReasonTimestamp` is the ISO timestamp the failure was persisted (the same value written to `agent_session.stop_reason_timestamp` alongside `stop_reason`, and served as `stopReasonTimestamp` on the §5.5 `AgentSession`/`AgentLite` projections, omitted when absent), so clients can render how long ago a parked-in-error session failed; wherever a status change sets or clears `stopReason` on the wire, `stopReasonTimestamp` rides along with the same set/`null` semantics (cleared on turn begin and `agent.retry`) — plus, when the failure classifies as corrupted/poisoned per monorepo#940 (session-fatal provider block, deterministic `session/prompt` 400 rejection, or the identical-failure streak at threshold), `sessionCorrupted: true` (**omitted otherwise**, matching the derived flag on the §5.5 `AgentLite`/`AgentSession` projections), so subscribers get the structured "retry will recreate / spawn fresh" signal without parsing `stopReason`. Each **distinct** terminal failure also appends a durable system-role transcript notice — a single text block carrying the error text with `meta.kind = "turn-failure"` (the `InterruptionNotice` shape, §5.35), emitting the standard `agent:message` (`role: "system"`) with agent-list cache invalidation, best-effort (an append failure is logged and swallowed; the persisted status/stopReason is the durable contract) — so the failure survives rehydration as a transcript card; a repeat of the **identical** failure text with **no intervening `agent.retry` or successful turn** (e.g. repeated fresh `agent.sendMessage` redrives of an ordinary error session) does NOT append a duplicate notice — but `agent.retry` resets the dedup streak (the deliberate quarantine escape hatch), so an identical failure immediately after a retry DOES get its own fresh notice (the user acted and it failed again, which is new information). **`agent:failed` carries `turnId?`** ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)): both emit sites — the turn-worker failure arm (`run_prompt_turn`) and the not-surfaced-by-streaming terminal path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion; its paired terminal `agent:stream:end` carries the same id) — stamp the failed turn's correlation id onto `data { agentId, error, turnId?, parentAgentId? }`, the SAME `turnId` the send/enqueue RPC returned (preserved across terminal-failure requeues), so clients attribute the failure to the exact turn instead of approximating; omitted when the turn has none (bare test wiring), never `null`. **`agent:failed` carries `parentAgentId?`** ([intentd#788](https://github.com/intent-hq/intentd/pull/788)): enriched centrally at publish time from the failing session's `parent_agent_id`, so EVERY emit site (turn-worker failure arm, spawn-retry terminal path, idle-timeout cap) carries it; present only when the failing agent is a delegated/parented agent and omitted entirely otherwise — never `null`, and when present always the parent's non-empty agent id, never `""` (a best-effort session-read failure also leaves the base payload untouched). The FE skips its failure-toast bookkeeping (`recordAgentFailure`) when the field is present (its non-empty-string check is defensive hardening, not a contract carve-out) — delegated-child failures surface through the parent wake instead of a user-facing toast. **Prompt idle timeouts suppress `agent:failed`** ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue): while the consecutive-timeout cap holds, a timed-out turn emits no `agent:failed` (and no `agent:idle`) at all — its `agent:stream:end` is the normal one and a warning turn is redriven; once the cap is spent, the turn worker's drain loop emits the `agent:failed` half itself (same `{ agentId, error, turnId?, parentAgentId? }` payload) before the terminal-failure requeue |
+| task | task:created, task:status-changed, task:ready-tasks-changed, task:agent-linked, task:agent-unlinked | status + ready-task-id list. **`task:created`** ([intent-hq/intentd#978](https://github.com/intent-hq/intentd/pull/978)) fires when a note **becomes** a task, so subscribers (e.g. the FE HUD feed) see new tasks without inferring task-ness from a `note:created`/`note:updated` payload. data = `{ noteId, noteTitle, status, createdAt, agentId? }` — a self-sufficient payload (§6.7); `status` is the task-note status word (§5.4 vocabulary) and `createdAt` is the timestamp the note **became a task** — the note's own `createdAt` on the born-a-task paths (`task.convertBlocks`, `task.createPrerequisite`, where the two coincide) and the mark timestamp (the note's freshly written `updatedAt`) on `task.markAsTask`, where an ordinary note created earlier becomes a task now. It is a task-creation timestamp, never a note-creation timestamp, so ordering a feed by it is always ordering by when task-ness appeared. Like `task:status-changed`, the event carries the **agent** actor plus `agentId` when the creation is agent-attributed and the **system** actor otherwise (`agentId` omitted, never `null`). Emitted **exactly once per note becoming a task**, on every creation path: `@@@task` block conversion (`task.convertBlocks`, including the auto-convert hook after a note mutation — one event per converted block, carrying the outer write's caller), `task.createPrerequisite`, and `task.markAsTask` on a note that was not already a task. Re-marking an existing task publishes no `task:created` — it is a status move (§5.4). `task:agent-linked` / `task:agent-unlinked` (new in intentd) are emitted by `task.linkAgent` / `task.unlinkAgent` (§5.4); self-sufficient payloads `{ workspaceId, noteId, taskKey, link }` and `{ workspaceId, noteId, taskKey }` so subscribers rebuild the `byNoteId → byTaskKey` map without a follow-up `listAgentLinks`. |
+| agent (lifecycle) | agent:started, agent:completed, agent:failed, agent:idle, agent:created, agent:deleted, agent:restored, agent:renamed, agent:updated, agent:status-changed | `agent:updated` (new in intentd, P3-1.2b) is the generic session-mutation invalidation — emitted on `agent.setModel`, the `agent.reportToParent` completion-report persist, the `agent.dismissQuestions` marker persist (v2.8; data `{ agentId, dismissedQuestionsMessageId }`, §5.5 question hold), the `agent.markSeen` marker persist (v4.5; data `{ agentId, lastSeenMessageId }`, §5.5 — not emitted on the monotonic older-message no-op or the idempotent re-mark), and the agent-attention-request raise/clear (§5.5: raise → `data { agentId, attentionRequestKind, attentionRequestTimestamp }`; turn-begin clear → `data { agentId, attentionRequestCleared: true }`); the `agent` collection channel maps it to an `updated` delta. `agent:idle` data is enriched with `agentName` (so subscribers don't fall back to a generic "Agent" label), `isBackground` (boolean, sourced from the session's persisted `is_background` flag — the same flag served as `metadata.isBackground` on `agent.list`/`agent.get`, §5.5 — so subscribers such as iOS notification routing can branch on it without a follow-up `agent.get`), and — when the child persisted one via `agent.reportToParent` — the completion report, emitted under both `completionReport` (canonical; readers should prefer it) and `report` (legacy alias, kept for back-compat) with identical values; the enrichment is emitted from both the turn-end idle and the STAB-28 interrupt-path synthetic idle, and a session-read failure is swallowed (the event still fires with the base payload, enrichment fields absent). `agent:idle` data also carries `isWaitingForOtherAgents` (boolean) — computed **at emit time** from the idle agent's pending completion watches (the same derivation as the §5.5 `AgentLite` flag; watches already marked `report_delivered` — the `agent.reportToParent` parent wake already fired, §5.5 — are excluded, matching the settlement predicate, [monorepo#1649](https://github.com/intent-hq/monorepo/issues/1649)) so notification clients can suppress "agent finished" alerts snapshot-consistently: a follow-up `agent.list`/`agent.get` read can race the awaited child's completion consuming the watch, but the flag frozen into the idle payload cannot. Emitted on both the prompt-turn idle and the harness-wake idle (§6.6); independent of the session read, so it is present even when the other enrichment fields are absent. The rehydration-reconciliation and group-rehydration synthetic idles stamp the same flag (raw pending-watch derivation), so subscribers see it consistently across live and synthesized emits. **An idle stamped `isWaitingForOtherAgents: true` is generally not a completion for watches or `after_all` settlement** (the agent-waiting deferral, §Completion-watch persistence; behavior-only within v4.3, [monorepo#1468](https://github.com/intent-hq/monorepo/issues/1468)) — the agent will run again when a watched target completes, so watch delivery and group settlement records defer until it settles for real; note the deferral decision itself is a live delivery-time classification with a 2-cycle deadlock guard, NOT the raw emit-time stamp (a mutual-idle watch pair delivers despite carrying the stamp), so the flag is a rendering/suppression hint, not the settlement predicate. **`agent:idle` carries `waitingOnHooks?`** (idle-visibility, within v3.1): `[{ hookId, name, nextRunAt?, expiresAt? }]` — light metadata for the idle agent's ACTIVE (`scheduled`/`running`) background hooks (§5.40), stamped **at emit time** on every idle emit site (prompt-turn idle, harness-wake idle, STAB-28 interrupt-path idle, the queue-retraction synthesized idle, and rehydration-reconciliation synthetic idles) so subscribers can tell a hook-waiting idle agent (it will wake again when a hook dispatches, fails, or expires) from a stalled one; **omitted when the agent owns no active hook** (absent, never `[]`), payload deliberately excludes code/lastState/logs, and a hook-store read failure is swallowed (the event fires without the field). For completion watches and `after_all` groups such an idle is **not** a completion at all — delivery/settlement defers until the child goes idle with no active hooks (the hook-waiting deferral, §Completion-watch persistence), so no parent wake carries the stamp mid-wait. The same `waitingOnHooks` list is served on the §5.5 `AgentLite` projection (`agent.list`/`agent.get`, one workspace-batched hook query for list) and on `agent.diagnostics` agent rows, omitted when empty in all three surfaces. The immediate `agent.reportToParent` wake's `event_notification` metadata (§5.5) carries the same dual keys on its `events[0].data`. **`agent:idle` carries `waitingOnPrMonitors?`** (idle-visibility, unified external-wait, within v6.2; [intent-hq/intentd#1007](https://github.com/intent-hq/intentd/pull/1007)): `[{ monitorId, repo, prNumber, title? }]` — the same light-metadata treatment as `waitingOnHooks`, mirroring it field-for-field, for the idle agent's ACTIVE PR monitors (§5.42): stamped **at emit time** on every idle emit site, **omitted when the agent owns no active monitor** (absent, never `[]`; no `lastSnapshot`/`pendingChanges`), and a monitor-store read failure is swallowed (the event fires without the field). For completion watches and `after_all` groups such an idle is likewise **not** a completion — delivery/settlement defers until the child goes idle with no active PR monitors (the pr-monitor-waiting deferral, §Completion-watch persistence). The same list is served on the §5.5 `AgentLite` projection and `agent.diagnostics` agent rows, omitted when empty in all three surfaces. The terminal-failure `agent:status-changed` (emitted when a spawn/turn failure parks the session in `error`) carries `data { agentId, status: "error", isActive: false, stopReason, stopReasonTimestamp }` — `stopReasonTimestamp` is the ISO timestamp the failure was persisted (the same value written to `agent_session.stop_reason_timestamp` alongside `stop_reason`, and served as `stopReasonTimestamp` on the §5.5 `AgentSession`/`AgentLite` projections, omitted when absent), so clients can render how long ago a parked-in-error session failed; wherever a status change sets or clears `stopReason` on the wire, `stopReasonTimestamp` rides along with the same set/`null` semantics (cleared on turn begin and `agent.retry`) — plus, when the failure classifies as corrupted/poisoned per monorepo#940 (session-fatal provider block, deterministic `session/prompt` 400 rejection, or the identical-failure streak at threshold), `sessionCorrupted: true` (**omitted otherwise**, matching the derived flag on the §5.5 `AgentLite`/`AgentSession` projections), so subscribers get the structured "retry will recreate / spawn fresh" signal without parsing `stopReason`. Each **distinct** terminal failure also appends a durable system-role transcript notice — a single text block carrying the error text with `meta.kind = "turn-failure"` (the `InterruptionNotice` shape, §5.35), emitting the standard `agent:message` (`role: "system"`) with agent-list cache invalidation, best-effort (an append failure is logged and swallowed; the persisted status/stopReason is the durable contract) — so the failure survives rehydration as a transcript card; a repeat of the **identical** failure text with **no intervening `agent.retry` or successful turn** (e.g. repeated fresh `agent.sendMessage` redrives of an ordinary error session) does NOT append a duplicate notice — but `agent.retry` resets the dedup streak (the deliberate quarantine escape hatch), so an identical failure immediately after a retry DOES get its own fresh notice (the user acted and it failed again, which is new information). **`agent:failed` carries `turnId?`** ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)): both emit sites — the turn-worker failure arm (`run_prompt_turn`) and the not-surfaced-by-streaming terminal path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion; its paired terminal `agent:stream:end` carries the same id) — stamp the failed turn's correlation id onto `data { agentId, error, turnId?, parentAgentId? }`, the SAME `turnId` the send/enqueue RPC returned (preserved across terminal-failure requeues), so clients attribute the failure to the exact turn instead of approximating; omitted when the turn has none (bare test wiring), never `null`. **`agent:failed` carries `parentAgentId?`** ([intentd#788](https://github.com/intent-hq/intentd/pull/788)): enriched centrally at publish time from the failing session's `parent_agent_id`, so EVERY emit site (turn-worker failure arm, spawn-retry terminal path, idle-timeout cap) carries it; present only when the failing agent is a delegated/parented agent and omitted entirely otherwise — never `null`, and when present always the parent's non-empty agent id, never `""` (a best-effort session-read failure also leaves the base payload untouched). The FE skips its failure-toast bookkeeping (`recordAgentFailure`) when the field is present (its non-empty-string check is defensive hardening, not a contract carve-out) — delegated-child failures surface through the parent wake instead of a user-facing toast. **Prompt idle timeouts suppress `agent:failed`** ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue): while the consecutive-timeout cap holds, a timed-out turn emits no `agent:failed` (and no `agent:idle`) at all — its `agent:stream:end` is the normal one and a warning turn is redriven; once the cap is spent, the turn worker's drain loop emits the `agent:failed` half itself (same `{ agentId, error, turnId?, parentAgentId? }` payload) before the terminal-failure requeue |
 | agent (messaging) | agent:message, agent:message:sent, agent:message:received, agent:user-message:sent, agent:tool:call | `agent:message` is the emitted per-persist transcript signal — fired whenever a message row is appended (user send, `agent.appendMessage`, system markers) with `data { agentId, messageId, role, appMessageId?, turnId? }`; discriminate the user-row echo on `role == "user"`. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is the turn correlation id — present on user-row echoes emitted by a turn that carries one (direct sends, queue drains, `agent.sendQueuedMessageNow` deliveries), omitted otherwise (wake deliveries, `agent.appendMessage`, system markers; never `null`). `agent:message:sent`, `agent:message:received`, and `agent:user-message:sent` are registered in the taxonomy but **reserved-but-unused** (no emit sites today). `agent:tool:call` — see §7. |
-| agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (deliver-once retirement of an ungrouped watch, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
+| agent (subscriptions) | agent:subscribed, agent:unsubscribed, agent:woken-by-subscription, agent:delivery-confirmed, agent:event-delivery-failed/-timeout, agent:subscriptions-restored/-changed, agent:message:delivery-failed | `agent:subscriptions-changed` (emitted by intentd) fires when a parent's completion-watch set changes — a watch is added (`agent.delegate` auto-watch, MCP `create_agent` auto-watch) or removed by wake delivery (deliver-once retirement of an ungrouped watch, `after_all` group clear after its aggregated wake). data = { agentId, isWaitingForOtherAgents, waitingForAgentIds } — the refreshed waiting-flag snapshot for that parent (same waiting state exposed by `agent.getSubscriptions`, §5.5; `report_delivered` watches are excluded, the same exclusion as the §5.5 `AgentLite` flags and the settlement predicate — [monorepo#1649](https://github.com/intent-hq/monorepo/issues/1649)); self-sufficient (§6.7) so clients converge without polling `agent.getSubscriptions` |
 | agent (attention, new in intentd) | agent:attention-requested | Emitted by the agent-attention-request op behind the MCP `ws.agent.requestDiscussion` / `ws.agent.reportBlocker` bindings (§5.5). data = { workspaceId, agentId, agentName, kind, reason, parentAgentId? } where `kind ∈ { discussion, blocker }` — self-sufficient payload (§6.7) driving the FE sticky toast without a follow-up `agent.get`. `parentAgentId` ([intentd#788](https://github.com/intent-hq/intentd/pull/788)) is present only when the caller is a delegated/parented agent (the session's `parent_agent_id`) and omitted entirely otherwise — never `null`, and when present always the parent's non-empty agent id, never `""`; the FE suppresses the sticky toast when the field is present (its non-empty-string check is defensive hardening, not a contract carve-out; the parent wake below is the delegated child's attention surface). Paired with an `agent:updated` raise on the same turn (session `attentionRequest*` fields persisted) and retired by the turn-begin clear (`agent:updated` with `attentionRequestCleared: true`) when the agent next receives a **user-origin** delivery (`agent.sendMessage`, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`, or a drained user-origin queue entry — same origin taxonomy as the §5.5 question hold) — or, for **child** (`parent_agent_id` set) / **background** (`is_background`) sessions, an **automatic** delivery too (A2A sends, parent/subscription wakes, `agent.sendToTask`, `agent.wakeOrCreate` context messages, drained automatic entries; the parent/coordinator is those agents' attention surface, §5.5). For top-level foreground agents automatic deliveries do NOT retire it. A delegated caller's immediate parent wake embeds this event's payload in its `event_notification` metadata (`events[0]`). |
-| agent (streaming) | agent:stream:start, agent:stream:activity, agent:stream:end | see §7 — `agent:stream:activity` is the rename of `agent:stream:chunk` ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775)) that dropped the per-chunk transcript delta (the incremental `content` firehose, which moved to the internal `chat:stream:delta`); it (and the terminal `agent:stream:end`) carries the server-derived live-preview fields `lastAgentResponse?` / `digest?` ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)) — a capped derived preview, not the raw delta stream; `agent:stream:start` is emitted **only** for agent-initiated (harness-wake) turns (§6.6) |
-| chat (internal content feed, new in intentd) | chat:stream:delta | The content-bearing per-chunk stream payload ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775) — where the former `agent:stream:chunk` content moved). data = { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } (the §7.1 block-identity enrichment). Deliberately **outside** the `agent:*` family so `agent:*` / `agent:stream:*` `events.subscribe` filters never receive the high-volume transcript firehose — external subscribers get the throttled `agent:stream:activity` signal (liveness plus the capped server-derived preview fields, §7) instead; the §7.1 `chat.subscribe` forwarder is its one consumer. **Transient / broadcast-only** (§7): never persisted, invisible to `event.query` (§5.10) |
-| agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint — the pre-first-token status line. Emitted **before the first `agent:stream:activity`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:activity` or terminal `agent:stream:end` / `agent:failed`. The `init` phase's ACP `initialize` request has a **dedicated timeout, default 30s** (overridable via `INTENTD_ACP_INITIALIZE_TIMEOUT_MS`, positive integer ms) so slow provider cold starts under host load don't fail the spawn; all other ACP requests keep the generic 5s default. **`unsloth`-provider spawns emit repeated `launch`-phase events:** before the child spawns, the daemon starts/reuses its managed Unsloth server, and each progress transition (server starting, model preparing, plus a still-loading update every ~15s while a first-use multi-GB download runs) surfaces as an additional `phase: "launch"` / `level: "info"` event — same payload shape, higher cardinality; clients keep only the latest message per agent. A model-switch restart with live `unsloth` agents attached additionally emits one `phase: "launch"` / `level: "warning"` event **before** the restart (intentd#647), warning that those sessions will lose the loaded model. |
-| agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message | `agent:queue:updated` → data { agentId, queue: QueuedMessage[] } — the full post-mutation queue snapshot (§5.5 wire shape, including each entry's `turnId?` and the v2.8 `interruptPriority?` flag), emitted on every enqueue/edit/remove/drain mutation — including question-hold parks (§5.5 question hold). `agent:queue:processing` *(newly emitted — [intentd#699](https://github.com/intent-hq/intentd/pull/699); the constant predates it but previously had no production emit site)* is the **drain-start signal** ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)): emitted by the queue-drain loop (all three drain arms) right after the shrunk `agent:queue:updated` and AFTER the #576 stale-redrive annotation (so `content` matches the persisted user row / provider prompt), with data { agentId, messageId, content, turnId? } (`turnId` omitted only for legacy entries without one; every enqueue path mints one today). It covers redrives whose user row is already persisted and therefore skip the duplicate `agent:message` echo — the FE keys prompt-turn start off `turnId` here. NOT emitted by `agent.sendQueuedMessageNow` (§5.5 — its RPC response carries the `turnId` instead). Audit history (never swept by the retention sweep, unlike the high-churn `agent:queue:updated`). `agent:queue:processing-cancelled` / `agent:queue:stale-message` are **reserved-but-unused** (no emit sites today). |
+| agent (streaming) | agent:stream:start, agent:stream:activity, agent:stream:end | see §7 — `agent:stream:activity` is the rename of `agent:stream:chunk` ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775)) that dropped the per-chunk transcript delta (the incremental `content` firehose, which moved to the internal `chat:stream:delta`); it (and the terminal `agent:stream:end`) carries the server-derived live-preview fields `lastAgentResponse?` / `digest?` ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)) — a capped derived preview, not the raw delta stream; it is emitted from both the text-chunk arm and the tool-call arm sharing one throttle window, the tool arm additionally carrying `lastToolUse?` ([monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414), §7); `agent:stream:start` is emitted **only** for agent-initiated (harness-wake) turns (§6.6) |
+| chat (internal content feed, new in intentd) | chat:stream:delta | The content-bearing per-chunk stream payload ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775) — where the former `agent:stream:chunk` content moved). data = { agentId, content, messageId, blockIndex, blockId, blockType, streamId? } (the §7.1 block-identity enrichment). `blockType` is `"text"` for assistant text, `"thinking"` for streamed reasoning (ACP `agent_thought_chunk`, additive within v6.0 — [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973); it rides the same chunk shape and the same stable `{messageId}:{blockIndex}` id), or the passthrough block's own type otherwise. Deliberately **outside** the `agent:*` family so `agent:*` / `agent:stream:*` `events.subscribe` filters never receive the high-volume transcript firehose — external subscribers get the throttled `agent:stream:activity` signal (liveness plus the capped server-derived preview fields, §7) instead; the §7.1 `chat.subscribe` forwarder is its one consumer. **Transient / broadcast-only** (§7): never persisted, invisible to `event.query` (§5.10) |
+| agent (stream status, new in intentd) | agent:stream:status | Turn-startup hint — the pre-first-token status line. Emitted **before the first `agent:stream:activity`** of every turn on each startup transition the runtime actually has. data = { agentId, workspaceId, phase, message, level, timestamp } where `phase ∈ { launch, init, session-create, session-load, prompt }` (child process about to spawn / ACP initialize handshake / session/new / session/load / session/prompt dispatched) and `timestamp` is epoch-ms. Self-sufficient payload (§6.7); the FE renders the hint next to the chat spinner and clears it on the first `agent:stream:activity` or terminal `agent:stream:end` / `agent:failed` — note that since [monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414) that first activity may come from the tool-call arm, so a tool-first turn clears the hint before any assistant text has streamed (by design: the tool call is real progress). The `init` phase's ACP `initialize` request has a **dedicated timeout, default 30s** (overridable via `INTENTD_ACP_INITIALIZE_TIMEOUT_MS`, positive integer ms) so slow provider cold starts under host load don't fail the spawn; all other ACP requests keep the generic 5s default. **`unsloth`-provider spawns emit repeated `launch`-phase events:** before the child spawns, the daemon starts/reuses its managed Unsloth server, and each progress transition (server starting, model preparing, plus a still-loading update every ~15s while a first-use multi-GB download runs) surfaces as an additional `phase: "launch"` / `level: "info"` event — same payload shape, higher cardinality; clients keep only the latest message per agent. A model-switch restart with live `unsloth` agents attached additionally emits one `phase: "launch"` / `level: "warning"` event **before** the restart (intentd#647), warning that those sessions will lose the loaded model. |
+| agent (queue) | agent:queue:updated, agent:queue:processing, agent:queue:processing-cancelled, agent:queue:stale-message | `agent:queue:updated` → data { agentId, queue: QueuedMessage[] } — the full post-mutation queue snapshot (§5.5 wire shape, including each entry's `turnId?` and the v2.8 `interruptPriority?` flag), emitted on every enqueue/edit/remove/drain mutation — including question-hold parks (§5.5 question hold). `agent:queue:processing` *(newly emitted — [intentd#699](https://github.com/intent-hq/intentd/pull/699); the constant predates it but previously had no production emit site)* is the **drain-start signal** ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)): emitted by the queue-drain loop (all three drain arms) right after the shrunk `agent:queue:updated` and AFTER the #576 stale-redrive annotation (so `content` matches the persisted user row / provider prompt), with data { agentId, messageId, content, turnId? } (`turnId` omitted only for legacy entries without one; every enqueue path mints one today). It covers redrives whose user row is already persisted and therefore skip the duplicate `agent:message` echo — the FE keys prompt-turn start off `turnId` here. NOT emitted by `agent.sendQueuedMessageNow` (§5.5 — its RPC response carries the `turnId` instead). **Batch flush ([intentd#876](https://github.com/intent-hq/intentd/pull/876)):** a combined-turn flush (§5.5 "Queued-message flush") emits ONE `agent:queue:updated` (the fully-shrunk queue) and ONE `agent:queue:processing` for the HEAD entry — whose `turnId` is the combined turn's id — followed by per-row `agent:message` echoes all stamped with that same combined `turnId`. Audit history (never swept by the retention sweep, unlike the high-churn `agent:queue:updated`). `agent:queue:processing-cancelled` / `agent:queue:stale-message` are **reserved-but-unused** (no emit sites today). |
 | workspace | workspace:created, :updated, :deleted, :opened, :closed, :activity, :activity-changed, :attention-changed, :context-changed | :created → data { workspaceId, workspace }; :updated → data { workspaceId, changes } where `changes` is the applied `WorkspaceUpdate` delta — untouched (Option::is_none) fields are omitted, but a field may also carry an explicit JSON `null` to signal a clear (the same omitted = untouched / `null` = clear / present = set tri-state as the §5.1 explicit-null-clear contract). `workspace.archive` / `workspace.unarchive` (§5.1) emit the full applied delta on this same type (no dedicated event): archive → `changes: { archived: true, status: "Archived", archivedAt: <ts> }` (`<ts>` = the persisted ISO timestamp); unarchive → `changes: { archived: false, status: "Active", archivedAt: null }` (explicit JSON `null` so clients clear the field). `updatedAt` is intentionally omitted from the delta by convention; :deleted → data { workspaceId }; :activity-changed → data { workspaceId, activity }; :attention-changed → data { workspaceId, attention }; :context-changed → data { workspaceId, items } (new in intentd — emitted by `workspace.updateContext` §5.1 with the persisted `ContextItem[]`). New in intentd; self-sufficient payloads (§6.7). **`workspace:deleted` ordering:** `workspace.delete` (§5.1) emits **one `agent:deleted` per live session first**, then the terminal `workspace:deleted` **before returning to the caller** (fast-ack) — the event and RPC response both complete before the background filesystem cleanup task finishes. Subscribers see per-session teardown and the workspace-row deletion event synchronously, while the heavy `remove_dir_all` work runs in a background task — the per-repository lock is held only for the git-metadata phase (registration prune + rename to a trash path + guarded branch delete), and the recursive removal runs after the lock is released. |
 | spec/goal | spec:updated, goal:updated |  |
 | comment | comment:added, comment:resolved | `comment:resolved` is emitted by `comment.resolveThread` (§5.3); self-sufficient payload `{ noteId, threadId, resolved }` lets a client flip the thread's resolved state without a follow-up read. |
@@ -4704,17 +5916,18 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
 | git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `askpass-missing`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. `terminal:data` is **transient / broadcast-only** (same publish path as `chat:stream:delta`, §7): never persisted, invisible to `event.query` (§5.10); scrollback replay uses `terminal.getBuffer`. `terminal:exit` stays durable and is emitted after the stream task has broadcast every data chunk, so exit never overtakes data. |
-| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable. |
+| script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable; the status value is one of `idle \| running \| restarting \| exited` (§5.8) — `restarting` (new in intentd, monorepo#1318) marks the transient restart-in-flight window (auto-restart backoff between an exit and the next spawn attempt, and the `script.restart` stop→start gap). The carried `ScriptRuntimeState` also surfaces the optional `previouslyRunning: true` was-running marker (§5.8; omitted when false), including the dismiss path — `script.stop` on a non-running marked script emits a `script:state` snapshot with the marker cleared, so other subscribers never retain a stale `previouslyRunning: true`. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
-| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending step-0 attention signal still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the step-0 `needs_attention` signal (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the persisted assistant tail), and question-hold releases (a user-origin row persisted by the send/drain paths — `agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry — `agent.dismissQuestions`, a later turn-end assistant tail, or a transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5), which recompute-and-compare after persisting (intentd#833), so the trigger taxonomy holds unconditionally) — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
+| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending higher-precedence attention axis — `failed`/`blocked`/`needs_attention`, §5.1 — still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the child-completion-watch signal (§5.1, new in intentd), on watch lifecycle transitions, recomputed in the parent's home workspace: watch register/adopt (the `agent.delegate` auto-watch, `after_all` group enrollment, explicit `ws.agent.watch`), the deliver-once watch retirement at the child's completion, `after_all` group settlement, `agent.cancelSubscriptions` / `ws.agent.unwatch` cancels, and the workspace-delete subscription sweeps — the same choke points that publish `agent:subscriptions-changed` — and, for the active-PR-monitor promotion (§5.1 step 3, [intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036)), on PR-monitor lifecycle transitions: register (`ws.pr.monitor`, including the idempotent re-arm), the owner (`ws.pr.unmonitor`) and FE (`prMonitor.cancel`) cancels, the poll loop's terminal completion (PR merged/closed), and the boot-rehydration owner-gone cancels — and, for the `needs_attention`/`blocked` axes (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the turn-end `pendingQuestionsMessageId` marker write), and question-hold releases — within v6.0 only a `question_answers`-tagged user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing assistant turn releases the hold (§5.5); the recompute-and-compare still runs after every user-row persist by the send/drain paths (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry) and every transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5) after persisting (intentd#833; intentd#965), so the trigger taxonomy holds unconditionally — an untagged row simply leaves the marker armed and the recompute a no-op — and, for the `failed` axis (§5.1, intentd#945), on the mid-turn Error park (recomputed as the park persists) and its retires: `agent.retry` (recomputed before the redriven worker starts, so the `failed → in_progress` transition emits immediately) and the fresh-`agent.sendMessage` recovery (recomputed after the user-row persist) — and, for the `unread` axis and the `review_required`-driven `needs_attention` (§5.1, intentd#945), on every workspace attention-flag write: `raise_attention` (the turn-end unread raise — fired only when a **top-level foreground** agent's queue drains, never for child (`parent_agent_id`) or background agents (intentd#1021); guarded no-op when the stored flag is not `none`), `workspace.dismissAttention`, `workspace.markSeen`, and `workspace.update { attention }` — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:cow:created, sandbox:cow:merged, sandbox:cow:conflict | Emitted when `agent.delegate` resolves the `isolation` mode to `"cow"` on a sandbox-eligible workspace and the background provisioning task succeeds (§5.5 — asynchronous: the delegate result itself only ever reports `effectiveIsolation: "pending"`; this row is about the resolved request mode, not that result field), when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.cow.merge`), and when a merge lands in the terminal `conflict` status (§5.5a Status lifecycle). `sandbox:cow:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:cow:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. `sandbox:cow:conflict` → data { workspaceId, agentId, conflictingPaths, canonicalHead, recoveryBranch } where `conflictingPaths` lists the clashing paths and `recoveryBranch` names the `sb/<agentId>-recovery-<timestamp>` branch fetched into the canonical repository preserving the sandbox's commits (`null` when the fetch failed; the work still lives in the sandbox directory) — the daemon also raises workspace attention (§9.9). All are self-sufficient payloads (§6.7). |
 | sandbox image (new in intentd; monorepo#1120) | sandbox:image:pulling, sandbox:image:downloaded, sandbox:image:error | Guest-image download/verify/cache pipeline (`intent-services::sandbox_image`) during first-use image resolution for microVM-sandboxed workspaces. `sandbox:image:pulling` → data { workspaceId?, manifestUrl, imageId?, version? } when a download starts (cache miss); `sandbox:image:downloaded` → data { workspaceId?, manifestUrl, imageId, version, sha256, cachePath } on a verified download landing in the cache; `sandbox:image:error` → data { workspaceId?, manifestUrl, configSource, error } on any manifest/download/verification failure (`configSource` names where the image reference came from: repo config, profile default, or built-in pin). `workspaceId` is present when the resolution is workspace-scoped. Actor: system; self-sufficient payloads (§6.7). |
 | sandbox vm (new in intentd; monorepo#1120) | sandbox:vm:starting, sandbox:vm:started, sandbox:vm:stopped, sandbox:vm:error | Per-agent microVM lifecycle, emitted by the microVM orchestrator (`intent-services::microvm`) around agent spawns in `executionEnvironment: "microvm"` workspaces (§5.1). `sandbox:vm:starting` → data { workspaceId, agentId, imageId, imageVersion } when a VM boot begins; `sandbox:vm:started` → data { workspaceId, agentId, imageId, imageVersion, bootMs } once the guest exec agent answers readiness; `sandbox:vm:stopped` → data { workspaceId, agentId } after teardown (helper reaped, staged credentials scrubbed); `sandbox:vm:error` → data { workspaceId, agentId, error } on any boot/bridge failure. Actor: system; self-sufficient payloads (§6.7). |
-| hook (new in intentd, v2.10) | hook:scheduled, hook:run-started, hook:run-completed, hook:dispatched, hook:evicted, hook:cancelled, hook:expired | Background-hook lifecycle (§5.40). All carry data { workspaceId, agentId, hookId, name, state } plus per-type extras: `hook:run-completed` adds `nextRunAt` when the hook stays scheduled; `hook:evicted` adds `lastError`; `hook:dispatched` fires when a run returns `{ dispatch: true }` (including the schedule-time validation run, which emits `hook:run-completed` + `hook:dispatched` with **no** preceding `hook:scheduled` — a persisting schedule emits validation `hook:run-completed` then `hook:scheduled`). `hook:expired` (v3.1) fires when the hook's TTL deadline passes (§5.40) — payload shape parity with `hook:cancelled` (the base data object, no extras); the owner is woken with `reason: "expired"`. Actor: system; the owner's agent id rides in `data.agentId` (the event row's internal session id is not part of the §6.3 wire object). Subscribe with a `hook:*` prefix filter — the family is **not** part of the bare-`*` category expansion applied by the internal `agent.subscribe`/`event.subscribe` aliases (§5.5/§5.10). |
+| hook (new in intentd, v2.10) | hook:scheduled, hook:run-started, hook:run-completed, hook:dispatched, hook:evicted, hook:cancelled, hook:expired | Background-hook lifecycle (§5.40). All carry data { workspaceId, agentId, hookId, name, state, perpetual, dispatchCount } plus per-type extras: `hook:run-completed` adds `nextRunAt` when the hook stays scheduled; `hook:evicted` adds `lastError`; `hook:dispatched` fires when a run returns `{ dispatch: true }` (including the schedule-time validation run: a **retiring** (one-shot, or perpetual landing at/after `expiresAt`) validation dispatch emits `hook:run-completed` + `hook:dispatched` with **no** preceding `hook:scheduled`; a **persisting** validation dispatch — one-shot-shaped non-dispatch, or any perpetual dispatch that stays active — emits `hook:run-completed` then `hook:scheduled`, with a perpetual dispatch additionally emitting `hook:dispatched` between the two, per the §5.40 event-ordering note). `hook:expired` (v3.1) fires when the hook's TTL deadline passes (§5.40) — payload shape parity with `hook:cancelled` (the base data object, no extras); the owner is woken with `reason: "expired"`. **`perpetual` / `dispatchCount` ride on EVERY emission of the family** ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979); `dispatchCount` counts fires so far for every hook, so only a perpetual hook ever exceeds 1) so a subscriber can tell a non-terminal perpetual `hook:dispatched` from a terminal one-shot dispatch without a follow-up `hook.list`: **for a perpetual hook `hook:dispatched` is non-terminal and may repeat** — the hook re-arms (a `hook:scheduled` with a fresh `nextRunAt` follows each fire) and keeps running until TTL expiry, cancel, or eviction, so the sequence `hook:run-completed` → `hook:dispatched` → `hook:scheduled` recurs once per dispatching cadence tick. The post-dispatch state is resolved and persisted before those events are emitted, so their `state` is the real outcome (`scheduled`, or `expired` for a dispatch landing at/after `expiresAt`), never the transient `running`. Actor: system; the owner's agent id rides in `data.agentId` (the event row's internal session id is not part of the §6.3 wire object). Subscribe with a `hook:*` prefix filter — the family is **not** part of the bare-`*` category expansion applied by the internal `agent.subscribe`/`event.subscribe` aliases (§5.5/§5.10). |
+| prMonitor (new in intentd, v6.1) | prMonitor:registered, prMonitor:changed, prMonitor:emitted, prMonitor:completed, prMonitor:cancelled | Centralized PR-monitor lifecycle (§5.42). All carry the canonical data { workspaceId, agentId, monitorId, repo, prNumber, state } (`repo` is the combined `"owner/name"` string; the owning agent's id rides in `data.agentId`); `prMonitor:changed` additionally carries `changes` (the coalesced net pending change lines). `registered` fires on registration **and** on an idempotent re-arm; `changed` on each poll where the net set changes — the set is the recomputed diff against the emit baseline (§5.42), so it can shrink or empty (`changes: []`) when changes revert; `emitted` when the consolidated wake is delivered (debounce elapsed, max-latency bound, restart catch-up, or a `prMonitor.flush` — never when the net set is empty: a fully reverted PR wakes nobody); `completed` when the PR merges/closes (monitoring stops with the immediate final wake); `cancelled` on an agent (`ws.pr.unmonitor`) or FE (`prMonitor.cancel`) cancel. Actor: system. |
 
 ### 6.6 Turn/event lifecycle & batching window
 
@@ -4780,7 +5993,10 @@ a new entry `id` but keeps the failed turn's original `turnId` — and **survive
 failure and its `agent.retry` redrive correlate with the id the client keyed at send time. For a
 queue-drained turn, `agent:queue:processing` is the explicit turn-start signal keyed by `turnId`
 — it covers `persisted: true` redrives that skip the duplicate user-row `agent:message` echo,
-which is why the echo alone is not a sufficient start signal. All `turnId` fields are additive
+which is why the echo alone is not a sufficient start signal. For a **batch-flushed** turn
+(§5.5 "Queued-message flush") the combined turn's id is the HEAD entry's `turnId`: the single
+`agent:queue:processing` and every flushed row's `agent:message` echo carry that same id, so
+all N rows correlate with the one turn lifecycle. All `turnId` fields are additive
 and omitted when absent (never `null`); agent-initiated (harness-wake) turns and wake deliveries
 carry none (no user retry record exists for them).
 
@@ -4898,7 +6114,7 @@ Agent assistant output is delivered as the `agent:stream:*` event family (subscr
 The externally-broadcast per-chunk event is renamed `agent:stream:activity` and **no longer
 carries the per-chunk transcript delta** (the incremental `content` firehose): its payload is
 `{ agentId, messageId, lastAgentResponse?,
-digest? }` — a liveness signal (busy tick / stall timestamps / watched-agent refresh hints)
+digest?, lastToolUse? }` — a liveness signal (busy tick / stall timestamps / watched-agent refresh hints)
 enriched with **server-derived live-preview fields** so a client tracking an agent's progress
 (workspace cards, watched-agent footers, iOS previews) renders a live preview push-style
 without an `agent.get` refetch on every tick. `lastAgentResponse` is the trailing slice —
@@ -4919,10 +6135,15 @@ per-chunk payload lives on the **internal** `chat:stream:delta` event (§6.5), d
 outside the `agent:*` family so `events.subscribe` firehose subscribers (`agent:*`,
 `agent:stream:*`) never receive the raw transcript firehose — the §7.1 `chat.subscribe`
 forwarder tails it unchanged, so the snapshot+delta flow is unaffected. `agent:stream:activity` is
-**leading-edge throttled per agent**: the first chunk of a turn emits immediately (preserving
+**leading-edge throttled per agent**: the first activity of a turn emits immediately (preserving
 the FE's pre-first-token status-hint clearing latency, §6.5 `agent:stream:status`), then at
 most one emission per **1 s** per agent; the throttle state lives in the live-turn slot, so it
 resets on stream end/failure/interrupt and the next turn's first activity is again immediate.
+The event is emitted from **both** the assistant-text-chunk arm and the tool-call arm
+([monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414)), sharing that ONE window —
+so on a tool-first turn the leading-edge ping (the one that clears the §6.5 status hint) can
+arrive from a tool call **before any assistant text has streamed**, carrying `lastToolUse` and
+no `lastAgentResponse`.
 Both events remain **transient** (broadcast-only, never persisted). The legacy
 `agent:stream:chunk` name is gone from both sides of the wire: no current client handles it
 ([intent-hq/cloudlands-fe#579](https://github.com/intent-hq/cloudlands-fe/pull/579) dropped the
@@ -4944,9 +6165,9 @@ taxonomy and `ALL_EVENT_TYPES` ([intent-hq/intentd#756](https://github.com/inten
 | Provider signal | Event type | data payload |
 | --- | --- | --- |
 | turn start (agent-initiated turns **only**) | agent:stream:start | { agentId, messageId, reason: "harness-wake" } — emitted when the daemon opens an **implicit agent-initiated turn** for an out-of-turn `session/update` burst (§6.6; [intent-hq/monorepo#855](https://github.com/intent-hq/monorepo/issues/855)). `messageId` is the assistant messageId minted for the wake turn (the same id carried by the turn's `chat:stream:delta` / `agent:stream:activity` / `agent:tool:call` events and — when the turn persists one — the persisted assistant row; a no-content wake turn skips persistence and its `agent:stream:end` omits `messageId`, §6.6). `reason` is `"harness-wake"` — the only value today. **Prompt (user-initiated) turns never emit this event**: its absence is the normal case, not an error |
-| text token(s) — liveness signal | agent:stream:activity | { agentId, messageId, lastAgentResponse?, digest? } — liveness tick ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775); renamed from `agent:stream:chunk`), leading-edge throttled per agent (first chunk of a turn immediate, then ≤1/s; see the rename block above), enriched with the server-derived live-preview fields ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)): `lastAgentResponse` = trailing ≤500 chars of the streamed-so-far text blocks clipped at the last completed newline (trailing partial line excluded — [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795); `...`-prefixed when truncated), `digest` = the parsed digest span, derived from the **unclipped** text (its capture requires the closing tag) — same extraction as the §5.5 live-turn overlay; each field **omitted until derivable** (no completed line / no closed digest yet; never an empty string). The raw incremental text itself flows on the internal `chat:stream:delta` event — `{ agentId, content, messageId, blockIndex, blockId, blockType, streamId? }`, enriched with the §7.1 block-identity fields — which is outside the `agent:*` filter family and consumed by the §7.1 `chat.subscribe` forwarder |
+| text token(s) **or tool call** — liveness signal | agent:stream:activity | { agentId, messageId, lastAgentResponse?, digest?, lastToolUse? } — liveness tick ([intent-hq/intentd#775](https://github.com/intent-hq/intentd/pull/775); renamed from `agent:stream:chunk`), leading-edge throttled per agent (first activity of a turn immediate, then ≤1/s; see the rename block above). **Emitted from BOTH the assistant-text-chunk arm and the tool-call arm** ([monorepo#1414](https://github.com/intent-hq/monorepo/issues/1414)), sharing the ONE per-agent throttle window — so a tool-heavy stretch that streams no assistant text keeps ticking (a watched-agent row no longer freezes at the turn's last text), while a turn mixing text and tool calls still emits at most one ping per second regardless of which arm opens the window. A tool-arm ping additionally carries `lastToolUse` = `{ name, status }` for the call just recorded — `name` the same derived real tool name as `agent:tool:call`'s `toolName`, `status` the same normalized `started` \| `completed` \| `error` word — **omitted entirely on text-chunk pings** (never `null`); it is a rendering hint, the canonical tool signal remains `agent:tool:call`. Both arms stamp the same server-derived live-preview fields ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)): `lastAgentResponse` = trailing ≤500 chars of the streamed-so-far text blocks clipped at the last completed newline (trailing partial line excluded — [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795); `...`-prefixed when truncated), `digest` = the parsed digest span, derived from the **unclipped** text (its capture requires the closing tag) — same extraction as the §5.5 live-turn overlay; each field **omitted until derivable** (no completed line / no closed digest yet; never an empty string). Streamed reasoning never contributes to either field: `thinking` blocks (§7.1, additive within v6.0 — [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)) and a pending thought buffer are excluded from the preview derivation. The raw incremental text itself flows on the internal `chat:stream:delta` event — `{ agentId, content, messageId, blockIndex, blockId, blockType, streamId? }`, enriched with the §7.1 block-identity fields (`blockType` is `"thinking"` on reasoning chunks) — which is outside the `agent:*` filter family and consumed by the §7.1 `chat.subscribe` forwarder |
 | tool call | agent:tool:call | { agentId, toolName, title, toolKind, toolCallId, input, status, output?, messageId, blockIndex, blockId, registeredAttachments? } — the single tool signal; `toolName` is the **real** tool name derived from the ACP title (`intent-acp::session::derive_tool_name`), `title` the raw human-readable ACP title; for a **known** `toolCallId`, sparse `tool_call_update` fields (`title`/`toolName`/`toolKind`/`input`) are backfilled from the per-call transcript state before the event is published (§7.1, [intent-hq/intentd#551](https://github.com/intent-hq/intentd/pull/551)); `registeredAttachments` is the claimed §7.1 `AtToolResult` canonical block batch, present only when the completed call claimed registered blocks (so the live `chat.subscribe` delta path attaches the SAME blocks the persisted transcript does); §7.1 `chat.subscribe` tails it to synthesize `tool_use` / `tool_result` blocks |
-| complete or error | agent:stream:end | { agentId, stopReason?, messageId?, trailingBlocks?, turnId?, lastAgentResponse?, digest? } — the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained. The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) — the turn correlation id naming the logical turn this event closes (the same id the send/enqueue RPC returned, §5.5/§6.6), stamped on both the complete and error arms; omitted when the turn carries none, never `null`. **Final live-preview values ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)):** every transcript-bearing terminal emit — the turn-worker emit, the interrupt flush, and the harness-wake finalize — also stamps `lastAgentResponse?` / `digest?` re-derived from the turn's full streamed text (same fields, same ≤500-char cap, and same omit-until-derivable rule as the throttled `agent:stream:activity` frames above — but with **no newline clipping**: [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795) clips only mid-turn frames, so the terminal emit carries the turn's true final text including any unterminated last line), so a client tracking the preview push-style lands on the turn's true final state without an `agent.get` refetch. The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) emits `{ agentId, turnId? }` — the same `turnId` as its paired `agent:failed`, and no preview fields (nothing streamed); the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted (the id of that row) and the preview fields derived from the flushed partial turn — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) and no `turnId` (the interrupt emit is a manager-side flush, not the turn worker's terminal). The **harness-wake turn finalize** (`agent_session.rs` `run_harness_wake_turn`, §6.6) is a fourth emit site: its payload is `{ agentId, messageId?, lastAgentResponse?, digest? }` — `messageId` present iff the wake turn persisted an assistant row, and **never** `trailingBlocks` (the wake path performs no `AtTurnEnd` drain; only `run_prompt_turn` does) or `turnId` (agent-initiated turns have no user retry record). A **prompt idle-timeout** turn ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue) closes through the ordinary turn-worker emit with a payload indistinguishable from a normal completion — `messageId` iff a partial assistant row was flushed (a fully silent turn carries none), `turnId` of the timed-out turn, no `stopReason` — and is followed by the persisted `[SYSTEM WARNING]` user row + redriven warning turn instead of `agent:failed` / `agent:idle`, until the consecutive-timeout cap is spent (§6.6) |
+| complete or error | agent:stream:end | { agentId, stopReason?, interruptReason?, interruptedBy?, messageId?, trailingBlocks?, turnId?, lastAgentResponse?, digest? } — the turn-worker terminal emit (`agent_session.rs` `run_prompt_turn`) covers **both** normal completion **and** error-terminated turns and additively carries ([monorepo#732](https://github.com/intent-hq/monorepo/issues/732), [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)): `messageId` — the turn's assistant message id, present whenever the turn persisted an assistant message (set only **after** the successful store append, so the event can never advertise a row that was never written); and `trailingBlocks` — the drained §7.1 `AtTurnEnd` resource blocks (e.g. `ws.app.question.ask` question blocks) in registration order, **byte-identical** to the trailing blocks of the persisted message, **omitted** when none were drained. The two fields are not independently optional in one direction: `trailingBlocks` is a trailing slice of the persisted message's blocks, so its presence **implies** `messageId` is present (a client always has the id to associate the blocks with); the converse does not hold — `messageId` routinely appears without `trailingBlocks`. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) — the turn correlation id naming the logical turn this event closes (the same id the send/enqueue RPC returned, §5.5/§6.6), stamped on both the complete and error arms; omitted when the turn carries none, never `null`. **Final live-preview values ([intent-hq/intentd#792](https://github.com/intent-hq/intentd/pull/792)):** every transcript-bearing terminal emit — the turn-worker emit, the interrupt flush, and the harness-wake finalize — also stamps `lastAgentResponse?` / `digest?` re-derived from the turn's full streamed text (same fields, same ≤500-char cap, and same omit-until-derivable rule as the throttled `agent:stream:activity` frames above — but with **no newline clipping**: [intent-hq/intentd#795](https://github.com/intent-hq/intentd/pull/795) clips only mid-turn frames, so the terminal emit carries the turn's true final text including any unterminated last line), so a client tracking the preview push-style lands on the turn's true final state without an `agent.get` refetch. The not-surfaced-by-streaming failure path (`publish_terminal_failure_events`, e.g. spawn-retry exhaustion) emits `{ agentId, turnId? }` — the same `turnId` as its paired `agent:failed`, and no preview fields (nothing streamed); the daemon never emits `content` or `streamId` on this event. The **user-interrupt path** (§7.2) additionally carries `stopReason: "interrupted"` and `interruptReason` (within v4.5, [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919): on the wire only ever `"user_stop"` \| `"preempted_by_message"` — the interrupt emit comes solely from the live-session interrupt path; the `"daemon_shutdown"` / `"agent_stopped"` teardowns flush the interrupted row without emitting this event, so those reasons appear only in row metadata (§7.2). Always present on the interrupt emit: it matches the persisted row's `metadata.interruptReason` when a row exists (`messageId` present) and is still stamped from the interruption cause when no row was persisted (`messageId` absent)), plus `interruptedBy` (only on `"preempted_by_message"` with an attributable sender: `{ kind: "user" }` or `{ kind: "agent", agentId, name? }` — §7.2), plus `messageId` when an interrupted assistant row was persisted (the id of that row — with the v4.5 always-persist marker-row semantics that is every emitting-path interrupt that found a registered live-turn slot, zero-output turns included; §7.2) and the preview fields derived from the flushed partial turn — but deliberately **no** `trailingBlocks` (the `AtTurnEnd` registry is not drained on the interrupt path; pending entries wait for the next turn's drain / the registry TTL) and no `turnId` (the interrupt emit is a manager-side flush, not the turn worker's terminal). Normal-completion, error, and harness-wake emits never carry `interruptReason` / `interruptedBy` (absent, never `null`). The **harness-wake turn finalize** (`agent_session.rs` `run_harness_wake_turn`, §6.6) is a fourth emit site: its payload is `{ agentId, messageId?, lastAgentResponse?, digest? }` — `messageId` present iff the wake turn persisted an assistant row, and **never** `trailingBlocks` (the wake path performs no `AtTurnEnd` drain; only `run_prompt_turn` does) or `turnId` (agent-initiated turns have no user retry record). A **prompt idle-timeout** turn ([intentd#741](https://github.com/intent-hq/intentd/pull/741), §6.6 warn-and-continue) closes through the ordinary turn-worker emit with a payload indistinguishable from a normal completion — `messageId` iff a partial assistant row was flushed (a fully silent turn carries none), `turnId` of the timed-out turn, no `stopReason` — and is followed by the persisted `[SYSTEM WARNING]` user row + redriven warning turn instead of `agent:failed` / `agent:idle`, until the consecutive-timeout cap is spent (§6.6) |
 
 Structured consumers should prefer the §7.1 `chat.subscribe` channel (the canonical structured
 transcript) over reconstructing turn state from the firehose.
@@ -4955,7 +6176,7 @@ Notes for client implementers:
 
 - **Ordering.** Events for one agent arrive in emission order over a single connection. Correlate a stream with `data.agentId` (and `data.streamId` when present). Tool-call activity arrives as the single `agent:tool:call` event interleaved with the `agent:stream:activity` liveness ticks (and, on the internal chat channel, `chat:stream:delta` text); the §7.1 `chat.subscribe` channel synthesizes ordered structured blocks from these signals.
 - **Agent-initiated turns.** A stream may begin with **no user send**: `agent:stream:start { agentId, messageId, reason: "harness-wake" }` announces an implicit agent-initiated turn (§6.6). Clients should open the same streaming UI as a user-initiated turn — spinner/busy state, active Stop/interrupt, autoscroll, live transcript — just with no user message row above it. A send racing an active wake turn auto-queues via the normal busy path and streams after the wake turn's `agent:stream:end`.
-- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` (+ `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live "Stopped" indicator without a transcript re-fetch. A **harness-wake** turn's terminal emit carries `messageId` when the wake turn persisted a row and never `trailingBlocks` (§6.6; see the `agent:stream:end` row above). A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch. A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists.
+- **Terminal event.** `complete` and `error` are mutually exclusive and **both** map to `agent:stream:end` — there is exactly one terminal event per stream. The complete/error payloads are identical by design — both carry the additive `messageId` / `trailingBlocks` fields under the same conditions (the §7.1 `AtTurnEnd` drain deliberately runs on the error path too); the **user-interrupt** terminal emit alone adds `stopReason: "interrupted"` + `interruptReason` (and `interruptedBy` on message preemption; + `messageId` when an interrupted row was persisted — §7.2, never `trailingBlocks`), letting clients render a live, reason-specific "Stopped" indicator without a transcript re-fetch. A **harness-wake** turn's terminal emit carries `messageId` when the wake turn persisted a row and never `trailingBlocks` (§6.6; see the `agent:stream:end` row above). A client treats `stream:end` as "this turn is done" and then re-fetches the authoritative transcript via `agent.getConversation` if it needs the final, persisted message — though `trailingBlocks` lets it append the turn-end attachments to the finalized in-flight message immediately, without waiting on that re-fetch. A client that does both must not double-render: `trailingBlocks` are byte-identical to the persisted message's trailing blocks, so on re-fetch the client **replaces** the finalized in-flight message (keyed by `messageId`) with the persisted one rather than merging block lists.
 - **Dedup.** The same agent output is also persisted; the live `chat:stream:delta` text (and its `agent:stream:activity` liveness ticks) is *incremental UI sugar*. Canonical state is the persisted conversation. After `stream:end` (or on reconnect) call `agent.getConversation` rather than reconstructing solely from chunks. User messages echo cross-client as the user-row `agent:message` event (`role: "user"`, carrying a stable `messageId` — §6.5/§6.6; `agent:user-message:sent` is reserved-but-unused) so other clients can de-dupe their own optimistic insert.
 - **Sending input.** Use `agent.sendMessage` (auto-queues if the agent is mid-stream; with `priority: "interrupt"` it instead preempts the turn keep-alive and streams immediately — duplicate interrupt delivery with the same `messageId` is absorbed idempotently, and an interrupt landing during turn startup queues keep-alive instead of preempting), `agent.queueMessage` to explicitly enqueue, or `agent.sendQueuedMessageNow` to atomically pull one already-queued entry and deliver it immediately with interrupt priority (the rest of the queue is preserved). `agent.stop` cancels an in-flight stream.
 
@@ -4976,6 +6197,24 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 - **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
   `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
   Each subsequent delta upserts individual **content blocks** within a message.
+- **`thinking` blocks (streamed reasoning; additive within v6.0,
+  [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)).** ACP
+  `agent_thought_chunk` updates accumulate into `{ type: "thinking", id, text }` content blocks —
+  a first-class block kind alongside `text` / `tool_use` / `tool_result` / `resource`, persisted
+  on the assistant message and **interleaved in stream order** with the other blocks. They share
+  the assistant text coalescing buffer: consecutive thought chunks merge into ONE `thinking`
+  block, and a thought↔text switch (either direction) closes the open block and opens a new one —
+  so thought → text → thought persists three blocks. Live deltas carry them with
+  `blockType: "thinking"` on `chat:stream:delta` (§6.5) and accumulate exactly like text chunks
+  (`added` on first chunk, `updated` carrying the full reasoning so far), under the same stable
+  `{messageId}:{blockIndex}` ids — so snapshot and deltas agree byte-for-byte as for every other
+  block. Clients that do not render reasoning should ignore unknown block types as usual.
+- **Reasoning never feeds the live previews.** Thought text is excluded from the server-derived
+  `lastAgentResponse` / `digest` preview fields (§5.5 live-turn overlay, `agent:stream:activity`
+  and the terminal `agent:stream:end`, §7) and from text-block extraction generally: `thinking`
+  blocks are skipped by the block filter, and a still-pending thought buffer is neither appended
+  to the preview input nor counted as an open final text block. A turn that has streamed only
+  reasoning so far therefore carries no preview fields yet.
 - **Stable block ids.** Every assistant block carries a synthetic `id` of `{messageId}:{blockIndex}`
   (the assistant message UUIDv7 minted at turn start + the 0-based index in the coalesced block
   array). Snapshot blocks and live deltas derive the same id, so deltas patch the snapshot exactly.
@@ -5069,8 +6308,17 @@ invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
 Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
-identifier followed by `": "` or `":\t"` — is split, taking the prefix. Titles without that
-shape (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
+identifier followed by `": "` or `":\t"` — is split, taking the prefix. Codex's dot-separated
+MCP title form `mcp.<server>.<tool>` (server segment contains no dots; title carries no
+whitespace, so prose titles containing dots never match) is rewritten to `{server}_{tool}`
+and fed through the affix strip below (`mcp.workspace-mcp.workspace_api` → `workspace_api`,
+`mcp.other-server.some_tool` → `other-server_some_tool`). Claude Code's
+double-underscore-separated MCP title form `mcp__<server>__<tool>` (server segment runs to
+the first `__`; both segments must be non-empty; title carries no whitespace, so prose
+titles containing `mcp__` never match) gets the same treatment
+(`mcp__workspace-mcp__workspace_api` → `workspace_api`,
+`mcp__github__list_issues` → `github_list_issues`). Titles without any of these
+shapes (`Edit src/lib.rs`, URLs like `https://…`, times like `10:15 sync`) pass through as
 `name` unchanged. Trailing `_workspace-mcp` suffixes (one or more) are stripped: the registry
 tool names carry no suffix, and auggie's `<tool>_<server>` convention appends the server
 name, so stripping recovers the registry name (`add_to_note_workspace-mcp` → `add_to_note`).
@@ -5200,7 +6448,7 @@ evicting the oldest (asks beyond that still return `{ ok: true }` but the earlie
 dropped from the turn-end drain). The call also fails outside a live agent turn (no
 turn-attachment registry or caller agent wired).
 
-*Answers are plain text — an FE convention, not a wire feature.* The FE presents the turn's
+*Answer TEXT is plain text — an FE convention, not a wire feature.* The FE presents the turn's
 questions sequentially and flattens **all** answers into ONE ordinary plain-text user message sent
 via the normal `agent.sendMessage` path: blank-line-separated `Q:`/`A:` pairs, multi-select answers
 comma-joined, free-form replies prefixed `(Other) `, skipped questions reported as `(skipped)`:
@@ -5216,20 +6464,31 @@ Q: Deploy target?
 A: (skipped)
 ```
 
-There is **no** `messageMetadata`, no answer ids, and **no daemon-side answer intake**: the daemon
-persists and delivers the text verbatim as a completely ordinary user message (the model has the
-context to correlate). Do **not** add daemon-side inspection, parsing, or correlation of these
-answers — the format is an FE↔model convention and the daemon is deliberately not a party to it.
-Any later user message supersedes the questions; the FE derives pending vs. answered purely from
-"does a user message exist after the question-bearing assistant message".
+The daemon persists and delivers that text **verbatim** as an ordinary user message and never
+inspects, parses, or correlates it — the `Q:`/`A:` format is an FE↔model convention and the daemon
+is deliberately not a party to it.
 
-*Daemon-side question hold (v2.8).* While the questions are pending — the same derivation as the
-FE's, plus the `agent.dismissQuestions` dismissal marker — **automatic** deliveries to the asking
+*The answer message IS tagged (within v6.0, [intentd#965](https://github.com/intent-hq/intentd/pull/965)).*
+What the daemon reads is the **structured tag**, never the text: the wizard's send carries
+`messageMetadata { "type": "question_answers", "answeredQuestionsMessageId": "<question-bearing
+assistant message id>" }` on the `agent.sendMessage` request (§5.5 opaque per-message payload,
+persisted on the user row). That tag — naming exactly the marked message — is the ONLY thing that
+retires the pending set, on the daemon and in every FE derivation. This supersedes the pre-#965
+"no `messageMetadata`, no answer ids, no daemon-side answer intake" contract, and with it the
+"any later user message supersedes the questions" rule: **pendingness is persistent**, surviving
+plain user messages, the agent's subsequent turns, and daemon restarts, until the tag lands, the
+user dismisses, or a newer question-bearing turn supersedes it.
+
+*Daemon-side question hold (v2.8).* While the questions are pending — the persisted
+`pendingQuestionsMessageId` marker, minus the `agent.dismissQuestions` dismissal marker —
+**automatic** deliveries to the asking
 agent (A2A sends, parent wakes, event batches, `agent.sendToTask`) are parked in its pending queue
-instead of starting a turn, so an internal message cannot supersede the Q&A and silently dismiss
-the wizard. User-origin sends (the answer path) bypass and release the hold, and
-`agent.dismissQuestions` releases it without notifying the model. Full contract in §5.5
-("Question hold").
+instead of starting a turn, so an internal message cannot bury the Q&A and silently dismiss
+the wizard. User-origin sends bypass the hold but do not release it (only the answer tag does), and
+`agent.dismissQuestions` releases it — since intentd#892 (within v4.3) the dismissal also
+delivers a system-origin notice to the model ("User dismissed your N questions without
+answering...", `questions_dismissed` `messageMetadata`) so the agent learns the questions were
+dismissed and does not re-ask. Full contract in §5.5 ("Question hold").
 
 *Rendering surface — wizard only (an FE convention).* Question blocks are surfaced exclusively via
 the composer-area wizard: they are **never** rendered as transcript cards, whether pending or
@@ -5288,19 +6547,20 @@ On a **user interrupt** of an in-flight turn — `agent.stop`, `agent.sendQueued
 
 - `metadata.interrupted: true`
 - `metadata.stopReason: "interrupted"`
+- `metadata.interruptReason` *(within v4.5, [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919))* — the machine-readable cause: `"user_stop"` (plain `agent.stop` keep-alive interrupt), `"preempted_by_message"` (an interrupt-priority send preempted the busy turn — `agent.sendMessage` / `agent.sendToTask` with `priority: "interrupt"`, or `agent.sendQueuedMessageNow`), `"daemon_shutdown"` (graceful-shutdown capture flushed the in-flight turn), or `"agent_stopped"` (hard stop/kill teardown — agent delete, or an `agent.stop` that fell back to the kill path because no live session was interruptible; clients must NOT assume every user-initiated stop carries `"user_stop"`). Rows without the field are legacy and should render a generic "Stopped".
+- `metadata.interruptedBy` *(within v4.5, same PR)* — sender attribution, present **only** when `interruptReason` is `"preempted_by_message"` and the sender is attributable: `{ "kind": "user" }` for a user-origin send, or `{ "kind": "agent", "agentId": "...", "name": "..." }` for an agent-to-agent send (attributed from the §5.5 `fromAgentId`/`fromAgentName` sender-attribution metadata; `name` is omitted when the sender name is unknown). Automatic sends with no attribution carry no `interruptedBy` — the reason alone suffices.
 
-This is the same convention as the graceful-shutdown flush of an in-flight turn.
+This is the same convention as the graceful-shutdown flush of an in-flight turn (which stamps `interruptReason: "daemon_shutdown"`).
 
-**Terminal-event payload.** The interrupt path's terminal `agent:stream:end` (§7 emitted-events table) carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. Normal-completion and error-terminated turn emits never carry `stopReason`, but they **do** carry `messageId` (when the turn persisted an assistant message) and `trailingBlocks` (when §7.1 `AtTurnEnd` blocks were drained — the drain deliberately runs on the error path too; §7, [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)). The interrupt emit itself never carries `trailingBlocks`: the `AtTurnEnd` registry is **not** drained on the interrupt path — pending entries wait for the next turn's drain or the registry TTL — so there are no persisted trailing blocks for the event to mirror.
+**Terminal-event payload.** The interrupt-path terminal `agent:stream:end` (§7 emitted-events table) is emitted **only** by the live-session interrupt path (`interrupt_inner`) — i.e. on the `"user_stop"` and `"preempted_by_message"` reasons; the `"daemon_shutdown"` and `"agent_stopped"` teardowns flush the interrupted row **without** emitting any `agent:stream:end`, so those two reasons exist only in persisted row metadata, never on this event. The emit carries `stopReason: "interrupted"`, plus `messageId` when an interrupted assistant row was persisted — the id of that row — so clients can flag the turn as stopped live, without waiting for the transcript re-fetch. It also **always** carries `interruptReason` (`"user_stop"` or `"preempted_by_message"` on the wire) — matching the persisted row's `metadata.interruptReason` when a row exists (`messageId` present), and still stamped from the interruption cause when the interrupt landed before any row could persist (`messageId` absent) — plus `interruptedBy` under the same presence rule as the row metadata, so clients can render the reason-specific Stopped indicator live. Normal-completion and error-terminated turn emits never carry `stopReason` / `interruptReason` / `interruptedBy`, but they **do** carry `messageId` (when the turn persisted an assistant message) and `trailingBlocks` (when §7.1 `AtTurnEnd` blocks were drained — the drain deliberately runs on the error path too; §7, [intent-hq/intentd#575](https://github.com/intent-hq/intentd/pull/575)). The interrupt emit itself never carries `trailingBlocks`: the `AtTurnEnd` registry is **not** drained on the interrupt path — pending entries wait for the next turn's drain or the registry TTL — so there are no persisted trailing blocks for the event to mirror.
 
-**Pre-first-token stop (zero-output flush).** When nothing has streamed yet (no content blocks), whether a row is persisted — and therefore whether the terminal `agent:stream:end` carries `messageId` — depends on the interrupt path:
+**Pre-first-token stop (always-persist marker row).** *(Changed within v4.5 by [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919) — supersedes the STAB-114 zero-output no-op flush.)* When nothing has streamed yet (no content blocks), **every** interruption that found a registered live-turn slot persists the interrupted assistant marker row anyway — `contentBlocks: []` plus the full metadata tag set above — so the transcript durably records the stop. This **row-persistence** guarantee holds on all four reasons: the plain `agent.stop` keep-alive path, interrupt-priority preemption (the empty marker row is persisted BEFORE the interrupting message's user row, so transcript order reads correctly), the graceful-shutdown capture, and the detach/kill teardown. The **event** guarantee is narrower: only the two emitting paths (`"user_stop"` / `"preempted_by_message"`, previous paragraph) carry the marker row's `messageId` on their terminal `agent:stream:end`. On those paths, `messageId` is absent only when no live-turn slot existed to flush — the interrupt landed during turn startup (spawn / `initialize` / `session/new` / `session/load`), before the worker registered the turn — in which case the emit still carries `stopReason: "interrupted"` + `interruptReason`, just no `messageId`. An `agent.stop` that takes the hard-kill fallback (no live connection or no `acpSessionId`) produces **no** interrupt `agent:stream:end` at all — it routes through the kill teardown, whose row flush (reason `"agent_stopped"`) is metadata-only.
 
-- **`messageId` guaranteed — plain `agent.stop` on the keep-alive interrupt path with a live-turn slot.** When a live ACP session exists to cancel (connection + `acpSessionId`) AND the turn has registered its live-turn slot (the worker reached prompt dispatch), a plain `agent.stop` persists a synthetic **empty** interrupted assistant row (`contentBlocks: []`, `metadata.interrupted: true`, `metadata.stopReason: "interrupted"`) so the transcript durably records the stop, and the terminal `agent:stream:end` carries that row's `messageId`. This is the **only** pre-first-token case that persists a row.
-- **`messageId` absent — everything else.** No row is persisted when: (a) no live-turn slot exists yet (the stop landed during turn startup — spawn / `initialize` / `session/new` / `session/load` — before the worker registered the turn; the emit still carries `stopReason: "interrupted"` but no `messageId`); (b) the stop takes the hard-kill fallback (no live connection or no `acpSessionId` — that path never flushes); (c) the interrupt comes from an **interrupt-priority send** (`agent.sendMessage` / `agent.sendToTask` with `priority: "interrupt"`) or the **graceful-shutdown capture**, which keep the zero-output flush as a **no-op** (STAB-114) so no phantom empty row lands ahead of the preempted user message's redelivery. For an interrupt-priority send, that redelivery is the zero-output combined delivery — the preempted user message rides the interrupt turn's prompt (see `agent.sendMessage`, §5.5, [monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014)); for the graceful-shutdown capture there is no interrupt message — the no-op flush simply keeps the transcript's last row as the user message so the post-restart redelivery isn't blocked by a phantom empty assistant row.
+**Zero-output combined delivery is preserved.** The always-persist marker row does NOT break the [monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014) combined delivery on interrupt-priority sends: the preemption's "has the turn progressed" check excludes the just-persisted marker row **by id, and only while it is actually empty** — so the preempted zero-output user message still rides the interrupt turn's prompt ahead of the interrupting message (see `agent.sendMessage`, §5.5), while a marker row that caught a first block streaming in the cancel window counts as progress and blocks the re-delivery as before.
 
-**Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`). On an interrupt-priority send, the interrupted partial row precedes the new user message in the transcript.
+**Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`) — reason-specific via `metadata.interruptReason` / `metadata.interruptedBy` when present. On an interrupt-priority send, the interrupted partial (or empty marker) row precedes the new user message in the transcript.
 
-Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); no method-surface change (additive semantics within protocol v2.0).
+Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); `interruptReason`/`interruptedBy` and the always-persist marker-row semantics added in [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919); no method-surface change (additive semantics, within protocol v4.5).
 
 ## 8. Permission Flow
 
@@ -5374,13 +6634,14 @@ Errors use the standard JSON-RPC 2.0 `error` object `{ code, message, data? }`.
 | -32700 | Parse error | Body is not valid JSON. Always answered (id null), even for would-be notifications. |
 | -32600 | Invalid Request | Not an object, jsonrpc !== "2.0", missing/empty method, or bad id type. |
 | -32601 | Method not found | Unknown method (only for requests; unknown notifications are dropped). |
-| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. A `workspace.create` failure from an unresolvable base ref keeps this code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation). User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this code — see the clone failure taxonomy below. A `workspace.create` `executionEnvironment` selection naming a type that is disabled in settings or unavailable on the host (§5.1, v3.3) uses this code with `error.data = { code: "execution-environment-unavailable", environment, reason }` — `environment` is the requested type, `reason` a human-readable cause. |
-| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. An `isNewRepo` repository-initialization failure in `workspace.create` (§5.1 new-repository initialization) keeps the bare "Internal error" message but carries the cause in `error.data` (`workspace.create: repository initialization failed: <detail>`). The structured `error.data = { code: "execution-environment-not-implemented", environment }` payload (§5.1, v3.3) rides this code when a selected execution environment passes enablement+availability validation but has no daemon implementation; with the microVM workspace orchestrator landed, no `workspace.create` selection emits it today — it is retained as the structured shape for any future not-yet-implemented environment. |
+| -32602 | Invalid params | Missing required param ("Missing required parameter: <name>"), bad workspaceId ("workspaceId is required"), non-array where an array is required, "not found" lookups, unauthorized repoPath, etc. **All** `-32602` errors carry an `error.data.code` discriminator: `"not-found"` when the addressed entity does not exist, or `"invalid-params"` for bad/missing parameters; fast-path connection-scope methods handled before the dispatcher (subscriptions, `drafts.*`, `forward.*`, `host.*`, `browser.exec`, `client.hello`) always emit `"invalid-params"`. **Client rule:** the deleted-entity flow requires `error.data.code === "not-found"`; only that code means the entity is absent (deleted); any other code must not be treated as deletion. Errors that already attach a more specific `error.data.code` keep theirs: a `workspace.create` failure from an unresolvable base ref keeps this numeric code and its human message but adds `error.data = { code: "base-ref-unresolvable", baseRef }` so clients detect the condition from `error.data.code` instead of parsing the message; `baseRef` is the canonical (remote-prefix-stripped) ref — the same value interpolated into the human message (§5.1 worktree provisioning + `baseRef` canonicalisation). User-fixable clone failures (`path-invalid`, `destination-exists-non-empty`) also use this numeric code — see the clone failure taxonomy below. A `workspace.create` `executionEnvironment` selection naming a type that is disabled in settings or unavailable on the host (§5.1, v6.3) uses this code with `error.data = { code: "execution-environment-unavailable", environment, reason }` — `environment` is the requested type, `reason` a human-readable cause. |
+| -32603 | Internal error | Underlying service threw. message is "Internal error" with the original message in data for unexpected throws; many shims pass the underlying message through as message directly. Classified clone failures never surface as a bare "Internal error" — see the clone failure taxonomy below. An `isNewRepo` repository-initialization failure in `workspace.create` (§5.1 new-repository initialization) keeps the bare "Internal error" message but carries the cause in `error.data` (`workspace.create: repository initialization failed: <detail>`). The `voice.transcribe` no-API-key failure (§5.41; v4.4) keeps the bare "Internal error" message but attaches structured `error.data = { code: "voice-no-api-key", detail }` with the descriptive cause in `detail`. The structured `error.data = { code: "execution-environment-not-implemented", environment }` payload (§5.1, v6.3) rides this code when a selected execution environment passes enablement+availability validation but has no daemon implementation; with the microVM workspace orchestrator landed, no `workspace.create` selection emits it today — it is retained as the structured shape for any future not-yet-implemented environment. |
 | -32005 | Conflict | Optimistic-concurrency failure: a conditional write's `expectedVersion` did not match the entity's current `rev`. `error.data = { code: "conflict", current }` carries the current entity so the client can reconcile (note conditional writes; §4, §5.6). |
 | -32001 | Unauthorized | Local-only guard: a remote (TCP/WSS) caller invoked a local-only fast-path method (e.g. `pairing.getInfo`, `server.pairingInfo`, `server.rotateToken`, `system.shutdown`, `system.importLegacy`, or `system.gitCredential`, §5). |
 | -32010 | Oversized response | The serialized response to a successful request exceeded the outbound message cap (`MAX_OUTBOUND_MESSAGE_BYTES`, 40 MiB on the serialized JSON-RPC message — §1.3; intentd#743). The response is replaced at router serialization — where the request id is known — with this error echoing the id, so the client fails fast instead of hitting its RPC timeout on a silently dropped message. `message` names the method and serialized size (verbatim daemon string: `"response for <method> exceeds maximum outbound frame size: <n> bytes > <limit> bytes"`); `error.data = { code: "oversized-response", method, responseBytes, limit }`. Clients should re-request with narrower scope (e.g. path-scoped `git.diffs`, §5.6). The connection-writer cap remains a last-resort backstop for non-response messages (subscription pushes/events), which are dropped, never errored (§1.3). |
+| -32011 | Server overloaded | The daemon-wide cap on outstanding slow-path RPCs (`server.maxOutstandingRpcs`, §5.12; default 256, `0` = unlimited, range 0..=100000) is reached, so the request is rejected immediately rather than queued. The cap is shared across every connection and both transports, and covers only the detached-spawn slow paths (`host.*`, `browser.*`, and router-dispatched methods); every inline fast-path method (subscriptions, `system.*`, `server.*`, `pairing.getInfo`, `forward.*`, `drafts.*`, `client.hello`, reverse-response routing) is never rejected. `message` is the fixed string `"Server overloaded"` with no `error.data`. Notification-shaped frames (no `id`) are dropped without a response. Parse/envelope validation runs **before** a permit is claimed, so a malformed or invalid frame is still answered inline with `-32700`/`-32600` at the cap — the error matrix does not change under load. Clients should back off and retry. Changing the cap takes effect on daemon restart. |
 
-The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict), `-32001` (Unauthorized, local-only guard), and `-32010` (Oversized response); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
+The only custom numeric codes outside the standard `-327xx` range are `-32005` (Conflict), `-32001` (Unauthorized, local-only guard), `-32010` (Oversized response), and `-32011` (Server overloaded); other server-specific conditions (e.g. "not a delegated agent", "path outside workspace", "staging `.` is blocked") are reported as `-32602`/`-32603` with a descriptive `message`. Notification-shaped requests (no `id`) never receive an error response except for parse/invalid-request failures detected before the notification status is known.
 
 ### 9.1 Clone failure taxonomy (`workspace.create`)
 

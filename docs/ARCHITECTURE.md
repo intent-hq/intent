@@ -48,8 +48,14 @@ The daemon embeds:
   JSON-RPC notifications.
 
 The overriding invariant, carried over from the original Intent Electron app:
-**transports are thin; services are shared.** Every transport (UDS, TCP/TLS,
-the agent-facing MCP server) dispatches into the same service layer.
+**transports are thin; services are shared.** Every transport (the local
+listener — UDS on Unix, a named pipe on Windows — TCP/TLS, the agent-facing
+MCP server) dispatches into the same service layer. The Windows pipe name is
+derived from the resolved socket path (`\\.\pipe\intentd-<hash16>`, first 16
+hex chars of SHA-256 over the normalized path — `intent-transport`'s
+`pipe_name_for_socket_path`, mirrored byte-for-byte by cloudlands-fe's
+`intentd-pipe-name.ts`; see PROTOCOL.md §1.1); framing and protocol are
+identical on both local transports.
 
 ## Crate layout
 
@@ -66,7 +72,7 @@ packages/intentd/               # cargo workspace root
     ├── intent-acp/             # ACP client, session multiplexing, agent→BE MCP server
     ├── intent-providers/       # provider registry, launch arg/env assembly
     ├── intent-sourcecontrol/   # SourceControl trait + GitHubSourceControl (octocrab)
-    ├── intent-git/             # git wrappers + worktree/CoW-checkout create/lock
+    ├── intent-git/             # git wrappers + worktree/CoW-checkout create/lock + repo cache
     ├── intent-context/         # ContextEngine trait + auggie impl
     ├── intent-pty/             # unified PTY host: terminals + scripts, scrollback, attach
     ├── intent-search/          # BE-owned search: ripgrep-equivalent content/path search
@@ -75,7 +81,8 @@ packages/intentd/               # cargo workspace root
     │                           #   (QuickJS via rquickjs), async host bindings, timeouts
     ├── intent-linear/          # LinearEngine + DTOs for the linear.* surface
     ├── intent-sentry/          # SentryEngine + DTOs for the sentry.* surface
-    └── intent-transport/       # UDS/TCP/TLS listeners, JSON-RPC router, auth,
+    └── intent-transport/       # local (UDS / Windows named pipe) + TCP/TLS
+                                #   listeners, JSON-RPC router, auth,
                                 #   client.hello → clientId mapping
 ```
 
@@ -100,23 +107,23 @@ bus — never on the transport or on each other directly.
 | intent-store | SQLite pool, migrations, repositories, file layout, locking | core |
 | intent-services | note/task/comment/workspace/agent/git/pr/script/file/event/draft logic plus the Agent-Ecosystem, Code-Changes-Review, and Integrations & Ops service modules | core, store, git, sourcecontrol, acp, context, providers, pty, search, linear, sentry |
 | intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
-| intent-providers | ProviderConfig registry, arg/env builder, per-provider static model-tier tables (`fast`/`balanced`/`smart` → model id; no cross-provider fallback), capability/quirks | core |
+| intent-providers | ProviderConfig registry, arg/env builder, capability/quirks (no static model catalogs — model discovery is dynamic via `models.list`, and no provider carries a default designation) | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
-| intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes | core |
+| intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
 | intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
 | intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
-| intent-transport | UDS/TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
+| intent-transport | local (UDS on Unix, named pipe on Windows) + TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
 
 ## Workspace checkouts & agent sandboxes (CoW)
 
 Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
 (sandboxes). Architectural split of responsibilities:
 
-- **Provisioning (`workspace.create` / `workspace.duplicate`).** `intent-services`
+- **Provisioning (`workspace.create`).** `intent-services`
   owns the decision matrix — `workspace.cowIsolation` off ⇒ linked worktree
   (`intent_git::worktree::provision_worktree`); on ⇒ CoW reflink probe from the
   repository directory into the workspace dir (`intent_git::cow_probe(&repo_dir,
@@ -127,9 +134,58 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   logs a warning and falls back to the linked-worktree path (the setting is a
   preference, not a guarantee; the separate root→root probe backing the
   `cowSupported` aggregate is advisory only). Both paths run under the
-  per-repository worktree lock. `workspace.duplicate` applies the same matrix when
-  provisioning the copy's checkout. The setting is consulted **only** at
+  per-repository worktree lock. The setting is consulted **only** at
   provisioning time; the persisted `checkoutMode` is immutable per workspace.
+- **Duplication (`workspace.duplicate`).** Applies that matrix only for
+  shared-checkout (worktree-mode) sources. A **standalone** source — the source's
+  own `checkoutMode` is `cow` or `direct` — always duplicates as a standalone
+  checkout, cloned from the source's own checkout rather than from its
+  `repositoryPath`: CoW probe ⇒ `cow` clone, Unsupported/probe error ⇒ a plain
+  local clone of the source checkout persisted as `direct`
+  (`intent_git::cow_checkout::provision_local_clone_checkout`, which carries
+  committed state only and resolves `origin` so no relative or self-referencing
+  URL survives into the duplicate — the CoW path copies `.git/config` verbatim
+  instead). `workspace.cowIsolation` is **ignored** for such sources
+  (parity with cache-hydrated create), and the duplicate persists
+  `repository_path` = its **own** checkout so it is fully self-contained. A linked
+  worktree rooted in a sibling workspace's checkout is never provisioned: the
+  source's deletion detaches that directory and would orphan the duplicate, and
+  deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
+  provisioning fails, the inherited `repository_path` is cleared for standalone
+  sources so no checkout-less row references the source's directory.
+- **Repo cache & cache-hydrated creation.** `intent-git::repo_cache` owns a hidden,
+  daemon-managed cache of read-only GitHub clones at
+  `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
+  users and to recent-repo derivation; the module never reads config — the caller passes
+  the cache root). `ensure_cached_repo` is the single entry point: it serializes callers
+  on a per-repo lock, then clones fresh (miss; `--recurse-submodules`, so the cache
+  carries populated submodule work trees and their module git dirs) or refreshes
+  (`git fetch --prune`, `remote set-head origin --auto` so an upstream default-branch
+  change is re-resolved, hard reset to that branch, `submodule sync` + `submodule update
+  --init --recursive --force` so gitlink bumps, URL changes, and newly added submodules
+  are followed, then `git clean -ffdx` plus a per-submodule recursive clean so untracked
+  pollution — including orphaned submodule checkouts — is never byte-copied into
+  hydrated checkouts). **Refresh never fails the flow** — any anomaly
+  (diverged history, corrupt object store, an interrupted prior clone, a vanished
+  `origin/HEAD`, a mismatched `origin`) deletes the cache dir and re-clones; only a
+  failed clone surfaces as an error. `intent-services` uses the cache to hydrate
+  `workspace.create` when a `githubUrl` arrives without a `clonePath` (PROTOCOL §5.1):
+  the checkout is always **standalone** — a CoW clone of the cache (`cow`) or a plain
+  local `git clone` of it (`direct`) — never a linked worktree against the cache, whose
+  hard-reset/re-clone refresh would corrupt linked worktrees. Both paths populate
+  submodule work trees from the cache's local module git dirs alone (the CoW byte copy
+  carries them; `direct` copies `.git/modules` before the update), and the populating
+  `submodule update` runs **strictly offline** (`--no-fetch`, every clone transport
+  refused): hydration never touches the network — a gitlink the cache does not hold
+  degrades to an unpopulated submodule with a warning, and no submodule anomaly ever
+  fails `workspace.create`. Provisioning holds the per-repo cache lock, and afterwards
+  `origin` is retargeted at the real URL (submodule URLs re-synced to their
+  `.gitmodules` resolution) so the checkout is fully self-contained and the cache is
+  always safe to delete. Network git here shells out to system `git` (fail-fast
+  `GIT_TERMINAL_PROMPT=0`, wall-clock deadline kill) with any token offered through the
+  env-backed credential helper, never argv; the helper config propagates to submodule
+  child fetches during cache clone/refresh via `GIT_CONFIG_PARAMETERS`, the token only
+  via the inherited env var.
 - **Capability surface.** The root→root probe is cached per workspaces root by the
   shared aggregate cache (`workspace_aggregates`) and delivered two ways: as the
   `Workspace.cowSupported` enrichment on the `workspace.list`/`workspace.get` read
@@ -141,15 +197,18 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   per-workspace aggregate.
 - **Deletion.** `workspace.delete`'s git-metadata phase is checkout-mode aware: a
   worktree checkout gets registration prune + guarded branch delete + rename to a
-  trash path, while a CoW checkout — a standalone clone with no registration in the
-  source repo — goes through `intent_git::worktree::detach_checkout_dir`, which only
+  trash path, while a `cow` or `direct` checkout — a standalone clone with no
+  registration in the source repo — goes through
+  `intent_git::worktree::detach_checkout_dir`, which only
   renames the directory to a trash path (filesystem work, never opens a repository).
   The recursive removal of the trash directory runs in the background outside the
   lock in both modes.
 - **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
-  resolving the **sandbox source** from the workspace's checkout mode: direct-mode
-  workspaces clone from the user's repository folder; CoW-checkout workspaces clone
-  from the **workspace checkout** — and the merge-back on agent completion targets
+  resolving the **sandbox source** from the workspace's checkout mode: shared-checkout
+  workspaces (no `checkoutMode`) clone from the user's repository folder; `cow` and
+  `direct` checkouts clone from the **workspace checkout** (a `direct` workspace with no
+  provisioned checkout — an `isNewRepo` initialization — falls back to its repository
+  folder) — and the merge-back on agent completion targets
   that same directory (agent commits land in the workspace's own checkout, never the
   user's repo folder). Worktree-mode workspaces are ineligible (agents share the
   checkout). **Provisioning is asynchronous** relative to `agent.delegate`
@@ -228,19 +287,21 @@ Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
   decoration — so previews match what a no-model create actually pins. Clients
   are pass-through: they send a model only when the user explicitly picked one
   and never pre-resolve defaults.
-- **Provider boundaries.** `intent-providers` carries the static per-provider
-  tier tables (`fast`/`balanced`/`smart` → model id) with **no cross-provider
-  fallback**: a specialist `modelTier` resolves strictly within the resolved
-  provider's own table (dynamic-model providers have none and fall through),
-  and every resolved candidate — specialist frontmatter `model` or a settings
-  default — is provider-guarded (static tiers ∪ cached dynamic catalogs), so a
-  model owned by another provider falls through to the next step instead of
-  leaking across providers.
+- **Provider boundaries.** The model-tier concept (`fast`/`balanced`/`smart`)
+  and the static per-provider tier tables are removed (intentd#922): all model
+  discovery is dynamic (`models.list` probes, cached per provider), and every
+  resolved candidate — specialist frontmatter `model` or a settings default —
+  is provider-guarded against the cached dynamic catalogs, so a model owned by
+  another provider falls through to the next step instead of leaking across
+  providers. The **default provider** is settings-derived (the provider prefix
+  of `model.default` when compound and registry-valid, else `providers.active`),
+  bottoming out at the first registered provider as a neutral positional last
+  resort — no provider carries a hardcoded default designation.
 - **Pinning.** The resolved model is persisted to `session.model` at creation
   time and fixed for the session's lifetime; later settings/specialist changes
   only affect subsequently created agents (`agent.setModel` is the explicit
-  mutation path). Bundled specialists carry no `modelTier` and inherit the
-  user's configured default (or the provider CLI default).
+  mutation path). Bundled specialists carry no frontmatter `model` and inherit
+  the user's configured default (or the provider CLI default).
 
 ## Local models: the unsloth provider
 
@@ -354,21 +415,55 @@ polling. The subsystem lives in `intent-services`
   read/trigger/cancel only (`hook.list` / `hook.runNow` / `hook.cancel`). The
   first run happens **immediately at schedule time as validation**: a failing
   script rejects the call, a dispatching one wakes the owner without
-  persisting a schedule.
+  persisting a schedule — except for a perpetual hook, which persists and
+  schedules anyway (see below).
 - **Execution.** Scripts evaluate in QuickJS (`intent_js::eval`) with the
   exact same `ws.*` prelude + host dispatch the `workspace_api` MCP tool
   installs — including `ws.host.exec` — with the hook's workspace/agent
   pinned as the caller and a 60 s wall-clock budget. The return value is the
   contract: `{ dispatch: true, message }` wakes the owning agent and
-  terminates the hook; `{ dispatch: false }` / `undefined` sleeps and
+  terminates the hook — unless the hook is perpetual, which counts the fire
+  and returns to `scheduled`; `{ dispatch: false }` / `undefined` sleeps and
   re-runs; a throw or the 60 s timeout evicts the hook, persists
   `last_error`, and wakes the owner with the reason.
+- **Perpetual hooks** ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)).
+  The optional `perpetual` schedule param (default `false` — one-shot
+  behavior is unchanged) makes dispatch **non-terminal**: the run wakes the
+  owner as usual, bumps `dispatch_count`, and re-arms the hook to `scheduled`
+  with a fresh `next_run_at`, so it keeps running on its cadence until TTL
+  expiry, cancel, or eviction. The re-armed wake's state note says the hook
+  remains active until its `expiresAt` with a `ws.hook.cancel` pointer —
+  replacing the one-shot retired-with-reschedule-pointer note — and dispatch
+  wakes carry the `hookStillActive` boolean in the `hook_wake`
+  messageMetadata (`true` only for the re-armed perpetual branch; absent on
+  non-dispatch wakes) so consumers need not parse the note text
+  ([intent-hq/intentd#1027](https://github.com/intent-hq/intentd/pull/1027));
+  a dispatch landing at/after `expiresAt` still wins but terminalizes the
+  hook (dispatch wake, then the expiry notice), and keeps the one-shot
+  phrasing so the two notices cannot contradict each other. Both paths
+  resolve and
+  persist the post-dispatch state before emitting `hook:run-completed` /
+  `hook:dispatched`, so those payloads carry the real outcome. `perpetual`
+  and `dispatch_count` persist as defaulted columns
+  (`0084_hook_perpetual.sql`) and surface on `hook.list` plus every `hook:*`
+  payload as `perpetual` / `dispatchCount`; the TTL-expiry notice reports
+  "N runs, M dispatches" for a perpetual hook.
+- **Ownership scoping.** Hooks are agent-owned, and `hook_cancel` takes the
+  cancelling agent as `caller: Option<AgentId>`. The MCP binding passes the
+  calling agent's id (`Some`) — and, like `ws.hook.schedule`, rejects a call
+  with no agent caller context outright — so an agent can only cancel its
+  own hooks; a non-owner cancel is rejected with an error naming the owning
+  agent, before any state change. The FE wire path (`hook.cancel`) passes
+  `None`: it may cancel any hook in the workspace. Cancels are visible in
+  exactly one direction: an owner's own cancel delivers no self-wake, while
+  a `None`-caller cancel wakes the owner with a notice
+  ([intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953)).
 - **Owner wakes** go through the automatic-delivery `agent.sendMessage` path
   — queued behind an in-flight turn, question hold respected — and are
   best-effort (a delivery failure is logged, never propagated).
 - **Persistence & rehydration.** Schedules persist in the SQLite `hook`
-  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql`, rows
-  cascade with their agent session)
+  table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql` +
+  `0084_hook_perpetual.sql`, rows cascade with their agent session)
   and rehydrate at boot (`Services::rehydrate_hooks`): `scheduled`/`running`
   rows respawn their tasks (`running` — daemon died mid-run — is healed back
   to `scheduled` with a fresh countdown), rows whose owning agent is gone
@@ -376,8 +471,234 @@ polling. The subsystem lives in `intent-services`
   kept for inspection.
 - **Limits.** `[hooks] maxPerAgent` (config.toml, default 5) caps
   concurrently active (scheduled/running) hooks per agent; `delayMs` has a
-  10 s floor and hook names are capped at 19 characters — all enforced at
-  schedule time.
+  10 s floor and hook names — user-facing, human-readable descriptions of
+  what the hook is waiting for — are capped at 50 characters — all enforced
+  at schedule time.
+
+## Centralized PR monitoring
+
+Wire contract: PROTOCOL.md §5.42 (`prMonitor.*` methods, the
+merge-requirements checklist) and §6.5 (`prMonitor:*` events). The subsystem
+lives in `intent-services` (`services::pr_monitor`): agents register monitors
+via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
+`ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
+`flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
+`main.rs` beside the PR-refresh sweep) polls every active monitor on the live
+`prMonitor.pollSeconds` cadence, diffs the merge-requirements checklist
+(checks, reviews, threads, mergeability, branch rules — composed in
+`pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
+the monitor's persisted **emit baseline** (the PR state as of the last
+delivered wake, or registration), and wakes the owning agent with a single
+consolidated notification once the PR has been quiet for
+`prMonitor.debounceSeconds` (with a max-latency bound so a never-quiet PR
+whose pending set stays continuously non-empty is late, never starved — a
+full revert empties the set and re-arms the clock, by design). The pending
+set is a coalesced net diff, recomputed
+against the emit baseline on every poll rather than accumulated as a log: a
+field that moved A→B→C reports one initial→final line, a reverted field drops
+out, and a PR that fully reverts within the debounce window empties the set —
+anchors reset, no wake sent. Each delivered wake advances the baseline to the
+delivered snapshot. Monitors persist in the SQLite `pr_monitor` table
+(migration `0085_pr_monitor.sql`, rows cascade with their agent session; the
+emit baseline column arrived in `0089_pr_monitor_baseline.sql`, whose
+backfill pairs with a rehydration path that delivers any pre-coalescing
+pending log as-is rather than letting the first recomputing poll drop it),
+survive daemon restarts via boot rehydration with catch-up delivery, and
+terminalize on merge/close with an immediate final wake (`completed` rows are
+retained so merged PRs stay visible). Store writes are guarded
+compare-and-swap so concurrent flush / cancel / re-register / poll never
+clobber each other; owner wakes go through the same automatic-delivery path
+as hook wakes. The agent surface (`ws.pr.monitor` / `ws.pr.unmonitor` /
+`ws.pr.monitors`) is gated by `agentFeatures.prMonitor`; `ws.pr.snapshot`
+stays un-gated and always carries its `requirements` block — the toggle only
+scrubs the "prefer `ws.pr.monitor`" cross-references from the surviving doc
+entries.
+
+## Agent completion settlement & deferrals
+
+Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
+`agent:idle` notes. The settlement machinery lives in `intent-services`
+(`deliver_completion_to_watches` in `lib.rs`, the completion-watch registry in
+`agent_subscriptions.rs`): an `agent:idle` only counts as the agent's
+completion — firing its watchers' deliver-once wakes and recording `after_all`
+group settlement — when the agent has genuinely settled. Four deferral
+classes gate this, all probed **live at delivery time** (never from emit-time
+event stamps):
+
+- **Queue/busy interim** — ready-to-send queued messages, or a worker already
+  busy in a new turn. Defers ungrouped watch delivery only; grouped watches
+  are exempt (group accounting must see every completion).
+- **Hook-waiting** — the agent owns active background hooks. Defers both
+  watch delivery and grouped settlement records; TTL-bounded by hook expiry.
+- **PR-monitor-waiting** (unified external-wait; intentd#1002) — the agent
+  owns active PR monitors (§Centralized PR monitoring). Defers watch delivery
+  and grouped settlement records exactly like hook-waiting, but has **no
+  TTL** of its own (PR monitors don't expire) — it resolves only via the
+  monitor's own terminal transitions (completion, owner `ws.pr.unmonitor`,
+  external `prMonitor.cancel`, or restart rehydration), each of which
+  re-runs the redelivery backstop.
+- **Agent-waiting** (monorepo#1468) — the agent itself holds live outgoing
+  completion watches on other, unsettled agents (ungrouped or grouped; a
+  coordinator with an open delegation group is waiting on its children).
+  Defers watch delivery and grouped settlement records, like hook-waiting.
+
+Two interim notions are deliberately split: `seal_interim`
+(queue/busy/hook/PR-monitor) also blocks sealing the agent's own open
+`after_all` group, while agent-waiting does **not** — an `after_all`
+coordinator always holds grouped outgoing watches on its own children, so
+gating the seal on agent-waiting would deadlock every group. The waiting
+classification (`Services::agent_is_waiting_on_agents` /
+`classify_agent_waiting`) bakes in a **2-cycle deadlock guard**: a mutual
+watch pair whose both sides are idle is not a waiting reason (the pair
+delivers as before); deeper cycles (A→B→C→A) are an accepted limitation,
+deferring until an external event breaks the cycle. Never deferred by any
+class: `agent:failed` / `agent:deleted`, the immediate `reportToParent`
+wake, and the attention (blocker/discussion) fan-out.
+
+Deferred idles record an interim-skip marker, and **redelivery backstops**
+re-run the deferred completion when the deferral reason disappears without a
+fresh idle: queue retraction/edit (queue interim), terminal hook transitions
+(hook-waiting), terminal PR-monitor transitions (PR-monitor-waiting), and —
+for agent-waiting — `agent.unwatch`, `agent.cancelSubscriptions`, and
+`after_all` group settlement, each of which may remove the agent's last
+outgoing watch. Restart paths share the same predicates: the startup watch
+reconcile, registration-time reconciliation (re-arming a watch on an
+already-idle target), and group rehydration all skip the synthetic
+completion for a deferred child — group rehydration via a durable variant
+that reads persisted `completion_watch` rows, since groups rehydrate before
+the in-memory watch registry loads.
+
+## Agent feature toggles (`[agentFeatures]`)
+
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Ten booleans under the
+`[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
+`terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
+`attentionRequests`, `stateSnapshot`, `prMonitor` — all default `true`. Each
+toggle removes an agent-exposed feature from the agent's system prompt, its MCP
+tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
+
+- **Three MCP gating layers per feature** (defense in depth): (a) the
+  `workspace_api` **tool description** is assembled from per-namespace segments
+  at bridge creation (`tools::workspace_api_description`), so a disabled
+  feature's docs never reach the agent; (b) the **JS prelude** omits the gated
+  namespace installers (`bindings::prelude_for`), so a call fails with a clear
+  `TypeError` instead of silently dispatching; (c) the **dispatch layer**
+  denies the method outright (`tools::denied_feature`) with an explicit
+  `disabled in settings (agentFeatures.<key> = false)` error. Parity tests in
+  `tools.rs` keep description ↔ bindings segment-aware. Gating is
+  namespace-level except `attentionRequests` and `prMonitor`, which are
+  method-level (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` only —
+  `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated; and
+  `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` only —
+  `ws.pr.snapshot` stays un-gated).
+- **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
+  per-bridge description assembly carries one dynamic segment: each visible
+  specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
+  fold at bridge creation (`Services::specialist_model_options_for_workspace`
+  → `specialist_model_options`, project tier derived from the stored workspace
+  record — worktree path, else repository path) and injected as
+  continuation-indented lines of the `ws.agent.delegate` doc entry
+  (`tools::workspace_api_description_with_model_options`), composing with the
+  feature pruning above. Snapshot semantics match the `[agentFeatures]`
+  toggles — captured once at bridge creation, never live-read — and when no
+  specialist carries options (the default) the assembled description is
+  byte-identical to the plain assembly by construction.
+- **Prompt-section gating.** `rules::assemble_system_prompt` threads the
+  captured flags into instruction assembly (`intent-services/instructions.rs`):
+  disabled features drop their bundled-instruction sections (e.g. common.md's
+  "Waiting on External Conditions", "Rich Chat Rendering", and "Raising
+  Attention" sections, workspace-agent.md's dev-server script guidance) and
+  the rules.rs-assembled "Asking the User Questions" section
+  (`structuredQuestions`). With all defaults the assembled prompt and tool
+  description are byte-identical to the pre-toggle output.
+- **Hook runtime.** `hook.schedule` is additionally rejected in the services
+  layer when `backgroundHooks` is off, and that check reads the effective
+  settings **live**. For sessions created after the flip, the MCP dispatch
+  deny (captured flags) blocks the call first and the services check is
+  redundant defense in depth; for pre-flip sessions — whose captured surface
+  still advertises `ws.hook.*` and whose dispatch layer lets the frame
+  through — the live services check is what denies it. Net effect: flipping
+  `backgroundHooks` off denies new schedules immediately from **all** sessions.
+  **Already-active hooks are unaffected by the toggle and run to their terminal
+  state/TTL**.
+  Hook script runs build their `ws.*` prelude from the effective flags read
+  fresh per run — a hook outlives sessions and daemon restarts, so a hook run
+  honors the same gates (e.g. `hostExec`) a newly created session would.
+- **Per-turn state-snapshot injection (`stateSnapshot`).** The one toggle that
+  gates neither a prompt section nor a tool: it governs only the
+  `current ws.agent.snapshot() => {…}` line that
+  `AgentManager::build_turn_prompt` prefixes to outbound turn prompts
+  (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
+  **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
+  the next turn of every session, existing ones included — unlike the other
+  nine. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
+  description/prelude/dispatch pruning), so the tool stays callable either way.
+  The line is rebuilt per turn from live sources (hook store, watch registry,
+  queue registry, event subscriptions, unsettled-children aggregate, pending
+  questions, the session's attention request), skipped when the snapshot is
+  trivial, and never persisted — the transcript row keeps the undecorated
+  content, and all three skip paths (toggle off, trivial snapshot, build
+  failure) leave the prompt byte-identical to pre-feature output.
+- **New sessions only (except the live-read toggles).** Flags are captured once
+  at agent-session creation (the assembled system prompt is persisted
+  per-session) and at per-agent MCP bridge creation — never live-read per call
+  (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
+  applies only to sessions created afterwards; existing sessions keep the
+  surface they were created with. The two exceptions above (`hook.schedule`'s
+  services-layer check, `stateSnapshot`'s per-turn read) act on existing
+  sessions immediately.
+
+## Read-path performance principles
+
+Hot read RPCs — the methods clients poll or fan out on focus (`workspace.list`
+/ `workspace.get`, `agent.list` / `agent.get`, conversation pagination, event
+reads) — obey one invariant: **cost is O(rows returned)**. Work is
+proportional to the size of the response, never to transcript length, blob
+size, repository size, or history depth — and no unbounded filesystem or git
+work (workdir walks, `git diff`, reflink probes) runs inline on these paths.
+Every recent performance regression attached unbounded-cost computation to a
+bounded-expectation read path (monorepo#958, #963, #1010, #1061, #1395/#1396);
+this section records the design that prevents the next one.
+
+Derived or enriched fields on hot read paths sit on a three-rung ladder —
+prefer the highest rung that fits:
+
+1. **Stored on write.** Maintain the derived value in the same transaction as
+   the write that changes it; the read path only selects columns. Embodiment:
+   the persisted `last_assistant_preview` / `last_user_preview` /
+   `last_message_role` columns on `agent_session` (migrations 0066/0070) —
+   `agent.list` previews are written at message-append time, so the read path
+   never hydrates or decodes transcript bodies (#958).
+2. **Cached with invalidation.** Compute off the hot path and serve from a
+   shared cache with explicit invalidation or a TTL. Embodiments: the
+   `workspace_aggregates` cache (`intent-services/src/workspace_aggregates.rs`
+   — lifetime-cached CoW probe, single-flight, per-call budget), the
+   `agent.list` projection cache (`agent_list_cache.rs` — event-driven
+   invalidation on transcript writes, epoch-guarded against stale in-flight
+   loads), and the disk-usage cache (`disk_usage.rs` — ~60 s TTL,
+   stale-while-revalidate: an expired entry is served immediately while a
+   single-flight background walk refreshes it).
+3. **On-demand RPC.** If a field cannot be made cheap, it does not belong on
+   a list payload: give it its own method the client calls when it actually
+   needs the value. Embodiment: `diffSummary` was removed from workspace
+   metadata payloads (its per-workspace `head_diff_rollup` pinned the
+   blocking pool on every list poll, #963) in favor of on-demand `git.diffs`.
+
+Two corollaries:
+
+- **Degrade by omission, never by blocking.** When a cached aggregate is
+  cold or over budget, the read omits the optional field and lets a detached
+  task backfill the cache for the next poll (`cowSupported`'s 1.5 s budget,
+  disk usage's first-poll omission) — a hot RPC never waits out a probe or a
+  filesystem walk.
+- **Window before materializing.** Pagination selects and decodes only the
+  requested page inside SQLite (`get_agent_messages_page`; the preview
+  window query runs on a covering index and never fetches `content`), rather
+  than hydrating the full log and slicing in memory (#1010).
+
+New enrichment fields on hot read paths carry the burden of proof: they must
+name their rung on this ladder before they land. The companion agent-facing
+contract lives in the intentd repo's AGENTS.md.
 
 ## Dependency-direction rules
 

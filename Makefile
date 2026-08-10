@@ -65,9 +65,17 @@ export DEV_PORT
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
+# Node heap ceiling (MB) for the FE production build. The renderer's vite build
+# OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
+# app; default to 16 GB. dist-mac exports this via NODE_OPTIONS so every child
+# Node process (vite, tsc, electron-builder) gets the bump. Overridable, e.g.
+# make dist-mac FE_BUILD_HEAP_MB=24576.
+FE_BUILD_HEAP_MB ?= 16384
+
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	sweep sweep-all dev-daemon release-daemon run-intentd run-fe dev ios-open ios-info
+	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
 
 all: build
 
@@ -115,6 +123,72 @@ ensure-ios-submodule:
 		echo "[ensure-ios-submodule] $(IOS_DIR) already initialized — leaving as-is"; \
 	fi
 
+# Pull/rebase the monorepo branch and every submodule onto its configured
+# remote branch (.gitmodules `branch = main` for all three today). Unlike
+# `ensure-submodules` (init-if-missing only) and bare `git submodule update`
+# (reset to the monorepo-recorded pin), this advances tips.
+#
+# Monorepo: fetch + pull --rebase --autostash on the current branch's upstream
+# (fails if detached HEAD or no upstream).
+# Each submodule: fetch, checkout the configured branch (creates a local
+# tracking branch from origin/<branch> when detached/missing), then
+# pull --rebase --autostash. Stops on the first conflict so you can fix and
+# re-run. Does not commit submodule pointer bumps in the monorepo — after a
+# successful update, `git status` will show dirty pins if you want a bump PR.
+update: ## git pull --rebase monorepo + each submodule onto its .gitmodules branch
+	@set -e; \
+	if ! git rev-parse -q --verify HEAD >/dev/null; then \
+		echo "[update] ERROR: monorepo has no HEAD"; \
+		exit 1; \
+	fi; \
+	if [ "$$(git rev-parse --abbrev-ref HEAD)" = "HEAD" ]; then \
+		echo "[update] ERROR: monorepo is detached HEAD — checkout a branch first (e.g. git checkout main)"; \
+		exit 1; \
+	fi; \
+	if ! git rev-parse -q --abbrev-ref '@{u}' >/dev/null 2>&1; then \
+		echo "[update] ERROR: monorepo branch '$$(git rev-parse --abbrev-ref HEAD)' has no upstream"; \
+		exit 1; \
+	fi; \
+	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) ← $$(git rev-parse --abbrev-ref '@{u}') (pull --rebase --autostash)"; \
+	git fetch --prune; \
+	git pull --rebase --autostash; \
+	git submodule sync --recursive; \
+	git submodule update --init --recursive; \
+	for sm in $(SUBMODULES); do \
+		branch=$$(git config -f .gitmodules --get "submodule.$$sm.branch" 2>/dev/null || echo main); \
+		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
+		if [ ! -e "$$sm/.git" ]; then \
+			echo "[update] ERROR: $$sm is not initialized after submodule update --init"; \
+			exit 1; \
+		fi; \
+		git -C "$$sm" fetch --prune origin; \
+		cur=$$(git -C "$$sm" rev-parse --abbrev-ref HEAD); \
+		if [ "$$cur" = "HEAD" ] || [ "$$cur" != "$$branch" ]; then \
+			if git -C "$$sm" show-ref --verify --quiet "refs/heads/$$branch"; then \
+				git -C "$$sm" checkout "$$branch"; \
+			elif git -C "$$sm" show-ref --verify --quiet "refs/remotes/origin/$$branch"; then \
+				git -C "$$sm" checkout -B "$$branch" "origin/$$branch"; \
+			else \
+				echo "[update] ERROR: $$sm has no local or origin/$$branch"; \
+				exit 1; \
+			fi; \
+		fi; \
+		if ! git -C "$$sm" rev-parse -q --abbrev-ref '@{u}' >/dev/null 2>&1; then \
+			git -C "$$sm" branch --set-upstream-to="origin/$$branch" "$$branch"; \
+		fi; \
+		git -C "$$sm" pull --rebase --autostash; \
+	done; \
+	echo "[update] done."; \
+	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) @ $$(git rev-parse --short HEAD)"; \
+	for sm in $(SUBMODULES); do \
+		echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+	done; \
+	if ! git diff --quiet -- $(SUBMODULES) 2>/dev/null \
+		|| ! git diff --cached --quiet -- $(SUBMODULES) 2>/dev/null; then \
+		echo "[update] submodule pointers differ from the monorepo commit (expected after advancing tips)."; \
+		echo "[update] stage and commit when you want a monorepo pin bump PR."; \
+	fi
+
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
@@ -128,10 +202,18 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite
+test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextest)
 
+# Runs under nextest so local full-suite runs pick up the same
+# .config/nextest.toml protections CI uses (timing-serial test group,
+# retries, slow-timeout). nextest does not run doctests; the workspace has
+# none, so nothing is lost.
 test-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && cargo test --workspace
+	@command -v cargo-nextest >/dev/null 2>&1 || { \
+		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	cd $(INTENTD_DIR) && cargo nextest run --workspace
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
@@ -211,18 +293,100 @@ run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-d
 	#   INTENTD_SOCKET=/path/to.sock  → UDS (highest precedence; e.g. point at
 	#                                    release-daemon's default socket).
 	#   INTENTD_WS_URL=ws://host:port → plain WebSocket to a specific URL.
+	#   `make run-fe-local`           → shorthand that resolves INTENTD_SOCKET to
+	#                                    the installed daemon's default UDS path.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
+
+run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
+	# Like `run-fe`, but points the FE at the installed Intent daemon's default
+	# socket path (<data_dir>/intentd.sock, per directories::ProjectDirs):
+	#   macOS   → $$HOME/Library/Application Support/intentd/intentd.sock
+	#   Linux   → $${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock
+	#   Windows → $$APPDATA/intentd/data/intentd.sock — not a filesystem entry:
+	#             the win32 FE derives the named pipe \\.\pipe\intentd-<hash16>
+	#             from the resolved socket path (intentd-pipe-name.ts; requires
+	#             an fe checkout that includes acbb0408), so the existence
+	#             pre-check is skipped there and the FE reports the connection
+	#             failure itself if no daemon is running.
+	# An INTENTD_SOCKET already set in the caller's environment wins over the
+	# platform default. Setting INTENTD_SOCKET is the highest-precedence
+	# transport override (resolveBackendConfig in
+	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts)
+	# and any transport override also disables sidecar spawning
+	# (intentd-spawn-policy.ts) — so only the daemon connection changes; the
+	# dev FE keeps its own DEV_PORT-namespaced userData dir.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe-local] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@sock="$$INTENTD_SOCKET"; \
+	is_windows=0; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) is_windows=1 ;; \
+	esac; \
+	if [ -n "$$sock" ]; then \
+		echo "[run-fe-local] using caller-provided INTENTD_SOCKET"; \
+	else \
+		case "$$(uname -s)" in \
+			Darwin) sock="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+			Linux) sock="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+			MINGW*|MSYS*|CYGWIN*) sock="$$APPDATA/intentd/data/intentd.sock" ;; \
+			*) echo "[run-fe-local] ERROR: unsupported platform $$(uname -s) — no known installed-daemon socket path."; \
+			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: INTENTD_WS_URL=ws://host:5181/ws make run-fe"; \
+			   exit 1 ;; \
+		esac; \
+	fi; \
+	if [ "$$is_windows" -eq 0 ] && [ ! -S "$$sock" ]; then \
+		echo "[run-fe-local] ERROR: no UDS socket at '$$sock' — is the installed Intent daemon running?"; \
+		exit 1; \
+	fi; \
+	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
+	cd $(FE_DIR) && INTENTD_SOCKET="$$sock" pnpm run dev
 
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
 	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
 	# prerequisite for `pnpm run dist:mac` in packages/cloudlands-fe.
+	# Ensure FE node_modules first so a fresh checkout does not fail when any
+	# staging helper (or a future copy-sidecar dep) expects an installed tree —
+	# and so `dist-mac` (which depends on this target) does not install after
+	# the sidecar step.
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[build-sidecar] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
 	cd $(FE_DIR) && node scripts/copy-sidecar.cjs
+
+dist-mac: update ## Pull/rebase monorepo+submodules, then package Intent.app into $(FE_DIR)/dist-electron
+	# End-to-end macOS packaging. Always starts with `update` (pull --rebase
+	# monorepo + each submodule onto its .gitmodules branch) so the package
+	# reflects current tips, not a stale pin. Then `build-sidecar` ensures FE
+	# deps, builds the intentd release binary, and stages it under
+	# $(FE_DIR)/resources/sidecar; finally the FE's dist:mac script runs
+	# (build -> ensure-native-deps -> copy-sidecar -> electron-builder --mac).
+	# Output artifacts (arm64 dmg + zip, each containing Intent.app) land in
+	# $(FE_DIR)/dist-electron.
+	#
+	# `build-sidecar` is invoked via a nested $(MAKE) (not a peer prerequisite)
+	# so it cannot race `update` under make -j.
+	#
+	# Code signing + notarization run only when the Apple credentials are present
+	# in the environment (APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID);
+	# without them electron-builder produces an unsigned/ad-hoc build. See
+	# packages/cloudlands-fe/electron-builder.yml.
+	#
+	# NODE_OPTIONS raises Node's heap ceiling to $(FE_BUILD_HEAP_MB) MB so the
+	# renderer's vite build does not OOM; it is inherited by every child Node
+	# process. A pre-existing NODE_OPTIONS in the environment is preserved and
+	# wins (Node applies the last --max-old-space-size), so callers can override.
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[dist-mac] ERROR: requires macOS (electron-builder --mac). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@$(MAKE) build-sidecar
+	@echo "[dist-mac] Packaging Intent.app (electron-builder --mac, Node heap $(FE_BUILD_HEAP_MB)MB)..."
+	cd $(FE_DIR) && NODE_OPTIONS="--max-old-space-size=$(FE_BUILD_HEAP_MB) $$NODE_OPTIONS" CSC_IDENTITY_AUTO_DISCOVERY=false pnpm run dist:mac
+	@echo "[dist-mac] Done. Artifacts in $(FE_DIR)/dist-electron"
 
 dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the FE with intentd as a sidecar (INTENTD_SIDECAR=1)
 	# Launches the FE with sidecar spawning enabled (INTENTD_SIDECAR=1). The FE will
