@@ -9,9 +9,15 @@ submodules:
 
 - `packages/intentd` → [intent-hq/intentd](https://github.com/intent-hq/intentd) — Rust backend daemon
 - `packages/cloudlands-fe` → [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) — Electron + SvelteKit desktop frontend
-- `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app
+- `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app (private)
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
+`packages/ios` is private and marked `update = none` in `.gitmodules`: recursive clones and
+`git submodule update --init --recursive` skip it by design, and internal devs initialize it
+on demand with `make ensure-ios-submodule`. When iOS goes public, deleting the `update = none`
+line is not enough for clones registered during the private period — they must also run
+`git config --unset submodule.packages/ios.update`, because `git submodule init` copies the
+key into the clone's local `.git/config` and `git submodule sync` does not refresh it.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
@@ -174,7 +180,7 @@ bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 ## Local Setup
 
 ```bash
-git submodule update --init --recursive
+git submodule update --init --recursive   # skips the private packages/ios (update = none)
 make check
 make test
 ```
