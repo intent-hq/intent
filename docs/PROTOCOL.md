@@ -786,16 +786,22 @@ workspace visibility. The seed captures an initial `v1` version snapshot and pub
 idempotency scope (§6.5) between `workspace:created` and initial-agent orchestration —
 a replayed create returns the stored result and does not re-seed.
 
-**Setup script persistence and execution (`workspace.create`).** When an explicit
-`setupScript` parameter is supplied, the daemon writes it into
-`<worktree-root>/.intent/config.json` (best-effort, warn on failure) after worktree
-provisioning, using merge semantics — unrelated keys (e.g., `setupScript`, `scripts`) are preserved;
-writes are no-op when the existing value is identical. The `.intent/config.json` file
-becomes the sole source of truth for the setup script; the workspace DB `setup_script`
-field is retired from all write paths (kept for wire compat and legacy read-only
-fallback only). After the config write, if an effective setup script exists (non-empty,
-resolved via worktree-first `.intent/config.json` read with legacy DB fallback), the
-daemon executes it non-blocking (fire-and-forget spawn) in the worktree directory via
+**Setup script execution (`workspace.create`).** The `setupScript` parameter is
+**execute-only**: when supplied, the daemon executes the script as provided for that
+creation (taking precedence over the committed repo config; an empty supplied script is
+treated as omitted) but **never persists** it —
+nothing is written to `<worktree-root>/.intent/config.json`, and the create path
+performs no workspace DB `setup_script` write (the field is retired from all write
+paths, kept for wire compat and legacy read-only fallback only). The worktree
+`.intent/config.json` remains the sole persisted source of truth, mutated only by the
+explicit write paths `workspace.saveSetupScript` (§5.25) and `repoConfig.save` (§5.33).
+When the parameter is omitted, the effective script resolves via the unchanged
+worktree-first `.intent/config.json` read with legacy DB fallback. FE contract:
+cloudlands-fe always sends the script shown in the create form, except when it is the
+unedited repo-config script (so the committed config stays authoritative); the
+"last used for this repo" default is kept client-side. If an effective setup script
+exists (non-empty), the daemon executes it non-blocking (fire-and-forget spawn) after
+worktree provisioning in the worktree directory via
 `/bin/sh` (POSIX; on Windows, via a discovered Git-for-Windows `sh.exe` running the same
 POSIX wrapper, falling back to a `cmd.exe` `.cmd` wrapper that receives the script path
 through the `INTENT_SETUP_SCRIPT` env var) with env vars `MAIN_CHECKOUT` (repository root path), `WORKTREE_PATH`
@@ -3761,7 +3767,8 @@ read-only fallback only). `detectProjectType` inspects manifest files to classif
 `generateSetupScript` is the **AI-assisted** generator. Every method requires `workspaceId`.
 
 **Setup script execution:** When a workspace is created (`workspace.create`) and an effective
-setup script exists (non-empty, resolved from worktree `.intent/config.json` or legacy DB
+setup script exists (non-empty, resolved from an explicit `setupScript` param — execute-only,
+never persisted, §5.1 — else from worktree `.intent/config.json` or legacy DB
 fallback), the daemon executes it non-blocking (fire-and-forget spawn) after worktree
 provisioning in the worktree directory via `/bin/sh` (POSIX; on Windows, via a discovered
 Git-for-Windows `sh.exe` running the same POSIX wrapper, falling back to a `cmd.exe` `.cmd`
