@@ -37,7 +37,7 @@ def render_seed(providers: object) -> str | None:
     enabled = providers.get("enabled")
     paths = providers.get("paths")
     lines = [
-        "# Seeded once by make dev from the packaged intentd config.",
+        "# Seeded by make seed-dev-providers from the packaged intentd config.",
         "[providers]",
     ]
     seeded = False
