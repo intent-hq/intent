@@ -86,13 +86,16 @@ help: ## List documented targets
 # the generic `git submodule update --init` would silently skip it while
 # claiming success. Its leg passes `--checkout` to override `update = none`,
 # and fails soft (warning, not error) when the clone fails — e.g. no access to
-# the private repo.
+# the private repo. GIT_TERMINAL_PROMPT=0 makes that failure fast and
+# non-interactive (no `Username for https://github.com:` prompt when no
+# credentials are cached); internal devs who want to authenticate
+# interactively can use `make ensure-ios-submodule`, which still prompts.
 ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent; iOS is fail-soft)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
 			if [ "$$sm" = "$(IOS_DIR)" ]; then \
-				git submodule update --init --checkout --recursive "$$sm" \
+				GIT_TERMINAL_PROMPT=0 git submodule update --init --checkout --recursive "$$sm" \
 					|| echo "[ensure-submodules] WARNING: could not initialize $$sm (private repo; skipping — check GitHub access if you need it)"; \
 			else \
 				git submodule update --init --recursive "$$sm" || exit 1; \

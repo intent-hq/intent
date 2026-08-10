@@ -14,7 +14,10 @@ submodules:
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
 `packages/ios` is private and marked `update = none` in `.gitmodules`: recursive clones and
 `git submodule update --init --recursive` skip it by design, and internal devs initialize it
-on demand with `make ensure-ios-submodule`.
+on demand with `make ensure-ios-submodule`. When iOS goes public, deleting the `update = none`
+line is not enough for clones registered during the private period — they must also run
+`git config --unset submodule.packages/ios.update`, because `git submodule init` copies the
+key into the clone's local `.git/config` and `git submodule sync` does not refresh it.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
