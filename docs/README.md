@@ -18,6 +18,46 @@ subscriptions, and error codes. The detailed wire contract from the porting era 
 merged in, making this the single canonical spec. The method surface is enforced by
 golden tests in the `intent-transport` crate.
 
+## Frontend — `fe/`
+
+Durable documentation for the `cloudlands-fe` desktop frontend (Electron + SvelteKit),
+migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
+
+**Architecture & state**
+
+- [fe/STATE_MANAGEMENT.md](./fe/STATE_MANAGEMENT.md) — Redux/Themis state architecture and side-effect ownership
+- [fe/EVENT_SYSTEM.md](./fe/EVENT_SYSTEM.md) — workspace event system and renderer IPC event handling
+- [fe/COMPONENTS_DESIGN.md](./fe/COMPONENTS_DESIGN.md) — Svelte 5 + Redux component design guidance
+- [fe/MODULE_BOUNDARY_GUIDE.md](./fe/MODULE_BOUNDARY_GUIDE.md) — directory roles and module placement rules
+- [fe/TYPE_SYSTEM_GUIDE.md](./fe/TYPE_SYSTEM_GUIDE.md) — IPC type-system contracts, validation, and codegen
+- [fe/agent-message-dedup-and-stream-sagas.md](./fe/agent-message-dedup-and-stream-sagas.md) — agent message dedup and stream saga ownership
+
+**Guides**
+
+- [fe/DEVELOPER_GUIDE.md](./fe/DEVELOPER_GUIDE.md) — project structure, agent factory, tab registry, provider system
+- [fe/TROUBLESHOOTING_GUIDE.md](./fe/TROUBLESHOOTING_GUIDE.md) — common issues and debugging workflow
+- [fe/IPC_DEBUG_GUIDE.md](./fe/IPC_DEBUG_GUIDE.md) — IPC debug tooling and adding new channels
+- [fe/ERROR_HANDLING_SYSTEM.md](./fe/ERROR_HANDLING_SYSTEM.md) — error handler, reporter, and toast utilities
+- [fe/KEYBINDINGS.md](./fe/KEYBINDINGS.md) — keyboard shortcut reference and audit notes
+- [fe/PR_DESCRIPTION_GUIDE.md](./fe/PR_DESCRIPTION_GUIDE.md) — PR description conventions
+- [fe/RULES_SYSTEM.md](./fe/RULES_SYSTEM.md) — agent instruction layers and rules loading
+
+**Features**
+
+- [fe/BROWSER_PANEL_SPEC.md](./fe/BROWSER_PANEL_SPEC.md) — embedded browser panel
+- [fe/CDP_MCP_TOOLS.md](./fe/CDP_MCP_TOOLS.md) — Chrome DevTools Protocol MCP tools
+- [fe/MULTI_BACKEND_CONNECT.md](./fe/MULTI_BACKEND_CONNECT.md) — multi-backend connections and switching
+- [fe/PANEL_TAB_UX_SPEC.md](./fe/PANEL_TAB_UX_SPEC.md) — panel/tab UX design spec (leader-key system)
+- [fe/panel-system-refactoring.md](./fe/panel-system-refactoring.md) — tab-type registry architecture
+- [fe/code-review-ui.md](./fe/code-review-ui.md) — code review panel design
+- [fe/tasks-block-syntax.md](./fe/tasks-block-syntax.md) — `@@@task` block syntax
+- [fe/workspaces-link-handler.md](./fe/workspaces-link-handler.md) — `intent://` link handling
+
+**Release engineering**
+
+- [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
+- [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
+
 ## Initial porting phase — **COMPLETE (historical)**
 
 The **initial port of Intent's backend to a headless Rust daemon** (`intentd`)
