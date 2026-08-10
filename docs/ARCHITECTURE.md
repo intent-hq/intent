@@ -543,6 +543,31 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
   `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated; and
   `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` only —
   `ws.pr.snapshot` stays un-gated).
+- **Sub-agent question gate — top-level-only `ws.app.question.ask`
+  ([intentd#1063](https://github.com/intent-hq/intentd/pull/1063)).** The same
+  three layers also enforce a caller-identity gate (not a settings toggle):
+  `WorkspaceMcpServer`/`WorkspaceHost` carry an `is_sub_agent` flag
+  (`with_sub_agent`), derived once at bridge creation in `agent_manager` from
+  the persisted session (`parent_agent_id.is_some() || is_background`; same
+  spawn-time snapshot semantics as the toggle capture — `is_background` can
+  flip via `agent.update`, but the bridge keeps its surface until the next
+  respawn). For layers (a) and (b) the flag reuses the toggle machinery: a
+  sub-agent bridge's *effective* features force `structuredQuestions` off
+  (`effective_agent_features`), pruning the `ws.app.question.*` docs from the
+  description and omitting the prelude installer (`ws.app.question` is
+  `undefined`). Layer (c) checks `is_sub_agent` FIRST and denies
+  `app.question.*` frames with the redirect error naming
+  `ws.agent.requestDiscussion` / `ws.agent.reportToParent`
+  (`dispatch::SUB_AGENT_QUESTION_DENIED`), so a sub-agent never sees the
+  misleading "disabled in settings" denial; `ws.help("app.question")` takes
+  the same branch and returns the honest top-level-only reason. Hook runs
+  re-derive the owner's sub-agent status per run
+  (`hook_manager::hook_owner_is_sub_agent`) and thread it through the
+  `prelude_for_bridge` / `make_workspace_host_for_bridge` entry points, so a
+  sub-agent-owned hook gets the same pruning and denial as its owner's
+  bridge. A genuinely disabled `structuredQuestions` toggle keeps the
+  settings error for every caller, and a top-level bridge with the toggle on
+  is byte-identical to the pre-gate assembly.
 - **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
   per-bridge description assembly carries one dynamic segment: each visible
   specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier
