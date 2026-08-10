@@ -788,7 +788,8 @@ a replayed create returns the stored result and does not re-seed.
 
 **Setup script execution (`workspace.create`).** The `setupScript` parameter is
 **execute-only**: when supplied, the daemon executes the script as provided for that
-creation (taking precedence over the committed repo config) but **never persists** it —
+creation (taking precedence over the committed repo config; an empty supplied script is
+treated as omitted) but **never persists** it —
 nothing is written to `<worktree-root>/.intent/config.json`, and the create path
 performs no workspace DB `setup_script` write (the field is retired from all write
 paths, kept for wire compat and legacy read-only fallback only). The worktree
