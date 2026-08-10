@@ -487,8 +487,9 @@ event stamps):
   and grouped settlement records exactly like hook-waiting, but has **no
   TTL** of its own (PR monitors don't expire) — it resolves only via the
   monitor's own terminal transitions (completion, owner `ws.pr.unmonitor`,
-  external `prMonitor.cancel`, or restart rehydration), each of which
-  re-runs the redelivery backstop.
+  external `prMonitor.cancel`, the `workspace.archive` sweep cancel
+  (intentd#1067), or restart rehydration), each of which re-runs the
+  redelivery backstop.
 - **Agent-waiting** (monorepo#1468) — the agent itself holds live outgoing
   completion watches on other, unsettled agents (ungrouped or grouped; a
   coordinator with an open delegation group is waiting on its children).
