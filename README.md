@@ -78,15 +78,18 @@ Releases. Until then, you can [build it from source](#build-from-source).
 ## Build from source
 
 ```sh
-git clone https://github.com/intent-hq/monorepo.git
+git clone --recurse-submodules https://github.com/intent-hq/monorepo.git
 cd monorepo
-# Init the public submodules (packages/ios is currently private):
-git submodule update --init --recursive packages/intentd packages/cloudlands-fe
 
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
 ```
+
+`packages/ios` is a private submodule and is skipped automatically
+(`update = none` in `.gitmodules`), so the clone succeeds without access to
+[intent-hq/ios](https://github.com/intent-hq/ios) — the directory is simply
+left empty.
 
 Run the stack locally in one of two ways:
 

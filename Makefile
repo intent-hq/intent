@@ -82,11 +82,21 @@ all: build
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent)
+# The iOS submodule is private and marked `update = none` in .gitmodules, so
+# the generic `git submodule update --init` would silently skip it while
+# claiming success. Its leg passes `--checkout` to override `update = none`,
+# and fails soft (warning, not error) when the clone fails — e.g. no access to
+# the private repo.
+ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent; iOS is fail-soft)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
-			git submodule update --init --recursive "$$sm" || exit 1; \
+			if [ "$$sm" = "$(IOS_DIR)" ]; then \
+				git submodule update --init --checkout --recursive "$$sm" \
+					|| echo "[ensure-submodules] WARNING: could not initialize $$sm (private repo; skipping — check GitHub access if you need it)"; \
+			else \
+				git submodule update --init --recursive "$$sm" || exit 1; \
+			fi; \
 		else \
 			echo "[ensure-submodules] $$sm already initialized — leaving as-is"; \
 		fi; \
@@ -114,11 +124,13 @@ ensure-fe-submodule:
 	fi
 
 # On-demand init for the iOS submodule — pulled in only by targets that need
-# it (`ios-open`); backend-only workflows stay fast.
+# it (`ios-open`); backend-only workflows stay fast. `--checkout` overrides the
+# `update = none` in .gitmodules (set so external clones skip this private
+# repo) so it still initializes on machines with access.
 ensure-ios-submodule:
 	@if [ ! -e "$(IOS_DIR)/.git" ]; then \
 		echo "[ensure-ios-submodule] initializing $(IOS_DIR)"; \
-		git submodule update --init --recursive "$(IOS_DIR)"; \
+		git submodule update --init --checkout --recursive "$(IOS_DIR)"; \
 	else \
 		echo "[ensure-ios-submodule] $(IOS_DIR) already initialized — leaving as-is"; \
 	fi
@@ -156,11 +168,15 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 	git submodule update --init --recursive; \
 	for sm in $(SUBMODULES); do \
 		branch=$$(git config -f .gitmodules --get "submodule.$$sm.branch" 2>/dev/null || echo main); \
-		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
 		if [ ! -e "$$sm/.git" ]; then \
+			if [ "$$(git config -f .gitmodules --get "submodule.$$sm.update" 2>/dev/null)" = "none" ]; then \
+				echo "[update] $$sm is not initialized (update = none) — skipping"; \
+				continue; \
+			fi; \
 			echo "[update] ERROR: $$sm is not initialized after submodule update --init"; \
 			exit 1; \
 		fi; \
+		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
 		git -C "$$sm" fetch --prune origin; \
 		cur=$$(git -C "$$sm" rev-parse --abbrev-ref HEAD); \
 		if [ "$$cur" = "HEAD" ] || [ "$$cur" != "$$branch" ]; then \
@@ -181,7 +197,11 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 	echo "[update] done."; \
 	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) @ $$(git rev-parse --short HEAD)"; \
 	for sm in $(SUBMODULES); do \
-		echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+		if [ -e "$$sm/.git" ]; then \
+			echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+		else \
+			echo "[update]   $$sm (not initialized — skipped)"; \
+		fi; \
 	done; \
 	if ! git diff --quiet -- $(SUBMODULES) 2>/dev/null \
 		|| ! git diff --cached --quiet -- $(SUBMODULES) 2>/dev/null; then \
