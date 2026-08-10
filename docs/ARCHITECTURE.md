@@ -153,6 +153,19 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
   provisioning fails, the inherited `repository_path` is cleared for standalone
   sources so no checkout-less row references the source's directory.
+- **Unified provisioning progress.** `intent-services::create_progress` owns the
+  per-create progress reporter armed by a `workspace.create { progressId }` (PROTOCOL
+  §5.1/§6.5): it echoes the client-minted id on every `git:clone:progress`/`git:clone:done`
+  frame, normalizes percent across the whole pipeline (network clone, cache
+  ensure/refresh, submodule population, CoW copy / worktree add / branch checkout,
+  finalizing) onto one monotonically non-decreasing 0–100 scale, and dedupes identical
+  consecutive frames. The `workspace.create` wrapper owns the exactly-one terminal
+  `git:clone:done` per create (success and every error path; idempotent replays emit
+  nothing). `clone_ops::SubmoduleAwareParser` folds a `--recurse-submodules` stderr
+  stream into one aggregated `submodules` phase — the create-orchestrated clone recurses
+  submodules ([intent-hq/intentd#1069](https://github.com/intent-hq/intentd/pull/1069));
+  the standalone `git.clone` RPC does not. Without a `progressId` every path keeps its
+  legacy framing (the field is additive).
 - **Repo cache & cache-hydrated creation.** `intent-git::repo_cache` owns a hidden,
   daemon-managed cache of read-only GitHub clones at
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to

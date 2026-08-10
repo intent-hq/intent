@@ -522,7 +522,7 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes)); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks?, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
 | workspace.delete | workspaceId (req) | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock |
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. -32602 if not found. |
@@ -698,11 +698,18 @@ The workspace's `repositoryPath` **is** the checkout (`worktreePath` carries the
 path), `baseCommitSha` is the checked-out tip, and `repositoryOwner`/`repositoryName`
 derive from the URL when the caller left them blank. Progress streams through the same
 `git:clone:progress` / `git:clone:done` frame shapes as a network clone (scoped to the
-newly minted `workspaceId`), but as **synthetic milestones** rather than parsed git
-percentages: `starting` at 0% before the cache ensure, `checkout` at 90% once the cache
-is ready, then the terminal `git:clone:done` — the local checkout provisioning that
-follows emits nothing, matching the legacy flow where worktree provisioning runs after
-`git:clone:done`. A cache failure fails the whole create pre-insert with the
+newly minted `workspaceId`). Without a `progressId` the legacy framing applies: **synthetic
+milestones** rather than parsed git percentages — `starting` at 0% before the cache
+ensure, `checkout` at 90% once the cache is ready, then the terminal `git:clone:done` —
+the local checkout provisioning that follows emits nothing, matching the legacy flow
+where worktree provisioning runs after `git:clone:done`. With a `progressId` the frames
+route through the unified provisioning progress reporter instead (see the block below):
+the cache ensure **streams real progress** — a cache miss's full clone parses git's
+stderr phases (submodule-aware), a cache hit's refresh emits per-step `cache` /
+`submodules` milestones (fetch, branch reset, submodule sync/update, clean) — followed
+by the provisioning-tail milestones (`cow-copy` / `checkout`, streamed `submodules`
+population on the `direct` arm, `finalizing`), with the terminal `git:clone:done` owned
+by the create wrapper. A cache failure fails the whole create pre-insert with the
 same clone-failure taxonomy as below (no row persisted, no `workspace:created`).
 Hydration is skipped — the legacy network clone below applies unchanged — for an
 explicit non-empty `clonePath`, a URL carrying no `owner/repo` pair, and creates that
@@ -713,7 +720,13 @@ caller-supplied `worktreePath`).
 `repositoryPath` is not already a local git repository, and cache hydration above does
 not apply, the daemon clones the URL
 before branch naming and worktree provisioning, reusing the streaming `git.clone`
-pipeline (§5.14). The clone target is the caller-supplied `clonePath` when non-empty,
+pipeline (§5.14) — with `--recurse-submodules` (new in intentd,
+[intent-hq/intentd#1069](https://github.com/intent-hq/intentd/pull/1069)), so the
+checkout lands with populated submodule work trees like the repo-cache path, and the
+progress stream can carry an aggregated `submodules` phase ("Cloning submodules (N/M)")
+after the superproject phases — the create-orchestrated clone is the only caller that
+recurses; the standalone `git.clone` RPC (§5.6) is unchanged. The clone target is the
+caller-supplied `clonePath` when non-empty,
 else `<workspaces_root>/clones/<derived-repo-name>` (basename of the URL with a trailing
 `.git` stripped, matching `git clone` defaults); a pre-existing target fails the create
 with `-32602` and `error.data = { code: "destination-exists-non-empty", detail }`
@@ -727,7 +740,10 @@ Expansion is best-effort: it is `/`-separated only, and when the daemon cannot r
 a home directory from its environment it is a no-op — the verbatim tilde path is then
 used as-is, so the clone fails as before (and per the clone-failure rule below, no row
 is persisted). Progress streams as `git:clone:progress` frames and terminates in exactly
-one `git:clone:done` — both scoped to the newly minted `workspaceId` — and a `git clone`
+one `git:clone:done` — both scoped to the newly minted `workspaceId`; with a
+`progressId` the frames route through the unified provisioning progress reporter below
+(normalized percent, `data.progressId` echo, terminal done owned by the create wrapper) —
+and a `git clone`
 failure fails the whole `workspace.create` (no row persisted, no `workspace:created`)
 with a classified error from the clone failure taxonomy (§9): the numeric code is
 `-32602` for user-fixable inputs (`path-invalid`, `destination-exists-non-empty`) or
@@ -745,6 +761,51 @@ derives them from the local repository's `origin` remote URL (local git config r
 no network) when the remote is a GitHub URL (https or ssh forms, strict `github.com` host
 check); non-GitHub or missing remotes leave `repositoryOwner` unset. Caller-supplied
 values always win; `repositoryName` persists the path basename as a last resort when blank.
+
+**Unified provisioning progress (`workspace.create { progressId }`, new in intentd —
+[intent-hq/intentd#1062](https://github.com/intent-hq/intentd/pull/1062),
+[#1069](https://github.com/intent-hq/intentd/pull/1069)).** The optional `progressId`
+parameter (string; trimmed, empty-after-trim treated as absent) is a **client-minted
+correlation id** that arms a per-create progress reporter. Every `git:clone:progress` /
+`git:clone:done` frame the create emits then echoes the id verbatim as
+`data.progressId` (§6.5), letting the client correlate the asynchronous frames to its
+own request without knowing the server-minted `requestId` or the not-yet-known
+`workspaceId`. Absent a `progressId` the reporter is never constructed and every event
+path behaves exactly as before (the field is additive; rollback-safe). With a reporter
+armed:
+
+- **One normalized 0–100 scale.** Percent is normalized across the whole provisioning
+  pipeline into a single **non-decreasing** series: the network/cache segment maps into
+  0–85 (superproject clone/cache phases into 0–70, aggregated submodule progress into
+  70–85), and the local provisioning tail (checkout / CoW copy / worktree / finalizing)
+  fills 85–100. Clone stderr phases are weighted inside their segment (receiving
+  dominates; counting/compressing are cheap), the percent is clamped monotonically
+  non-decreasing within the create, identical consecutive frames are deduped, and the
+  clone's own terminal `complete` frame is re-labeled `checkout` at 85 ("Repository
+  cloned") — only the create's own terminal frame carries `complete 100`
+  ("Workspace ready").
+- **Every mode emits.** Provisioning paths that historically streamed nothing emit
+  coarse milestones through the same reporter: `starting 0` once armed, then per mode —
+  a network clone streams the parsed git phases (plus the aggregated `submodules`
+  phase); cache hydration streams the cache ensure for real (`cache` phase — a miss's
+  full clone parses stderr, a hit's refresh emits per-step milestones for fetch/branch
+  reset/submodule sync + update/clean) and then the provisioning tail (`cow-copy` or
+  `checkout` at 88, streamed `submodules` population inside 89–94 on the `direct` arm);
+  a local-repo create emits `worktree` ("Creating linked worktree...") or `cow-copy`
+  ("Copying repository (CoW)...") at a nominal 30 (no clone segment ran before it; after
+  a network clone the monotonic clamp lifts a later milestone into the 85+ tail
+  automatically); an `isNewRepo` `direct` create emits `checkout` (branch checkout) at a
+  nominal 50; every mode ends with `finalizing 95` before the row insert.
+- **Exactly one terminal done.** The create wrapper owns the terminal frame: exactly one
+  `git:clone:done` per create — `{ ok: true }` after the final `complete 100` on any
+  successful create, `{ ok: false, error, errorCode? }` on any failure (sanitized detail,
+  credential fragments redacted; `errorCode` present only for classified clone failures,
+  §9.1) — in **every** checkout mode, including failures that occur before any
+  clone/cache work started (an early config or idempotency-store error synthesizes a
+  reporter so the stream still closes; no `workspaceId` exists yet on those paths, so
+  that frame publishes under the empty sentinel id). **Idempotent replays emit
+  nothing** — the cached success result is the answer; no progress or done frames are
+  re-emitted.
 
 **New-repository initialization (`workspace.create`, new in intentd).** When
 `isNewRepo: true` (optional boolean, default absent/`false`), `repositoryPath` is not
@@ -5913,7 +5974,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | mcp | mcp:notification | data.topic, payload. The agent→BE MCP callback — distinct from the `mcp.servers.*` lifecycle surface. |
 | mcp.servers (new in intentd) | mcp.servers:status-changed | Health/lifecycle of **external** MCP servers (§5.22). data = { serverId, status: McpServerStatus }. Emitted on every state transition; self-sufficient payload (§6.7). |
 | git / terminal / test / build | git:, terminal:command, test:, build:* | Mostly reserved-but-unused. `git:commit` is emitted by `git.commit` / `git.agentCommit` (§5.6) with `data { workspaceId, operation: "commit", commit, message, files }` (the reserved FE `GitOperationEvent` shape); `git:pull` is emitted by `git.pull` (§5.6) on a successful pull with `data { workspaceId, operation: "pull", branch }` (same reserved shape, `commit`/`message`/`files` omitted) and requires a persisted workspace row whose `worktreePath` matches `repoPath` — the workspace-create auto-pull runs before the row exists and stays silent by design. Both successful paths also emit a follow-up `changes:git-status` so subscribers can refresh without a follow-up `git.status`. |
-| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`. `git:clone:progress` → `data { requestId, phase, percent, message }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `askpass-missing`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). |
+| git.clone (new in intentd) | git:clone:progress, git:clone:done | Streaming `git.clone` (§5.6), correlated by `data.requestId`; the same frames also carry `workspace.create` provisioning progress (§5.1). `git:clone:progress` → `data { requestId, phase, percent, message, progressId? }` where `phase ∈ { starting, counting, compressing, receiving, resolving, checkout, complete }` — plus, on `workspace.create` streams, `submodules` (aggregated `--recurse-submodules` progress, "Cloning submodules (N/M)"; appears on the create-orchestrated clone with or without a `progressId`) and, under a `progressId` only, `cache` (repo-cache ensure/refresh), `cow-copy` (CoW checkout copy), `worktree` (linked-worktree add), and `finalizing` (post-provisioning bookkeeping) — and `percent` is `0..=100`. `git:clone:done` → `data { requestId, ok, error?, errorCode?, progressId? }`; `error` is present iff `ok == false` and never carries the source URL or credentials; `errorCode` is present only when the failure was classified per the clone failure taxonomy (§9.1) — `path-invalid`, `askpass-missing`, `auth-required`, `repo-not-found`, `access-denied`, `network`, `destination-exists-non-empty` (the `clone-failed` catch-all is never emitted as `errorCode`; unclassified failures omit the key). `data.progressId` (additive, [intent-hq/intentd#1062](https://github.com/intent-hq/intentd/pull/1062)) is present on both frame types iff the frames belong to a `workspace.create` that supplied a `progressId` (§5.1 unified provisioning progress): the client-minted id is echoed verbatim on **every** frame of that create's stream, percent is normalized to one non-decreasing 0–100 scale (clone/cache 0–70, submodules 70–85, provisioning tail 85–100), and exactly one terminal `git:clone:done` closes the stream per create — including error paths — while idempotent replays emit nothing. Standalone `git.clone` frames never carry the key. |
 | terminal (new in intentd) | terminal:data, terminal:exit, terminal:title, terminal:cwd | Live PTY streaming (§5.13). data.chunk (terminal:data) is base64. `terminal:data` is **transient / broadcast-only** (same publish path as `chat:stream:delta`, §7): never persisted, invisible to `event.query` (§5.10); scrollback replay uses `terminal.getBuffer`. `terminal:exit` stays durable and is emitted after the stream task has broadcast every data chunk, so exit never overtakes data. |
 | script (new in intentd) | script:output, script:state | Live script streaming (§5.8); shared PTY host. data.chunk (script:output) is base64. `script:output` is **transient / broadcast-only** (never persisted, invisible to `event.query` §5.10); replay uses `script.output`. `script:state` lifecycle transitions stay durable; the status value is one of `idle \| running \| restarting \| exited` (§5.8) — `restarting` (new in intentd, monorepo#1318) marks the transient restart-in-flight window (auto-restart backoff between an exit and the next spawn attempt, and the `script.restart` stop→start gap). The carried `ScriptRuntimeState` also surfaces the optional `previouslyRunning: true` was-running marker (§5.8; omitted when false), including the dismiss path — `script.stop` on a non-running marked script emits a `script:state` snapshot with the marker cleared, so other subscribers never retain a stale `previouslyRunning: true`. |
 | search (new in intentd) | search:result, search:done | Streaming search results (§5.15), correlated by data.requestId. search:result → data { requestId, matches }; search:done → data { requestId, total, truncated }. |
