@@ -237,7 +237,7 @@ logger.debug('Agent operation', { agentId, operation });
 ### Problem: State not reactive
 
 **Symptom**: UI not updating
-**Solution**: Use Svelte 5 runes for component-local state, or Redux selectors/actions for shared application state (see `docs/STATE_MANAGEMENT.md`).
+**Solution**: Use Svelte 5 runes for component-local state, or Redux selectors/actions for shared application state (see [STATE_MANAGEMENT.md](./STATE_MANAGEMENT.md)).
 
 ### Problem: Manager singleton issues
 

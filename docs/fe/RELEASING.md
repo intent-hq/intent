@@ -203,16 +203,33 @@ If the automated **Release Stable** workflow fails and cannot be fixed by re-run
 
 2. **Replace assets on the rolling stable release**
 
-   ```bash
-   # Delete old assets from stable
-   gh release view stable --repo intent-hq/cloudlands-releases --json assets --jq '.assets[].name' | \
-     xargs -I {} gh release delete-asset stable {} --repo intent-hq/cloudlands-releases --yes
+   Upload first (with `--clobber`), feed files last, so the current stable
+   assets keep serving until each one is overwritten in place — never delete
+   the old assets before their replacements are up.
 
-   # Upload new assets to stable (all feed files last for atomic switch)
-   gh release upload stable --repo intent-hq/cloudlands-releases --clobber \
-     *.dmg *.zip *.exe *.AppImage *.deb *.blockmap release-manifest.json
-   gh release upload stable --repo intent-hq/cloudlands-releases --clobber \
-     latest-mac.yml latest.yml latest-linux.yml latest-linux-arm64.yml
+   ```bash
+   cd /tmp/release-assets
+
+   # Upload binaries/manifests first (everything except the feed files)
+   for f in *; do
+     case "$f" in
+       latest*.yml) ;;  # feeds go last
+       *) gh release upload stable "$f" --repo intent-hq/cloudlands-releases --clobber ;;
+     esac
+   done
+
+   # Upload feed files last for the atomic switch (loop tolerates
+   # older releases that don't have all four platforms)
+   for f in latest-mac.yml latest.yml latest-linux.yml latest-linux-arm64.yml; do
+     [ -e "$f" ] && gh release upload stable "$f" --repo intent-hq/cloudlands-releases --clobber
+   done
+
+   # Finally, remove any stale assets left over from the previous stable
+   # that are not part of the new release
+   gh release view stable --repo intent-hq/cloudlands-releases --json assets --jq '.assets[].name' | \
+     while read -r name; do
+       [ -e "$name" ] || gh release delete-asset stable "$name" --repo intent-hq/cloudlands-releases --yes
+     done
    ```
 
 3. **Verify sha512 hash**

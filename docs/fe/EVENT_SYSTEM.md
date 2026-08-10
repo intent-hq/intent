@@ -6,9 +6,9 @@
 
 ## Overview
 
-The Intent app uses a **Redux-based event system** for all workspace events. Events are managed through Redux slices and sagas in the main process, with IPC channels for renderer communication.
+The Intent app uses a **Redux-based event system** for all workspace events. Events originate from the intentd daemon and are routed into the renderer Redux store by the daemon events bridge; renderer slices and sagas manage event state.
 
-1. **WorkspaceEvents**: Full-featured events managed by `workspace-events` Redux slice with persistence, filtering, and query support
+1. **WorkspaceEvents**: Full-featured events managed by the renderer `workspace-events` Redux slice with filtering and query support (persistence is daemon-owned)
 
 > **Note**: The legacy EventBus singletons (UnifiedEventBus, WorkspaceEventBus, WorkspaceEventService) have been removed, as have the DomainEvents broadcast layer (`domain-events` actions/sagas) and the main-process Redux store. All event state is now managed through renderer Redux.
 
@@ -21,28 +21,20 @@ The Intent app uses a **Redux-based event system** for all workspace events. Eve
 │  Components              Redux Store              Selectors     │
 │  ┌─────────┐         ┌──────────────────┐    ┌─────────────┐   │
 │  │ UI      │◄────────│ workspace-events │◄───│ Reactive    │   │
-│  │ Layer   │────────►│ slice (synced)   │───►│ Selectors   │   │
-│  └─────────┘         └────────┬─────────┘    └─────────────┘   │
+│  │ Layer   │────────►│ slice + sagas    │───►│ Selectors   │   │
+│  └─────────┘         └────────▲─────────┘    └─────────────┘   │
+│                               │                                  │
+│              ┌────────────────┴────────────────┐                │
+│              │  Daemon Events Bridge            │                │
+│              │  (daemon-events-bridge.client)   │                │
+│              └────────────────▲────────────────┘                │
 └──────────────────────────────┼──────────────────────────────────┘
-                               │ IPC (Redux sync)
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Main Process                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │              Redux Store (Main)                          │    │
-│  │                                                          │    │
-│  │  • workspace-events slice — event state + persistence   │    │
-│  │  • agent-subscriptions slice — agent event filters      │    │
-│  └────────────────────────┬────────────────────────────────┘    │
-│                           │                                      │
-│                           ▼                                     │
-│                  ┌──────────────┐                               │
-│                  │ Sagas        │                               │
-│                  │ (side fx)    │                               │
-│                  └──────────────┘                               │
-│                                                                  │
+                               │ event subscription (JSON-RPC)
+                               │
+┌──────────────────────────────┴──────────────────────────────────┐
+│                    intentd Daemon                                │
+│   • emits workspace/agent/git/note events                       │
+│   • owns event persistence and historical queries               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -76,8 +68,9 @@ The DomainEvents broadcast layer (`domain-events` actions and sagas under `src/s
 
 | Component | Location | Responsibility |
 |-----------|----------|----------------|
-| workspace-events slice | `store/main/slices/workspace-events/` | Event state management |
-| agent-subscriptions slice | `store/main/slices/agent-subscriptions/` | Agent event filter state |
+| Daemon events bridge | `features/events/daemon-events-bridge.client.ts` | Routes daemon events into renderer Redux |
+| workspace-events slice | `store/renderer/slices/workspace-events/` | Event state management |
+| agent-subscription-ui slice | `store/renderer/slices/agent-subscription-ui/` | Agent event filter state |
 | EventFilterEngine | `features/events/event-filter-engine.ts` | Pure filter matching logic |
 | agent-subscription-ops | `features/events/main/agent-subscription-ops.ts` | Agent subscription operations |
 
