@@ -151,7 +151,8 @@ update checks against public GitHub Releases and actions you take yourself:
   [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
   mirror, falling back to the
   [intentd releases page](https://github.com/intent-hq/intentd/releases). The
-  mirror is temporary until the intentd repo is open-sourced.
+  mirror is the permanent public distribution channel, kept even after the
+  intentd repo goes public.
 - **Auggie binary download (on demand)** — installing the Auggie CLI from the
   desktop app downloads the pre-built binary from the latest public release of
   [augmentcode/auggie](https://github.com/augmentcode/auggie).
