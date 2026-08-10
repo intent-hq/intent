@@ -92,7 +92,10 @@ workflow dispatch.
   first with a coded fallback to intentd. Daemon release notes are mirrored too
   (source changelog with download URLs rewritten to the mirror; sitter releases
   keep their purpose-written notes). `mirror-release.yml` (manual dispatch)
-  backfills older releases. The mirror is temporary until intentd is open-sourced.
+  backfills older releases. The `-releases` repos ([intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
+  and [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases))
+  are the **permanent** public distribution channels — manifests, download URLs, and
+  the Homebrew formula keep pointing at them even after the source repos go public.
   Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
