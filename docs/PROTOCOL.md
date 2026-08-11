@@ -46,7 +46,7 @@ When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note be
 wss://<host>:<port>/ws
 ```
 
-- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD obtain the port from the QR/manual pairing payload (rendered on the daemon host via the local-only `pairing.getInfo`, §5, or `intentd token`) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
+- **Default port:** `5181` (fixed — no port walking, no same-port backoff). The listener binds exactly this port. In the secure posture a WSS bind failure at boot is **non-fatal**: the daemon logs a warning and keeps serving UDS (`server.wsApi.enabled` stays true; toggle it to retry), and a runtime toggle-on bind failure surfaces as a `settings.update` error. Only the insecure dev listener (`--insecure`) treats a bind failure as fatal — the daemon exits non-zero with the OS bind error. Clients still SHOULD obtain the port from the QR/manual pairing payload (rendered on the daemon host via the local-only `pairing.getInfo`, §5, or the `intentd pair` CLI) or a well-known override rather than hard-coding it, since the operator may reconfigure `server.wsApi.port` (or its `INTENTD_TCP_PORT` env override).
 - **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - Any path other than `/ws` is rejected at upgrade time (socket destroyed).
@@ -98,7 +98,7 @@ Browser-origin upgrades are gated to prevent cross-origin attacks; native client
 
 ### 2.3 Where the token lives
 
-The token and the API-enabled flag are persisted in the daemon's settings store. Clients obtain the token out-of-band via a pairing flow (the daemon surfaces token + fingerprint together — see also `pairing.getInfo` in the §5 fast-path catalog). An operator can run `intentd token` to print the current bearer token and TLS certificate fingerprint together for pairing (and `intentd token --rotate` to regenerate the token).
+The token and the API-enabled flag are persisted in the daemon's settings store. Clients obtain the token out-of-band via a pairing flow (the daemon surfaces token + fingerprint together — see also `pairing.getInfo` in the §5 fast-path catalog). An operator can run `intentd pair` to print the current bearer token and TLS certificate fingerprint together for pairing — as labeled lines alongside the QR code and `intent://pair?…` URI (it queries `pairing.getInfo` over UDS) — and `intentd pair --rotate` to regenerate the token before printing.
 
 ## 3. Message Envelope (JSON-RPC 2.0)
 
@@ -332,7 +332,7 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 ```
 
 - `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`) are provided so clients can render their own payloads.
-- Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd token`, so all pairing surfaces stay consistent.
+- Hosts, TLS fingerprint, and bearer token come from the same sources as `server.pairingInfo`, so all pairing surfaces (including the `intentd pair` CLI, which queries this method over UDS) stay consistent.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available. The listener-down failure carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator. The no-address failure keeps its plain descriptive message.
 
