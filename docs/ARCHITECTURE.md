@@ -153,6 +153,19 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   deleting the duplicate would mutate the source (intent-hq/monorepo#1560). If
   provisioning fails, the inherited `repository_path` is cleared for standalone
   sources so no checkout-less row references the source's directory.
+- **Unified provisioning progress.** `intent-services::create_progress` owns the
+  per-create progress reporter armed by a `workspace.create { progressId }` (PROTOCOL
+  §5.1/§6.5): it echoes the client-minted id on every `git:clone:progress`/`git:clone:done`
+  frame, normalizes percent across the whole pipeline (network clone, cache
+  ensure/refresh, submodule population, CoW copy / worktree add / branch checkout,
+  finalizing) onto one monotonically non-decreasing 0–100 scale, and dedupes identical
+  consecutive frames. The `workspace.create` wrapper owns the exactly-one terminal
+  `git:clone:done` per create (success and every error path; idempotent replays emit
+  nothing). `clone_ops::SubmoduleAwareParser` folds a `--recurse-submodules` stderr
+  stream into one aggregated `submodules` phase — the create-orchestrated clone recurses
+  submodules ([intent-hq/intentd#1069](https://github.com/intent-hq/intentd/pull/1069));
+  the standalone `git.clone` RPC does not. Without a `progressId` every path keeps its
+  legacy framing (the field is additive).
 - **Repo cache & cache-hydrated creation.** `intent-git::repo_cache` owns a hidden,
   daemon-managed cache of read-only GitHub clones at
   `<workspaces_root>/.repo-cache/<owner>/<repo>` (dot-prefixed so it stays invisible to
@@ -535,8 +548,9 @@ event stamps):
   and grouped settlement records exactly like hook-waiting, but has **no
   TTL** of its own (PR monitors don't expire) — it resolves only via the
   monitor's own terminal transitions (completion, owner `ws.pr.unmonitor`,
-  external `prMonitor.cancel`, or restart rehydration), each of which
-  re-runs the redelivery backstop.
+  external `prMonitor.cancel`, the `workspace.archive` sweep cancel
+  (intentd#1067), or restart rehydration), each of which re-runs the
+  redelivery backstop.
 - **Agent-waiting** (monorepo#1468) — the agent itself holds live outgoing
   completion watches on other, unsettled agents (ungrouped or grouped; a
   coordinator with an open delegation group is waiting on its children).
@@ -591,6 +605,33 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
   `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated; and
   `ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors` only —
   `ws.pr.snapshot` stays un-gated).
+- **Sub-agent question gate — top-level-only `ws.app.question.ask`
+  ([intentd#1063](https://github.com/intent-hq/intentd/pull/1063)).** The same
+  three layers also enforce a caller-identity gate (not a settings toggle):
+  `WorkspaceMcpServer` carries an `is_sub_agent` flag (`with_sub_agent`),
+  threaded into the workspace-host dispatch via
+  `make_workspace_host_for_bridge`, derived once at bridge creation in
+  `agent_manager` from
+  the persisted session (`parent_agent_id.is_some() || is_background`; same
+  spawn-time snapshot semantics as the toggle capture — `is_background` can
+  flip via `agent.update`, but the bridge keeps its surface until the next
+  respawn). For layers (a) and (b) the flag reuses the toggle machinery: a
+  sub-agent bridge's *effective* features force `structuredQuestions` off
+  (`effective_agent_features`), pruning the `ws.app.question.*` docs from the
+  description and omitting the prelude installer (`ws.app.question` is
+  `undefined`). Layer (c) checks `is_sub_agent` FIRST and denies
+  `app.question.*` frames with the redirect error naming
+  `ws.agent.requestDiscussion` / `ws.agent.reportToParent`
+  (`dispatch::SUB_AGENT_QUESTION_DENIED`), so a sub-agent never sees the
+  misleading "disabled in settings" denial; `ws.help("app.question")` takes
+  the same branch and returns the honest top-level-only reason. Hook runs
+  re-derive the owner's sub-agent status per run
+  (`hook_manager::hook_owner_is_sub_agent`) and thread it through the
+  `prelude_for_bridge` / `make_workspace_host_for_bridge` entry points, so a
+  sub-agent-owned hook gets the same pruning and denial as its owner's
+  bridge. A genuinely disabled `structuredQuestions` toggle keeps the
+  settings error for every top-level caller, and a top-level bridge with the
+  toggle on is byte-identical to the pre-gate assembly.
 - **Dynamic delegate-docs segment (specialist `modelOptions`).** The same
   per-bridge description assembly carries one dynamic segment: each visible
   specialist's `modelOptions` (PROTOCOL §5.11) is resolved through the 3-tier

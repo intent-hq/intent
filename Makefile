@@ -75,18 +75,32 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
-	sweep sweep-all dev-daemon release-daemon run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
+	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
+	run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
 
 all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent)
+# The iOS submodule is private and marked `update = none` in .gitmodules, so
+# the generic `git submodule update --init` would silently skip it while
+# claiming success. Its leg passes `--checkout` to override `update = none`,
+# and fails soft (warning, not error) when the clone fails — e.g. no access to
+# the private repo. GIT_TERMINAL_PROMPT=0 makes that failure fast and
+# non-interactive (no `Username for https://github.com:` prompt when no
+# credentials are cached); internal devs who want to authenticate
+# interactively can use `make ensure-ios-submodule`, which still prompts.
+ensure-submodules: ## Initialize any missing submodules — intentd, FE, iOS (idempotent; iOS is fail-soft)
 	@for sm in $(SUBMODULES); do \
 		if [ ! -e "$$sm/.git" ]; then \
 			echo "[ensure-submodules] initializing $$sm"; \
-			git submodule update --init --recursive "$$sm" || exit 1; \
+			if [ "$$sm" = "$(IOS_DIR)" ]; then \
+				GIT_TERMINAL_PROMPT=0 git submodule update --init --checkout --recursive "$$sm" \
+					|| echo "[ensure-submodules] WARNING: could not initialize $$sm (private repo; skipping — check GitHub access if you need it)"; \
+			else \
+				git submodule update --init --recursive "$$sm" || exit 1; \
+			fi; \
 		else \
 			echo "[ensure-submodules] $$sm already initialized — leaving as-is"; \
 		fi; \
@@ -114,11 +128,13 @@ ensure-fe-submodule:
 	fi
 
 # On-demand init for the iOS submodule — pulled in only by targets that need
-# it (`ios-open`); backend-only workflows stay fast.
+# it (`ios-open`); backend-only workflows stay fast. `--checkout` overrides the
+# `update = none` in .gitmodules (set so external clones skip this private
+# repo) so it still initializes on machines with access.
 ensure-ios-submodule:
 	@if [ ! -e "$(IOS_DIR)/.git" ]; then \
 		echo "[ensure-ios-submodule] initializing $(IOS_DIR)"; \
-		git submodule update --init --recursive "$(IOS_DIR)"; \
+		git submodule update --init --checkout --recursive "$(IOS_DIR)"; \
 	else \
 		echo "[ensure-ios-submodule] $(IOS_DIR) already initialized — leaving as-is"; \
 	fi
@@ -156,11 +172,15 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 	git submodule update --init --recursive; \
 	for sm in $(SUBMODULES); do \
 		branch=$$(git config -f .gitmodules --get "submodule.$$sm.branch" 2>/dev/null || echo main); \
-		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
 		if [ ! -e "$$sm/.git" ]; then \
+			if [ "$$(git config -f .gitmodules --get "submodule.$$sm.update" 2>/dev/null)" = "none" ]; then \
+				echo "[update] $$sm is not initialized (update = none) — skipping"; \
+				continue; \
+			fi; \
 			echo "[update] ERROR: $$sm is not initialized after submodule update --init"; \
 			exit 1; \
 		fi; \
+		echo "[update] $$sm → $$branch (pull --rebase --autostash)"; \
 		git -C "$$sm" fetch --prune origin; \
 		cur=$$(git -C "$$sm" rev-parse --abbrev-ref HEAD); \
 		if [ "$$cur" = "HEAD" ] || [ "$$cur" != "$$branch" ]; then \
@@ -181,7 +201,11 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 	echo "[update] done."; \
 	echo "[update] monorepo $$(git rev-parse --abbrev-ref HEAD) @ $$(git rev-parse --short HEAD)"; \
 	for sm in $(SUBMODULES); do \
-		echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+		if [ -e "$$sm/.git" ]; then \
+			echo "[update]   $$sm $$(git -C $$sm rev-parse --abbrev-ref HEAD) @ $$(git -C $$sm rev-parse --short HEAD)"; \
+		else \
+			echo "[update]   $$sm (not initialized — skipped)"; \
+		fi; \
 	done; \
 	if ! git diff --quiet -- $(SUBMODULES) 2>/dev/null \
 		|| ! git diff --cached --quiet -- $(SUBMODULES) 2>/dev/null; then \
@@ -250,6 +274,38 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 			echo "[sweep-all] skipping $$dir (no target/ dir)"; \
 		fi; \
 	done
+
+# Optional: inherit non-secret provider choices from the packaged seat into an
+# empty $(DEV_DATA_DIR). Existing contents always win; missing prod config is a
+# no-op. Not wired into `dev` / `dev-daemon` — run explicitly when you want it:
+#   make seed-dev-providers
+#   make seed-dev-providers DEV_DATA_DIR=...
+seed-dev-providers: ## Seed provider prefs from packaged intentd into empty $(DEV_DATA_DIR)
+	@python3 scripts/seed_dev_providers.py --dev-data-dir "$(DEV_DATA_DIR)"
+
+# Optional: copy workspace rows from the packaged intentd SQLite DB into the
+# dev seat. Creates/migrates $(DEV_DATA_DIR)/intentd.db via `intentd doctor`
+# when missing, then inserts Active (default) workspace metadata only — not
+# agents, notes, messages, or assets. Skips ids already present; does not
+# touch the on-disk worktrees (paths point at the shared ~/intent/workspaces).
+# Not wired into `dev` / `dev-daemon` — run explicitly, ideally with the dev
+# daemon stopped so WAL/locking stays quiet:
+#   make seed-dev-workspaces
+#   make seed-dev-workspaces SEED_INCLUDE_ARCHIVED=1
+#   make seed-dev-workspaces SEED_SOURCE_DB=/path/to/intentd.db
+SEED_INCLUDE_ARCHIVED ?= 0
+seed-dev-workspaces: ensure-intentd-submodule ## Seed workspace rows from packaged intentd.db into $(DEV_DATA_DIR)
+	@mkdir -p "$(DEV_DATA_DIR)"
+	@if [ ! -f "$(DEV_DATA_DIR)/intentd.db" ]; then \
+		echo "[seed-dev-workspaces] initializing empty dev DB via intentd doctor..."; \
+		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
+			cargo run -q -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- doctor >/dev/null; \
+	fi
+	@if [ "$(SEED_INCLUDE_ARCHIVED)" = "1" ]; then \
+			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" --include-archived; \
+		else \
+			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)"; \
+		fi
 
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"

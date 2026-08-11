@@ -9,9 +9,15 @@ submodules:
 
 - `packages/intentd` → [intent-hq/intentd](https://github.com/intent-hq/intentd) — Rust backend daemon
 - `packages/cloudlands-fe` → [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) — Electron + SvelteKit desktop frontend
-- `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app
+- `packages/ios` → [intent-hq/ios](https://github.com/intent-hq/ios) — SwiftUI iOS companion app (private)
 
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
+`packages/ios` is private and marked `update = none` in `.gitmodules`: recursive clones and
+`git submodule update --init --recursive` skip it by design, and internal devs initialize it
+on demand with `make ensure-ios-submodule`. When iOS goes public, deleting the `update = none`
+line is not enough for clones registered during the private period — they must also run
+`git config --unset submodule.packages/ios.update`, because `git submodule init` copies the
+key into the clone's local `.git/config` and `git submodule sync` does not refresh it.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
@@ -61,12 +67,15 @@ submodule refs).
 - **Conventional commits** are required. PR titles are validated by CI
   (`amannn/action-semantic-pull-request`) against: `feat`, `fix`, `chore`, `docs`,
   `refactor`, `test`, `ci`, `perf`.
-- **Merging**: The repository allows squash and rebase merges. When squash-merging, the
-  commit title defaults to the commit message (or PR title as fallback), and the commit
-  message includes all commit messages from the PR. On single-commit PRs, ensure the branch
-  commit message is itself a valid conventional commit (amend auto-commits like
-  "Coordinator" before pushing) to prevent non-conventional commits from landing on main
-  (e.g., PR #102 incident).
+- **Merging**: The repository allows squash and rebase merges; no merge queue is enabled.
+  Merge with `gh pr merge --squash` (optionally `--auto` to merge once checks pass). The
+  GraphQL `enqueuePullRequest` mutation fails with "Merge queues are not enabled" — it is
+  only relevant if a merge queue is enabled later. When squash-merging, the commit
+  title defaults to the commit message (or PR title as fallback), and the commit message
+  includes all commit messages from the PR. On single-commit PRs, ensure the branch commit
+  message is itself a valid conventional commit (amend auto-commits like "Coordinator"
+  before pushing) to prevent non-conventional commits from landing on main (e.g., PR #102
+  incident).
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: keep `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo build`
   green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
@@ -92,7 +101,10 @@ workflow dispatch.
   first with a coded fallback to intentd. Daemon release notes are mirrored too
   (source changelog with download URLs rewritten to the mirror; sitter releases
   keep their purpose-written notes). `mirror-release.yml` (manual dispatch)
-  backfills older releases. The mirror is temporary until intentd is open-sourced.
+  backfills older releases. The `-releases` repos ([intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
+  and [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases))
+  are the **permanent** public distribution channels — manifests, download URLs, and
+  the Homebrew formula keep pointing at them even after the source repos go public.
   Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
@@ -171,7 +183,7 @@ bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 ## Local Setup
 
 ```bash
-git submodule update --init --recursive
+git submodule update --init --recursive   # skips the private packages/ios (update = none)
 make check
 make test
 ```

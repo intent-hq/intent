@@ -39,6 +39,23 @@ install that channel's version immediately — also the downgrade path — then
 `intentd restart` to activate it in place). Per-launch `--sitter-channel` /
 `INTENTD_CHANNEL` overrides take precedence over the pin.
 
+### One-line script (macOS & Linux)
+
+```sh
+curl -fsSL https://github.com/intent-hq/intentd-releases/releases/download/sitter-latest/install.sh | sh
+```
+
+Detects OS/arch, verifies the archive checksum, and installs `intentd` to
+`/usr/local/bin` when writable, else `~/.local/bin` (override with
+`INTENTD_INSTALL_DIR`). Then start the daemon with `intentd serve`, or use
+the Homebrew / `.deb` installs below for a managed background service.
+
+On Windows:
+
+```powershell
+powershell -c "irm https://github.com/intent-hq/intentd-releases/releases/download/sitter-latest/install.ps1 | iex"
+```
+
 ### Homebrew (macOS & Linux)
 
 ```sh
@@ -78,15 +95,18 @@ Releases. Until then, you can [build it from source](#build-from-source).
 ## Build from source
 
 ```sh
-git clone https://github.com/intent-hq/monorepo.git
+git clone --recurse-submodules https://github.com/intent-hq/monorepo.git
 cd monorepo
-# Init the public submodules (packages/ios is currently private):
-git submodule update --init --recursive packages/intentd packages/cloudlands-fe
 
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
 ```
+
+`packages/ios` is a private submodule and is skipped automatically
+(`update = none` in `.gitmodules`), so the clone succeeds without access to
+[intent-hq/ios](https://github.com/intent-hq/ios) — the directory is simply
+left empty.
 
 Run the stack locally in one of two ways:
 
@@ -134,7 +154,8 @@ update checks against public GitHub Releases and actions you take yourself:
   [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
   mirror, falling back to the
   [intentd releases page](https://github.com/intent-hq/intentd/releases). The
-  mirror is temporary until the intentd repo is open-sourced.
+  mirror is the permanent public distribution channel, kept even after the
+  intentd repo goes public.
 - **Auggie binary download (on demand)** — installing the Auggie CLI from the
   desktop app downloads the pre-built binary from the latest public release of
   [augmentcode/auggie](https://github.com/augmentcode/auggie).

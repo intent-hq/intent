@@ -33,7 +33,11 @@ lives in the submodule repos:
 |------|------------|-----------|
 | `packages/intentd` | [intent-hq/intentd](https://github.com/intent-hq/intentd) | Rust backend daemon |
 | `packages/cloudlands-fe` | [intent-hq/cloudlands-fe](https://github.com/intent-hq/cloudlands-fe) | Electron + SvelteKit desktop frontend |
-| `packages/ios` | [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app |
+| `packages/ios` | [intent-hq/ios](https://github.com/intent-hq/ios) | SwiftUI iOS companion app (private) |
+
+`packages/ios` is private and marked `update = none` in `.gitmodules`, so
+recursive clones and submodule updates skip it by default; internal developers
+with access initialize it via `make ensure-ios-submodule`.
 
 The durable engineering docs live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 (backend architecture) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (the canonical
@@ -88,7 +92,7 @@ Keep the relevant checks green before opening a PR:
 ## Local setup
 
 ```bash
-git submodule update --init --recursive
+git submodule update --init --recursive   # skips the private packages/ios by design
 make check
 make test
 ```

@@ -10,3 +10,4 @@
 	path = packages/ios
 	url = https://github.com/intent-hq/ios.git
 	branch = main
+	update = none
