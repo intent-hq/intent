@@ -266,6 +266,22 @@ The `system.status` result includes two **optional** self-process resource field
 - `memoryBytes` is the daemon process RSS in bytes.
 - Both fields are **additive and optional**; clients must tolerate their absence and degrade gracefully. They shipped within protocol **v2.0** without a version bump (additive optional response fields; the method surface is unchanged) — clients must detect them by **presence**, not by protocol version.
 
+#### `system.status` — daemon routing fields (additive)
+
+The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
+
+```jsonc
+{
+  "localIps": ["192.168.1.10", "10.0.0.5"], // non-loopback IPv4 addresses (same source as server.pairingInfo)
+  "hostname": "studio.local",               // local OS hostname
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `localIps` lists the host's non-loopback IPv4 addresses (virtual/container interfaces skipped) — the same list `server.pairingInfo` returns. It may be **empty** on a host with no routable interface, but is always an array, never `null`. The daemon serves it from a background-refreshed cache (~15s TTL), so a freshly changed interface list may take one refresh interval to appear.
+- `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
+- Both fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
+
 #### `system.importLegacy` (UDS-only, v2.2)
 
 Runs the daemon's legacy workspace import over RPC — the same engine behind the `intentd import-legacy` CLI and the first-boot hook — so a client can trigger a recovery import without shell access. Scans the default legacy roots and imports per-directory legacy workspaces (notes, comments, agent sessions, assets) into the live store.
