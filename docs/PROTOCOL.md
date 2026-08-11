@@ -5849,7 +5849,7 @@ The **wire surface is read/cancel/flush only** (the FE view over agent-owned mon
 | --- | --- | --- |
 | prMonitor.list | workspaceId | { monitors: PrMonitor[] } — the workspace-wide view (every agent's monitors); `cancelled` rows are excluded, `completed` rows retained so merged PRs stay visible |
 | prMonitor.cancel | workspaceId, monitorId | { ok, monitor } — cancels **any** monitor in the workspace by id and wakes the owning agent with a cancellation notice (unlike the agent's own `ws.pr.unmonitor`, which never self-wakes — the same one-directional visibility as `hook.cancel`, §5.40) |
-| prMonitor.flush | workspaceId, monitorId | { ok, flushed } — delivers a monitor's pending consolidated wake **now**, bypassing the remaining debounce window; `flushed: false` when nothing was pending (a no-op, not an error) |
+| prMonitor.flush | workspaceId, monitorId, check? | { ok, flushed } — delivers a monitor's pending consolidated wake **now**, bypassing the remaining debounce window; `flushed: false` when nothing was pending (a no-op, not an error). `check?: boolean` *(additive; default `false`)* — when `true`, the daemon first performs an **immediate on-demand poll** of that one monitor (fresh snapshot fetched from the forge, coalesced pending set recomputed against the emit baseline through the same guarded CAS write as the loop, terminalizing with the final wake if the PR merged/closed), then flushes whatever is pending — so the flush covers changes the poll loop has not seen yet; the recomputed set being empty returns `flushed: false` with no wake. A forge fetch failure during the check records the monitor's `lastError` (baseline untouched) and returns an error. Omitting `check` (or `false`) preserves the pre-check semantics exactly; a non-boolean value is `-32602` |
 
 **`PrMonitor` wire shape** (shared by `prMonitor.list`, the `ws.pr.monitor` / `ws.pr.unmonitor` results, and `ws.pr.monitors` rows): `{ monitorId, workspaceId, agentId, repo, prNumber, state, pendingChanges, hasPendingChanges, createdAt, updatedAt, pendingSince?, lastChangeAt?, lastPolledAt?, lastError?, title?, url?, lastSnapshot? }` — `repo` is the combined `"owner/name"` string; `state ∈ { active, completed, cancelled }`; `pendingChanges` is the human-readable **net** change lines since the last delivered wake — the coalesced diff against the emit baseline, recomputed each poll (awaiting the debounce window; it shrinks or empties when changes revert; `[]` when nothing is pending); `lastError` is the most recent forge-poll error (cleared by a successful poll — a failing poll never kills the loop); `title` / `url` / `lastSnapshot` are present once the monitor has a successful poll baseline, `lastSnapshot` being the last-refresh checklist summary `{ state, isDraft, hasConflicts, isBehind, mergeable, mergeBlockedReason, checks: { total, passed, failed, pending, failingRequired, pendingRequired, requiredKnown }, approvals: { decision, have, needed, changesRequested }, threads: { unresolved, resolutionRequired }, rulesKnown }`.
 
@@ -5885,6 +5885,12 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
   "workspaceId":"ws-abc","monitorId":"prm-1" } }
 // ← response
 { "jsonrpc":"2.0","id":100,"result":{ "ok":true,"flushed":true } }
+
+// → request — re-poll the PR on demand first, then flush (check-and-flush)
+{ "jsonrpc":"2.0","id":101,"method":"prMonitor.flush","params":{
+  "workspaceId":"ws-abc","monitorId":"prm-1","check":true } }
+// ← response — nothing changed vs. the emit baseline: no wake
+{ "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
 
 ### 5.43 Daemon stack sampling — `debug.sampleStacks` *(v6.3)*
