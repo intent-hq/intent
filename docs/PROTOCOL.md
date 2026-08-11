@@ -6186,7 +6186,7 @@ The `events.subscribe` firehose (§6.1) carries every bus event; a thin client t
 | `workspace.subscribe` / `workspace.unsubscribe` | workspace | global (no `workspaceId`) — the only global channel | array of **lite** `Workspace` projections visible to the connection (see notes), **including archived workspaces** (clients filter by `status` if needed; archived workspaces remain listed) | tails `workspace:created`/`updated`/`deleted`/`activity-changed`/`attention-changed`/`displayStatus-changed`. Snapshot and deltas are consistent on archived inclusion: deltas upsert archived workspaces as `updated`, and the seq-0 snapshot carries them too (matching the legacy `workspace.list { includeArchived: true }` fetch). **Lite seq-0 snapshot (intentd#743):** snapshot rows are store rows + live `activity` + the cheap status aggregates — each row carries `taskStats` (store-level counting query, no note-body hydration), `displayStatus` (same derivation as the enriched path; authoritative when present — clients must not re-derive, §5.1), and `cowSupported` (lifetime-cached probe), while the heavy `agentSummary` and `diffSummary` are **always omitted** (a stats-read failure degrades that row to absent `taskStats` + `displayStatus`, same as the enriched path). The omitted aggregates arrive via the enriched follow-ups: each delta upserts the full `workspace.get` projection (`agentSummary` present; `diffSummary` stays omitted everywhere, §5.1), and clients can call `workspace.get` directly. This keeps seq-0 at tens of KB instead of multi-MB (an enriched ~80-workspace snapshot was ~4.5 MiB and HOL'd the connection writer). |
 | `comment.subscribe` / `comment.unsubscribe` | comment | per-workspace (`workspaceId` req); `noteId` optional narrowing | array of `Comment` entities | tails `comment:added`/`resolved`. |
 | `agent.subscribe` / `agent.unsubscribe` (no `eventTypes`) | agent | per-workspace (`workspaceId` req) | array of `AgentLite` entities | **Disambiguated by params** from the deprecated service-alias `agent.subscribe` of §5.5: an `eventTypes`-bearing frame falls through to the router (alias); a bare `{ workspaceId }` frame routes to this collection channel. Likewise `agent.unsubscribe` without `workspaceId` is the channel form. |
-| `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty) | newest `agent.getConversation` page, plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
+| `chat.subscribe` / `chat.unsubscribe` | chat | per-agent (`agentId` req — `-32602` if missing/empty); `sinceMessageId` optional (resume, §7.1) | newest `agent.getConversation` page — or, on a successful resume, only the messages after `sinceMessageId` (`resumed: true`) — plus a synthetic in-flight assistant message when one is streaming | The structured alternative to the `agent:stream:*` firehose (§7.1). |
 
 **Frame shapes.** Every push is a JSON-RPC notification with method `subscription.push`:
 
@@ -6290,10 +6290,32 @@ can render directly, with **no follow-up fetch**. It **coexists** additively wit
 observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
-  before the JSON-RPC dispatcher (like `events.subscribe`). `params` is `{ agentId }` — a
-  missing/empty `agentId` is a `-32602` error. `chat.subscribe` returns `{ subscriptionId }`, then
+  before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
+  `{ agentId, sinceMessageId? }` — a missing/empty `agentId` is a `-32602` error.
+  `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
+- **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
+  holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
+  (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
+  **no** `resumed` key at all; a present non-string value is a `-32602` error. When provided,
+  the daemon reads the **same bounded newest page** as the standard snapshot (still exactly one
+  conversation read — resume is a post-filter, never a second fetch; monorepo#958 cost contract)
+  and then:
+  - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
+    **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
+    `truncated: false`, and `nextToken: null` — no gap exists toward older history, the client
+    already holds everything up to `sinceMessageId`, so no older-pages cursor is served.
+    `totalMessages` stays the transcript-wide count (same semantics as the standard snapshot,
+    where `messages.length` already ≠ `totalMessages` on a truncated page).
+  - **Id not in the page** (unknown, pruned, or older than the bounded newest page —
+    indistinguishable without an unbounded lookup, which the bounded-read contract forbids) →
+    the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
+    `resumed: false`: the client MUST discard its cached transcript and rehydrate from this
+    snapshot as if it had subscribed fresh.
+  The mid-turn synthetic in-flight message merge and the activity-flags overlay (below) apply
+  identically in both cases, **after** the filter — an in-flight partial is never trimmed away.
+  Deltas (seq 1, 2, …) are unaffected by resume.
 - **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
   `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
   Each subsequent delta upserts individual **content blocks** within a message.
