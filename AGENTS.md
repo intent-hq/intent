@@ -70,7 +70,7 @@ submodule refs).
 - **Merging**: The repository allows squash and rebase merges; no merge queue is enabled.
   Merge with `gh pr merge --squash` (optionally `--auto` to merge once checks pass). The
   GraphQL `enqueuePullRequest` mutation fails with "Merge queues are not enabled" — it is
-  only relevant if a merge queue is re-enabled later. When squash-merging, the commit
+  only relevant if a merge queue is enabled later. When squash-merging, the commit
   title defaults to the commit message (or PR title as fallback), and the commit message
   includes all commit messages from the PR. On single-commit PRs, ensure the branch commit
   message is itself a valid conventional commit (amend auto-commits like "Coordinator"
