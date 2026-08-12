@@ -51,10 +51,12 @@ Changes that touch a submodule land in two phases:
    branch in the submodule repo (e.g. `intent-hq/intentd`), open a PR there, and
    merge it (squash merge preferred).
 2. **Phase 2 — automated monorepo pin advance.** The `auto-bump-submodules`
-   workflow (cron every 30 minutes, plus manual dispatch) advances the monorepo's
-   submodule pins to the merged tips via a single rolling auto-merged PR on the
-   `auto/submodule-bump` branch. **Do not file manual submodule bump PRs** — if an
-   urgent bump is needed, dispatch the workflow manually
+   workflow (triggered by `repository_dispatch` from submodule merges for
+   ~1-minute latency, with a 30-minute cron backstop, plus manual dispatch)
+   advances the monorepo's submodule pins to the merged tips via a single
+   rolling auto-merged PR on the `auto/submodule-bump` branch. **Do not file
+   manual submodule bump PRs** — if an urgent bump is needed, dispatch the
+   workflow manually
    (`gh workflow run auto-bump-submodules.yml`) instead of opening a PR.
 
 Monorepo-only changes (docs, Makefile, CI, scripts, templates) are unaffected by

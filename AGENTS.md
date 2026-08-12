@@ -42,10 +42,17 @@ on it when the fix ships in a release.
 ### Phase 2 — Monorepo pin advance (automated)
 
 Submodule pins are advanced automatically by the `auto-bump-submodules` workflow
-(`.github/workflows/auto-bump-submodules.yml`): a cron run every 30 minutes (plus
-manual dispatch) detects submodule tips ahead of the recorded pins and lands the bump
-via a single rolling PR on the `auto/submodule-bump` branch with auto-merge armed;
-repeat runs update that PR instead of opening new ones.
+(`.github/workflows/auto-bump-submodules.yml`): it detects submodule tips ahead of the
+recorded pins and lands the bump via a single rolling PR on the `auto/submodule-bump`
+branch with auto-merge armed; repeat runs update that PR instead of opening new ones.
+The workflow is triggered three ways: each submodule repo notifies the monorepo on push
+to `main` via a `repository_dispatch` event (`submodule-update` type), so bumps normally
+land within about a minute of a submodule merge; a cron run every 30 minutes acts as a
+backstop; and manual `workflow_dispatch` is available for urgent bumps. The
+`repository_dispatch` notifications are sent by the submodule repos using the
+`MONOREPO_DISPATCH_TOKEN` secret (stored in each submodule repo; a fine-grained PAT with
+contents:write on `intent-hq/monorepo`), and are fail-soft: when the secret is absent
+the notify step logs a warning and skips, and the cron backstop still advances the pins.
 
 **Agents (and humans) must NOT file manual submodule bump PRs on the monorepo.** The
 workflow owns pin advancement. If an urgent bump is needed, dispatch the workflow
