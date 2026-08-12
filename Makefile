@@ -54,6 +54,9 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
 DEV_TCP_PORT ?= 5181
 DEV_PORT ?= 5190
+# Injectable platform seam for dev-prod's packaged-daemon socket default.
+# An explicit INTENTD_SOCKET always takes precedence.
+DEV_PROD_PLATFORM ?= $(shell uname -s)
 # Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
 # actually sees the default/override in the child environment.
 export DEV_PORT
@@ -525,7 +528,15 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 		pnpm run dev
 
 dev-prod: ensure-fe-submodule ## Run the dev FE against the packaged app's live daemon and production state
-	@socket="$${INTENTD_SOCKET:-$$HOME/Library/Application Support/intentd/intentd.sock}"; \
+	@socket="$$INTENTD_SOCKET"; \
+		if [ -z "$$socket" ]; then \
+			case "$(DEV_PROD_PLATFORM)" in \
+				Darwin) socket="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+				Linux) socket="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+				*) echo "[dev-prod] ERROR: unsupported platform '$(DEV_PROD_PLATFORM)'; set INTENTD_SOCKET explicitly."; \
+				   exit 1 ;; \
+			esac; \
+		fi; \
 		if [ ! -S "$$socket" ]; then \
 			echo "[dev-prod] ERROR: production daemon socket not found at $$socket"; \
 			echo "[dev-prod] Start the packaged app first, or set INTENTD_SOCKET to its socket path."; \

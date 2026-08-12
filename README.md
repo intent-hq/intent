@@ -124,6 +124,12 @@ make dev-daemon   # terminal 1 — dev daemon with an isolated data dir
 make run-fe       # terminal 2 — desktop app, connects to the dev daemon
 ```
 
+`make dev-prod` uses `INTENTD_SOCKET` when provided. Otherwise, the packaged
+socket defaults to `$HOME/Library/Application Support/intentd/intentd.sock`
+on macOS and `${XDG_DATA_HOME:-$HOME/.local/share}/intentd/intentd.sock`
+on Linux. This mode connects directly to the packaged daemon's production state
+and does not start another daemon.
+
 `make help` lists every documented target.
 
 ## Architecture
