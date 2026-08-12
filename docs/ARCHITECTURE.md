@@ -649,9 +649,12 @@ own heap: a 183 MB `intentd` binary was measured owning a 21.5 GB / 95-process
 tree (monorepo#2063). An operator diagnosing memory pressure reads
 `childProcesses` / `childMemoryBytes`; `memoryBytes` covers only the daemon
 binary and understates the real footprint by more than an order of magnitude.
-Every figure below is measured rather than estimated; each claim carries the
-issue holding the capture it came from (monorepo#2062, #2063, #2107, #2109),
-so a reader can check the method without re-deriving the numbers.
+Each claim below carries the issue holding the capture it came from
+(monorepo#2062, #2063, #2107, #2109), so a reader can check the method without
+re-deriving the numbers. The handful of figures that are **arithmetic on**
+those captures rather than captures themselves — a 20-agent seat's ~12 GB,
+three concurrent test runs at ~29 GB, the 256-adapter ~156 GB ceiling — are
+marked as projections where they appear.
 
 **What an agent costs.** Per-agent cost spans a 22× range, so agent count is
 not a predictor of memory and `agents.maxConcurrent` is a **concurrency cap,
@@ -668,7 +671,8 @@ not a resource cap** (monorepo#2063):
 
 A single agent therefore spans 0.44 GB → 9.6 GB, and the top of that range is
 reached by an agent doing exactly what agents are for — three concurrent test
-runs is ~29 GB, an ordinary coordinator fan-out.
+runs projects to ~29 GB (3 × the measured 9.6 GB, not itself a capture), an
+ordinary coordinator fan-out.
 
 **The tree is retained, not leaked.** At the shipped `agents.idleReapMinutes
 = 30`, every agent touched inside the window stays resident (monorepo#2109,
@@ -686,7 +690,8 @@ as `ttl/4` clamped to `[30s, 300s]` (`reap_timings` in the `intentd` binary
 crate), and eviction only takes idle processes —
 `ProcessRegistry::evict_idle_older_than` never interrupts a running turn.
 Consequence for sizing: a seat that touches 20 agents within the window holds
-all 20 subtrees at once — ~12 GB — even if only one is active.
+all 20 subtrees at once even if only one is active — projecting to ~12 GB at
+the measured ~0.6 GB idle median, more if any of them ran a test suite.
 
 **The knobs**, all under the `[agents]` table in `config.toml` (each is
 self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
@@ -718,9 +723,11 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   (monorepo#2062). One-shot completions and model probes never enter
   `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
   in `system.status.agents` — before the bound the only ceiling was
-  `server.maxOutstandingRpcs` (256), i.e. ~156 GB of adapter chains. Peak live
-  chains equal the cap exactly and are **invariant to burst size** (a 16-call
-  burst at cap 6 peaked at 3.57 GB). Over-limit callers queue FIFO on the
+  `server.maxOutstandingRpcs` (256), which projects to ~156 GB of adapter
+  chains. **Once a burst exceeds the cap**, peak live chains equal the cap
+  exactly and are invariant to how much bigger the burst is (a 16-call burst
+  at cap 6 peaked at 3.57 GB); a burst smaller than the cap is unaffected and
+  simply peaks at its own size. Over-limit callers queue FIFO on the
   semaphore in `intent-services/src/acp_adapter.rs` and, if their own timeout
   expires first, fail with `-32603` and
   `error.data.code = "adapter-busy"` **having spawned nothing** — a retry is
