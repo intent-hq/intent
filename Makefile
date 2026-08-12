@@ -233,7 +233,7 @@ test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextes
 # retries, slow-timeout). nextest does not run doctests; the workspace has
 # none, so nothing is lost.
 test-intentd: ensure-intentd-submodule
-	@command -v cargo-nextest >/dev/null 2>&1 || { \
+	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
@@ -249,7 +249,7 @@ clean-dev: ## Wipe the dev-seat state dir (.dev/)
 # initializing the submodule just to sweep a target/ dir that cannot exist yet
 # would be overkill, so it short-circuits with a friendly no-op instead.
 sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
-	@command -v cargo-sweep >/dev/null 2>&1 || { \
+	@cargo sweep --version >/dev/null 2>&1 || { \
 		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
 		exit 1; \
 	}
@@ -260,7 +260,7 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 	fi
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
-	@command -v cargo-sweep >/dev/null 2>&1 || { \
+	@cargo sweep --version >/dev/null 2>&1 || { \
 		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
 		exit 1; \
 	}
