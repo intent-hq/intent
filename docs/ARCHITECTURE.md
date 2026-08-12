@@ -641,6 +641,133 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
   services-layer check, `stateSnapshot`'s per-turn read) act on existing
   sessions immediately.
 
+## Agent process-tree memory: characteristics & tuning knobs
+
+Wire contract: PROTOCOL.md §5 (`system.status` — child-process tree fields).
+The daemon's cost to the machine is its **descendant process tree**, not its
+own heap: a 183 MB `intentd` binary was measured owning a 21.5 GB / 95-process
+tree (monorepo#2063). An operator diagnosing memory pressure reads
+`childProcesses` / `childMemoryBytes`; `memoryBytes` covers only the daemon
+binary and understates the real footprint by more than an order of magnitude.
+Each claim below carries the issue holding the capture it came from
+(monorepo#2062, #2063, #2107, #2109), so a reader can check the method without
+re-deriving the numbers. The handful of figures that are **arithmetic on**
+those captures rather than captures themselves — a 20-agent seat's ~12 GB,
+three concurrent test runs at ~29 GB, the 256-adapter ~156 GB ceiling — are
+marked as projections where they appear.
+
+**What an agent costs.** Per-agent cost spans a 22× range, so agent count is
+not a predictor of memory and `agents.maxConcurrent` is a **concurrency cap,
+not a resource cap** (monorepo#2063):
+
+| Subtree | RSS | Notes |
+| --- | ---: | --- |
+| Idle / conversing agent (median of 7) | **~660 MB** | range 436–756 MB; `npm exec` → node ACP adapter → provider CLI → mcp-bridge |
+| — provider CLI alone | 427–518 MB | |
+| Agent running `vitest` | **9,617 MB** | 19 procs; 6 node workers at 0.8–2.3 GB each |
+| Agent running `cargo check --workspace` | 2,087 MB | 24 procs |
+| Agent running `pnpm run test:unit` | 1,154 MB | 10 procs |
+| Ephemeral adapter chain (one-shot completion / model probe) | **~610 MB** | monorepo#2062; holds no agent slot, bounded lifetime |
+
+A single agent therefore spans 0.44 GB → 9.6 GB, and the top of that range is
+reached by an agent doing exactly what agents are for — three concurrent test
+runs projects to ~29 GB (3 × the measured 9.6 GB, not itself a capture), an
+ordinary coordinator fan-out.
+
+**The tree is retained, not leaked.** At the shipped `agents.idleReapMinutes
+= 30`, every agent touched inside the window stays resident (monorepo#2109,
+measured on real `claude-code` chains, 10 agents driven to idle then left
+alone):
+
+| `idleReapMinutes` | After idle | Result |
+| --- | --- | --- |
+| **30 (shipped default)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
+| 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
+
+The reaper works; it simply is not asked to run for half an hour. An agent
+becomes a candidate at the TTL and is picked up by the next sweep (interval
+`ttl/4` clamped to `[30s, 300s]`, `reap_timings` in the `intentd` binary
+crate), so **selection** is bounded by TTL + one sweep — but release is not
+the same instant: `ProcessRegistry::evict_idle_older_than` awaits each kill
+serially and each carries a SIGTERM→SIGKILL grace plus a descendant sweep, so
+a large idle set drains over a tail rather than all at once. Only processes
+idle past the TTL are candidates, and the sweep skips any agent the manager
+reports busy when it checks (`AgentManager::reap_idle_older_than`'s
+eligibility predicate).
+Consequence for sizing: a seat that touches 20 agents within the window holds
+all 20 subtrees at once even if only one is active — projecting to ~12 GB at
+the measured ~0.6 GB idle median, more if any of them ran a test suite.
+
+**The knobs**, all under the `[agents]` table in `config.toml` (each is
+self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
+`intent-core/src/settings_file.rs`; all take effect on daemon restart):
+
+| Knob | Default | Bounds |
+| --- | --- | --- |
+| `idleReapMinutes` | `30` | How long an idle agent subtree is retained. **The lever for a memory-constrained seat.** |
+| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. |
+| `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
+| `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
+
+- **`memoryBudgetMb` is a soft admission gate, not a ceiling**
+  (monorepo#2063, validated end-to-end against real agents). Set to 1500 MB,
+  a 20-agent simultaneous burst peaked at **3.06 GB** against **12.37 GB**
+  unbounded, and settled at 1.73 GB against 11.56 GB; the same-budget 8-agent
+  burst peaked at 2.47 GB and 3.09 GB across two runs — i.e. **the bound does
+  not scale with demand**, a 4× larger request peaks the same (3.06 vs 3.09
+  GB). The costs: transient overshoot of **65–105%** and
+  steady state **~16% over**. The overshoot is structural rather than
+  accidental (`live == 0` always admits, the provisional charge is a fixed
+  `PROVISIONAL_AGENT_BYTES` = 660 MB, and `budget_pending_bytes` resets when a
+  new sample seq lands while a just-spawned agent's RSS is still ramping —
+  `ProcessRegistry` in `intent-services/src/agent_manager.rs`), so it is a
+  **fixed offset, not proportional to demand**: budget for roughly 2× the
+  configured value as the transient. That sizing rule covers the **admission**
+  transient the measurement exercised — a burst of comparable agents — and is
+  not a runtime ceiling. The gate runs at spawn only: an already-admitted
+  agent whose own workload grows (the 9.6 GB `vitest` case above) is never
+  re-checked and can carry the tree past the budget by itself, and the gate's
+  only lever against that is refusing later spawns and evicting idle trees.
+  Admission only — nothing running is ever killed, and all turns complete.
+- **`maxConcurrentAdapters` closes the quick-action burst path**
+  (monorepo#2062). One-shot completions and model probes never enter
+  `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
+  in `system.status.agents` — before the bound the only ceiling was
+  `server.maxOutstandingRpcs` (256), which projects to ~156 GB of adapter
+  chains. **Once a burst exceeds the cap**, peak live chains equal the cap
+  exactly and are invariant to how much bigger the burst is (a 16-call burst
+  at cap 6 peaked at 3.57 GB); a burst smaller than the cap is unaffected and
+  simply peaks at its own size. Over-limit callers queue FIFO on the
+  semaphore in `intent-services/src/acp_adapter.rs` and, if their own timeout
+  expires first, fail with `-32603` and
+  `error.data.code = "adapter-busy"` **having spawned nothing** — a retry is
+  always safe.
+
+**Caveat: do not judge a burst from `childMemoryPeakBytes`** until
+monorepo#2107 is fixed. The high-water mark is a maximum over 5 s samples
+(`CHILD_TREE_SAMPLE_SECS`), so a burst that peaks between ticks is never seen.
+Measured against a 1 Hz `ps` descendant walk:
+
+| Run | `ps` @ 1 Hz | `childMemoryPeakBytes` | Under-report |
+| --- | ---: | ---: | ---: |
+| bounded (cap 6, 16 calls) | 3.57 GB | 3.57 GB | 0% |
+| unbounded (cap 64, 16 calls) | 7.00 GB | 3.48 GB | **−50%** |
+| unbounded (cap 64, 16 calls, repeat) | 8.97 GB | 5.43 GB | **−39%** |
+
+Read from telemetry alone, **the unbounded run looks cheaper than the bounded
+one** — the inverted conclusion. Steady state is accurate (a running soak read
+5.85 GB by both methods); the field aliases only on transients, which is
+precisely the case it was introduced for.
+
+**Defaults deliberately stay as they are** (decision recorded on
+monorepo#2109). Reaping earlier costs every user a warm process on next use,
+and the measured accumulation is a function of how many agents a seat touches
+— which differs enormously between a single-agent user and a coordinator
+fanning out a dozen. A default that suits one badly hurts the other, and both
+bounds already exist for anyone who needs them. A seat hitting the
+accumulation path should reach for `idleReapMinutes` first, then
+`memoryBudgetMb`.
+
 ## Read-path performance principles
 
 Hot read RPCs — the methods clients poll or fan out on focus (`workspace.list`
