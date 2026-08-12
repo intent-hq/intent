@@ -1,0 +1,46 @@
+name: Auto-bump submodules
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-bump-submodules
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      # Fail-soft: without the token, warn and end the run successfully
+      # (mirrors INTENTD_RELEASES_TOKEN / MONOREPO_ISSUES_TOKEN handling).
+      - name: Check for SUBMODULE_BUMP_TOKEN
+        id: token
+        env:
+          SUBMODULE_BUMP_TOKEN: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
+        run: |
+          if [ -n "$SUBMODULE_BUMP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::SUBMODULE_BUMP_TOKEN is not set; skipping submodule auto-bump."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The PAT is persisted as the credential for github.com, so both the
+      # ls-remote reads of the submodule repos and the branch push use it.
+      - name: Checkout
+        if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
+          submodules: false
+
+      - name: Bump submodule pins
+        if: steps.token.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
+        run: bash scripts/auto-bump-submodules.sh

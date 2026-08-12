@@ -23,7 +23,8 @@ The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architectur
 
 ## Commit & PR Workflow
 
-When changes span a submodule and the monorepo, follow this sequence: Phase 1 → Phase 2.
+When changes span a submodule and the monorepo, land the submodule PR (Phase 1); the
+monorepo pin advance (Phase 2) then happens automatically.
 
 ### Phase 1 — Submodule PRs
 
@@ -38,15 +39,32 @@ When the change fixes a monorepo issue, reference it with the full cross-repo fo
 auto-closes the issue on merge, and the release notifier (see Release Process) comments
 on it when the fix ships in a release.
 
-### Phase 2 — Monorepo Update
+### Phase 2 — Monorepo pin advance (automated)
 
-1. Pull latest `main` in the updated submodule so it points to the newly merged commit.
-2. **Stage the submodule ref change** in the monorepo (`git add packages/<name>`).
-3. **Commit** with a message like `chore: update <name> submodule to latest main`.
-4. **Push** the monorepo branch.
-5. **File a PR** on the monorepo repo (`intent-hq/monorepo`). Reference the submodule PR
-   in the body.
-6. **Merge the monorepo PR**.
+Submodule pins are advanced automatically by the `auto-bump-submodules` workflow
+(`.github/workflows/auto-bump-submodules.yml`): a cron run every 30 minutes (plus
+manual dispatch) detects submodule tips ahead of the recorded pins and lands the bump
+via a single rolling PR on the `auto/submodule-bump` branch with auto-merge armed;
+repeat runs update that PR instead of opening new ones.
+
+**Agents (and humans) must NOT file manual submodule bump PRs on the monorepo.** The
+workflow owns pin advancement. If an urgent bump is needed, dispatch the workflow
+manually instead of filing a PR:
+
+```bash
+gh workflow run auto-bump-submodules.yml
+```
+
+Regular monorepo PRs for actual content changes (docs, Makefile, CI, scripts) are
+unaffected and still follow the normal PR flow.
+
+The workflow authenticates with the `SUBMODULE_BUMP_TOKEN` secret — a fine-grained PAT
+with contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and
+`intent-hq/ios`, plus contents:write and pull-requests:write on `intent-hq/monorepo`.
+Like `INTENTD_RELEASES_TOKEN` / `MONOREPO_ISSUES_TOKEN`, it is fail-soft: when the
+secret is absent the workflow logs a warning and exits successfully. The private
+`packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped
+with a warning and never fails the run.
 
 ### Cross-component features (intentd + cloudlands-fe)
 
@@ -58,9 +76,10 @@ is not enough. This intentd-first rule applies specifically to protocol changes 
 daemon↔fe wire contract, `docs/PROTOCOL.md`): whenever a feature touches the protocol,
 the daemon side must land first. Rationale: cloudlands-fe may depend on daemon
 behavior/protocol that only exists once the intentd change has landed, so an fe-first
-merge can break main or ship against a contract that doesn't exist yet. After both are
-merged, the normal Phase 2 submodule bump applies (a single monorepo PR may bump both
-submodule refs).
+merge can break main or ship against a contract that doesn't exist yet. This rule is
+about submodule PR merges, not monorepo bumps — after both are merged, the
+auto-bump-submodules workflow advances both monorepo pins automatically (a single
+rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 
 ## Conventions
 
@@ -136,7 +155,8 @@ workflow dispatch.
 ### Coordinated Release Ordering
 
 intentd release → promote intentd stable → cloudlands-fe pin-bump PR → cloudlands-fe
-release → promote cloudlands-fe stable → monorepo submodule bump PR.
+release → promote cloudlands-fe stable → monorepo pins advance automatically via the
+auto-bump workflow (no manual bump PR).
 
 ### Gotchas
 
