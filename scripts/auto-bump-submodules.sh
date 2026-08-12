@@ -155,6 +155,12 @@ else
   echo "Created PR #$pr."
 fi
 
+# Enabling auto-merge fails when the PR is already in clean status ("Pull
+# request is in clean status"); fall back to a direct squash merge so the PR
+# doesn't sit open unmerged. Only if both fail do we warn and leave it open.
 if ! gh pr merge "$pr" --auto --squash; then
-  warn "could not enable auto-merge on PR #$pr; leaving it open"
+  warn "could not enable auto-merge on PR #$pr; attempting direct merge"
+  if ! gh pr merge "$pr" --squash; then
+    warn "could not merge PR #$pr; leaving it open"
+  fi
 fi
