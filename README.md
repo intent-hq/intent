@@ -108,12 +108,16 @@ make build   # cargo build --workspace
 [intent-hq/ios](https://github.com/intent-hq/ios) — the directory is simply
 left empty.
 
-Run the stack locally in one of two ways:
+Run the stack locally in one of three ways:
 
 ```sh
 # One-command sidecar mode (recommended): the desktop app spawns and
 # supervises its own intentd binary, like the packaged app.
 make dev
+
+# Production-data frontend mode: connect the dev FE to the packaged app's
+# already-running daemon and show the same workspaces and agents.
+make dev-prod
 
 # Two-terminal mode, useful for daemon debugging:
 make dev-daemon   # terminal 1 — dev daemon with an isolated data dir
