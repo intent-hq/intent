@@ -6449,8 +6449,8 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
     the **standard full page** is served unchanged (`truncated` / `nextToken` intact) with
     `resumed: false`: the client MUST discard its cached transcript and rehydrate from this
     snapshot as if it had subscribed fresh.
-  The mid-turn synthetic in-flight message merge and the activity-flags overlay (below) apply
-  identically in both cases, **after** the filter — an in-flight partial is never trimmed away.
+  The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
+  identically in both cases, **after** the filter — a merged partial is never trimmed away.
   Deltas (seq 1, 2, …) are unaffected by resume.
 - **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
   `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
@@ -6481,15 +6481,54 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   [monorepo#1114](https://github.com/intent-hq/monorepo/issues/1114),
   [intent-hq/intentd#781](https://github.com/intent-hq/intentd/pull/781)), so **every** block on
   the channel — snapshot or delta, any role — is id-bearing.
-- **Mid-turn (re)subscribe.** When a turn is streaming, the seq-0 snapshot appends a synthetic
-  in-flight `assistant` message (`isStreaming: true`) whose `contentBlocks` are the current partial
-  blocks, so a subscriber arriving mid-turn renders a coherent partial rather than a gap. The
-  terminal delta clears it to `streamingComplete: true`.
+- **Mid-turn (re)subscribe.** When the daemon's **live-turn slot** holds a message the page does not
+  already contain, the seq-0 snapshot appends it as a synthetic `assistant` message whose
+  `contentBlocks` are the slot's current partial blocks, so a subscriber arriving mid-turn renders a
+  coherent partial rather than a gap. On the normal path — a worker still holding the turn's busy
+  claim — that message carries `isStreaming: true`, and the terminal delta clears it to
+  `streamingComplete: true`. The append is idempotent against the page: once the turn's message has
+  persisted, its id is already present and the slot is skipped, so a snapshot taken in the window
+  between the store append and the slot clear never duplicates the row.
+- **Orphaned slots are served, not hidden (`isStreaming` is derived, not a merge gate;
+  [monorepo#2104](https://github.com/intent-hq/monorepo/issues/2104),
+  [intent-hq/intentd#1161](https://github.com/intent-hq/intentd/pull/1161)).** The agent's busy
+  claim decides the merged message's `isStreaming` flag, **not** whether the merge happens: a
+  **populated** slot is merged unconditionally, with `isStreaming: false` when no worker holds the
+  turn. So a client can legitimately receive a **settled, non-streaming** assistant message sourced
+  from the live-turn slot — a slot whose turn is over still holds real output the user watched
+  arrive. In practice that is the §7.2 interrupt flush failing on a non-UNIQUE store error, where
+  the daemon deliberately keeps the slot because it is the **only** copy of the streamed content
+  (a mid-turn crash normally clears its own slot as the turn guard drops, so it publishes nothing
+  to merge). The invariant that survives is the narrower one the gate actually existed for: an
+  orphaned slot never claims to be streaming. What a client should expect:
+  - An **empty** orphan slot is skipped entirely — a turn that died before streaming anything
+    contributes no blank assistant row. An empty slot belonging to a *live* turn is still merged: a
+    turn that has only just begun legitimately has no blocks yet, and the client needs its id to
+    reconcile the deltas that follow.
+  - A merged message with `isStreaming: false` receives **no further deltas** — nothing is coming
+    for a dead turn — and it is not necessarily durable: the flush-failure case is precisely one the
+    store rejected, so a later `agent.getConversation` may not contain it, and the row disappears
+    from subsequent snapshots once the agent's next turn replaces the slot or the daemon restarts
+    (slots are not otherwise time-expired). Render it as final content; do not treat it as a row to
+    reconcile against or as evidence the transcript persisted it.
+  - The activity flags below stay **busy-gated**, so an orphan-sourced message normally arrives
+    alongside `isResponding: false`, `turnInFlight: false`, and `lastStreamActivityAt: null`. It is
+    `isStreaming` **on the message**, not the flags, that distinguishes a live partial from a
+    rescued one — and the two agree by construction: both derive from the same busy read.
+  - The snapshot reads the busy claim **before** the slot, and a new turn's claim clears a slot that
+    outlived its turn *before* publishing the claim, so the pair (busy `true`, the **previous**
+    turn's slot content) is not observable — stale content is never gilded as `isStreaming: true`.
+    The two reads are ordered, not atomic; the residual interleaving is the benign mirror — a
+    brand-new turn's first blocks briefly labelled settled, corrected by the next delta (the delta
+    mapper learns the turn's `messageId` from the event payload) or the next snapshot.
 - **Activity-flags overlay.** The seq-0 snapshot also carries the daemon-owned activity flags from
   the `AgentLite` projection (§5.5) — `isResponding`, `isWaitingOnTool`, `isWaitingForOtherAgents`,
   `waitingForAgentIds`, plus the STAB-125 turn-liveness pair `turnInFlight` /
   `lastStreamActivityAt` (`null` when no turn is in flight) — so a client arriving mid-turn renders
-  the same agent state as `agent.get` without a second read.
+  the same agent state as `agent.get` without a second read. `isResponding`, `isWaitingOnTool` and
+  the turn-liveness pair are gated on the agent's busy claim, so they describe **live** turn state
+  only and never light up for the orphaned-slot merge above (`isWaitingForOtherAgents` /
+  `waitingForAgentIds` are watch-derived and independent of any turn).
 
 **Delta envelope.** Reuses the standard `{ added, updated, removedIds }` envelope with content blocks
 as the id-bearing entities. Each entity carries the **full current block** (not a text diff) plus a
