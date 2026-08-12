@@ -684,11 +684,16 @@ alone):
 | **30 (shipped default)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
 | 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
 
-The reaper works; it simply is not asked to run for half an hour. Drain
-latency is the TTL plus up to one sweep, since the sweep interval is derived
-as `ttl/4` clamped to `[30s, 300s]` (`reap_timings` in the `intentd` binary
-crate), and eviction only takes idle processes —
-`ProcessRegistry::evict_idle_older_than` never interrupts a running turn.
+The reaper works; it simply is not asked to run for half an hour. An agent
+becomes a candidate at the TTL and is picked up by the next sweep (interval
+`ttl/4` clamped to `[30s, 300s]`, `reap_timings` in the `intentd` binary
+crate), so **selection** is bounded by TTL + one sweep — but release is not
+the same instant: `ProcessRegistry::evict_idle_older_than` awaits each kill
+serially and each carries a SIGTERM→SIGKILL grace plus a descendant sweep, so
+a large idle set drains over a tail rather than all at once. Only processes
+idle past the TTL are candidates, and the sweep skips any agent the manager
+reports busy when it checks (`AgentManager::reap_idle_older_than`'s
+eligibility predicate).
 Consequence for sizing: a seat that touches 20 agents within the window holds
 all 20 subtrees at once even if only one is active — projecting to ~12 GB at
 the measured ~0.6 GB idle median, more if any of them ran a test suite.
@@ -717,8 +722,13 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   new sample seq lands while a just-spawned agent's RSS is still ramping —
   `ProcessRegistry` in `intent-services/src/agent_manager.rs`), so it is a
   **fixed offset, not proportional to demand**: budget for roughly 2× the
-  configured value as the transient. Admission only — nothing running is ever
-  killed, and all turns complete.
+  configured value as the transient. That sizing rule covers the **admission**
+  transient the measurement exercised — a burst of comparable agents — and is
+  not a runtime ceiling. The gate runs at spawn only: an already-admitted
+  agent whose own workload grows (the 9.6 GB `vitest` case above) is never
+  re-checked and can carry the tree past the budget by itself, and the gate's
+  only lever against that is refusing later spawns and evicting idle trees.
+  Admission only — nothing running is ever killed, and all turns complete.
 - **`maxConcurrentAdapters` closes the quick-action burst path**
   (monorepo#2062). One-shot completions and model probes never enter
   `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
