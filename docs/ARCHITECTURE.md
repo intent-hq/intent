@@ -479,6 +479,31 @@ stays un-gated and always carries its `requirements` block — the toggle only
 scrubs the "prefer `ws.pr.monitor`" cross-references from the surviving doc
 entries.
 
+## Multi git root tracking
+
+Wire contract: PROTOCOL.md §5.6 ("Multi git root tracking" — the
+`gitRoot.list` method, the `gitRootId?` param on the git reads, the
+`WorkspaceGitRoot` wire shape) and §6.5 (`gitRoot:*` events). A workspace can
+track **secondary git roots** — agent-created subtree checkouts, initialized
+submodules, or sibling clones anywhere on the host — alongside its implicit
+primary worktree. Rows persist in the SQLite `workspace_git_root` table
+(migration `0093_workspace_git_root.sql`, `intent-store`'s
+`workspace_git_root_repo`; rows cascade with their workspace), keyed by
+canonicalized absolute path and idempotent per `(workspaceId, path)`.
+Registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot` /
+`ws.git.listRoots` in `intent-acp`'s git bindings, per the §6.8 principle) —
+the FE reads via `gitRoot.list` and subscribes to `gitRoot:registered` /
+`gitRoot:updated` / `gitRoot:unregistered`. The background PR-refresh loop
+additionally sweeps each workspace's roots: it auto-detects the worktree's
+initialized submodules as `source: "auto"` rows, auto-prunes rows whose path
+vanished from disk, and runs the same per-branch PR discovery on each root as
+on the primary workspace root (the row's PR fields mirror the `Workspace` PR
+fields), fail-soft per root. Six git reads (`git.status`, `git.changes`,
+`git.diffs`, `git.commits`, `git.showFile`, `git.branchStatus`) accept an
+optional `gitRootId` that re-points the read at the registered root's path;
+an unknown or foreign-workspace id is `-32602` with an identical message, so
+roots are not probeable across workspaces.
+
 ## Agent completion settlement & deferrals
 
 Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
