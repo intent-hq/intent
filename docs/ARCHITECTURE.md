@@ -718,7 +718,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 
 | Knob | Default | Bounds |
 | --- | --- | --- |
-| `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables reaping). **The lever for a memory-constrained seat.** |
+| `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
 | `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
@@ -795,13 +795,16 @@ use, and the measured accumulation is a function of how many agents a seat
 touches — which differs enormously between a single-agent user and a
 coordinator fanning out a dozen. What changed is the read on where the
 midpoint sits. 30 minutes is long enough that the two cases converge in the
-worst direction — the coordinator holds every subtree it touched all session
-(the 5.85 GB flat row above), and the single-agent user gains a warm process
-they were unlikely to return to that late anyway. 10 minutes keeps the warm
-path for the case that actually re-enters an agent while bounding what a
-fan-out retains, and `0` still disables reaping entirely for anyone who wants
-the old unbounded behaviour. A seat still hitting the accumulation path should
-reach for `idleReapMinutes` first, then `memoryBudgetMb`.
+worst direction — the coordinator holds every subtree it touched anywhere in
+that half-hour window, re-extending it on each fan-out (the 5.85 GB flat row
+above measured 10 minutes of that, not a whole session), while the single-agent
+user gains a warm process they were unlikely to return to that late anyway. 10
+minutes keeps the warm path for the case that actually re-enters an agent while
+bounding what a fan-out retains, and `0` still turns the sweep off entirely for
+anyone who wants the old behaviour — with the caveat above that `0` stops the
+sweep, not every path that can reclaim an idle tree. A seat still hitting the
+accumulation path should reach for `idleReapMinutes` first, then
+`memoryBudgetMb`.
 
 ## Read-path performance principles
 
