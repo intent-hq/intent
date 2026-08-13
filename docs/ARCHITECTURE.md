@@ -674,17 +674,41 @@ reached by an agent doing exactly what agents are for — three concurrent test
 runs projects to ~29 GB (3 × the measured 9.6 GB, not itself a capture), an
 ordinary coordinator fan-out.
 
-**The tree is retained, not leaked.** At the shipped `agents.idleReapMinutes
-= 30`, every agent touched inside the window stays resident (monorepo#2109,
-measured on real `claude-code` chains, 10 agents driven to idle then left
-alone):
+**The tree is retained, not leaked.** Every agent touched inside the
+`agents.idleReapMinutes` window stays resident (monorepo#2109, measured on
+real `claude-code` chains, 10 agents driven to idle then left alone):
 
 | `idleReapMinutes` | After idle | Result |
 | --- | --- | --- |
-| **30 (shipped default)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
+| **30 (default until monorepo#2109)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
 | 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
 
-The reaper works; it simply is not asked to run for half an hour. An agent
+Retention claims in this section describe the **idle-reap sweep** with
+`memoryBudgetMb` off, which is the shipped default. A non-zero budget adds a
+second, independent eviction path: `ProcessRegistry::evict_idle` takes no TTL
+and drops the LRU idle subtree to admit a spawn, so with a budget set an idle
+tree can go before its TTL and none of the retention figures below are
+guaranteed floors.
+
+The reaper works; it was simply not asked to run for half an hour. That
+measurement is what moved the shipped default to **10 minutes**: the same tree
+begins draining once the window passes rather than holding 5.85 GB for a
+further 20 minutes, and the 30-minute row above now describes the old default
+rather than the shipped one.
+
+> **On upgrade, an existing seat keeps the value its `config.toml` already
+> carries — permanently.** The 10-minute default applies to **new installs**:
+> the config template is written only when the file is absent, and every
+> install created before this change has an explicit `idleReapMinutes = 30` in
+> it, which wins over the shipped default. There is **no migration** — that 30
+> stays until someone edits the file, by decision (monorepo#2109): a boot
+> rewrite cannot tell a deliberate 30 from one the old template baked in, and
+> silently overriding the former was judged worse than leaving the latter.
+>
+> So if your seat is accumulating memory right now, **upgrading will not change
+> that — open `config.toml` and set `idleReapMinutes` yourself.**
+
+An agent
 becomes a candidate at the TTL and is picked up by the next sweep (interval
 `ttl/4` clamped to `[30s, 300s]`, `reap_timings` in the `intentd` binary
 crate), so **selection** is bounded by TTL + one sweep — but release is not
@@ -694,9 +718,10 @@ a large idle set drains over a tail rather than all at once. Only processes
 idle past the TTL are candidates, and the sweep skips any agent the manager
 reports busy when it checks (`AgentManager::reap_idle_older_than`'s
 eligibility predicate).
-Consequence for sizing: a seat that touches 20 agents within the window holds
-all 20 subtrees at once even if only one is active — projecting to ~12 GB at
-the measured ~0.6 GB idle median, more if any of them ran a test suite.
+Consequence for sizing: with the budget off, a seat that touches 20 agents
+within the window holds all 20 subtrees at once even if only one is active —
+projecting to ~12 GB at the measured ~0.6 GB idle median, more if any of them
+ran a test suite.
 
 **The knobs**, all under the `[agents]` table in `config.toml` (each is
 self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
@@ -704,8 +729,8 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 
 | Knob | Default | Bounds |
 | --- | --- | --- |
-| `idleReapMinutes` | `30` | How long an idle agent subtree is retained. **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. |
+| `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
+| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
@@ -729,6 +754,18 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   re-checked and can carry the tree past the budget by itself, and the gate's
   only lever against that is refusing later spawns and evicting idle trees.
   Admission only — nothing running is ever killed, and all turns complete.
+  The settings catalog advertises the bound as `min 0` / `max` = detected
+  physical RAM in MB, **capped at 1,024,000 MB** — which is also the value used
+  where detection is unavailable (it is Linux/macOS only) and the static bound
+  `config.toml` parsing enforces. So a client renders a slider over the range
+  the setting can meaningfully take, and on a seat with more than ~1 TB of RAM
+  the cap binds instead of the RAM figure. The cap is not cosmetic: the
+  catalog bound must never exceed the parse bound, or `settings.update` would
+  accept a value that the same schema then rejects on the way to disk. The
+  parse bound itself stays static and machine-independent, so a `config.toml`
+  written on one seat still parses on another — meaning the divergence runs
+  one way only, and a config carrying a budget above *this* machine's RAM
+  still loads and is reported with a `value` above the advertised `max`.
 - **`maxConcurrentAdapters` closes the quick-action burst path**
   (monorepo#2062). One-shot completions and model probes never enter
   `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
@@ -759,12 +796,25 @@ one** — the inverted conclusion. Steady state is accurate (a running soak read
 5.85 GB by both methods); the field aliases only on transients, which is
 precisely the case it was introduced for.
 
-**Defaults deliberately stay as they are** (decision recorded on
-monorepo#2109). Reaping earlier costs every user a warm process on next use,
-and the measured accumulation is a function of how many agents a seat touches
-— which differs enormously between a single-agent user and a coordinator
-fanning out a dozen. A default that suits one badly hurts the other, and both
-bounds already exist for anyone who needs them. A seat hitting the
+**`idleReapMinutes` now defaults to 10, not 30** — on new installs; see the
+upgrade note above for why an existing seat is unaffected (monorepo#2109,
+reversing the earlier decision on that issue to leave defaults alone). The
+reasoning that originally argued for holding still is unchanged and is what
+keeps the new default off the floor: reaping earlier costs every user a warm
+process on next
+use, and the measured accumulation is a function of how many agents a seat
+touches — which differs enormously between a single-agent user and a
+coordinator fanning out a dozen. What changed is the read on where the
+midpoint sits. 30 minutes is long enough that the two cases converge in the
+worst direction — with the budget off, the coordinator holds every subtree it
+touched anywhere in that half-hour window, re-extending it on each fan-out (the
+5.85 GB flat row above measured 10 minutes of that, not a whole session), while
+the single-agent
+user gains a warm process they were unlikely to return to that late anyway. 10
+minutes keeps the warm path for the case that actually re-enters an agent while
+bounding what a fan-out retains, and `0` still turns the sweep off entirely for
+anyone who wants the old behaviour — with the caveat above that `0` stops the
+sweep, not every path that can reclaim an idle tree. A seat still hitting the
 accumulation path should reach for `idleReapMinutes` first, then
 `memoryBudgetMb`.
 
