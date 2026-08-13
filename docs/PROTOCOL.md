@@ -1259,10 +1259,14 @@ same `workspace.list` / `workspace.get` emit path — and the lite `workspace.su
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"failed" | "blocked" | "needs_attention" | "in_progress" | "unread" | "not_started" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
-(`"idle"` new in intentd#793, `"needs_attention"` new in intentd; `"failed"` / `"blocked"` /
-`"unread"` new in intentd#945 — added without a protocol bump per the same precedent, since
-clients degrade unrecognized values neutrally, see below). The field is
+`"failed" | "blocked" | "needs_attention" | "in_progress" | "not_started" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
+(`"idle"` new in intentd#793, `"needs_attention"` new in intentd; `"failed"` / `"blocked"`
+new in intentd#945 — added without a protocol bump per the same precedent, since
+clients degrade unrecognized values neutrally, see below; the intentd#945 `"unread"`
+value is **removed** — the `unread` attention flag is no longer a displayStatus axis, so
+the value simply never reaches the wire, which is client-compatible per the same
+precedent — the flag itself, its turn-end raise, and `workspace.markSeen` are the unread
+contract, §5.1 `attention`). The field is
 **authoritative**: clients render it as-is and
 perform **no local derivation** (ios#59, cloudlands-fe#560; the former FE sidebar
 running/idle grouping overlay is deleted, cloudlands-fe#578). It is decoded as optional and
@@ -1274,13 +1278,13 @@ degrades to a **neutral unknown** treatment (a placeholder rendering, sorted las
 `not_started` or any other real status. Clients must not conflate the two: a value the build
 does not know is not evidence that work has not started. The derivation is the
 **canonical precedence** (intentd#945) — `failed` > `blocked` > `needs_attention` >
-`in_progress` (running agent) > `unread` (idle/terminal base only, step 6 — the active
-`pr_ready` / `pr_open` stages outrank it) > the PR/task rollup — folding the attention axes
+`in_progress` (running agent) > the PR/task rollup — folding the attention axes
 and live agent activity around the "current cycle" rollup:
 
-The attention axes (steps 0–2 and the step-6 `unread` promotion) are probed per workspace
+The attention axes (steps 0–2) are probed per workspace
 over its **top-level foreground** sessions — no `parentAgentId`, not background
-(`isBackground`), and not deleted — plus the dismissible workspace `attention` flag. Child
+(`isBackground`), and not deleted — plus the dismissible workspace `attention` flag
+(`review_required` only — the `unread` flag never feeds the derivation). Child
 and background sessions never count: their attention surface is the parent/subscriber (the
 §5.5 attention-retire taxonomy). Best-effort: a store read failure fails open to `false`
 (the question-hold derivation fails open itself), so list/get emission is never wedged and
@@ -1316,7 +1320,7 @@ attention is never fabricated.
    completion watch** (§Completion-watch persistence: the `agent.delegate` auto-watch,
    `after_all` delegation-group membership, explicit `ws.agent.watch` — one registry
    covers all) → `in_progress`, **unconditionally over everything below** (overrides the
-   PR stages, `complete`, and the `unread` flag — active work masks the blue dot). The
+   PR stages and `complete`). The
    hook signal is a within-version derivation refinement (intentd#856)
    folded into this step only: an idle agent still watching via a background hook reads
    as active work; steps 0–2 still outrank the promotion, the `activity` field's
@@ -1345,12 +1349,12 @@ attention is never fabricated.
       `not_started`.
 5. **Idle demotion** — when not running and step 4 yields `in_progress` or `not_started`,
    the result is demoted to `idle`; the PR stages and `complete` pass through.
-6. **Unread promotion** *(new in intentd#945)* — the workspace `attention` flag at
-   `unread` (the server-owned turn-end blue dot, §5.1 `attention`) promotes an
-   **idle/terminal base only** — `idle` (including the demoted task stages), `complete`,
-   or `pr_merged` — to `unread`. It **never** masks the active PR stages
-   (`pr_ready` / `pr_open`) or anything above them: those are actionable state that
-   outranks the blue dot. `workspace.markSeen` retires the flag (and the status).
+
+The dismissible `unread` workspace attention flag (the server-owned turn-end blue dot,
+§5.1 `attention`) **never feeds the derivation** — the intentd#945 step-6 unread
+promotion is removed, so the rollup always reflects the workspace's real state and the
+flag surfaces exclusively through `Workspace.attention` and
+`workspace:attention-changed` (§6.5).
 
 `not_started` and a non-running `in_progress` are therefore **no longer emitted**; those enum
 variants are retained for wire back-compat (older daemons / client decode paths — they still
@@ -1363,10 +1367,9 @@ only when a **top-level foreground** agent's queue drains (intentd#1021): child 
 to their parent/coordinator, not the user. A `NotFound` session load (deleted agent)
 skips the raise too, while a genuine store error fails open (raise + warn). The raise is
 further guarded on the stored flag being `none`: it never downgrades a persistent
-`review_required` (no `workspace:attention-changed`, no spurious
-`needs_attention → unread` demotion in the rollup), and `workspace.markSeen` — guarded on
-`unread` — leaves `review_required` in place; only `workspace.dismissAttention` retires
-that flag (its documented contract).
+`review_required` (no `workspace:attention-changed`), and `workspace.markSeen` — guarded
+on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
+retires that flag (its documented contract).
 
 A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` for open/draft
 entries) or open tasks (step 4.2 precedes the merged check). Transitions are pushed as
@@ -1415,11 +1418,14 @@ never hides it) and its retires — `agent.retry` (the redrive clears the park a
 recompute runs before the worker starts, emitting `failed → in_progress` immediately)
 and the fresh-`agent.sendMessage` recovery path (recomputed after the user-row persist —
 the earlier turn-begin recompute still reads `error` and would stay silent); every
-workspace **attention-flag write** — `raise_attention` (the turn-end unread raise; a
-guarded no-op when the flag is not `none`, and skipped entirely when the workspace is
-`Archived` at drain time — fail-open on a workspace-read error;
-[intent-hq/intentd#1075](https://github.com/intent-hq/intentd/pull/1075)), `workspace.dismissAttention`,
-`workspace.markSeen`, and a `workspace.update` carrying `attention`. The emit-path
+workspace **attention-flag write that can move the `review_required` axis** —
+`workspace.dismissAttention` and a `workspace.update` carrying `attention` (the turn-end
+`raise_attention` writes only `unread` — a guarded no-op when the flag is not `none`, and
+skipped entirely when the workspace is `Archived` at drain time — fail-open on a
+workspace-read error;
+[intent-hq/intentd#1075](https://github.com/intent-hq/intentd/pull/1075) — and
+`workspace.markSeen` only clears `unread`; neither feeds the derivation, so both skip the
+recompute). The emit-path
 enrichment (both the enriched list/get path and the lite
 snapshot path) also seeds the in-memory baseline that event's recompute-and-compare runs
 against (a seed never emits).
@@ -6210,7 +6216,7 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | drafts (new in intentd) | draft:changed | Emitted after drafts.set / drafts.clear (§5.16). data = { workspaceId, agentId, clientId, hasDraft }; **no draft text** (no leakage). |
 | changes (new in intentd) | changes:tracked, changes:git-status, changes:metrics-changed | Code Changes Review (§5.18–§5.20). `changes:tracked` → data { workspaceId, changes: TrackedChange[] } (emitted as the BE records attribution internally — there is no `file-tracking.trackChange` RPC). `changes:git-status` → data { workspaceId, status: WorkspaceGitStatus }. `changes:metrics-changed` → data { workspaceId, agentId?, metrics: Metrics }. Self-sufficient payloads (§6.7). |
 | workspace usage (new in intentd) | workspace:tokenUsage-changed | Token/credit usage recomputed — live at ACP turn end, or by the internal reconciliation scan (§5.23). data = { workspaceId, tokenUsage: TokenUsage }. Self-sufficient payload (§6.7). |
-| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending higher-precedence attention axis — `failed`/`blocked`/`needs_attention`, §5.1 — still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the child-completion-watch signal (§5.1, new in intentd), on watch lifecycle transitions, recomputed in the parent's home workspace: watch register/adopt (the `agent.delegate` auto-watch, `after_all` group enrollment, explicit `ws.agent.watch`), the deliver-once watch retirement at the child's completion, `after_all` group settlement, `agent.cancelSubscriptions` / `ws.agent.unwatch` cancels, and the workspace-delete subscription sweeps — the same choke points that publish `agent:subscriptions-changed` — and, for the active-PR-monitor promotion (§5.1 step 3, [intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036)), on PR-monitor lifecycle transitions: register (`ws.pr.monitor`, including the idempotent re-arm), the owner (`ws.pr.unmonitor`) and FE (`prMonitor.cancel`) cancels, the `workspace.archive` sweep cancels (§5.1 archive active-work teardown, [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)), the poll loop's terminal completion (PR merged/closed), and the boot-rehydration owner-gone cancels — and, for the `needs_attention`/`blocked` axes (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the turn-end `pendingQuestionsMessageId` marker write), and question-hold releases — within v6.0 only a `question_answers`-tagged user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing assistant turn releases the hold (§5.5); the recompute-and-compare still runs after every user-row persist by the send/drain paths (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry) and every transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5) after persisting (intentd#833; intentd#965), so the trigger taxonomy holds unconditionally — an untagged row simply leaves the marker armed and the recompute a no-op — and, for the `failed` axis (§5.1, intentd#945), on the mid-turn Error park (recomputed as the park persists) and its retires: `agent.retry` (recomputed before the redriven worker starts, so the `failed → in_progress` transition emits immediately) and the fresh-`agent.sendMessage` recovery (recomputed after the user-row persist) — and, for the `unread` axis and the `review_required`-driven `needs_attention` (§5.1, intentd#945), on every workspace attention-flag write: `raise_attention` (the turn-end unread raise — fired only when a **top-level foreground** agent's queue drains, never for child (`parent_agent_id`) or background agents (intentd#1021), and skipped when the workspace is `Archived` at drain time (fail-open on a workspace-read error; [intent-hq/intentd#1075](https://github.com/intent-hq/intentd/pull/1075)); guarded no-op when the stored flag is not `none`), `workspace.dismissAttention`, `workspace.markSeen`, and `workspace.update { attention }` — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
+| workspace display status (new in intentd) | workspace:displayStatus-changed | Derived `Workspace.displayStatus` rollup transitioned (§5.1). Mutation-driven, never polled: recomputed-and-compared after the mutations that can move the derivation (task status/metadata updates, task-note creation/deletion, PR link/status changes) — and, since intentd#793, on agent start/stop transitions: the 0→1 agent-running flip recomputes-and-emits immediately (normally the promotion to `in_progress`; a pending higher-precedence attention axis — `failed`/`blocked`/`needs_attention`, §5.1 — still outranks it and the transition-only emission suppresses the no-op), and the running→not-running recompute runs after the same debounce grace window as `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`, a PR stage, or `complete`) — and, for the child-completion-watch signal (§5.1, new in intentd), on watch lifecycle transitions, recomputed in the parent's home workspace: watch register/adopt (the `agent.delegate` auto-watch, `after_all` group enrollment, explicit `ws.agent.watch`), the deliver-once watch retirement at the child's completion, `after_all` group settlement, `agent.cancelSubscriptions` / `ws.agent.unwatch` cancels, and the workspace-delete subscription sweeps — the same choke points that publish `agent:subscriptions-changed` — and, for the active-PR-monitor promotion (§5.1 step 3, [intent-hq/intentd#1036](https://github.com/intent-hq/intentd/pull/1036)), on PR-monitor lifecycle transitions: register (`ws.pr.monitor`, including the idempotent re-arm), the owner (`ws.pr.unmonitor`) and FE (`prMonitor.cancel`) cancels, the `workspace.archive` sweep cancels (§5.1 archive active-work teardown, [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)), the poll loop's terminal completion (PR merged/closed), and the boot-rehydration owner-gone cancels — and, for the `needs_attention`/`blocked` axes (§5.1), on attention raises (`ws.agent.requestDiscussion` / `ws.agent.reportBlocker`) and retires (the turn-begin clear), question-asking turn ends (the turn-end `pendingQuestionsMessageId` marker write), and question-hold releases — within v6.0 only a `question_answers`-tagged user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing assistant turn releases the hold (§5.5); the recompute-and-compare still runs after every user-row persist by the send/drain paths (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`, `agent.editAndRegenerate`'s regenerated message, a drained user-origin queue entry) and every transcript mutation via the RPCs `agent.appendMessage` / `agent.replaceMessages` (§5.5) after persisting (intentd#833; intentd#965), so the trigger taxonomy holds unconditionally — an untagged row simply leaves the marker armed and the recompute a no-op — and, for the `failed` axis (§5.1, intentd#945), on the mid-turn Error park (recomputed as the park persists) and its retires: `agent.retry` (recomputed before the redriven worker starts, so the `failed → in_progress` transition emits immediately) and the fresh-`agent.sendMessage` recovery (recomputed after the user-row persist) — and, for the `review_required`-driven `needs_attention` (§5.1, intentd#945; the `unread` flag never feeds the derivation), on the workspace attention-flag writes that can move that axis: `workspace.dismissAttention` and `workspace.update { attention }` — the turn-end `raise_attention` writes only `unread` (fired only when a **top-level foreground** agent's queue drains, never for child (`parent_agent_id`) or background agents (intentd#1021), and skipped when the workspace is `Archived` at drain time (fail-open on a workspace-read error; [intent-hq/intentd#1075](https://github.com/intent-hq/intentd/pull/1075)); guarded no-op when the stored flag is not `none`) and `workspace.markSeen` only clears `unread`, so neither feeds the derivation and both skip the recompute — and emitted **only on an actual transition** — no-op recomputes stay silent. The in-memory baseline is seeded by the `workspace.list` / `workspace.get` emit-path enrichment (or lazily by the first post-mutation recompute); a first observation records without emitting, and a daemon restart re-seeds on first touch. data = { workspaceId, displayStatus }. Self-sufficient payload (§6.7). |
 | agent stats (new in intentd) | agent:session-stats-changed | Per-session usage changed (§5.24). data = { sessionId, agentId?, stats: SessionStats }. Self-sufficient payload (§6.7). |
 | sandbox (new in intentd) | sandbox:cow:created, sandbox:cow:merged | Emitted when `agent.delegate` resolves the `isolation` mode to `"cow"` on a sandbox-eligible workspace and the background provisioning task succeeds (§5.5 — asynchronous: the delegate result itself only ever reports `effectiveIsolation: "pending"`; this row is about the resolved request mode, not that result field) and when sandbox commits are successfully merged back to the canonical repository (§5.5a — auto-merge on completion or manual `sandbox.cow.merge`). `sandbox:cow:created` → data { workspaceId, agentId, sandboxPath, branch, baseCommitSha, snapshotCommitSha } where `sandboxPath` is the absolute filesystem path to the sandbox clone, `branch` is the sandbox snapshot branch (`sb/<agentId>`), `baseCommitSha` is the sandbox HEAD at provisioning, and `snapshotCommitSha` is the WIP-snapshot commit SHA (`null` when the source was clean). `sandbox:cow:merged` → data { workspaceId, agentId, commitRange, canonicalHead } where `commitRange` names the applied sandbox commit range and `canonicalHead` is the canonical repository HEAD SHA after the merge. Both are self-sufficient payloads (§6.7). |
 | hook (new in intentd, v2.10) | hook:scheduled, hook:run-started, hook:run-completed, hook:dispatched, hook:evicted, hook:cancelled, hook:expired | Background-hook lifecycle (§5.40). All carry data { workspaceId, agentId, hookId, name, state, perpetual, dispatchCount } plus per-type extras: `hook:run-completed` adds `nextRunAt` when the hook stays scheduled; `hook:evicted` adds `lastError`; `hook:dispatched` fires when a run returns `{ dispatch: true }` (including the schedule-time validation run: a **retiring** (one-shot, or perpetual landing at/after `expiresAt`) validation dispatch emits `hook:run-completed` + `hook:dispatched` with **no** preceding `hook:scheduled`; a **persisting** validation dispatch — one-shot-shaped non-dispatch, or any perpetual dispatch that stays active — emits `hook:run-completed` then `hook:scheduled`, with a perpetual dispatch additionally emitting `hook:dispatched` between the two, per the §5.40 event-ordering note). `hook:expired` (v3.1) fires when the hook's TTL deadline passes (§5.40) — payload shape parity with `hook:cancelled` (the base data object, no extras); the owner is woken with `reason: "expired"`. **`perpetual` / `dispatchCount` ride on EVERY emission of the family** ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979); `dispatchCount` counts fires so far for every hook, so only a perpetual hook ever exceeds 1) so a subscriber can tell a non-terminal perpetual `hook:dispatched` from a terminal one-shot dispatch without a follow-up `hook.list`: **for a perpetual hook `hook:dispatched` is non-terminal and may repeat** — the hook re-arms (a `hook:scheduled` with a fresh `nextRunAt` follows each fire) and keeps running until TTL expiry, cancel, or eviction, so the sequence `hook:run-completed` → `hook:dispatched` → `hook:scheduled` recurs once per dispatching cadence tick. The post-dispatch state is resolved and persisted before those events are emitted, so their `state` is the real outcome (`scheduled`, or `expired` for a dispatch landing at/after `expiresAt`), never the transient `running`. Actor: system; the owner's agent id rides in `data.agentId` (the event row's internal session id is not part of the §6.3 wire object). Subscribe with a `hook:*` prefix filter — the family is **not** part of the bare-`*` category expansion applied by the internal `agent.subscribe`/`event.subscribe` aliases (§5.5/§5.10). |
