@@ -697,13 +697,16 @@ further 20 minutes, and the 30-minute row above now describes the old default
 rather than the shipped one.
 
 > **On upgrade, an existing seat keeps the value its `config.toml` already
-> carries.** The 10-minute default applies to **new installs**: the config
-> template is written only when the file is absent, and every install created
-> before this change has an explicit `idleReapMinutes = 30` in it, which wins
-> over the shipped default. The practical consequence is the one that matters
-> here — **a seat accumulating memory today will not change behaviour when it
-> upgrades.** Check the file and set the value explicitly if you want the
-> shorter window.
+> carries — permanently.** The 10-minute default applies to **new installs**:
+> the config template is written only when the file is absent, and every
+> install created before this change has an explicit `idleReapMinutes = 30` in
+> it, which wins over the shipped default. There is **no migration** — that 30
+> stays until someone edits the file, by decision (monorepo#2109): a boot
+> rewrite cannot tell a deliberate 30 from one the old template baked in, and
+> silently overriding the former was judged worse than leaving the latter.
+>
+> So if your seat is accumulating memory right now, **upgrading will not change
+> that — open `config.toml` and set `idleReapMinutes` yourself.**
 
 An agent
 becomes a candidate at the TTL and is picked up by the next sweep (interval
