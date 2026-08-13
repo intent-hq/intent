@@ -687,7 +687,18 @@ The reaper works; it was simply not asked to run for half an hour. That
 measurement is what moved the shipped default to **10 minutes**: the same tree
 begins draining once the window passes rather than holding 5.85 GB for a
 further 20 minutes, and the 30-minute row above now describes the old default
-rather than the shipped one. An agent
+rather than the shipped one.
+
+> **On upgrade, an existing seat keeps the value its `config.toml` already
+> carries.** The 10-minute default applies to **new installs**: the config
+> template is written only when the file is absent, and every install created
+> before this change has an explicit `idleReapMinutes = 30` in it, which wins
+> over the shipped default. The practical consequence is the one that matters
+> here — **a seat accumulating memory today will not change behaviour when it
+> upgrades.** Check the file and set the value explicitly if you want the
+> shorter window.
+
+An agent
 becomes a candidate at the TTL and is picked up by the next sweep (interval
 `ttl/4` clamped to `[30s, 300s]`, `reap_timings` in the `intentd` binary
 crate), so **selection** is bounded by TTL + one sweep — but release is not
@@ -707,7 +718,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 
 | Knob | Default | Bounds |
 | --- | --- | --- |
-| `idleReapMinutes` | `10` | How long an idle agent subtree is retained (`0` disables reaping). **The lever for a memory-constrained seat.** |
+| `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables reaping). **The lever for a memory-constrained seat.** |
 | `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
@@ -767,8 +778,10 @@ one** — the inverted conclusion. Steady state is accurate (a running soak read
 5.85 GB by both methods); the field aliases only on transients, which is
 precisely the case it was introduced for.
 
-**`idleReapMinutes` now defaults to 10, not 30** (monorepo#2109, reversing the
-earlier decision on that issue to leave defaults alone). The reasoning that
+**`idleReapMinutes` now defaults to 10, not 30** — on new installs; see the
+upgrade note above for why an existing seat is unaffected (monorepo#2109,
+reversing the earlier decision on that issue to leave defaults alone). The
+reasoning that
 originally argued for holding still is unchanged and is what keeps the new
 default off the floor: reaping earlier costs every user a warm process on next
 use, and the measured accumulation is a function of how many agents a seat
