@@ -274,15 +274,16 @@ The `system.status` result additionally reports the daemon's **whole descendant 
 {
   "childProcesses": 24,                // process count in the daemon's descendant tree; null until first sample
   "childMemoryBytes": 5090787328,      // aggregate RSS of those processes, in bytes; null until first sample
-  "childMemoryPeakBytes": 23085449216  // high-water mark of childMemoryBytes since daemon start; null until first sample
+  "childMemoryPeakBytes": 23085449216  // high-water mark of the daemon's sampled tree memory since daemon start; null until first sample
   // ...existing status fields (cpuPercent, memoryBytes, running, listenMode, ...)
 }
 ```
 
 - `childProcesses` counts the OS processes in the daemon's descendant tree: agent provider CLIs and everything they spawn (ACP adapters, MCP bridges, an agent's own tool children), the Unsloth server, and `host.exec` children.
 - `childMemoryBytes` is the aggregate resident memory of those processes. This is the daemon's real cost to the machine; the existing `memoryBytes` covers only the daemon binary and understates it by more than an order of magnitude once agents are live (measured on a dev seat: a 183 MB daemon owning a 21.5 GB tree). A client cannot attribute system memory pressure to agents without it.
-- `childMemoryPeakBytes` is the high-water mark of `childMemoryBytes` since daemon start. It is carried separately because ephemeral quick-action (`agent.completeOnce`, `agent.enhancePrompt`) and model-probe adapter chains live only seconds, so by the time a debug bundle is captured the instantaneous value has drained back to baseline.
-- The tree is sampled every **5s**. All three keys are always present on the wire and are `null` — never `0` — until the first sample lands (~5s after daemon start); `0` is a real measurement meaning an empty tree. Clients must detect them by **presence**, not by protocol version.
+- `childMemoryPeakBytes` is the high-water mark of the daemon's **sampled** descendant-tree memory since daemon start. It is **not** simply the maximum of the `childMemoryBytes` values a client has seen: the tree is swept every **500 ms** while an ephemeral ACP adapter chain holds a slot in the daemon-wide adapter bound (`agents.maxConcurrentAdapters`, §5.12) — one-shot `agent.completeOnce` / `agent.enhancePrompt` on ACP providers, and model probes — against the 5 s cadence `childProcesses` / `childMemoryBytes` are published at, so **the peak can legitimately exceed every instantaneous value ever published**. That is deliberate: those chains live only seconds, so by the time a debug bundle is captured the instantaneous value has drained back to baseline (intentd#1139, monorepo#2107; fast cadence introduced by [intent-hq/intentd#1167](https://github.com/intent-hq/intentd/pull/1167) — measured, a 16-chain burst peaked at 6.97 GB while `childMemoryBytes` read 0 at every published sample).
+- The fast cadence applies **only** to descendants spawned through the ephemeral-adapter bound — the one-shot ACP runner and the model probe. Everything else in the tree — the **auggie** route of the same quick actions (it spawns its CLI directly and takes no slot), `host.exec` children, PTY sessions, MCP bridge servers, the Unsloth server, and the tool children a long-lived agent runs — is sampled at the 5 s baseline only, so a burst from one of those that spikes and drains inside one baseline interval may not appear in the peak.
+- The tree's baseline sampling cadence is **5s**. All three keys are always present on the wire and are `null` — never `0` — until the first sample lands (~5s after daemon start); `0` is a real measurement meaning an empty tree. Clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — daemon routing fields (additive)
 
