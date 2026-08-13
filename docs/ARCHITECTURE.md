@@ -719,7 +719,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables reaping). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM. |
+| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
@@ -744,10 +744,17 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   only lever against that is refusing later spawns and evicting idle trees.
   Admission only — nothing running is ever killed, and all turns complete.
   The settings catalog advertises the bound as `min 0` / `max` = detected
-  physical RAM in MB (a static 1,024,000 MB where detection is unavailable —
-  Linux/macOS only), so a client renders a slider over the range the setting
-  can meaningfully take; the `config.toml` parse bound stays at the static
-  figure so a config file written on one seat still parses on another.
+  physical RAM in MB, **capped at 1,024,000 MB** — which is also the value used
+  where detection is unavailable (it is Linux/macOS only) and the static bound
+  `config.toml` parsing enforces. So a client renders a slider over the range
+  the setting can meaningfully take, and on a seat with more than ~1 TB of RAM
+  the cap binds instead of the RAM figure. The cap is not cosmetic: the
+  catalog bound must never exceed the parse bound, or `settings.update` would
+  accept a value that the same schema then rejects on the way to disk. The
+  parse bound itself stays static and machine-independent, so a `config.toml`
+  written on one seat still parses on another — meaning the divergence runs
+  one way only, and a config carrying a budget above *this* machine's RAM
+  still loads and is reported with a `value` above the advertised `max`.
 - **`maxConcurrentAdapters` closes the quick-action burst path**
   (monorepo#2062). One-shot completions and model probes never enter
   `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
