@@ -683,6 +683,13 @@ real `claude-code` chains, 10 agents driven to idle then left alone):
 | **30 (default until monorepo#2109)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
 | 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
 
+Retention claims in this section describe the **idle-reap sweep** with
+`memoryBudgetMb` off, which is the shipped default. A non-zero budget adds a
+second, independent eviction path: `ProcessRegistry::evict_idle` takes no TTL
+and drops the LRU idle subtree to admit a spawn, so with a budget set an idle
+tree can go before its TTL and none of the retention figures below are
+guaranteed floors.
+
 The reaper works; it was simply not asked to run for half an hour. That
 measurement is what moved the shipped default to **10 minutes**: the same tree
 begins draining once the window passes rather than holding 5.85 GB for a
@@ -708,9 +715,10 @@ a large idle set drains over a tail rather than all at once. Only processes
 idle past the TTL are candidates, and the sweep skips any agent the manager
 reports busy when it checks (`AgentManager::reap_idle_older_than`'s
 eligibility predicate).
-Consequence for sizing: a seat that touches 20 agents within the window holds
-all 20 subtrees at once even if only one is active — projecting to ~12 GB at
-the measured ~0.6 GB idle median, more if any of them ran a test suite.
+Consequence for sizing: with the budget off, a seat that touches 20 agents
+within the window holds all 20 subtrees at once even if only one is active —
+projecting to ~12 GB at the measured ~0.6 GB idle median, more if any of them
+ran a test suite.
 
 **The knobs**, all under the `[agents]` table in `config.toml` (each is
 self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
@@ -788,16 +796,17 @@ precisely the case it was introduced for.
 **`idleReapMinutes` now defaults to 10, not 30** — on new installs; see the
 upgrade note above for why an existing seat is unaffected (monorepo#2109,
 reversing the earlier decision on that issue to leave defaults alone). The
-reasoning that
-originally argued for holding still is unchanged and is what keeps the new
-default off the floor: reaping earlier costs every user a warm process on next
+reasoning that originally argued for holding still is unchanged and is what
+keeps the new default off the floor: reaping earlier costs every user a warm
+process on next
 use, and the measured accumulation is a function of how many agents a seat
 touches — which differs enormously between a single-agent user and a
 coordinator fanning out a dozen. What changed is the read on where the
 midpoint sits. 30 minutes is long enough that the two cases converge in the
-worst direction — the coordinator holds every subtree it touched anywhere in
-that half-hour window, re-extending it on each fan-out (the 5.85 GB flat row
-above measured 10 minutes of that, not a whole session), while the single-agent
+worst direction — with the budget off, the coordinator holds every subtree it
+touched anywhere in that half-hour window, re-extending it on each fan-out (the
+5.85 GB flat row above measured 10 minutes of that, not a whole session), while
+the single-agent
 user gains a warm process they were unlikely to return to that late anyway. 10
 minutes keeps the warm path for the case that actually re-enters an agent while
 bounding what a fan-out retains, and `0` still turns the sweep off entirely for
