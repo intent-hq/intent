@@ -12,7 +12,31 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
+      # Intermittent TLS failures reaching api.github.com can kill this action
+      # sub-second, before it validates anything — a spurious red that reads
+      # like a bad title (intent-hq/monorepo#2098). Tolerate a first-attempt
+      # failure and retry once; the retry is authoritative, so a genuinely
+      # bad title still fails the job.
       - uses: amannn/action-semantic-pull-request@v6
+        id: title_check
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            ci
+            perf
+      - name: Wait before retrying title validation
+        if: steps.title_check.outcome == 'failure'
+        run: sleep 15
+      - uses: amannn/action-semantic-pull-request@v6
+        if: steps.title_check.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
