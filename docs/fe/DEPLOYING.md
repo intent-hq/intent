@@ -35,8 +35,10 @@ version number by hand.
 1. On every push to `main`, release-please opens (or updates) a **Release PR**
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
-2. A human merges the Release PR when it's time to ship — that is the release
-   timing gate.
+2. The Release PR is auto-merged hourly by `auto-cut-beta.yml` (cron at :30)
+   when it is green — that is the release timing gate. The `hold-release`
+   label on the Release PR pauses the auto-cut; a human can still merge
+   early.
 3. On the merge, release-please creates the `v{version}` tag and a GitHub
    Release on `cloudlands-fe`. The workflow authenticates with `RELEASE_PAT`
    (not the default `GITHUB_TOKEN`) so the pushed tag triggers downstream
