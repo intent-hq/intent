@@ -120,7 +120,15 @@ cloudlands-fe).
 
 - release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
   cargo-dist builds the artifacts, and the alpha channel manifest (`alpha.json` on the
-  `channel-alpha` release) publishes automatically.
+  `channel-alpha` release) publishes automatically. Right after the alpha manifest
+  publishes (source + mirror), `publish-channel-manifest.yml` sends a
+  `repository_dispatch` of type `intentd-alpha-published` (`client_payload.version` =
+  the released version, no leading v) to `intent-hq/cloudlands-fe`, which kicks off
+  the event-chained fe pin bump + cut (see cloudlands-fe below). The dispatch
+  authenticates with the `FE_DISPATCH_TOKEN` secret (fine-grained PAT with
+  contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
+  failed dispatch logs a warning and never fails the publish — the fe crons then act
+  as the backstop.
 - Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
   verify `stable.json` on the `channel-stable` release.
 - Daemon archives and channel manifests are **mirrored** to the public
@@ -142,12 +150,31 @@ cloudlands-fe).
 ### cloudlands-fe
 
 - The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
-  root (`packages/cloudlands-fe/` in this monorepo). The pin advances automatically:
-  `auto-pin-intentd.yml` follows the intentd alpha channel and lands the bump via a
-  rolling PR — a manual pin-bump PR is only for overrides (verify with
+  root (`packages/cloudlands-fe/` in this monorepo). The pin advances automatically
+  and event-driven: `auto-pin-intentd.yml` runs on the `intentd-alpha-published`
+  repository_dispatch from intentd (so the pin bumps minutes after an alpha
+  publishes), with an hourly cron at :15 as the backstop when the dispatch is missed.
+  Each run follows the intentd alpha channel and lands the bump via a rolling PR — a
+  manual pin-bump PR is only for overrides (verify with
   `node scripts/fetch-sidecar.cjs` from that directory).
 - release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
   publishes to `intent-hq/cloudlands-releases`.
+- The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained
+  with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
+  `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
+  into a cut run that polls (30s interval, up to 15 min) for release-please to refresh
+  the Release PR and for CI Gate to go green, then merges — so an intentd change ships
+  in the **same fe alpha cycle**. The hourly cron at :30 is the backstop and the
+  normal path for fe-only changes; cron and manual-dispatch runs keep the
+  check-once-and-exit behavior (no polling). An open pin-bump PR (branch
+  `auto/intentd-pin`) defers the cut — the pin must land first so the alpha carries
+  the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
+  `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
+  the tag is younger than 90 minutes (an intentd release build is running and a pin
+  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; the
+  age bound stops a failed intentd build from deferring fe cuts forever, and the
+  check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
+  manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
 - Stable: dispatch `release-stable.yml` with the `version` input.
 
 ### Release notifier
@@ -168,22 +195,30 @@ cloudlands-fe).
 
 ### Coordinated Release Ordering
 
-intentd release → cloudlands-fe pin bump (automatic via `auto-pin-intentd.yml`) →
-cloudlands-fe release → promote each component's stable → monorepo pins advance
-automatically via the auto-bump workflow (no manual bump PR).
+The pipeline is event-chained, with hourly crons as backstops: intentd release PR
+merge → tag + cargo-dist build → alpha manifest publish →
+`intentd-alpha-published` dispatch → cloudlands-fe pin bump
+(`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
+(`auto-cut-beta.yml` push trigger) → promote each component's stable → monorepo
+pins advance automatically via the auto-bump workflow (no manual bump PR). Every
+link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
+the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
 
-### Tracking shipped work (hourly alpha builds)
+### Tracking shipped work (alpha builds)
 
-Alpha builds happen automatically: releases are cut every hour, so merged work ships
-in a cloudlands-fe alpha shortly after landing. When the work changed intentd and/or
-cloudlands-fe, the workspace is NOT done once the PRs are merged: wait on / monitor
-the release PR(s) until the work ships in a cloudlands-fe alpha, then update the
-final workspace status message with the version that carries the feat/fix (e.g.
-"Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
-too: an intentd change first ships in an intentd release, is then pinned into
-cloudlands-fe automatically, and finally rides the next cloudlands-fe alpha (roughly
-an hour later) — the version to report is still the cloudlands-fe alpha (verify
-inclusion via `intentdVersion` in the published release's `release-manifest.json`).
+Alpha builds happen automatically: fe-only work rides the hourly :30 cron cut, and
+intentd work chains into a same-cycle fe alpha via the dispatch pipeline above, so
+merged work ships in a cloudlands-fe alpha shortly after landing. When the work
+changed intentd and/or cloudlands-fe, the workspace is NOT done once the PRs are
+merged: wait on / monitor the release PR(s) until the work ships in a cloudlands-fe
+alpha, then update the final workspace status message with the version that carries
+the feat/fix (e.g. "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to
+intentd-only changes too: an intentd change first ships in an intentd release, is
+then pinned into cloudlands-fe automatically, and finally rides the chained
+cloudlands-fe alpha (same cycle when the event chain is live; the next hourly cron
+cut when it falls back) — the version to report is still the cloudlands-fe alpha
+(verify inclusion via `intentdVersion` in the published release's
+`release-manifest.json`).
 Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never block a turn
 polling. Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha
 channel, so it needs no release monitoring or shipped-version status message.

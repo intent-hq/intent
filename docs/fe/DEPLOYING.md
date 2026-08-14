@@ -35,8 +35,17 @@ version number by hand.
 1. On every push to `main`, release-please opens (or updates) a **Release PR**
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
-2. The Release PR is auto-merged hourly by `auto-cut-beta.yml` (cron at :30)
-   when it is green — that is the release timing gate. The `hold-release`
+2. The Release PR is auto-merged by `auto-cut-beta.yml` when it is green —
+   that is the release timing gate. The workflow is event-chained with an
+   hourly cron backstop: a sidecar pin-bump squash merge (a push to `main`
+   touching `intentd.version`) chains straight into a cut run that polls
+   (30s interval, up to 15 min) for release-please to refresh the Release PR
+   and for CI Gate to go green, then merges — so a new intentd ships in the
+   same fe alpha cycle. The hourly cron at :30 is the backstop and the normal
+   path for fe-only changes (check-once-and-exit, no polling); every run type
+   defers the cut while an intentd release build is in flight (a semver tag on
+   `intent-hq/intentd` newer than the published alpha manifest and younger
+   than 90 minutes; fails open on any lookup error). The `hold-release`
    label on the Release PR pauses the auto-cut; a human can still merge
    early.
 3. On the merge, release-please creates the `v{version}` tag and a GitHub
