@@ -561,12 +561,16 @@ the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Ten booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor` — all default `true`. Each
-toggle removes an agent-exposed feature from the agent's system prompt, its MCP
-tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. The first ten
+default `true`; `taskGraph` is opt-in and defaults `false`. Each toggle removes
+an agent-exposed feature from the agent's system prompt, its MCP tool surface,
+or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
+docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
+unblocked-wake teaching uses the value captured when the parent session is
+created rather than the live setting at wake delivery.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
