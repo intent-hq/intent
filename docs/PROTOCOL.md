@@ -286,6 +286,24 @@ The `system.status` result additionally reports the daemon's **whole descendant 
 - The fast cadence applies **only** to descendants spawned through the ephemeral-adapter bound — the one-shot ACP runner and the model probe. Everything else in the tree — the **auggie** route of the same quick actions (it spawns its CLI directly and takes no slot), `host.exec` children, PTY sessions, MCP bridge servers, the Unsloth server, and the tool children a long-lived agent runs — is sampled at the 5 s baseline only, so a burst from one of those that spikes and drains inside one baseline interval may not appear in the peak.
 - The tree's baseline sampling cadence is **5s**. All three keys are always present on the wire and are `null` — never `0` — until the first sample lands (~5s after daemon start); `0` is a real measurement meaning an empty tree. Clients must detect them by **presence**, not by protocol version.
 
+#### `system.status` — aggregate memory budget fields (additive)
+
+When the aggregate agent memory budget is on (`agents.memoryBudgetMb` > 0, §5.12; [intent-hq/monorepo#2063](https://github.com/intent-hq/monorepo/issues/2063)), the `system.status` result additionally reports the budget's live admission state:
+
+```jsonc
+{
+  "agentMemoryBudgetBytes": 21474836480, // installed budget (agents.memoryBudgetMb, in bytes)
+  "agentMemoryChargedBytes": 3221225472, // what admission actually compares: last tree sample + pending correction
+  "queuedSpawns": 1                      // spawns currently queued behind the admission gate
+  // ...existing status fields (childMemoryBytes, running, listenMode, ...)
+}
+```
+
+- `agentMemoryBudgetBytes` is the installed budget in bytes.
+- `agentMemoryChargedBytes` is the byte count admission actually compares against the budget: the last descendant-tree memory sample **plus the provisional correction** for spawns admitted / processes released since that sample was taken — not the raw `childMemoryBytes` value, which lags the truth by up to one sampling period. It is additionally **absent while the budget is on but no tree sample has landed yet** (~5s after daemon start): the budget is inert until the first sample, and the field says so by omission.
+- `queuedSpawns` counts the agent spawns currently parked in the admission wait queue — whether they queued on the concurrency slot cap or on the memory budget. `0` means nothing is waiting.
+- Unlike the child-tree fields above (always present, `null` until sampled), all three follow the **presence-detection convention**: when the budget is off (`agents.memoryBudgetMb = 0`, the default) they are **absent** — never `null`. Reading them never perturbs admission state. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
+
 #### `system.status` — daemon routing fields (additive)
 
 The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
