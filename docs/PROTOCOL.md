@@ -2862,6 +2862,26 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
 > caller's own connection.
 >
+> **Loopback-hostname interpretation — FE-side, wire shape unchanged (monorepo#2323).**
+> URL hostnames in `navigate` / `openTab` action URLs are interpreted **on the frontend
+> that serves the reverse RPC**, per the reserved-hostname convention (RFC 6761
+> `*.localhost` names): `daemon.localhost` targets the **daemon machine** (rewritten to
+> `127.0.0.1` on a local daemon, to the daemon host — the sanitized transport target —
+> on a remote one); `client.localhost` targets the **client (user's) machine** (always
+> rewritten to `127.0.0.1`); **bare loopback** (`127.0.0.1` / `localhost` / `[::1]`) is
+> ambiguous and defaults to the agent's frame of reference — the daemon: unchanged on a
+> local daemon, rewritten to the daemon host on a remote one. The daemon remains a
+> **thin proxy**: no rewrite happens daemon-side and the `browser.exec` request /
+> reverse-RPC wire shape is unchanged — the convention is entirely FE-served. Rewritten
+> actions echo **additive fields** in their result payload: `requestedUrl` (the URL as
+> requested), `finalUrl` (the URL actually loaded), `rewritten: true`, and a
+> human-readable `reason`; ambiguous bare-loopback rewrites additionally carry a
+> `warning` naming the explicit `daemon.localhost` / `client.localhost` forms.
+> Non-rewritten URLs keep a byte-identical result shape (no echo fields). Only the
+> hostname is rewritten (scheme, port, path, query, and hash are preserved), and only
+> top-level `navigate` / `openTab` URLs are interpreted — never URLs inside pages
+> (redirects, fetches, links).
+>
 > **`browser.docs` — not exposed.** The `browser_docs` MCP tool that
 > served static reference docs on-demand has no consumer in the daemon surface (skills-style
 > docs stay in the FE MCP layer) and is deferred, not cancelled: revisit
@@ -3301,6 +3321,15 @@ in the bullet under this table).
   local branch short-circuits directly on the daemon host without a wire round-trip (via
   `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
   `openInEditor`, and — when available — a native chooser for `pickApplication`).
+- **`browser.exec` loopback-hostname convention — FE-side (monorepo#2323).** Because the
+  CDP work is FE-served (§5.9), loopback hostnames in `navigate`/`openTab` action URLs are
+  interpreted by the frontend per the reserved-hostname convention: `daemon.localhost` →
+  the daemon machine, `client.localhost` → the client (user's) machine, and bare loopback
+  (`127.0.0.1` / `localhost` / `[::1]`) defaults to the daemon's frame of reference —
+  rewritten to the daemon host on a remote connection, with a `warning` echoed in the
+  result. The daemon forwards the `browser.exec` envelope verbatim — the wire shape is
+  unchanged; rewritten action results carry the additive `requestedUrl` / `finalUrl` /
+  `rewritten` / `reason` echo fields. Full contract in §5.9.
 - `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
   commands itself. It uses `argv` only — **no shell interpolation** — and spawns with the child
   in its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree). The
