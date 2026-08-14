@@ -2249,7 +2249,8 @@ question-hold derivation, and queue persistence/rehydration are all untouched by
   applied per entry in the same order as the single-entry drain arms.
   The combined prompt exists **only on the wire**: it is never persisted as a transcript row.
 - **Per-entry transcript rows.** Each flushed entry persists as its own user message row (own
-  id, own `messageMetadata` including the `queueInfo` stamp), so the transcript and UI show
+  id, own `messageMetadata` — including the `queueInfo` stamp when the entry's wait met the
+  5-second threshold above), so the transcript and UI show
   the same N messages as individual stacked user rows — identical to what a one-at-a-time
   drain would have persisted. Entries already persisted by a terminal-failure requeue
   (`persisted: true`) are not re-appended.
