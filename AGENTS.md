@@ -111,8 +111,10 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 
 Releases are per-component and channel-based: merging a release PR publishes to the
 rolling **alpha** channel (several workflows are historically named "beta" but publish
-to alpha); **stable** is a promotion of an existing release (no new build), triggered
-by a manual workflow dispatch.
+to alpha); **beta** and **stable** are promotions of existing releases (no new build),
+each triggered by a manual workflow dispatch (`promote-beta.yml` /
+`promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
+cloudlands-fe).
 
 ### intentd
 
@@ -140,8 +142,10 @@ by a manual workflow dispatch.
 ### cloudlands-fe
 
 - The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
-  root (`packages/cloudlands-fe/` in this monorepo). Bump it via PR and verify by running
-  `node scripts/fetch-sidecar.cjs` from that directory.
+  root (`packages/cloudlands-fe/` in this monorepo). The pin advances automatically:
+  `auto-pin-intentd.yml` follows the intentd alpha channel and lands the bump via a
+  rolling PR — a manual pin-bump PR is only for overrides (verify with
+  `node scripts/fetch-sidecar.cjs` from that directory).
 - release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
   publishes to `intent-hq/cloudlands-releases`.
 - Stable: dispatch `release-stable.yml` with the `version` input.
@@ -149,10 +153,11 @@ by a manual workflow dispatch.
 ### Release notifier
 
 - Both component repos run `scripts/notify-fixed-issues.sh` from their release workflows.
-  On beta publish it scans the released tag range (commit messages plus squash-merged PR
+  On alpha publish it scans the released tag range (commit messages plus squash-merged PR
   bodies, resolved via the `(#N)` subject suffix) for `intent-hq/monorepo#N` / full issue
-  URL references and posts "Fixed in <component> vX.Y.Z (beta)" on each referenced issue;
-  on stable promotion it posts a "promoted to stable" comment covering the range since the
+  URL references and posts "Fixed in <component> vX.Y.Z (alpha)" on each referenced issue;
+  beta comments come from the manual `promote-beta.yml` promotion, and on stable promotion
+  it posts a "promoted to stable" comment covering the range since the
   previous stable. cloudlands-fe comments also name the bundled intentd version.
 - Comments embed a hidden per-component/version/channel marker, so tag rebuilds and
   workflow re-runs never double-post. `--dry-run` prints intended comments without
@@ -163,9 +168,9 @@ by a manual workflow dispatch.
 
 ### Coordinated Release Ordering
 
-intentd release → promote intentd stable → cloudlands-fe pin-bump PR → cloudlands-fe
-release → promote cloudlands-fe stable → monorepo pins advance automatically via the
-auto-bump workflow (no manual bump PR).
+intentd release → cloudlands-fe pin bump (automatic via `auto-pin-intentd.yml`) →
+cloudlands-fe release → promote each component's stable → monorepo pins advance
+automatically via the auto-bump workflow (no manual bump PR).
 
 ### Tracking shipped work (hourly alpha builds)
 
