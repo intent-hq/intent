@@ -109,14 +109,16 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 
 ## Release Process
 
-Releases are per-component and channel-based: merging a release PR publishes to **beta**;
-**stable** is a promotion of an existing release (no new build), triggered by a manual
-workflow dispatch.
+Releases are per-component and channel-based: merging a release PR publishes to the
+rolling **alpha** channel (several workflows are historically named "beta" but publish
+to alpha); **stable** is a promotion of an existing release (no new build), triggered
+by a manual workflow dispatch.
 
 ### intentd
 
 - release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
-  cargo-dist builds the artifacts, and the beta manifest publishes automatically.
+  cargo-dist builds the artifacts, and the alpha channel manifest (`alpha.json` on the
+  `channel-alpha` release) publishes automatically.
 - Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
   verify `stable.json` on the `channel-stable` release.
 - Daemon archives and channel manifests are **mirrored** to the public
@@ -164,6 +166,22 @@ workflow dispatch.
 intentd release → promote intentd stable → cloudlands-fe pin-bump PR → cloudlands-fe
 release → promote cloudlands-fe stable → monorepo pins advance automatically via the
 auto-bump workflow (no manual bump PR).
+
+### Tracking shipped work (hourly alpha builds)
+
+Alpha builds happen automatically: releases are cut every hour, so merged work ships
+in a cloudlands-fe alpha shortly after landing. When the work changed intentd and/or
+cloudlands-fe, the workspace is NOT done once the PRs are merged: wait on / monitor
+the release PR(s) until the work ships in a cloudlands-fe alpha, then update the
+final workspace status message with the version that carries the feat/fix (e.g.
+"Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
+too: an intentd change first ships in an intentd release, is then pinned into
+cloudlands-fe automatically, and finally rides the next cloudlands-fe alpha (roughly
+an hour later) — the version to report is still the cloudlands-fe alpha (verify
+inclusion via `intentdVersion` in the published release's `release-manifest.json`).
+Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never block a turn
+polling. Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha
+channel, so it needs no release monitoring or shipped-version status message.
 
 ### Gotchas
 
