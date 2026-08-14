@@ -708,12 +708,13 @@ real `claude-code` chains, 10 agents driven to idle then left alone):
 | **30 (default until monorepo#2109)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
 | 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
 
-Retention claims in this section describe the **idle-reap sweep** with
-`memoryBudgetMb` off, which is the shipped default. A non-zero budget adds a
-second, independent eviction path: `ProcessRegistry::evict_idle` takes no TTL
-and drops the LRU idle subtree to admit a spawn, so with a budget set an idle
-tree can go before its TTL and none of the retention figures below are
-guaranteed floors.
+Retention claims in this section describe the **idle-reap sweep** in isolation.
+The shipped default for `memoryBudgetMb` is auto (a RAM-derived budget), which
+adds a second, independent eviction path: `ProcessRegistry::evict_idle` takes
+no TTL and drops the LRU idle subtree to admit a spawn, so an idle tree can go
+before its TTL and none of the retention figures below are guaranteed floors.
+To observe the sweep-only behavior (no budget eviction), set
+`memoryBudgetMb = 0`.
 
 The reaper works; it was simply not asked to run for half an hour. That
 measurement is what moved the shipped default to **10 minutes**: the same tree
@@ -755,7 +756,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
