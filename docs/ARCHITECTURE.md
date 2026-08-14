@@ -683,12 +683,13 @@ real `claude-code` chains, 10 agents driven to idle then left alone):
 | **30 (default until monorepo#2109)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
 | 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
 
-Retention claims in this section describe the **idle-reap sweep** with
-`memoryBudgetMb` off, which is the shipped default. A non-zero budget adds a
-second, independent eviction path: `ProcessRegistry::evict_idle` takes no TTL
-and drops the LRU idle subtree to admit a spawn, so with a budget set an idle
-tree can go before its TTL and none of the retention figures below are
-guaranteed floors.
+Retention claims in this section describe the **idle-reap sweep** in isolation.
+The shipped default for `memoryBudgetMb` is auto (a RAM-derived budget), which
+adds a second, independent eviction path: `ProcessRegistry::evict_idle` takes
+no TTL and drops the LRU idle subtree to admit a spawn, so an idle tree can go
+before its TTL and none of the retention figures below are guaranteed floors.
+To observe the sweep-only behavior (no budget eviction), set
+`memoryBudgetMb = 0`.
 
 The reaper works; it was simply not asked to run for half an hour. That
 measurement is what moved the shipped default to **10 minutes**: the same tree
