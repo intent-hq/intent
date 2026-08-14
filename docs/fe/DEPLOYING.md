@@ -42,8 +42,8 @@ version number by hand.
    (30s interval, up to 15 min) for release-please to refresh the Release PR
    and for CI Gate to go green, then merges — so a new intentd ships in the
    same fe alpha cycle. The hourly cron at :30 is the backstop and the normal
-   path for fe-only changes (check-once-and-exit, no polling); the cron cut
-   defers while an intentd release build is in flight (a semver tag on
+   path for fe-only changes (check-once-and-exit, no polling); every run type
+   defers the cut while an intentd release build is in flight (a semver tag on
    `intent-hq/intentd` newer than the published alpha manifest and younger
    than 90 minutes; fails open on any lookup error). The `hold-release`
    label on the Release PR pauses the auto-cut; a human can still merge
