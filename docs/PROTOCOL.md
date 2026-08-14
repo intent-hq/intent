@@ -2155,15 +2155,20 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   prefix (a terminal-failure requeue keeps its first-delivery numbers); `persisted: true`
   requeues are never rewritten (the delivered prompt stays byte-identical to the durable
   row); an unparseable `queuedAt` fails open (content untouched). Messages delivered
-  immediately (never queued) are not annotated. Alongside the content note, the drained
-  entry's `messageMetadata` is stamped with structured queue info —
+  immediately (never queued) are not annotated, and neither are entries whose wait fell
+  below the **5-second annotation threshold** (monorepo#2353): a sub-threshold hop —
+  e.g. a question-wizard answer converted into an enqueue + immediate drain by the #1791
+  FIFO-restore branch — is treated like an immediate delivery (no note, no `queueInfo`
+  stamp), so instant queue hops never render a "waited 0s" chip. Alongside the content
+  note, the drained entry's `messageMetadata` is stamped with structured queue info —
   `queueInfo: { "queuedAt": "<ISO enqueue timestamp>", "waitedMs": <non-negative millis> }`
   — persisted on the user transcript row and round-tripping on chat reads
   (`agent.getConversation` / `chat.subscribe`) like the A2A sender-attribution metadata, so
   clients can render the wait without parsing the note text. Same guards as the note: an
   existing `queueInfo` is never overwritten (first-delivery numbers stay across requeues),
   `persisted: true` requeues are never stamped, and an unparseable `queuedAt` skips the
-  stamp; negative waits (clock skew) clamp to `0`.
+  stamp; negative waits (clock skew) sit below the threshold and skip the annotation
+  entirely.
 - **`agent.diagnostics` queues fill** — the per-agent `queues` snapshots are now real
   (previously hardcoded `[]`), using the same drain-order sorting.
 
@@ -2239,8 +2244,9 @@ question-hold derivation, and queue persistence/rehydration are all untouched by
 - **Wire-only combined prompt.** The model receives ONE message beginning with the header
   `N queued messages while you were working`, followed by each entry under a `Message #k:`
   label in delivery order. Entry contents already carry their per-entry annotations — the
-  dequeue-wait note (original `queuedAt` + wait duration) and, where applicable, the #576
-  stale-redrive note — applied per entry in the same order as the single-entry drain arms.
+  dequeue-wait note (original `queuedAt` + wait duration; only for waits at/above the
+  5-second threshold, monorepo#2353) and, where applicable, the #576 stale-redrive note —
+  applied per entry in the same order as the single-entry drain arms.
   The combined prompt exists **only on the wire**: it is never persisted as a transcript row.
 - **Per-entry transcript rows.** Each flushed entry persists as its own user message row (own
   id, own `messageMetadata` including the `queueInfo` stamp), so the transcript and UI show
