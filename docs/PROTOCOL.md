@@ -2870,7 +2870,9 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > on a remote one); `client.localhost` targets the **client (user's) machine** (always
 > rewritten to `127.0.0.1`); **bare loopback** (`127.0.0.1` / `localhost` / `[::1]`) is
 > ambiguous and defaults to the agent's frame of reference — the daemon: unchanged on a
-> local daemon, rewritten to the daemon host on a remote one. The daemon remains a
+> local daemon, rewritten to the daemon host on a remote one. (Degenerate case: when
+> the remote daemon host cannot be determined from the transport state, daemon-targeting
+> URLs are left unchanged — non-rewritten, no echo fields.) The daemon remains a
 > **thin proxy**: no rewrite happens daemon-side and the `browser.exec` request /
 > reverse-RPC wire shape is unchanged — the convention is entirely FE-served. Rewritten
 > actions echo **additive fields** in their result payload: `requestedUrl` (the URL as
