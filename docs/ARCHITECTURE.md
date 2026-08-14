@@ -730,7 +730,7 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | `0` (off) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
