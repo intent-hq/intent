@@ -35,7 +35,7 @@ monorepo pin advance (Phase 2) then happens automatically.
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
 `Fixes intent-hq/monorepo#N` — in the squash-commit message or PR body. GitHub
 auto-closes the issue on merge, and the release notifier (see Release Process) comments
-on it when the fix ships in a release.
+on it once a release actually contains the complete fix.
 
 ### Phase 2 — Monorepo pin advance (automated)
 
@@ -152,7 +152,8 @@ for all components.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
   `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
   `Fixes intent-hq/monorepo#N` so the issue auto-closes on merge and the release
-  notifier comments on it when the fix ships (see Release Process).
+  notifier comments on it once a release contains the complete fix (see Release
+  Process).
 
 ## Terminology
 
