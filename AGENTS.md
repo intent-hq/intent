@@ -134,9 +134,9 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   cloudlands-fe alpha — verify inclusion via `intentdVersion` in the published
   release's `release-manifest.json` on the
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
-  mirror (same tag; cloudlands-fe source-repo releases carry no assets). Use
-  background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never block a turn
-  polling.
+  distribution repo (same tag; cloudlands-fe source-repo releases carry no
+  assets). Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never
+  block a turn polling.
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
 
