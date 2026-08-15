@@ -36,7 +36,7 @@ jobs:
       # ls-remote reads of the submodule repos and the branch push use it.
       - name: Checkout
         if: steps.token.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
           submodules: false
