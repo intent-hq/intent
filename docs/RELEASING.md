@@ -60,7 +60,14 @@ cloudlands-fe).
   PR (verify with `node scripts/fetch-sidecar.cjs` from that directory) and cuts the
   cloudlands-fe release.
 - release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
-  publishes to `intent-hq/cloudlands-releases`.
+  publishes to `intent-hq/cloudlands-releases`. All release assets — installers,
+  update feeds, and `release-manifest.json` — live **only** on the
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
+  mirror (same `vX.Y.Z` tag); the release on the `cloudlands-fe` source repo carries
+  the changelog but **no assets**. Anything polling for release assets (e.g. checking
+  `intentdVersion` in `release-manifest.json`) must query the mirror, not the source
+  repo. (intentd differs: its manifests are dual-published, so its source-repo
+  releases do carry assets — see the intentd section above.)
 - The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained
   with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
   `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
@@ -128,6 +135,8 @@ the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
   sections are hidden), so a sidecar pin bump never appears in the release PR
   diff/changelog. The tag is cut on the merge commit whose tree contains the pin; the
   authoritative check is `intentdVersion` in the published release's
-  `release-manifest.json`.
+  `release-manifest.json` on the
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
+  mirror (same tag) — cloudlands-fe source-repo releases carry no assets.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).

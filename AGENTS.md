@@ -132,8 +132,11 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
   too: they ride the chained cloudlands-fe alpha, and the version to report is the
   cloudlands-fe alpha — verify inclusion via `intentdVersion` in the published
-  release's `release-manifest.json`. Use background monitoring (`ws.pr.monitor` /
-  `ws.hook.*`) — never block a turn polling.
+  release's `release-manifest.json` on the
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
+  mirror (same tag; cloudlands-fe source-repo releases carry no assets). Use
+  background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never block a turn
+  polling.
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
 
