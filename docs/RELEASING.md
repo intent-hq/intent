@@ -1,0 +1,111 @@
+# Release Engineering
+
+Deep-detail reference for the Intent release pipeline: workflows, secrets, dispatch
+types, fail-soft semantics, and guardrails. For the agent-facing rules (what you must
+and must not do around releases), see the root [AGENTS.md](../AGENTS.md) → Release
+Process.
+
+Releases are per-component and channel-based: merging a release PR publishes to the
+rolling **alpha** channel (several workflows are historically named "beta" but publish
+to alpha); **beta** and **stable** are promotions of existing releases (no new build),
+each triggered by a manual workflow dispatch (`promote-beta.yml` /
+`promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
+cloudlands-fe).
+
+## intentd
+
+- release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
+  cargo-dist builds the artifacts, and the alpha channel manifest (`alpha.json` on the
+  `channel-alpha` release) publishes automatically. Right after the alpha manifest
+  publishes (source + mirror), `publish-channel-manifest.yml` sends a
+  `repository_dispatch` of type `intentd-alpha-published` (`client_payload.version` =
+  the released version, no leading v) to `intent-hq/cloudlands-fe`, which kicks off
+  the event-chained fe pin bump + cut (see cloudlands-fe below). The dispatch
+  authenticates with the `FE_DISPATCH_TOKEN` secret (fine-grained PAT with
+  contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
+  failed dispatch logs a warning and never fails the publish — the fe crons then act
+  as the backstop.
+- Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
+  verify `stable.json` on the `channel-stable` release.
+- Daemon archives and channel manifests are **mirrored** to the public
+  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) repo
+  (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
+  absent). Manifests are dual-published — the mirror's copy points at the mirrored
+  assets, the intentd repo's copy is unchanged — and the sitter fetches the mirror
+  first with a coded fallback to intentd. Daemon release notes are mirrored too
+  (source changelog with download URLs rewritten to the mirror; sitter releases
+  keep their purpose-written notes). `mirror-release.yml` (manual dispatch)
+  backfills older releases. The `-releases` repos ([intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
+  and [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases))
+  are the **permanent** public distribution channels — manifests, download URLs, and
+  the Homebrew formula keep pointing at them even after the source repos go public.
+  Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
+  intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
+  formula, README curl commands) point at the mirror.
+
+## cloudlands-fe
+
+- The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
+  root (`packages/cloudlands-fe/` in this monorepo). The pin advances automatically
+  and event-driven: `auto-pin-intentd.yml` runs on the `intentd-alpha-published`
+  repository_dispatch from intentd (so the pin bumps minutes after an alpha
+  publishes), with an hourly cron at :15 as the backstop when the dispatch is missed.
+  Each run follows the intentd alpha channel and lands the bump via a rolling PR — a
+  manual pin-bump PR is only for overrides (verify with
+  `node scripts/fetch-sidecar.cjs` from that directory).
+- release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
+  publishes to `intent-hq/cloudlands-releases`.
+- The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained
+  with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
+  `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
+  into a cut run that polls (30s interval, up to 15 min) for release-please to refresh
+  the Release PR and for CI Gate to go green, then merges — so an intentd change ships
+  in the **same fe alpha cycle**. The hourly cron at :30 is the backstop and the
+  normal path for fe-only changes; cron and manual-dispatch runs keep the
+  check-once-and-exit behavior (no polling). An open pin-bump PR (branch
+  `auto/intentd-pin`) defers the cut — the pin must land first so the alpha carries
+  the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
+  `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
+  the tag is younger than 90 minutes (an intentd release build is running and a pin
+  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; the
+  age bound stops a failed intentd build from deferring fe cuts forever, and the
+  check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
+  manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
+- Stable: dispatch `release-stable.yml` with the `version` input.
+
+## Release notifier
+
+- Both component repos run `scripts/notify-fixed-issues.sh` from their release workflows.
+  On alpha publish it scans the released tag range (commit messages plus squash-merged PR
+  bodies, resolved via the `(#N)` subject suffix) for `intent-hq/monorepo#N` / full issue
+  URL references and posts "Fixed in <component> vX.Y.Z (alpha)" on each referenced issue;
+  beta comments come from the manual `promote-beta.yml` promotion, and on stable promotion
+  it posts a "promoted to stable" comment covering the range since the
+  previous stable. cloudlands-fe comments also name the bundled intentd version.
+- Comments embed a hidden per-component/version/channel marker, so tag rebuilds and
+  workflow re-runs never double-post. `--dry-run` prints intended comments without
+  posting.
+- Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on `intent-hq/monorepo`)
+  in both component repos. Notifier steps are fail-soft (`continue-on-error`; skipped
+  with a warning when the secret is absent) — they never block a release or promotion.
+
+## Coordinated Release Ordering
+
+The pipeline is event-chained, with hourly crons as backstops: intentd release PR
+merge → tag + cargo-dist build → alpha manifest publish →
+`intentd-alpha-published` dispatch → cloudlands-fe pin bump
+(`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
+(`auto-cut-beta.yml` push trigger) → promote each component's stable → monorepo
+pins advance automatically via the auto-bump workflow (no manual bump PR). Every
+link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
+the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
+
+## Gotchas
+
+- release-please does **not** refresh the release PR for `chore` commits (their changelog
+  sections are hidden), so a sidecar pin bump never appears in the release PR
+  diff/changelog. The tag is cut on the merge commit whose tree contains the pin; the
+  authoritative check is `intentdVersion` in the published release's
+  `release-manifest.json`.
+- Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
+  landed via follow-up release PR intentd#520).

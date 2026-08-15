@@ -14,10 +14,7 @@ submodules:
 Code lives in the submodule repos. The monorepo tracks specific commits of each submodule.
 `packages/ios` is private and marked `update = none` in `.gitmodules`: recursive clones and
 `git submodule update --init --recursive` skip it by design, and internal devs initialize it
-on demand with `make ensure-ios-submodule`. When iOS goes public, deleting the `update = none`
-line is not enough for clones registered during the private period — they must also run
-`git config --unset submodule.packages/ios.update`, because `git submodule init` copies the
-key into the clone's local `.git/config` and `git submodule sync` does not refresh it.
+on demand with `make ensure-ios-submodule`.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
 
@@ -32,7 +29,8 @@ monorepo pin advance (Phase 2) then happens automatically.
    logical commits with conventional commit messages (`feat:`, `fix:`, `chore:`, etc.).
 2. **Push the feature branch** in the submodule repo.
 3. **File a PR** on the submodule's repo (e.g., `intent-hq/intentd`).
-4. **Merge the PR** (squash merge preferred).
+4. **Merge the PR** (squash merge preferred) — **only after explicit permission from a
+   human** (see Conventions → Merging). Approved + green checks is not enough.
 
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
 `Fixes intent-hq/monorepo#N` — in the squash-commit message or PR body. GitHub
@@ -77,7 +75,8 @@ with a warning and never fails the run.
 
 For features that need changes in both intentd and cloudlands-fe, development and PR
 filing on both repos proceed fully in parallel — nothing serializes until merge time.
-The only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
+Both merges require explicit human permission (see Conventions → Merging), and the
+only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
 (or arm auto-merge on it) until the intentd PR is confirmed merged** — approved/green
 is not enough. This intentd-first rule applies specifically to protocol changes (the
 daemon↔fe wire contract, `docs/PROTOCOL.md`): whenever a feature touches the protocol,
@@ -93,153 +92,48 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 - **Conventional commits** are required. PR titles are validated by CI
   (`amannn/action-semantic-pull-request`) against: `feat`, `fix`, `chore`, `docs`,
   `refactor`, `test`, `ci`, `perf`.
-- **Merging**: The repository allows squash and rebase merges; no merge queue is enabled.
-  Merge with `gh pr merge --squash` (optionally `--auto` to merge once checks pass). The
-  GraphQL `enqueuePullRequest` mutation fails with "Merge queues are not enabled" — it is
-  only relevant if a merge queue is enabled later. When squash-merging, the commit
-  title defaults to the commit message (or PR title as fallback), and the commit message
-  includes all commit messages from the PR. On single-commit PRs, ensure the branch commit
-  message is itself a valid conventional commit (amend auto-commits like "Coordinator"
-  before pushing) to prevent non-conventional commits from landing on main (e.g., PR #102
+- **Merging**: agents must **NEVER merge a PR or arm auto-merge — in this repo or any
+  submodule repo — without explicit permission from a human**. Approved + green checks
+  is not enough. Repo-owned automation is exempt (auto-bump-submodules,
+  auto-pin-intentd, auto-cut-beta, and the release PR workflows merge their own
+  rolling PRs). The repository allows squash and rebase merges; no merge queue is
+  enabled. Once a human has given permission, merge with `gh pr merge --squash`
+  (optionally `--auto` to merge once checks pass). The GraphQL `enqueuePullRequest`
+  mutation fails with "Merge queues are not enabled" — it is only relevant if a merge
+  queue is enabled later. When squash-merging, the commit title defaults to the commit
+  message (or PR title as fallback), and the commit message includes all commit
+  messages from the PR. On single-commit PRs, ensure the branch commit message is
+  itself a valid conventional commit (amend auto-commits like "Coordinator" before
+  pushing) to prevent non-conventional commits from landing on main (e.g., PR #102
   incident).
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
-- **Rust**: keep `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo build`
-  green in `packages/intentd` before opening a PR. The **monorepo-root** `Makefile` exposes
-  `make check` and `make test`, which run those checks against `packages/intentd`.
+- **Rust**: run the package gates before opening a PR — `make check` / `make test`
+  from the monorepo root; see `packages/intentd/AGENTS.md` → Gates.
 
 ## Release Process
 
-Releases are per-component and channel-based: merging a release PR publishes to the
-rolling **alpha** channel (several workflows are historically named "beta" but publish
-to alpha); **beta** and **stable** are promotions of existing releases (no new build),
-each triggered by a manual workflow dispatch (`promote-beta.yml` /
-`promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
-cloudlands-fe).
+The full pipeline detail (workflows, secrets, dispatch types, fail-soft semantics,
+guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing rules:
 
-### intentd
-
-- release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,
-  cargo-dist builds the artifacts, and the alpha channel manifest (`alpha.json` on the
-  `channel-alpha` release) publishes automatically. Right after the alpha manifest
-  publishes (source + mirror), `publish-channel-manifest.yml` sends a
-  `repository_dispatch` of type `intentd-alpha-published` (`client_payload.version` =
-  the released version, no leading v) to `intent-hq/cloudlands-fe`, which kicks off
-  the event-chained fe pin bump + cut (see cloudlands-fe below). The dispatch
-  authenticates with the `FE_DISPATCH_TOKEN` secret (fine-grained PAT with
-  contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
-  failed dispatch logs a warning and never fails the publish — the fe crons then act
-  as the backstop.
-- Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
-  verify `stable.json` on the `channel-stable` release.
-- Daemon archives and channel manifests are **mirrored** to the public
-  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) repo
-  (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
-  absent). Manifests are dual-published — the mirror's copy points at the mirrored
-  assets, the intentd repo's copy is unchanged — and the sitter fetches the mirror
-  first with a coded fallback to intentd. Daemon release notes are mirrored too
-  (source changelog with download URLs rewritten to the mirror; sitter releases
-  keep their purpose-written notes). `mirror-release.yml` (manual dispatch)
-  backfills older releases. The `-releases` repos ([intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
-  and [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases))
-  are the **permanent** public distribution channels — manifests, download URLs, and
-  the Homebrew formula keep pointing at them even after the source repos go public.
-  Sitter installers (Homebrew, `.deb`, `sitter-latest`) are also mirrored to
-  intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
-  formula, README curl commands) point at the mirror.
-
-### cloudlands-fe
-
-- The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
-  root (`packages/cloudlands-fe/` in this monorepo). The pin advances automatically
-  and event-driven: `auto-pin-intentd.yml` runs on the `intentd-alpha-published`
-  repository_dispatch from intentd (so the pin bumps minutes after an alpha
-  publishes), with an hourly cron at :15 as the backstop when the dispatch is missed.
-  Each run follows the intentd alpha channel and lands the bump via a rolling PR — a
-  manual pin-bump PR is only for overrides (verify with
-  `node scripts/fetch-sidecar.cjs` from that directory).
-- release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
-  publishes to `intent-hq/cloudlands-releases`.
-- The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained
-  with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
-  `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
-  into a cut run that polls (30s interval, up to 15 min) for release-please to refresh
-  the Release PR and for CI Gate to go green, then merges — so an intentd change ships
-  in the **same fe alpha cycle**. The hourly cron at :30 is the backstop and the
-  normal path for fe-only changes; cron and manual-dispatch runs keep the
-  check-once-and-exit behavior (no polling). An open pin-bump PR (branch
-  `auto/intentd-pin`) defers the cut — the pin must land first so the alpha carries
-  the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
-  `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
-  the tag is younger than 90 minutes (an intentd release build is running and a pin
-  bump is imminent), the cut defers instead of shipping a stale-sidecar alpha; the
-  age bound stops a failed intentd build from deferring fe cuts forever, and the
-  check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
-  manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
-- Stable: dispatch `release-stable.yml` with the `version` input.
-
-### Release notifier
-
-- Both component repos run `scripts/notify-fixed-issues.sh` from their release workflows.
-  On alpha publish it scans the released tag range (commit messages plus squash-merged PR
-  bodies, resolved via the `(#N)` subject suffix) for `intent-hq/monorepo#N` / full issue
-  URL references and posts "Fixed in <component> vX.Y.Z (alpha)" on each referenced issue;
-  beta comments come from the manual `promote-beta.yml` promotion, and on stable promotion
-  it posts a "promoted to stable" comment covering the range since the
-  previous stable. cloudlands-fe comments also name the bundled intentd version.
-- Comments embed a hidden per-component/version/channel marker, so tag rebuilds and
-  workflow re-runs never double-post. `--dry-run` prints intended comments without
-  posting.
-- Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on `intent-hq/monorepo`)
-  in both component repos. Notifier steps are fail-soft (`continue-on-error`; skipped
-  with a warning when the secret is absent) — they never block a release or promotion.
-
-### Coordinated Release Ordering
-
-The pipeline is event-chained, with hourly crons as backstops: intentd release PR
-merge → tag + cargo-dist build → alpha manifest publish →
-`intentd-alpha-published` dispatch → cloudlands-fe pin bump
-(`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
-(`auto-cut-beta.yml` push trigger) → promote each component's stable → monorepo
-pins advance automatically via the auto-bump workflow (no manual bump PR). Every
-link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
-the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
-
-### Tracking shipped work (alpha builds)
-
-Alpha builds happen automatically: fe-only work rides the hourly :30 cron cut, and
-intentd work chains into a same-cycle fe alpha via the dispatch pipeline above, so
-merged work ships in a cloudlands-fe alpha shortly after landing. When the work
-changed intentd and/or cloudlands-fe, the workspace is NOT done once the PRs are
-merged: wait on / monitor the release PR(s) until the work ships in a cloudlands-fe
-alpha, then update the final workspace status message with the version that carries
-the feat/fix (e.g. "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to
-intentd-only changes too: an intentd change first ships in an intentd release, is
-then pinned into cloudlands-fe automatically, and finally rides the chained
-cloudlands-fe alpha (same cycle when the event chain is live; the next hourly cron
-cut when it falls back) — the version to report is still the cloudlands-fe alpha
-(verify inclusion via `intentdVersion` in the published release's
-`release-manifest.json`).
-Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never block a turn
-polling. Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha
-channel, so it needs no release monitoring or shipped-version status message.
-
-### Gotchas
-
-- release-please does **not** refresh the release PR for `chore` commits (their changelog
-  sections are hidden), so a sidecar pin bump never appears in the release PR
-  diff/changelog. The tag is cut on the merge commit whose tree contains the pin; the
-  authoritative check is `intentdVersion` in the published release's
-  `release-manifest.json`.
-- Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
-  landed via follow-up release PR intentd#520).
-
-## Breadcrumbs (initial porting) — **CONCLUDED**
-
-The initial porting effort is complete as of 2026-07-13, and its chronicle (implementation
-spec, porting-era protocol, and the frozen breadcrumbs progress log) has been removed from
-the tree — the original documents remain available in git history. The durable content
-lives on in `docs/ARCHITECTURE.md` and `docs/PROTOCOL.md`. Do not add new breadcrumb
-entries; progress is tracked via GitHub issues and PRs.
+- Releases are per-component and channel-based: merging a release PR publishes to the
+  rolling **alpha** channel automatically; **beta** and **stable** are manual
+  promotions of existing releases (no new build).
+- The pipeline is fully automated and event-chained (intentd alpha publish →
+  cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
+  backstops when an event link is missed.
+- **Never file manual submodule-bump or pin-bump PRs** — the workflows own pin
+  advancement. For an urgent bump, dispatch the workflow instead
+  (`gh workflow run auto-bump-submodules.yml`).
+- **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
+  done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
+  then update the final workspace status message with the carrying version (e.g.
+  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
+  too: they ride the chained cloudlands-fe alpha, and the version to report is the
+  cloudlands-fe alpha — verify inclusion via `intentdVersion` in the published
+  release's `release-manifest.json`. Use background monitoring (`ws.pr.monitor` /
+  `ws.hook.*`) — never block a turn polling.
+- Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
+  so it needs no release monitoring or shipped-version status message.
 
 ## Filing Issues
 
