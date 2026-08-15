@@ -50,9 +50,15 @@ cloudlands-fe).
   and event-driven: `auto-pin-intentd.yml` runs on the `intentd-alpha-published`
   repository_dispatch from intentd (so the pin bumps minutes after an alpha
   publishes), with an hourly cron at :15 as the backstop when the dispatch is missed.
-  Each run follows the intentd alpha channel and lands the bump via a rolling PR — a
-  manual pin-bump PR is only for overrides (verify with
-  `node scripts/fetch-sidecar.cjs` from that directory).
+  Each run follows the intentd alpha channel and lands the bump via a rolling PR.
+  In normal day-to-day operations everyone relies on this automated train (intentd
+  alpha publish → dispatch → auto pin bump → chained fe cut; crons as backstop) and
+  manual pin-bump PRs are not filed. A manual pin bump is the **emergency release**
+  path, used when an intentd fix must ship immediately rather than waiting on the
+  event chain / hourly crons: the operator lands the fix in intentd, cuts the intentd
+  release, then immediately pin-bumps `intentd.version` in cloudlands-fe via a manual
+  PR (verify with `node scripts/fetch-sidecar.cjs` from that directory) and cuts the
+  cloudlands-fe release.
 - release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
   publishes to `intent-hq/cloudlands-releases`.
 - The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained

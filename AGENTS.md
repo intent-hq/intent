@@ -121,9 +121,11 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - The pipeline is fully automated and event-chained (intentd alpha publish →
   cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
   backstops when an event link is missed.
-- **Never file manual submodule-bump or pin-bump PRs** — the workflows own pin
-  advancement. For an urgent bump, dispatch the workflow instead
-  (`gh workflow run auto-bump-submodules.yml`).
+- **Never file manual monorepo submodule-bump PRs or routine pin-bump PRs** — the
+  workflows own pin advancement. For an urgent monorepo bump, dispatch the workflow
+  instead (`gh workflow run auto-bump-submodules.yml`). The one sanctioned exception
+  is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
+  in [docs/RELEASING.md](./docs/RELEASING.md).
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
   then update the final workspace status message with the carrying version (e.g.
