@@ -55,6 +55,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 
 **Release engineering**
 
+- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails)
 - [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 
