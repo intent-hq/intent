@@ -190,13 +190,17 @@ cloudlands-fe).
   intentd posts "This fix is included in intentd vX.Y.Z."; cloudlands-fe posts
   "This fix is included in cloudlands-fe vX.Y.Z (bundles intentd vA.B.C)."
 - Completeness gate ("stay silent until complete"): a comment is posted only when
-  every fix PR linked to the issue across both component repos is merged and
-  contained — intentd PRs in the released / bundled intentd tag, fe PRs in the fe
-  tag. Any open or not-yet-contained linked fix PR → skip; a later release whose
-  scan re-references the issue picks it up. When completeness cannot be determined
-  (API error, token cannot see a repo), the notifier skips with a warning rather
-  than post a possibly-false claim. Issues with no linked fix PRs at all fall back
-  to the range-scan evidence (best effort).
+  every linked fix PR the gate considers is merged and contained. The gates differ
+  in scope: intentd's gate is component-scoped — it checks only intentd-linked fix
+  PRs against the released intentd tag (an intentd release still comments while an
+  fe-side fix PR is open); cloudlands-fe's gate is cross-repo — fe PRs must be
+  contained in the fe tag AND intentd PRs in the bundled intentd tag, making the fe
+  comment the user-facing availability signal. Any in-scope open or
+  not-yet-contained linked fix PR → skip; a later release whose scan re-references
+  the issue picks it up. When completeness cannot be determined (API error, token
+  cannot see a repo), the notifier skips with a warning rather than post a
+  possibly-false claim. Issues with no linked fix PRs at all fall back to the
+  range-scan evidence (best effort).
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
