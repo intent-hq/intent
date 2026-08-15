@@ -11,6 +11,10 @@
 // BRIDGE_HOST/--host (default 127.0.0.1), INTENTD_SOCKET/--socket
 // (default: platform intentd data dir, honoring INTENTD_DATA_DIR).
 //
+// Loopback-only is non-negotiable: non-loopback hosts are refused at startup
+// unless --unsafe-allow-non-loopback / BRIDGE_UNSAFE_NON_LOOPBACK=1 is passed,
+// and browser upgrades with a non-loopback Origin are rejected with 403.
+//
 // See intent-hq/monorepo#2526.
 
 import crypto from 'node:crypto';
@@ -50,6 +54,23 @@ export function defaultSocketPath(env = process.env, platform = process.platform
 
 export function computeAccept(key) {
   return crypto.createHash('sha1').update(key + WS_GUID).digest('base64');
+}
+
+export function isLoopbackHost(host) {
+  const h = String(host).replace(/^\[|\]$/g, '').toLowerCase();
+  return h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+// Browser pages are not stopped by loopback binding (they run on this
+// machine), so upgrades carrying a non-loopback Origin are rejected;
+// non-browser clients send no Origin header and are unaffected.
+export function isAllowedOrigin(origin) {
+  if (origin === undefined) return true;
+  try {
+    return isLoopbackHost(new URL(origin).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function encodeFrame(opcode, payload, fin = true) {
@@ -239,8 +260,11 @@ export function createBridge({ socketPath, host = '127.0.0.1', port = 51337 } = 
     const key = req.headers['sec-websocket-key'];
     const upgrade = (req.headers.upgrade || '').toLowerCase();
     if (req.method !== 'GET' || upgrade !== 'websocket' || !key) {
-      socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
-      socket.destroy();
+      socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    if (!isAllowedOrigin(req.headers.origin)) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
     socket.write(
@@ -263,10 +287,11 @@ export function createBridge({ socketPath, host = '127.0.0.1', port = 51337 } = 
   };
 }
 
-const USAGE = `usage: node scripts/uds-ws-bridge.mjs [--port N] [--host H] [--socket PATH]
+const USAGE = `usage: node scripts/uds-ws-bridge.mjs [--port N] [--host H] [--socket PATH] [--unsafe-allow-non-loopback]
 
 env: BRIDGE_PORT (default 51337), BRIDGE_HOST (default 127.0.0.1),
-     INTENTD_SOCKET (default: platform intentd data dir, honors INTENTD_DATA_DIR)`;
+     INTENTD_SOCKET (default: platform intentd data dir, honors INTENTD_DATA_DIR),
+     BRIDGE_UNSAFE_NON_LOOPBACK=1 (dangerous: allow a non-loopback host)`;
 
 function parseArgs(argv) {
   const out = {};
@@ -292,6 +317,10 @@ function parseArgs(argv) {
       out.socketPath = sock;
       continue;
     }
+    if (arg === '--unsafe-allow-non-loopback') {
+      out.unsafeAllowNonLoopback = true;
+      continue;
+    }
     if (arg === '--help' || arg === '-h') {
       out.help = true;
       continue;
@@ -315,6 +344,14 @@ function main() {
     console.error(`[uds-ws-bridge] error: invalid port ${port}`);
     process.exit(2);
   }
+  const allowNonLoopback =
+    args.unsafeAllowNonLoopback || process.env.BRIDGE_UNSAFE_NON_LOOPBACK === '1';
+  if (!isLoopbackHost(host) && !allowNonLoopback) {
+    console.error(`[uds-ws-bridge] error: refusing to bind non-loopback host ${host}`);
+    console.error('[uds-ws-bridge] this endpoint is the FULL UNAUTHENTICATED daemon API; loopback-only is non-negotiable.');
+    console.error('[uds-ws-bridge] if you really must, pass --unsafe-allow-non-loopback or BRIDGE_UNSAFE_NON_LOOPBACK=1.');
+    process.exit(2);
+  }
   if (!fs.existsSync(socketPath)) {
     console.error(`[uds-ws-bridge] error: intentd UDS socket not found at ${socketPath}`);
     console.error('[uds-ws-bridge] is intentd running? Override with INTENTD_SOCKET or --socket.');
@@ -330,8 +367,12 @@ function main() {
     console.warn('[uds-ws-bridge] * with NO AUTHENTICATION. Anything that can reach this port    *');
     console.warn('[uds-ws-bridge] * fully controls the daemon. Loopback-only; dev use only.      *');
     console.warn('[uds-ws-bridge] *****************************************************************');
-    if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
-      console.warn(`[uds-ws-bridge] * DANGER: bound to non-loopback host ${host} — do NOT do this.`);
+    if (!isLoopbackHost(host)) {
+      console.warn('[uds-ws-bridge] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+      console.warn(`[uds-ws-bridge] !!! DANGER: --unsafe-allow-non-loopback bound ${host} — the`);
+      console.warn('[uds-ws-bridge] !!! FULL UNAUTHENTICATED daemon API is reachable from the');
+      console.warn('[uds-ws-bridge] !!! network. Anyone who can reach this port owns the daemon.');
+      console.warn('[uds-ws-bridge] !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
     }
   });
   const stop = (sig) => {

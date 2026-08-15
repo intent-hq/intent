@@ -415,12 +415,16 @@ uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHEN
 	# connection to the installed daemon, with 1:1 JSON-RPC frame translation
 	# (docs/PROTOCOL.md). The daemon's own auth posture — authed WSS on 5181
 	# for iOS — is untouched; despite the target name, the endpoint is plain
-	# ws:// (no TLS). Socket resolution: an explicit INTENTD_SOCKET always
-	# takes precedence over the platform default (BRIDGE_PLATFORM is the
-	# injectable `uname -s` seam), and the target errors if the resolved
-	# socket does not exist.
+	# ws:// (no TLS). Socket resolution matches the script's own
+	# defaultSocketPath(): an explicit INTENTD_SOCKET always takes precedence,
+	# then an INTENTD_DATA_DIR-derived path ($$INTENTD_DATA_DIR/intentd.sock),
+	# then the platform default (BRIDGE_PLATFORM is the injectable `uname -s`
+	# seam). The target errors if the resolved socket does not exist.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	@socket="$$INTENTD_SOCKET"; \
+		if [ -z "$$socket" ] && [ -n "$$INTENTD_DATA_DIR" ]; then \
+			socket="$$INTENTD_DATA_DIR/intentd.sock"; \
+		fi; \
 		if [ -z "$$socket" ]; then \
 			case "$(BRIDGE_PLATFORM)" in \
 				Darwin) socket="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \

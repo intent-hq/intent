@@ -2,6 +2,7 @@
 // Run: node --test scripts/uds-ws-bridge.test.mjs
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import { once } from 'node:events';
 import http from 'node:http';
@@ -9,8 +10,11 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { createBridge, MAX_MESSAGE_BYTES } from './uds-ws-bridge.mjs';
+
+const BRIDGE_PATH = fileURLToPath(new URL('./uds-ws-bridge.mjs', import.meta.url));
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -83,7 +87,7 @@ class FrameReader {
   }
 }
 
-async function wsConnect(port, urlPath = '/ws') {
+async function wsConnect(port, urlPath = '/ws', extraHeaders = '') {
   const key = crypto.randomBytes(16).toString('base64');
   const sock = net.connect(port, '127.0.0.1');
   await once(sock, 'connect');
@@ -93,7 +97,9 @@ async function wsConnect(port, urlPath = '/ws') {
       'Upgrade: websocket\r\n' +
       'Connection: Upgrade\r\n' +
       `Sec-WebSocket-Key: ${key}\r\n` +
-      'Sec-WebSocket-Version: 13\r\n\r\n',
+      'Sec-WebSocket-Version: 13\r\n' +
+      extraHeaders +
+      '\r\n',
   );
   let head = Buffer.alloc(0);
   while (head.indexOf('\r\n\r\n') === -1) {
@@ -274,6 +280,61 @@ test('binary frames are ignored', async (t) => {
   assert.equal(frame.payload.toString(), 'after-binary');
   assert.equal(received.toString(), 'after-binary\n');
   sock.destroy();
+});
+
+test('client-initiated Close is echoed with the same code, then the socket closes', async (t) => {
+  let resolveConn;
+  const gotConn = new Promise((resolve) => (resolveConn = resolve));
+  const { port } = await setup(t, (c) => resolveConn(c));
+  const { sock, reader } = await wsConnect(port);
+  const conn = await gotConn;
+  const connClosed = once(conn, 'close');
+  const sockClosed = once(sock, 'close');
+  const payload = Buffer.concat([Buffer.from([0x03, 0xe8]), Buffer.from('done')]); // 1000 + reason
+  sock.write(clientFrame(0x8, payload));
+  const frame = await reader.next();
+  assert.equal(frame.opcode, 0x8);
+  assert.equal(frame.payload.readUInt16BE(0), 1000);
+  await sockClosed;
+  await connClosed;
+});
+
+test('over-cap line from the UDS side closes the WS client with 1009', async (t) => {
+  const { port } = await setup(t, (c) => {
+    c.write(Buffer.alloc(MAX_MESSAGE_BYTES + 1, 0x61));
+  });
+  const { sock, reader } = await wsConnect(port);
+  const frame = await reader.next();
+  assert.equal(frame.opcode, 0x8);
+  assert.equal(frame.payload.readUInt16BE(0), 1009);
+  await once(sock, 'close');
+});
+
+test('upgrade with a non-loopback Origin is rejected with 403', async (t) => {
+  const { port } = await setup(t);
+  const { sock, headerText } = await wsConnect(port, '/ws', 'Origin: https://evil.example\r\n');
+  assert.match(headerText, /^HTTP\/1\.1 403 /);
+  sock.destroy();
+});
+
+test('upgrade with a loopback Origin is accepted and round-trips', async (t) => {
+  const { port } = await setup(t);
+  const { sock, reader, headerText } = await wsConnect(port, '/ws', 'Origin: http://localhost:5173\r\n');
+  assert.match(headerText, /^HTTP\/1\.1 101 /);
+  sock.write(clientFrame(0x1, '{"id":1}'));
+  const frame = await reader.next();
+  assert.equal(frame.payload.toString(), '{"id":1}');
+  sock.destroy();
+});
+
+test('non-loopback host is refused at startup without the unsafe opt-out', async () => {
+  const child = spawn(process.execPath, [BRIDGE_PATH, '--host', '0.0.0.0', '--socket', '/nonexistent.sock']);
+  let stderr = '';
+  child.stderr.on('data', (d) => (stderr += d));
+  const [code] = await once(child, 'exit');
+  assert.equal(code, 2);
+  assert.match(stderr, /refusing to bind non-loopback host 0\.0\.0\.0/);
+  assert.match(stderr, /--unsafe-allow-non-loopback/);
 });
 
 test('UDS connect failure closes the WS client with a clear reason', async (t) => {
