@@ -55,6 +55,16 @@ DEV_PORT ?= 5190
 # actually sees the default/override in the child environment.
 export DEV_PORT
 
+# BRIDGE_PORT is the loopback port for `make uds-to-unauthed-wss-bridge` — the
+# source-only dev shim that exposes the installed daemon's UDS socket as an
+# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. 51337 stays clear of 5181
+# (held by the daemon's authed WSS for iOS). Overridable, e.g.
+# `make uds-to-unauthed-wss-bridge BRIDGE_PORT=5182`.
+BRIDGE_PORT ?= 51337
+# Injectable platform seam for the bridge's installed-daemon socket default.
+# An explicit INTENTD_SOCKET always takes precedence.
+BRIDGE_PLATFORM ?= $(shell uname -s)
+
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
 # days in this worktree's intentd, and `sweep-all` does the same across every
@@ -76,7 +86,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd run-fe run-fe-local dev ios-open ios-info dist-mac
+	run-intentd run-fe run-fe-local uds-to-unauthed-wss-bridge dev ios-open ios-info dist-mac
 
 all: build
 
@@ -398,6 +408,39 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 	fi; \
 	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
 	cd $(FE_DIR) && INTENTD_SOCKET="$$sock" pnpm run dev
+
+uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1:$(BRIDGE_PORT)
+	# Runs scripts/uds-ws-bridge.mjs (zero-dependency, Node >= 20): each WS
+	# client on ws://127.0.0.1:$(BRIDGE_PORT)/ws gets its own dedicated UDS
+	# connection to the installed daemon, with 1:1 JSON-RPC frame translation
+	# (docs/PROTOCOL.md). The daemon's own auth posture — authed WSS on 5181
+	# for iOS — is untouched; despite the target name, the endpoint is plain
+	# ws:// (no TLS). Socket resolution matches the script's own
+	# defaultSocketPath(): an explicit INTENTD_SOCKET always takes precedence,
+	# then an INTENTD_DATA_DIR-derived path ($$INTENTD_DATA_DIR/intentd.sock),
+	# then the platform default (BRIDGE_PLATFORM is the injectable `uname -s`
+	# seam). The target errors if the resolved socket does not exist.
+	# Long-running; does not exit until you stop it (Ctrl-C).
+	@socket="$$INTENTD_SOCKET"; \
+		if [ -z "$$socket" ] && [ -n "$$INTENTD_DATA_DIR" ]; then \
+			socket="$$INTENTD_DATA_DIR/intentd.sock"; \
+		fi; \
+		if [ -z "$$socket" ]; then \
+			case "$(BRIDGE_PLATFORM)" in \
+				Darwin) socket="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+				Linux) socket="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+				*) echo "[uds-to-unauthed-wss-bridge] ERROR: unsupported platform '$(BRIDGE_PLATFORM)'; set INTENTD_SOCKET explicitly."; \
+				   exit 1 ;; \
+			esac; \
+		fi; \
+		if [ ! -S "$$socket" ]; then \
+			echo "[uds-to-unauthed-wss-bridge] ERROR: daemon socket not found at $$socket"; \
+			echo "[uds-to-unauthed-wss-bridge] Start the installed Intent daemon first, or set INTENTD_SOCKET to its socket path."; \
+			exit 1; \
+		fi; \
+		echo "[uds-to-unauthed-wss-bridge] Bridging installed daemon socket: $$socket"; \
+		echo "[uds-to-unauthed-wss-bridge] WARNING: this exposes the FULL UNAUTHENTICATED daemon API as plain ws:// on 127.0.0.1:$(BRIDGE_PORT) — no TLS, no auth. Loopback-only by design; any process on this machine can drive the daemon while the bridge runs."; \
+		INTENTD_SOCKET="$$socket" BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs
 
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and

@@ -49,3 +49,17 @@ jobs:
             test
             ci
             perf
+
+  # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) is zero-dependency
+  # Node, so its node:test suite is also seconds-long and runs directly on a
+  # GitHub-hosted runner — no tinybox routing, no submodules needed.
+  bridge-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/uds-ws-bridge.test.mjs
