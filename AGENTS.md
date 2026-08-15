@@ -37,7 +37,7 @@ monorepo pin advance (Phase 2) then happens automatically.
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
 `Fixes intent-hq/monorepo#N` — in the squash-commit message or PR body. GitHub
 auto-closes the issue on merge, and the release notifier (see Release Process) comments
-on it when the fix ships in a release.
+on it once a release actually contains the complete fix.
 
 ### Phase 2 — Monorepo pin advance (automated)
 
@@ -179,19 +179,35 @@ cloudlands-fe).
 
 ### Release notifier
 
-- Both component repos run `scripts/notify-fixed-issues.sh` from their release workflows.
-  On alpha publish it scans the released tag range (commit messages plus squash-merged PR
-  bodies, resolved via the `(#N)` subject suffix) for `intent-hq/monorepo#N` / full issue
-  URL references and posts "Fixed in <component> vX.Y.Z (alpha)" on each referenced issue;
-  beta comments come from the manual `promote-beta.yml` promotion, and on stable promotion
-  it posts a "promoted to stable" comment covering the range since the
-  previous stable. cloudlands-fe comments also name the bundled intentd version.
-- Comments embed a hidden per-component/version/channel marker, so tag rebuilds and
-  workflow re-runs never double-post. `--dry-run` prints intended comments without
-  posting.
-- Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on `intent-hq/monorepo`)
-  in both component repos. Notifier steps are fail-soft (`continue-on-error`; skipped
-  with a warning when the secret is absent) — they never block a release or promotion.
+- Both component repos run `scripts/notify-fixed-issues.sh` from their release (tag
+  build) workflows only — promotion workflows post nothing. Each release scans for
+  `intent-hq/monorepo#N` / full issue URL references (commit messages plus
+  squash-merged PR bodies, resolved via the `(#N)` subject suffix): intentd scans its
+  released tag range; cloudlands-fe scans its own range plus the bundled intentd
+  delta `v{prev pin}..v{new pin}`, so an fe release that merely bumps the sidecar
+  still comments on intentd-fixed issues.
+- Comments never name a channel and there are no beta/stable promotion comments.
+  intentd posts "This fix is included in intentd vX.Y.Z."; cloudlands-fe posts
+  "This fix is included in cloudlands-fe vX.Y.Z (bundles intentd vA.B.C)."
+- Completeness gate ("stay silent until complete"): a comment is posted only when
+  every linked fix PR the gate considers is merged and contained. The gates differ
+  in scope: intentd's gate is component-scoped — it checks only intentd-linked fix
+  PRs against the released intentd tag (an intentd release still comments while an
+  fe-side fix PR is open); cloudlands-fe's gate is cross-repo — fe PRs must be
+  contained in the fe tag AND intentd PRs in the bundled intentd tag, making the fe
+  comment the user-facing availability signal. Any in-scope open or
+  not-yet-contained linked fix PR → skip; a later release whose scan re-references
+  the issue picks it up. When completeness cannot be determined (API error, token
+  cannot see a repo), the notifier skips with a warning rather than post a
+  possibly-false claim. Issues with no linked fix PRs at all fall back to the
+  range-scan evidence (best effort).
+- Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
+  re-runs never double-post. `--dry-run` prints intended comments without posting.
+- Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
+  `intent-hq/monorepo` plus pull-requests:read on `intent-hq/intentd` and
+  `intent-hq/cloudlands-fe` — the PR reads power the completeness gate) in both
+  component repos. Notifier steps are fail-soft (`continue-on-error`; skipped with a
+  warning when the secret is absent) — they never block a release.
 
 ### Coordinated Release Ordering
 
@@ -256,7 +272,8 @@ for all components.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
   `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
   `Fixes intent-hq/monorepo#N` so the issue auto-closes on merge and the release
-  notifier comments on it when the fix ships (see Release Process).
+  notifier comments on it once a release contains the complete fix (see Release
+  Process).
 
 ## Terminology
 
