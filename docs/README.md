@@ -18,6 +18,14 @@ subscriptions, and error codes. The detailed wire contract from the porting era 
 merged in, making this the single canonical spec. The method surface is enforced by
 golden tests in the `intent-transport` crate.
 
+## Harness Versioning — `HARNESS.md`
+
+**[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent
+creation-time `harnessVersion` / `harnessFeatures` stamp on agent sessions, the
+doctrine-vs-reference split, the versioned `Harness` trait and doctrine bundles in
+`intentd`, golden-test byte pinning, the steps for minting a new version, and the
+read-only frontend surface.
+
 ## Frontend — `fe/`
 
 Durable documentation for the `cloudlands-fe` desktop frontend (Electron + SvelteKit),
