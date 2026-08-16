@@ -968,8 +968,14 @@ An `isNewRepo` create that would otherwise be provisioned persists
 **`checkoutMode: "direct"`** (intentd#944): no worktree and no CoW clone is provisioned —
 the workspace works directly in the initialized repository folder, where the workspace
 `branch` is created (at `baseRef` when supplied, else from `HEAD`) and checked out so
-agents land on `branch` as in every other checkout mode. `worktreePath` stays unset;
-`repositoryPath` is the checkout. The `"direct"` arm is gated on the same
+agents land on `branch` as in every other checkout mode. `repositoryPath` **is** the
+checkout and `worktreePath` carries the same path (standalone-row parity with cache
+hydration, monorepo#2611 — previously `worktreePath` stayed unset, which left agent
+spawn cwd resolution and the workspace file watcher without a checkout path). Because
+the folder is user-chosen — never daemon-provisioned — `workspace.delete` removes only
+the row: the standalone-checkout cleanup is gated on the daemon-owned
+`<root>/<workspaceId>/<repo-slug>` layout, which the repository folder never matches.
+The `"direct"` arm is gated on the same
 provisioning-skip conditions as the worktree path above — an `isNewRepo` create with
 `isRemote: true`, `skipIsolation`/`skipWorktree`, or a caller-supplied `worktreePath`
 still initializes the repository but persists **no** `checkoutMode` and creates no
