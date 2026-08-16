@@ -358,6 +358,22 @@ When the aggregate agent memory budget is on (`agents.memoryBudgetMb` > 0, §5.1
 - `queuedSpawns` counts the agent spawns currently parked in the admission wait queue — whether they queued on the concurrency slot cap or on the memory budget. `0` means nothing is waiting.
 - Unlike the child-tree fields above (always present, `null` until sampled), all three follow the **presence-detection convention**: when the budget is off (`agents.memoryBudgetMb = 0`, the default) they are **absent** — never `null`. Reading them never perturbs admission state. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
 
+#### `system.status` — workspaces-root disk fields (additive)
+
+The `system.status` result additionally reports the disk space of the **volume containing the daemon's resolved workspaces root** — the parent directory workspace checkouts are provisioned under (startup-pinned `workspaces.root` / `INTENTD_WORKSPACES_DIR`, else the `~/intent/workspaces` default; fixed for the daemon's lifetime) — so a client can warn when workspace provisioning is about to run out of space:
+
+```jsonc
+{
+  "workspacesDiskAvailableBytes": 250790436864, // available bytes on the workspaces-root volume
+  "workspacesDiskTotalBytes": 994662584320      // total bytes of that volume
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- The values describe the **mounted volume** containing the workspaces root (longest-mount-point match against the canonicalized root), not the directory's own usage — the same numbers `df` reports for that path.
+- Served from a background sampler (~30s cadence, first sample taken synchronously at startup), so the status read path never touches the OS; a large delete or download may take one refresh interval to appear.
+- Both fields follow the **presence-detection convention**: **absent** — never `null` or `0` — until the sampler's first sample lands, or when no mounted volume matches the root (e.g. the configured directory does not exist yet). Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
+
 #### `system.status` — daemon routing fields (additive)
 
 The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
