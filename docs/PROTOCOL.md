@@ -2097,10 +2097,14 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
   **the snapshot is what the session actually runs with**: session (re)spawns resolve
   the agent's MCP tool surface and prompt assembly from the persisted snapshot rather
   than the live settings, so a settings flip never alters an existing session's tools
-  and the wire report never disagrees with the runtime surface. The one documented
-  exception stays live: `agentFeatures.stateSnapshot` gates the per-turn snapshot-line
-  injection with a LIVE read each turn (§5.12), so the captured value records the
-  creation-time setting without freezing that behavior. The pre-existing per-session
+  and the wire report never disagrees with the runtime surface. Two documented
+  exceptions stay live: `agentFeatures.stateSnapshot` gates the per-turn snapshot-line
+  injection with a LIVE read each turn (§5.12), and `agentFeatures.backgroundHooks` is
+  re-checked live in the services layer on every `hook.schedule` (defense in depth
+  behind the MCP dispatch deny) — a flip to `false` denies new schedules from ALL
+  sessions regardless of their snapshot, while already-active hooks are unaffected and
+  run to their terminal state/TTL. For both, the captured value records the
+  creation-time setting without freezing the behavior. The pre-existing per-session
   `taskGraph` pin folds into the snapshot: readers prefer `harnessFeatures.taskGraph`,
   falling back to the legacy per-session column for older rows (behavior identical).
   The wire always carries a value: a legacy pre-snapshot row (NULL in the store)
