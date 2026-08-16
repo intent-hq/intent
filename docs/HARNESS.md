@@ -13,6 +13,10 @@ envelope, wake/queue system messages, notices, and the bundled instruction
 and specialist markdown ("doctrine"). Versioning it gives every agent session
 a permanent, creation-time pin to the exact doctrine it was created under, so
 a daemon upgrade never silently changes what an existing session runs with.
+Today the session pin governs system-prompt/doctrine assembly (and the
+specialist bundle); the turn-envelope and wake/notice surfaces are versioned
+behind the same trait but their call sites still resolve the latest harness —
+routing them through the session's stamp is the intended end state.
 
 ## Doctrine vs. reference
 
@@ -55,7 +59,9 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 Legacy sessions persisted before the feature snapshot existed (NULL in the
 store) follow the live effective settings on read until their first
 post-launch activation, which materializes the snapshot once from the
-resolved live values and persists it (idempotent: the store write is guarded
+resolved live values — with one exception: the legacy per-session `taskGraph`
+pin, where present, wins over the live setting for that key, matching the
+pre-freeze read — and persists it (idempotent: the store write is guarded
 on `harness_features IS NULL`). From then on the row reads its frozen
 snapshot like any new session; `harnessVersion` stays `"1.0"` — only the
 flags freeze.
