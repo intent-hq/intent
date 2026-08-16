@@ -360,7 +360,7 @@ When the aggregate agent memory budget is on (`agents.memoryBudgetMb` > 0, §5.1
 
 #### `system.status` — workspaces-root disk fields (additive)
 
-The `system.status` result additionally reports the disk space of the **volume containing the daemon's resolved workspaces root** — the parent directory workspace checkouts are provisioned under (startup-pinned `workspaces.root` / `INTENTD_WORKSPACES_DIR`, else the `~/intent/workspaces` default; fixed for the daemon's lifetime) — so a client can warn when workspace provisioning is about to run out of space:
+The `system.status` result additionally reports the disk space of the **volume containing the daemon's resolved workspaces root** — the parent directory `workspace.create` provisions new checkouts under, resolved with the create path's precedence: startup-pinned `workspaces.root` (`INTENTD_WORKSPACES_DIR`) wins, then a non-empty absolute `workspace.worktreesLocation` setting, then the `~/intent/workspaces` default (resolved once at boot; a `worktreesLocation` change applies on restart) — so a client can warn when workspace provisioning is about to run out of space:
 
 ```jsonc
 {
@@ -372,7 +372,7 @@ The `system.status` result additionally reports the disk space of the **volume c
 
 - The values describe the **mounted volume** containing the workspaces root (longest-mount-point match against the canonicalized root), not the directory's own usage — the same numbers `df` reports for that path.
 - Served from a background sampler (~30s cadence, first sample taken synchronously at startup), so the status read path never touches the OS; a large delete or download may take one refresh interval to appear.
-- Both fields follow the **presence-detection convention**: **absent** — never `null` or `0` — until the sampler's first sample lands, or when no mounted volume matches the root (e.g. the configured directory does not exist yet). Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
+- Both fields follow the **presence-detection convention**: **absent** — never `null` or `0` — until the sampler's first sample lands, or when no mounted volume matches the root (e.g. an empty disks list in a locked-down container, or an unmounted drive letter on Windows; a merely not-yet-created root still matches its would-be volume, so absence does **not** imply the directory is missing). Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — daemon routing fields (additive)
 
