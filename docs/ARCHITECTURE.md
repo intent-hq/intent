@@ -214,8 +214,12 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   registration in the source repo — goes through
   `intent_git::worktree::detach_checkout_dir`, which only
   renames the directory to a trash path (filesystem work, never opens a repository).
-  The recursive removal of the trash directory runs in the background outside the
-  lock in both modes.
+  The standalone rename is gated on the daemon-owned
+  `<root>/<workspaceId>/<repo-slug>` layout: an `isNewRepo` direct checkout —
+  where the checkout IS the user's chosen repository folder, outside that
+  layout — is never renamed or removed; deletion removes only the workspace
+  row. The recursive removal of the trash directory runs in the background
+  outside the lock in both modes.
 - **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
   resolving the **sandbox source** from the workspace's checkout mode: shared-checkout
   workspaces (no `checkoutMode`) clone from the user's repository folder; `cow` and
@@ -527,6 +531,31 @@ stays un-gated and always carries its `requirements` block — the toggle only
 scrubs the "prefer `ws.pr.monitor`" cross-references from the surviving doc
 entries.
 
+## Multi git root tracking
+
+Wire contract: PROTOCOL.md §5.6 ("Multi git root tracking" — the
+`gitRoot.list` method, the `gitRootId?` param on the git reads, the
+`WorkspaceGitRoot` wire shape) and §6.5 (`gitRoot:*` events). A workspace can
+track **secondary git roots** — agent-created subtree checkouts, initialized
+submodules, or sibling clones anywhere on the host — alongside its implicit
+primary worktree. Rows persist in the SQLite `workspace_git_root` table
+(migration `0093_workspace_git_root.sql`, `intent-store`'s
+`workspace_git_root_repo`; rows cascade with their workspace), keyed by
+canonicalized absolute path and idempotent per `(workspaceId, path)`.
+Registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot` /
+`ws.git.listRoots` in `intent-acp`'s git bindings, per the §6.8 principle) —
+the FE reads via `gitRoot.list` and subscribes to `gitRoot:registered` /
+`gitRoot:updated` / `gitRoot:unregistered`. The background PR-refresh loop
+additionally sweeps each workspace's roots: it auto-detects the worktree's
+initialized submodules as `source: "auto"` rows, auto-prunes rows whose path
+vanished from disk, and runs the same per-branch PR discovery on each root as
+on the primary workspace root (the row's PR fields mirror the `Workspace` PR
+fields), fail-soft per root. Six git reads (`git.status`, `git.changes`,
+`git.diffs`, `git.commits`, `git.showFile`, `git.branchStatus`) accept an
+optional `gitRootId` that re-points the read at the registered root's path;
+an unknown or foreign-workspace id is `-32602` with an identical message, so
+roots are not probeable across workspaces.
+
 ## Agent completion settlement & deferrals
 
 Wire contract: PROTOCOL.md §Completion-watch persistence and the §6.5
@@ -584,12 +613,16 @@ the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Ten booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor` — all default `true`. Each
-toggle removes an agent-exposed feature from the agent's system prompt, its MCP
-tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. The first ten
+default `true`; `taskGraph` is opt-in and defaults `false`. Each toggle removes
+an agent-exposed feature from the agent's system prompt, its MCP tool surface,
+or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
+docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
+unblocked-wake teaching uses the value captured when the parent session is
+created rather than the live setting at wake delivery.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -688,6 +721,184 @@ tool surface, or (for `stateSnapshot`) its per-turn prompt decoration.
   surface they were created with. The two exceptions above (`hook.schedule`'s
   services-layer check, `stateSnapshot`'s per-turn read) act on existing
   sessions immediately.
+
+## Agent process-tree memory: characteristics & tuning knobs
+
+Wire contract: PROTOCOL.md §5 (`system.status` — child-process tree fields).
+The daemon's cost to the machine is its **descendant process tree**, not its
+own heap: a 183 MB `intentd` binary was measured owning a 21.5 GB / 95-process
+tree (monorepo#2063). An operator diagnosing memory pressure reads
+`childProcesses` / `childMemoryBytes`; `memoryBytes` covers only the daemon
+binary and understates the real footprint by more than an order of magnitude.
+Each claim below carries the issue holding the capture it came from
+(monorepo#2062, #2063, #2107, #2109), so a reader can check the method without
+re-deriving the numbers. The handful of figures that are **arithmetic on**
+those captures rather than captures themselves — a 20-agent seat's ~12 GB,
+three concurrent test runs at ~29 GB, the 256-adapter ~156 GB ceiling — are
+marked as projections where they appear.
+
+**What an agent costs.** Per-agent cost spans a 22× range, so agent count is
+not a predictor of memory and `agents.maxConcurrent` is a **concurrency cap,
+not a resource cap** (monorepo#2063):
+
+| Subtree | RSS | Notes |
+| --- | ---: | --- |
+| Idle / conversing agent (median of 7) | **~660 MB** | range 436–756 MB; `npm exec` → node ACP adapter → provider CLI → mcp-bridge |
+| — provider CLI alone | 427–518 MB | |
+| Agent running `vitest` | **9,617 MB** | 19 procs; 6 node workers at 0.8–2.3 GB each |
+| Agent running `cargo check --workspace` | 2,087 MB | 24 procs |
+| Agent running `pnpm run test:unit` | 1,154 MB | 10 procs |
+| Ephemeral adapter chain (one-shot completion / model probe) | **~610 MB** | monorepo#2062; holds no agent slot, bounded lifetime |
+
+A single agent therefore spans 0.44 GB → 9.6 GB, and the top of that range is
+reached by an agent doing exactly what agents are for — three concurrent test
+runs projects to ~29 GB (3 × the measured 9.6 GB, not itself a capture), an
+ordinary coordinator fan-out.
+
+**The tree is retained, not leaked.** Every agent touched inside the
+`agents.idleReapMinutes` window stays resident (monorepo#2109, measured on
+real `claude-code` chains, 10 agents driven to idle then left alone):
+
+| `idleReapMinutes` | After idle | Result |
+| --- | --- | --- |
+| **30 (default until monorepo#2109)** | 10 minutes | **40 procs / 5.85 GB, flat — zero processes exited** |
+| 2 | 122 s after last turn | **0 procs / 0 GB — drained completely** |
+
+Retention claims in this section describe the **idle-reap sweep** in isolation.
+The shipped default for `memoryBudgetMb` is auto (a RAM-derived budget), which
+adds a second, independent eviction path: `ProcessRegistry::evict_idle` takes
+no TTL and drops the LRU idle subtree to admit a spawn, so an idle tree can go
+before its TTL and none of the retention figures below are guaranteed floors.
+To observe the sweep-only behavior (no budget eviction), set
+`memoryBudgetMb = 0`.
+
+The reaper works; it was simply not asked to run for half an hour. That
+measurement is what moved the shipped default to **10 minutes**: the same tree
+begins draining once the window passes rather than holding 5.85 GB for a
+further 20 minutes, and the 30-minute row above now describes the old default
+rather than the shipped one.
+
+> **On upgrade, an existing seat keeps the value its `config.toml` already
+> carries — permanently.** The 10-minute default applies to **new installs**:
+> the config template is written only when the file is absent, and every
+> install created before this change has an explicit `idleReapMinutes = 30` in
+> it, which wins over the shipped default. There is **no migration** — that 30
+> stays until someone edits the file, by decision (monorepo#2109): a boot
+> rewrite cannot tell a deliberate 30 from one the old template baked in, and
+> silently overriding the former was judged worse than leaving the latter.
+>
+> So if your seat is accumulating memory right now, **upgrading will not change
+> that — open `config.toml` and set `idleReapMinutes` yourself.**
+
+An agent
+becomes a candidate at the TTL and is picked up by the next sweep (interval
+`ttl/4` clamped to `[30s, 300s]`, `reap_timings` in the `intentd` binary
+crate), so **selection** is bounded by TTL + one sweep — but release is not
+the same instant: `ProcessRegistry::evict_idle_older_than` awaits each kill
+serially and each carries a SIGTERM→SIGKILL grace plus a descendant sweep, so
+a large idle set drains over a tail rather than all at once. Only processes
+idle past the TTL are candidates, and the sweep skips any agent the manager
+reports busy when it checks (`AgentManager::reap_idle_older_than`'s
+eligibility predicate).
+Consequence for sizing: with the budget off, a seat that touches 20 agents
+within the window holds all 20 subtrees at once even if only one is active —
+projecting to ~12 GB at the measured ~0.6 GB idle median, more if any of them
+ran a test suite.
+
+**The knobs**, all under the `[agents]` table in `config.toml` (each is
+self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
+`intent-core/src/settings_file.rs`; all take effect on daemon restart):
+
+| Knob | Default | Bounds |
+| --- | --- | --- |
+| `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
+| `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
+
+- **`memoryBudgetMb` is a soft admission gate, not a ceiling**
+  (monorepo#2063, validated end-to-end against real agents). Set to 1500 MB,
+  a 20-agent simultaneous burst peaked at **3.06 GB** against **12.37 GB**
+  unbounded, and settled at 1.73 GB against 11.56 GB; the same-budget 8-agent
+  burst peaked at 2.47 GB and 3.09 GB across two runs — i.e. **the bound does
+  not scale with demand**, a 4× larger request peaks the same (3.06 vs 3.09
+  GB). The costs: transient overshoot of **65–105%** and
+  steady state **~16% over**. The overshoot is structural rather than
+  accidental (`live == 0` always admits, the provisional charge is a fixed
+  `PROVISIONAL_AGENT_BYTES` = 660 MB, and `budget_pending_bytes` resets when a
+  new sample seq lands while a just-spawned agent's RSS is still ramping —
+  `ProcessRegistry` in `intent-services/src/agent_manager.rs`), so it is a
+  **fixed offset, not proportional to demand**: budget for roughly 2× the
+  configured value as the transient. That sizing rule covers the **admission**
+  transient the measurement exercised — a burst of comparable agents — and is
+  not a runtime ceiling. The gate runs at spawn only: an already-admitted
+  agent whose own workload grows (the 9.6 GB `vitest` case above) is never
+  re-checked and can carry the tree past the budget by itself, and the gate's
+  only lever against that is refusing later spawns and evicting idle trees.
+  Admission only — nothing running is ever killed, and all turns complete.
+  The settings catalog advertises the bound as `min 0` / `max` = detected
+  physical RAM in MB, **capped at 1,024,000 MB** — which is also the value used
+  where detection is unavailable (it is Linux/macOS only) and the static bound
+  `config.toml` parsing enforces. So a client renders a slider over the range
+  the setting can meaningfully take, and on a seat with more than ~1 TB of RAM
+  the cap binds instead of the RAM figure. The cap is not cosmetic: the
+  catalog bound must never exceed the parse bound, or `settings.update` would
+  accept a value that the same schema then rejects on the way to disk. The
+  parse bound itself stays static and machine-independent, so a `config.toml`
+  written on one seat still parses on another — meaning the divergence runs
+  one way only, and a config carrying a budget above *this* machine's RAM
+  still loads and is reported with a `value` above the advertised `max`.
+- **`maxConcurrentAdapters` closes the quick-action burst path**
+  (monorepo#2062). One-shot completions and model probes never enter
+  `ProcessRegistry`, so they consume no `maxConcurrent` slot and do not appear
+  in `system.status.agents` — before the bound the only ceiling was
+  `server.maxOutstandingRpcs` (256), which projects to ~156 GB of adapter
+  chains. **Once a burst exceeds the cap**, peak live chains equal the cap
+  exactly and are invariant to how much bigger the burst is (a 16-call burst
+  at cap 6 peaked at 3.57 GB); a burst smaller than the cap is unaffected and
+  simply peaks at its own size. Over-limit callers queue FIFO on the
+  semaphore in `intent-services/src/acp_adapter.rs` and, if their own timeout
+  expires first, fail with `-32603` and
+  `error.data.code = "adapter-busy"` **having spawned nothing** — a retry is
+  always safe.
+
+**Caveat: do not judge a burst from `childMemoryPeakBytes`** until
+monorepo#2107 is fixed. The high-water mark is a maximum over 5 s samples
+(`CHILD_TREE_SAMPLE_SECS`), so a burst that peaks between ticks is never seen.
+Measured against a 1 Hz `ps` descendant walk:
+
+| Run | `ps` @ 1 Hz | `childMemoryPeakBytes` | Under-report |
+| --- | ---: | ---: | ---: |
+| bounded (cap 6, 16 calls) | 3.57 GB | 3.57 GB | 0% |
+| unbounded (cap 64, 16 calls) | 7.00 GB | 3.48 GB | **−50%** |
+| unbounded (cap 64, 16 calls, repeat) | 8.97 GB | 5.43 GB | **−39%** |
+
+Read from telemetry alone, **the unbounded run looks cheaper than the bounded
+one** — the inverted conclusion. Steady state is accurate (a running soak read
+5.85 GB by both methods); the field aliases only on transients, which is
+precisely the case it was introduced for.
+
+**`idleReapMinutes` now defaults to 10, not 30** — on new installs; see the
+upgrade note above for why an existing seat is unaffected (monorepo#2109,
+reversing the earlier decision on that issue to leave defaults alone). The
+reasoning that originally argued for holding still is unchanged and is what
+keeps the new default off the floor: reaping earlier costs every user a warm
+process on next
+use, and the measured accumulation is a function of how many agents a seat
+touches — which differs enormously between a single-agent user and a
+coordinator fanning out a dozen. What changed is the read on where the
+midpoint sits. 30 minutes is long enough that the two cases converge in the
+worst direction — with the budget off, the coordinator holds every subtree it
+touched anywhere in that half-hour window, re-extending it on each fan-out (the
+5.85 GB flat row above measured 10 minutes of that, not a whole session), while
+the single-agent
+user gains a warm process they were unlikely to return to that late anyway. 10
+minutes keeps the warm path for the case that actually re-enters an agent while
+bounding what a fan-out retains, and `0` still turns the sweep off entirely for
+anyone who wants the old behaviour — with the caveat above that `0` stops the
+sweep, not every path that can reclaim an idle tree. A seat still hitting the
+accumulation path should reach for `idleReapMinutes` first, then
+`memoryBudgetMb`.
 
 ## Read-path performance principles
 

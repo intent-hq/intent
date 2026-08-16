@@ -12,7 +12,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
+      # Intermittent TLS failures reaching api.github.com can kill this action
+      # sub-second, before it validates anything — a spurious red that reads
+      # like a bad title (intent-hq/monorepo#2098). Tolerate a first-attempt
+      # failure and retry once; the retry is authoritative, so a genuinely
+      # bad title still fails the job.
       - uses: amannn/action-semantic-pull-request@v6
+        id: title_check
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -25,3 +32,34 @@ jobs:
             test
             ci
             perf
+      - name: Wait before retrying title validation
+        if: steps.title_check.outcome == 'failure'
+        run: sleep 15
+      - uses: amannn/action-semantic-pull-request@v6
+        if: steps.title_check.outcome == 'failure'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            chore
+            docs
+            refactor
+            test
+            ci
+            perf
+
+  # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) is zero-dependency
+  # Node, so its node:test suite is also seconds-long and runs directly on a
+  # GitHub-hosted runner — no tinybox routing, no submodules needed.
+  bridge-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test scripts/uds-ws-bridge.test.mjs
