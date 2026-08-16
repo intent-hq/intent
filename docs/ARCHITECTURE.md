@@ -214,8 +214,12 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   registration in the source repo — goes through
   `intent_git::worktree::detach_checkout_dir`, which only
   renames the directory to a trash path (filesystem work, never opens a repository).
-  The recursive removal of the trash directory runs in the background outside the
-  lock in both modes.
+  The standalone rename is gated on the daemon-owned
+  `<root>/<workspaceId>/<repo-slug>` layout: an `isNewRepo` direct checkout —
+  where the checkout IS the user's chosen repository folder, outside that
+  layout — is never renamed or removed; deletion removes only the workspace
+  row. The recursive removal of the trash directory runs in the background
+  outside the lock in both modes.
 - **Agent sandboxes.** `services::sandbox_ops` provisions a per-agent CoW clone,
   resolving the **sandbox source** from the workspace's checkout mode: shared-checkout
   workspaces (no `checkoutMode`) clone from the user's repository folder; `cow` and
