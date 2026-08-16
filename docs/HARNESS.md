@@ -104,9 +104,11 @@ The doctrine text is **byte-pinned**: `intent-services/src/v1_goldens.rs`
 asserts full literal bytes (or a SHA-256 pin for the large bundled layers)
 of every system-generated string that reaches an agent conversation, and
 `agent_manager::v1_turn_envelope_goldens` pins the composed turn envelope.
-Any wording or whitespace change fails the goldens and forces a deliberate
-decision: update the golden (byte-neutral refactor) or mint a new harness
-version (material doctrine change).
+Any wording or whitespace change to a versioned surface fails that
+version's goldens and must be answered by minting a new harness version —
+a version's goldens are never updated to absorb a doctrine change. Code
+moves that keep the output byte-identical (refactors) pass the goldens
+unchanged; that is what they exist to prove.
 
 ### Minting a new harness version
 
@@ -133,10 +135,14 @@ The stamp is read-only in the UI. The agent tab `⋯` menu and the AgentCard
 context menu show a "Harness v{version}" item; selecting it opens
 `HarnessFeaturesModal.svelte`, a read-only list of the session's
 `harnessFeatures` snapshot (name + description per row, On/Off state).
-Legacy sessions without a snapshot open the modal too — every catalog
-feature renders Off — while sessions from daemons that predate the field
-omit the menu item entirely. Unknown snapshot keys (from a newer daemon)
-are rendered with humanized labels rather than dropped.
+The daemon always serves a `harnessFeatures` value (legacy pre-snapshot
+rows follow the live effective settings until activation freezes them —
+see above), so the modal normally renders a real snapshot; as a defensive
+fallback, an absent snapshot renders every catalog feature Off. Sessions
+from daemons that predate the field omit the menu item entirely. Snapshot
+keys unknown to the catalog (from a newer daemon) are rendered with
+humanized labels rather than dropped, and catalog keys absent from the
+snapshot render Off (an older harness never had the newer features).
 
 ## Design invariants
 
