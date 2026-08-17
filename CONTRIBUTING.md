@@ -40,7 +40,7 @@ recursive clones and submodule updates skip it by default; internal developers
 with access initialize it via `make ensure-ios-submodule`.
 
 The durable engineering docs live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-(backend architecture) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (the canonical
+(backend architecture) and [docs/protocol/](docs/protocol/README.md) (the canonical
 wire contract); see [docs/README.md](docs/README.md) for the docs index.
 
 ## Two-phase change workflow

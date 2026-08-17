@@ -3,7 +3,7 @@
 > Audience: engineers working on `intentd` (`packages/intentd`) and
 > `cloudlands-fe` (`packages/cloudlands-fe`). Companion documents:
 > [ARCHITECTURE.md](./ARCHITECTURE.md) (backend architecture) and
-> [PROTOCOL.md](./PROTOCOL.md) §5.5 (the wire contract for
+> [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5 (the wire contract for
 > `harnessVersion` / `harnessFeatures` — wire shapes are specified there,
 > not here).
 
@@ -35,7 +35,7 @@ Two layers with different versioning rules:
 
 Every agent session is stamped **at creation** with two immutable fields,
 served on the `AgentSession` and `AgentLite` projections (shapes in
-[PROTOCOL.md](./PROTOCOL.md) §5.5):
+[protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
   (`intent_core::CURRENT_HARNESS_VERSION`, today `"1.0"`). There is no

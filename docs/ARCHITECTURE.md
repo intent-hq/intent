@@ -17,7 +17,8 @@ requests, scripts, terminals, files, and events.
 
 The daemon embeds:
 
-- A **JSON-RPC router** serving the full method catalog (see `PROTOCOL.md`),
+- A **JSON-RPC router** serving the full method catalog (see the
+  [protocol docs](./protocol/README.md)),
   reusing one set of **service** implementations across every transport.
 - An **ACP client** that spawns provider CLIs (auggie, claude-code, codex, … —
   see the `intent-providers` registry for the full set) over piped stdio and
