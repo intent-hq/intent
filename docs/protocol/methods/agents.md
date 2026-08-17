@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5 `agent.*` & §5.5a `sandbox.cow.*` (CoW agent sandboxes).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.5 `agent.*` · §5.5a `sandbox.cow.*` (CoW agent sandboxes).
 
 ### 5.5 `agent.*`
 

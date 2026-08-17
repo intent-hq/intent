@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.7 `pr.*`, §5.42 Centralized PR monitoring (`prMonitor.*`).
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.7 `pr.*` · §5.42 Centralized PR monitoring (`prMonitor.*`).
 
 ### 5.7 `pr.*`
 

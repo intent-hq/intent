@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.24 Session stats, §5.31 `agent.enhancePrompt`, §5.32 `agent.completeOnce`, §5.34 Skills, §5.35 Interrupted-agent resumption, §5.36 Agentic usage stats.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.24 Session stats · §5.31 `agent.enhancePrompt` · §5.32 `agent.completeOnce` · §5.34 Skills · §5.35 Interrupted-agent resumption · §5.36 Agentic usage stats.
 
 ### 5.24 Session stats — `agent.getSessionStats`
 

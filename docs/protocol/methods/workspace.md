@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.1 `workspace.*`, §5.23 Usage metrics, §5.25 Worktree setup scripts.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.1 `workspace.*` · §5.23 Usage metrics · §5.25 Worktree setup scripts.
 
 ### 5.1 `workspace.*`
 

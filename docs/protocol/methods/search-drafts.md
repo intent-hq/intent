@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.15 `search.*` & §5.16 `drafts.*`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.15 `search.*` · §5.16 `drafts.*`.
 
 ### 5.15 `search.*`
 

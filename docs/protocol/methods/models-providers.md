@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.30 `models.list` — model catalog & §5.38 Provider catalog — `providers.catalog`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.30 `models.list` — model catalog · §5.38 Provider catalog — `providers.catalog`.
 
 ### 5.30 `models.list` — model catalog
 

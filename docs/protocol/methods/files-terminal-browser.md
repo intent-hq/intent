@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.9 `browser.*`, `terminal.*`, `file.*` & §5.13 Interactive `terminal.*`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.9 `browser.*`, `terminal.*`, `file.*` · §5.13 Interactive `terminal.*`.
 
 ### 5.9 `browser.*`, `terminal.*`, `file.*`
 

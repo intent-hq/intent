@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.2 `note.*`, §5.2.1 `note.lineAttribution.*`, §5.3 `comment.*`, §5.4 `task.*`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.2 `note.*` · §5.2.1 `note.lineAttribution.*` · §5.3 `comment.*` · §5.4 `task.*`.
 
 ### 5.2 `note.*`
 

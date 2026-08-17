@@ -77,6 +77,6 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 ## How this doc set evolves
 
 - **§ numbers are stable and citation-load-bearing.** intentd code comments, tests, and sibling docs cite "§5.5", "§6.5", etc. Never renumber existing sections; new content gets the next free number.
-- **New §5.x subsections** go into the `methods/` file whose domain they belong to (see the map above), or a new `methods/*.md` file for a genuinely new domain — in either case, add the subsection to this README's map and to the index in [05-method-catalog.md](./05-method-catalog.md).
+- **New §5.x subsections** go into the `methods/` file whose domain they belong to (see the map above), or a new `methods/*.md` file for a genuinely new domain — in either case, add the subsection to this README's map (the single canonical § → file map; [05-method-catalog.md](./05-method-catalog.md)'s index just points here).
 - **Version-history entries** are appended to the narrative in [versioning.md](./versioning.md), and the current-version headers there and in this README are updated together.
 - **New top-level sections** (§11, …) get their own `NN-*.md` file and a row in the map above.
