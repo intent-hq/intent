@@ -1969,7 +1969,18 @@ Precedence, first match wins:
    never consulted for an agent session, delegated ones included — the former
    `backgroundAgents.typeOverrides[agentType]` / `backgroundAgents.defaultModel` rungs are
    **removed**.
-4. **None** — `session.model` stays unset; the provider CLI's own default applies.
+4. **Cached catalog default ([intent-hq/intentd#1279](https://github.com/intent-hq/intentd/pull/1279))** —
+   the `id` of the resolved provider's cached catalog row marked `isDefault: true` (§5.30).
+   Cache-only and probe-free: the rung reads the in-memory/persisted last-good `models.list`
+   entry under the provider's current registry version key and NEVER triggers a probe
+   (subprocess spawn) on the creation path or on the `specialist.list`/`specialist.get`
+   previews. A cold cache, a stale-pin entry, or a catalog without a marked row falls
+   through to step 5 — byte-identical to the pre-rung behavior. Pinning the row's id to
+   `session.model` freezes the model for the session's lifetime even if the provider later
+   changes its own default, so the model shown in previews is the model the agent actually
+   runs. This is NOT a settings default: the settings default reasoning effort
+   (`model.defaultReasoningEffort`, below) does not apply to it.
+5. **None** — `session.model` stays unset; the provider CLI's own default applies.
 
 The former specialist frontmatter `modelTier` step is **retired** (tolerated-and-ignored,
 §5.11): a specialist's model is either an explicit frontmatter `model` pin or inherited via
@@ -1981,7 +1992,7 @@ Specialist `modelOptions` (§5.11) likewise adds **no resolver step**: the list 
 — surfaced to delegating agents in the `workspace_api` tool description's
 `ws.agent.delegate` docs — and a chosen option is sent as the explicit client `model`, i.e.
 step 1 above, which remains the first-match step exactly as before. A caller that omits
-`model` resolves through steps 2–4 unchanged, regardless of any `modelOptions`. The
+`model` resolves through steps 2–5 unchanged, regardless of any `modelOptions`. The
 per-option `reasoningEffort` (§5.11) is likewise not a resolver step for `model` — it only
 feeds the separate delegation reasoning-effort resolution.
 
@@ -1995,9 +2006,10 @@ default-provider aliases are normalized. The resolved model is
 persisted to `session.model` at creation time, **pinning it for the session's lifetime**:
 later settings/specialist changes only affect agents created afterwards, and an existing
 agent's model changes only via explicit `agent.setModel`. Bundled specialists ship with no
-frontmatter `model`, so they inherit the user's configured default (step 3) or the provider
-CLI default. `specialist.get`/`specialist.list` preview this resolution via the additive
-`resolvedModel`/`resolvedProvider` fields (§5.11), computed by the same resolver.
+frontmatter `model`, so they inherit the user's configured default (step 3), the cached
+catalog default (step 4), or the provider CLI default. `specialist.get`/`specialist.list`
+preview this resolution via the additive `resolvedModel`/`resolvedProvider` fields (§5.11),
+computed by the same resolver.
 
 **Creation-time reasoning-effort resolution (daemon-owned, [intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970) / [#974](https://github.com/intent-hq/intentd/pull/974)).**
 Every creation path resolves the session's `reasoningEffort` through one daemon-side chain,
@@ -2014,7 +2026,8 @@ parallel to the default-model resolver above. Precedence, first match wins:
 4. **Settings `model.defaultReasoningEffort`** (§5.12) — applied only when no rung above
    decided AND the session's **model itself resolved from the settings chain** (step 3 of
    the default-model resolver above). A caller-supplied model, a specialist frontmatter pin,
-   or a fall-through to the provider CLI default all leave the effort unset here.
+   a catalog-default-resolved model (step 4), or a fall-through to the provider CLI default
+   all leave the effort unset here.
 5. **Unset** — the provider's own default applies.
 
 Rungs 2–3 apply on `agent.create` too when it names a `specialistId` and the caller supplied
@@ -3236,7 +3249,7 @@ non-existent or `bundled` definition → `-32602`.
 - **`resolvedModel?` / `resolvedProvider?` (additive preview, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852))** —
   on `list`/`get` only, the daemon decorates each definition with the model a **no-model
   `agent.create`** for that specialist would actually pin, computed by the same daemon-side
-  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–4 — a
+  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
   request param supplies the resolution context: absent/empty defaults to the
   settings-derived default provider (provider of `model.default`, else `providers.active`,
