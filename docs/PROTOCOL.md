@@ -5263,6 +5263,13 @@ static/probe metadata, distinct from the session-scoped `effortLevels` served on
 the `AgentSession`/`AgentLite` projections (§5.5 "Session-discovered effort
 levels") — clients prefer the session-advertised levels for a live session's
 picker and fall back to the catalog when the session advertises none.
+On the ACP-probed catalogs (claude-code / pi / droid) the adapter's `default`
+pseudo-row is **hidden**: the daemon resolves the real model it stands for —
+the model select's `currentValue` when it names a real row, else the unique
+sibling row matching the pseudo-row's version-bearing model family — drops the
+pseudo-row, and marks the resolved row `isDefault: true`. Fail-soft: a
+pseudo-row that cannot be resolved to exactly one sibling is served as-is with
+no `isDefault` marking (the resolution never empties a catalog).
 
 **Per-provider catalog.**
 
