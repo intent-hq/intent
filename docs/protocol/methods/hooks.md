@@ -18,8 +18,9 @@ call, a dispatching one wakes without persisting a schedule — unless the hook 
 **perpetual**, whose dispatching validation run wakes the owner AND persists the active
 schedule (see the perpetual block below); per-agent cap on active
 hooks, default 5). Every hook carries a **TTL** (v3.1) counted from creation, not the
-last run: `ttlMs` defaults to and is capped at 3 600 000 (60 minutes; values are
-clamped into `[10000, 3600000]`, never rejected), and `expiresAt = createdAt + ttlMs`
+last run: `ttlMs` defaults to and is capped at 86 400 000 (24 hours — raised from the
+original 60-minute cap within v7.0, [intent-hq/intentd#1290](https://github.com/intent-hq/intentd/pull/1290);
+values are clamped into `[10000, 86400000]`, never rejected), and `expiresAt = createdAt + ttlMs`
 persists on the Hook. When the deadline passes the daemon stops the hook (terminal
 state `expired`, `nextRunAt` cleared), emits `hook:expired` (§6.5), and wakes the owner
 (`messageMetadata.reason: "expired"`) naming the hook and its `runCount` so the model
@@ -61,7 +62,7 @@ sole fire counts too, so only a perpetual hook ever exceeds 1 — and both are a
 `dispatchCount: 0` unconditionally, so a retained pre-migration row that had already
 dispatched reads back `dispatchCount: 0` despite having fired — the "fires so far" contract
 only holds going forward, not retroactively for that one field on migrated rows).
-`expiresAt` (v3.1) is the TTL deadline (`createdAt` + clamped `ttlMs`, ≤ 60 minutes from
+`expiresAt` (v3.1) is the TTL deadline (`createdAt` + clamped `ttlMs`, ≤ 24 hours from
 creation); it is set on every hook scheduled from v3.1 on and absent only on pre-TTL
 legacy rows, which never expire.
 `lastLogs` is the **last run's** `console.log/info/warn/error` output (newline-joined,
@@ -115,7 +116,7 @@ the only wire-shape change, present on every hook and payload regardless of `per
   post-dispatch outcome (`scheduled` with a fresh `nextRunAt`, or `expired`) is resolved
   and persisted **before** `hook:run-completed` / `hook:dispatched` are emitted, so those
   payloads carry the real post-dispatch `state`, never the transient `running`.
-- **Everything else is unchanged.** TTL semantics (60-minute cap; perpetual does not
+- **Everything else is unchanged.** TTL semantics (24-hour cap; perpetual does not
   extend it), eviction, cancel, the per-agent active-hook cap (a perpetual hook counts
   once, like any other active hook), the cadence floor, and the `hookState` carry-over
   contract all behave exactly as documented above.
