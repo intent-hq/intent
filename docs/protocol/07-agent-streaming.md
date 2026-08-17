@@ -85,7 +85,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, sinceMessageId? }` — a missing/empty `agentId` is a `-32602` error.
+  `{ agentId, sinceMessageId?, deltaEncoding? }` — a missing/empty `agentId` is a `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
@@ -110,6 +110,46 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
   identically in both cases, **after** the filter — a merged partial is never trimmed away.
   Deltas (seq 1, 2, …) are unaffected by resume.
+- **Incremental delta encoding via `deltaEncoding` (opt-in, within v7.0;
+  [intent-hq/intentd#1289](https://github.com/intent-hq/intentd/pull/1289),
+  [monorepo#2675](https://github.com/intent-hq/monorepo/issues/2675)).** The optional
+  `deltaEncoding` param selects how the subscription's live `text`/`thinking` chunk deltas encode
+  their content. Absent / `null` / `"full"` select the default full-text mode — byte-identical to
+  the pre-#2675 wire shape, where each growth re-carries the FULL accumulated `text` (O(accumulated
+  text) per chunk, quadratic wire cost over a turn). `"incremental"` switches those deltas to
+  append-only fragments: each entity's block carries only the new fragment as `textDelta`
+  (`{ type, id, textDelta }` — never accumulated `text`), and the client appends fragments for the
+  same block `id` in seq order (O(chunk) per delta, O(N) per turn). Any other value is a `-32602`
+  error, never silently coerced. The encoding is fixed for the subscription's lifetime and applies
+  **only** to live `text`/`thinking` chunk deltas — tool blocks, non-assistant row deltas, and the
+  terminal reconcile are encoding-independent and carry full blocks in both modes, so the terminal
+  frame's authoritative full `text` (never `textDelta`) keeps `stream:end` a per-turn convergence
+  checkpoint under either encoding (the degraded best-effort terminal frame is likewise full-text),
+  and the §7.1 invariant — seq-0 snapshot reduced with every delta equals a fresh
+  `agent.getConversation` — holds with the reducer extended by one rule: a `textDelta`-bearing
+  entity **appends** to the identified block's text instead of replacing it — where an `added`
+  fragment (the block's first chunk, so no block exists yet) creates the block from the entity's
+  `{ type, id }` with text equal to the fragment, i.e. an append onto the empty string, and an
+  `updated` fragment appends to the block already known from an earlier delta or the snapshot.
+  **Snapshot echo:**
+  every snapshot an incremental subscription emits — the seq-0 snapshot AND any lag-recovery
+  snapshot — carries `deltaEncoding: "incremental"` at the snapshot's top level, so the client can
+  assert the daemon honored the mode before applying the append reducer. Full mode stamps nothing
+  (default subscriptions stay byte-identical to the pre-#2675 shape), and an older daemon ignores
+  the unknown param and stamps no echo, so a client that sees no echo MUST reduce full-text —
+  the echo, not the request, decides the reducer. **Mid-turn
+  (re)subscribe composes:** the snapshot's merged in-flight message carries the text accumulated so
+  far, and subsequent deltas carry only post-snapshot fragments (in the `updated` bucket — the
+  block is already known), so the client appends after the snapshot prefix; no streamed text is
+  ever re-delivered. **Backpressure conflation stays lossless:** when the connection writer falls
+  behind, buffered same-block chunk deltas conflate — full mode by latest-entity-wins (each entity
+  already carries the full text), incremental mode by **concat-merge**: the buffered fragments
+  compose in arrival order onto one pending entity's `textDelta` (associative appends — exactly as
+  lossless), capped at 256 KiB per merged entity; a merge that would exceed the cap is refused, the
+  pending entity seals in place, and the newer fragment starts a fresh entity (seq order
+  preserved — the client simply applies more appends). Tool calls, terminal reconciles, and
+  message-row deltas are conflation barriers in both modes, so a conflated fragment run never
+  crosses an authoritative frame.
 - **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
   `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
   Each subsequent delta upserts individual **content blocks** within a message.
@@ -122,9 +162,12 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   block, and a thought↔text switch (either direction) closes the open block and opens a new one —
   so thought → text → thought persists three blocks. Live deltas carry them with
   `blockType: "thinking"` on `chat:stream:delta` (§6.5) and accumulate exactly like text chunks
-  (`added` on first chunk, `updated` carrying the full reasoning so far), under the same stable
-  `{messageId}:{blockIndex}` ids — so snapshot and deltas agree byte-for-byte as for every other
-  block. Clients that do not render reasoning should ignore unknown block types as usual.
+  (`added` on first chunk, `updated` carrying the full reasoning so far in the default full-text
+  encoding; under `deltaEncoding: "incremental"`, above, thinking chunks carry append-only
+  `textDelta` fragments exactly like text chunks — the two block kinds always share one encoding),
+  under the same stable `{messageId}:{blockIndex}` ids — so snapshot plus reduced deltas agree
+  byte-for-byte with a fresh fetch as for every other block. Clients that do not render reasoning
+  should ignore unknown block types as usual.
 - **Reasoning never feeds the live previews.** Thought text is excluded from the server-derived
   `lastAgentResponse` / `digest` preview fields (§5.5 live-turn overlay, `agent:stream:activity`
   and the terminal `agent:stream:end`, §7) and from text-block extraction generally: `thinking`
@@ -193,11 +236,14 @@ as the id-bearing entities. Each entity carries the **full current block** (not 
 `{ agentId, messageId, role }` pointer — `role` is the row's real role: `assistant` for the stream
 family, the persisted role (`user`/`system`/`tool`) for the non-assistant row deltas below — and
 `messageSeq` + `timestamp` on the authoritative frames (the terminal reconcile and the
-non-assistant row deltas):
+non-assistant row deltas). The one exception to full-current-block: under the opt-in
+`deltaEncoding: "incremental"` (above), a live `text`/`thinking` chunk entity's block carries the
+fragment-only `textDelta` instead of accumulated `text`:
 
 - `added` — a block's first appearance this turn (e.g. a text block's first chunk, or a `tool_use`).
 - `updated` — an existing block grown/changed, matched by `id` (e.g. each subsequent text chunk
-  carries the full accumulated text; full-block replace is idempotent under re-delivery).
+  carries the full accumulated text — full-block replace is idempotent under re-delivery — or, on
+  an incremental subscription, only the new `textDelta` fragment, which the client appends).
 - `removedIds` — a block emitted **live** that the finally-persisted message does **not** contain.
   This is non-empty only for orphan self-heal: e.g. a trailing partial the durable turn dropped, or
   a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
@@ -510,10 +556,16 @@ delta — honoring `removedIds` — equals a fresh `agent.getConversation` snaps
     "removedIds":[] } } }
 ```
 
+On an incremental subscription (`deltaEncoding: "incremental"`, above) the same growth frame carries
+only the new fragment — `"block":{ "type":"text","id":"0190a200-asst:0","textDelta":" the logs
+first." }` — which the client appends to its accumulated text for that block id.
+
 A block's first appearance arrives as `added` with the same `block.id`; each growth is an `updated`
-carrying the **full** block. A tool call arrives as an `added` `tool_use` block, then a `tool_result`
+carrying the **full** block (or, incremental mode, the fragment-only `textDelta`). A tool call
+arrives as an `added` `tool_use` block, then a `tool_result`
 block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
-with `streamingComplete:true` and any orphan ids in `removedIds`. A persisted non-assistant row
+with `streamingComplete:true` and any orphan ids in `removedIds` — full `text` in both encodings.
+A persisted non-assistant row
 (direct send, queue drain — the non-assistant row deltas above) arrives as `added` entities with no
 live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
 `streamingComplete:true` (and the row's `metadata` when present) in a single frame.
