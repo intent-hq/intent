@@ -16,7 +16,7 @@ Code lives in the submodule repos. The monorepo tracks specific commits of each 
 `git submodule update --init --recursive` skip it by design, and internal devs initialize it
 on demand with `make ensure-ios-submodule`.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
-`docs/PROTOCOL.md` (canonical wire contract); see `docs/README.md` for the docs index.
+`docs/protocol/` (canonical wire contract); see `docs/README.md` for the docs index.
 
 ## Commit & PR Workflow
 
@@ -79,7 +79,7 @@ Both merges require explicit human permission (see Conventions → Merging), and
 only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
 (or arm auto-merge on it) until the intentd PR is confirmed merged** — approved/green
 is not enough. This intentd-first rule applies specifically to protocol changes (the
-daemon↔fe wire contract, `docs/PROTOCOL.md`): whenever a feature touches the protocol,
+daemon↔fe wire contract, `docs/protocol/`): whenever a feature touches the protocol,
 the daemon side must land first. Rationale: cloudlands-fe may depend on daemon
 behavior/protocol that only exists once the intentd change has landed, so an fe-first
 merge can break main or ship against a contract that doesn't exist yet. This rule is

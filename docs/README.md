@@ -8,15 +8,18 @@ Index of the `docs/` tree for the Intent monorepo.
 `intentd` Rust backend: system overview, crate layout and dependency rules,
 persistence, transports, and the ACP agent runtime.
 
-## Wire Contract — `PROTOCOL.md`
+## Wire Contract — `protocol/`
 
-**[PROTOCOL.md](./PROTOCOL.md)** is the **canonical, versioned wire contract** between
-Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). It
-is the living protocol v2.0 specification, covering transport, authentication,
-JSON-RPC 2.0 envelope rules, the complete method catalog, event
-subscriptions, and error codes. The detailed wire contract from the porting era has been
-merged in, making this the single canonical spec. The method surface is enforced by
-golden tests in the `intent-transport` crate.
+**[protocol/](./protocol/README.md)** is the **canonical, versioned wire contract**
+between Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`):
+a living specification covering transport, authentication, JSON-RPC 2.0 envelope
+rules, the complete method catalog, event subscriptions, agent streaming, the
+permission flow, error codes, and thin-client guidance. It is split into per-section
+files with § numbering preserved; [protocol/README.md](./protocol/README.md) carries
+the § → file map, and the version history + compatibility policy live in
+[protocol/versioning.md](./protocol/versioning.md). The method surface is enforced by
+golden tests in the `intent-transport` crate. [PROTOCOL.md](./PROTOCOL.md) remains as
+a redirect stub so legacy "PROTOCOL.md §N.M" citations stay meaningful.
 
 ## Harness Versioning — `HARNESS.md`
 
@@ -75,8 +78,8 @@ with the reference app (`augmentcode/intent`), and development has since moved o
 Intent stack (`intentd` + `cloudlands-fe`) itself. The porting chronicle (implementation
 spec, porting-era protocol, breadcrumbs log, and supporting notes) has been removed from
 the tree; its durable content lives on in [ARCHITECTURE.md](./ARCHITECTURE.md) and
-[PROTOCOL.md](./PROTOCOL.md), and the original documents remain available in git
-history.
+the [protocol docs](./protocol/README.md), and the original documents remain available
+in git history.
 
 ## `01_stabilizing/` — **CONCLUDED**
 

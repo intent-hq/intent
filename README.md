@@ -128,7 +128,7 @@ Clients are thin: all state and business logic â€” including the agent runtime â
 live in `intentd`, which persists to SQLite and serves JSON-RPC 2.0 over a
 Unix-domain socket (local clients) and WSS/TLS (LAN clients such as the iOS
 app). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the backend design
-and [docs/PROTOCOL.md](docs/PROTOCOL.md) for the canonical wire contract.
+and [docs/protocol/](docs/protocol/README.md) for the canonical wire contract.
 
 This monorepo ties the components together as git submodules and carries the
 cross-cutting docs, tooling, and CI; the code lives in the component repos:
