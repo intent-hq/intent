@@ -439,17 +439,34 @@ any of it — unlike the delete cascade below, nothing is deleted:
   rows, transcripts, completion watches, and pending message queues all **survive for
   unarchive to resume**; no `agent:deleted` fires. Read-only wiring (no agent manager
   attached) still archives without error.
-- **Queued messages and wakes park while archived.** Both gated delivery arms check the
+- **Queued messages and wakes park while archived.** All gated delivery arms check the
   archived flag: the automatic queue drain and wake delivery (hook wakes,
   `agent.wakeOrCreate` context messages) refuse to start a turn in an archived
   workspace — entries stay parked in the pending queue (still visible via
-  `agent.getQueue`, §5.5). Completion-watch wakes take a different arm
-  (`send_message`) that carries no archived gate — a watched child completing elsewhere
-  can still wake an idle parent in an archived workspace. The virtual chief workspace
+  `agent.getQueue`, §5.5). Since [intent-hq/intentd#1293](https://github.com/intent-hq/intentd/pull/1293)
+  (behavior only, no wire-shape change; monorepo#2732) the `send_message` arm carries
+  the same gate at its choke point: **every automatic-origin delivery** into an
+  archived workspace — completion-watch wakes, `ws.agent.reportToParent` relays,
+  attention (blocker/discussion) wakes, event-subscription wakes, and agent-to-agent
+  `ws.agent.send` / `ws.agent.sendToTask` — parks in the target's queue instead of
+  delivering (interrupt-priority automatic sends park too, without interrupting), so a
+  watched child completing elsewhere can no longer wake a parent in an archived
+  workspace into a turn that auto-unarchives it (the archive/auto-unarchive loop).
+  The gate keys on the **delivery (target) workspace**, so a watcher in an active
+  workspace is still woken normally when a child in an archived workspace settles.
+  **User-origin sends are exempt**: a direct user message (FE `agent.sendMessage`)
+  passes the gate untouched and reaches the turn-start choke point, where the
+  auto-unarchive block below flips the workspace back to Active — the user talking to
+  an agent is an explicit resurrection signal; automatic machinery is not. The parked
+  send's internal result carries the additive `archivedParked: true` marker alongside
+  `queued: true` (surfaced through the MCP send bindings, so an agent can tell an
+  archived park from an ordinary busy-queue fallback). The virtual chief workspace
   skips the row read (never archived), and a row-lookup error fails open so a transient
   store error cannot strand a queue. `workspace.unarchive` re-kicks the drain for every
   workspace agent with ready-to-send work (the drain re-checks its own gates), so
-  parked queues deliver after unarchive without a manual kick.
+  parked queues deliver after unarchive without a manual kick; the gate re-checks the
+  row after enqueue and re-kicks the drain itself if the workspace was concurrently
+  unarchived, so a park racing a manual unarchive is never stranded.
 - **Active background hooks are cancelled.** Every ACTIVE (`scheduled`/`running`) hook
   in the workspace (§5.40) goes through the `hook.cancel` machinery: scheduler task
   aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5), and the
@@ -492,7 +509,14 @@ activity but not against a **real turn start**: when an agent turn actually begi
 Archived workspace — at the turn-start choke point where the in-flight slot is claimed,
 covering direct sends, queue drains, wake deliveries, and send-now redrives, but never
 mere enqueue (the archived gates above keep parking queued wakes) — the daemon
-automatically flips the workspace back to Active through the same machinery as
+automatically flips the workspace back to Active. Since
+[intent-hq/intentd#1293](https://github.com/intent-hq/intentd/pull/1293) the archived
+gates park **every automatic-origin delivery** before it can start a turn (see "Queued
+messages and wakes park while archived" above), so in practice only a **user-origin**
+send — the user deliberately messaging an agent in the archived workspace — reaches
+this choke point while archived and triggers the flip; automatic wakes
+(completion-watch, reportToParent, attention, event-subscription, agent-to-agent sends)
+queue instead and never auto-unarchive. The flip goes through the same machinery as
 `workspace.unarchive` (row flip, parked-queue drain re-kick, `lastActivity` derivation)
 and publishes ONE `workspace:updated` delta (§6.5) whose `changes` additionally carry
 the **additive** stamp:
