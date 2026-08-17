@@ -127,7 +127,11 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   checkpoint under either encoding (the degraded best-effort terminal frame is likewise full-text),
   and the §7.1 invariant — seq-0 snapshot reduced with every delta equals a fresh
   `agent.getConversation` — holds with the reducer extended by one rule: a `textDelta`-bearing
-  entity **appends** to the identified block's text instead of replacing it. **Snapshot echo:**
+  entity **appends** to the identified block's text instead of replacing it — where an `added`
+  fragment (the block's first chunk, so no block exists yet) creates the block from the entity's
+  `{ type, id }` with text equal to the fragment, i.e. an append onto the empty string, and an
+  `updated` fragment appends to the block already known from an earlier delta or the snapshot.
+  **Snapshot echo:**
   every snapshot an incremental subscription emits — the seq-0 snapshot AND any lag-recovery
   snapshot — carries `deltaEncoding: "incremental"` at the snapshot's top level, so the client can
   assert the daemon honored the mode before applying the append reducer. Full mode stamps nothing
@@ -158,9 +162,12 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   block, and a thought↔text switch (either direction) closes the open block and opens a new one —
   so thought → text → thought persists three blocks. Live deltas carry them with
   `blockType: "thinking"` on `chat:stream:delta` (§6.5) and accumulate exactly like text chunks
-  (`added` on first chunk, `updated` carrying the full reasoning so far), under the same stable
-  `{messageId}:{blockIndex}` ids — so snapshot and deltas agree byte-for-byte as for every other
-  block. Clients that do not render reasoning should ignore unknown block types as usual.
+  (`added` on first chunk, `updated` carrying the full reasoning so far in the default full-text
+  encoding; under `deltaEncoding: "incremental"`, above, thinking chunks carry append-only
+  `textDelta` fragments exactly like text chunks — the two block kinds always share one encoding),
+  under the same stable `{messageId}:{blockIndex}` ids — so snapshot plus reduced deltas agree
+  byte-for-byte with a fresh fetch as for every other block. Clients that do not render reasoning
+  should ignore unknown block types as usual.
 - **Reasoning never feeds the live previews.** Thought text is excluded from the server-derived
   `lastAgentResponse` / `digest` preview fields (§5.5 live-turn overlay, `agent:stream:activity`
   and the terminal `agent:stream:end`, §7) and from text-block extraction generally: `thinking`
