@@ -56,7 +56,7 @@ non-existent or `bundled` definition → `-32602`.
 - **`resolvedModel?` / `resolvedProvider?` (additive preview, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852))** —
   on `list`/`get` only, the daemon decorates each definition with the model a **no-model
   `agent.create`** for that specialist would actually pin, computed by the same daemon-side
-  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–4 — a
+  resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
   request param supplies the resolution context: absent/empty defaults to the
   settings-derived default provider (provider of `model.default`, else `providers.active`,
