@@ -584,8 +584,9 @@ existing interrupt entries, ahead of normal ones; the preemption is skipped enti
 nothing to preempt, since a hold implies the question-asking turn already ended). Since
 [intentd#1292](https://github.com/intent-hq/intentd/pull/1292) the `ws.agent.send` /
 `ws.agent.sendToTask` bindings default an omitted `priority` to `"interrupt"`, so a default A2A
-send under hold parks front-of-queue this way — only the explicit `priority: "queue"` opt-out
-parks as a normal entry. A held park
+send under hold parks front-of-queue this way — an explicit non-interrupt `priority` (the
+`"queue"` opt-out, or any other value, since only `"interrupt"` is interrupt at the service
+layer) parks as a normal entry. A held park
 returns `{ success: true, queued: true, heldForQuestions: true, queuedMessage, turnId? }` to the
 sender (the additive `heldForQuestions: true` field distinguishes it from an ordinary busy-queue
 park; the wake-delivery and store-only arms may omit `turnId`) and republishes `agent:queue:updated`. The
