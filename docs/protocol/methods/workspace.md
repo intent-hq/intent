@@ -516,7 +516,9 @@ messages and wakes park while archived" above), so in practice only a **user-ori
 send — the user deliberately messaging an agent in the archived workspace — reaches
 this choke point while archived and triggers the flip; automatic wakes
 (completion-watch, reportToParent, attention, event-subscription, agent-to-agent sends)
-queue instead and never auto-unarchive. The flip goes through the same machinery as
+queue instead and do not auto-unarchive — with one bounded exception: the residual-race
+stray turn above (a drain whose row read raced ahead of the archive persist) still
+reaches the choke point and flips the workspace once. The flip goes through the same machinery as
 `workspace.unarchive` (row flip, parked-queue drain re-kick, `lastActivity` derivation)
 and publishes ONE `workspace:updated` delta (§6.5) whose `changes` additionally carry
 the **additive** stamp:
