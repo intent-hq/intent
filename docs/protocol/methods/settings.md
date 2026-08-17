@@ -1,0 +1,114 @@
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.12 `settings.*`.
+
+### 5.12 `settings.*`
+
+> The daemon owns the settings that affect server-side behavior and lets thin clients read/mutate them over the wire. These methods are global — like specialist.list / repo.list they do not require workspaceId (§3.6).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted; TOML-backed entries carry `origin`) |
+| settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
+| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }] }; triggers settings:changed |
+| settings.reset | path (req) | { path, value } (restores defaultValue) — -32602 if path is unknown |
+
+`SettingDefinition`** shape:**
+
+```ts
+interface SettingDefinition {
+  path: string;            // dotted key, e.g. "server.port" or "sourceControl.github.token"
+  label: string;          // human-readable name
+  description: string;    // help text
+  category: string;       // grouping, e.g. "server", "sourceControl", "providers"
+  type: "boolean" | "number" | "string" | "enum" | "object";
+  enumValues?: string[];  // present when type === "enum"
+  min?: number;           // numeric bound (type === "number")
+  max?: number;           // numeric bound (type === "number")
+  defaultValue?: unknown; // value used by settings.reset
+  sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
+}
+// SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
+```
+
+`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
+
+**Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
+persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`.
+For TOML-backed paths, `settings.get` (and each `settings.list`
+entry) carries an additive `origin` field naming the layer the effective value came from:
+`"default"` (absent from the file), `"file"` (explicit in config.toml), or `"flag"` (pinned at
+boot by a startup flag / env var, e.g. `--insecure`, `INTENTD_TCP_PORT`). Secrets and the opaque
+machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitializer.state`,
+`hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
+`endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
+(secrets stay in `secrets.json`, state blobs stay in SQLite).
+`settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
+comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
+re-parse, debounced; invalid content keeps last-good values) and emit the same
+`settings:changed` notification. A key pinned by a startup flag is **read-only over the wire**
+while pinned: `settings.update` / `settings.reset` on it yields `-32602` with a message naming
+the overriding flag ("overridden by startup flag …").
+
+**BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
+
+- **Providers / agents:** `providers.active`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel`,`quickActions.typeOverrides`, `quickActions.providerSettings`, `specialists.default`. `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset). It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11). Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded). The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages, PR descriptions, quick tasks) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped. These two keys also derive the **effective default provider** ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)): the provider prefix of `model.default` when it is a compound id naming a registered provider, else `providers.active` (registry-validated, so a stale/mistyped value falls through), else no derived default — resolution bottoms out at the first registered provider (no provider carries a hardcoded default designation). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded.
+- **Workspace / git:** `workspace.branchPrefix`, `workspace.worktreesLocation`,`workspace.sshKeyPath` *(string — filesystem path to the key, not key material; the real secret is the key file on disk, so the value is read back verbatim by the FE `git`-env consumer)*, `workspace.defaultShell`, `workspace.autoCommit`, `workspace.cowIsolation` *(boolean, default `false` — CoW workspaces + per-agent sandboxes: `workspace.create`/`workspace.duplicate` provision the checkout as a standalone CoW clone instead of a linked worktree (§5.1), and `agent.delegate` defaults `isolation` to `"cow"` when the param is omitted (§5.5); ignored by cache-hydrated creation and by `workspace.duplicate` of a standalone-checkout source, which are always standalone (§5.1); consulted only at provisioning time — the resulting `checkoutMode` is immutable per workspace (§5.1); requires CoW filesystem support on the workspaces root — the FE gates the toggle on `Workspace.cowSupported`)*.
+- **MCP:** `mcp.enableUserServers`, `mcp.disabledServers`, `mcp.servers` *(sensitive)*.
+- **Server / transport (new in intentd):** `server.socketPath`,`server.bindAddress`, `server.port` *(legacy port key — still exposed and validated, used in the `settings.*` examples below; the live WSS listener reads `server.wsApi.port`)*, `server.wsApi.enabled`, `server.wsApi.port`, `server.tls.enabled`, `server.auth.enabled`,`server.auth.token` *(sensitive; read-only / regenerate)*, `server.originAllowList`, `server.maxOutstandingRpcs` *(number, default `256`, min `0`, max `100000`, TOML-backed under `[server]` — the daemon-wide cap on outstanding slow-path RPCs shared across every connection and both transports; over-limit requests are rejected with `-32011` "Server overloaded" (§9) and `0` disables the cap. Read once at boot: a change applies on daemon restart)*. The UDS listener always serves; the TCP/WSS listener is toggled at runtime by `server.wsApi.enabled` (the former `server.listenMode` key is retired — a config.toml still carrying it boots, is discarded, and is stripped from the file).
+- **Source control (new in intentd, provider-agnostic):** `sourceControl.activeProvider` (enum,**default **`github`; v1 ships only `github`), `sourceControl.github.tokenSource`(`auto`|`env`|`gh-cli`|`explicit`; default `auto` — secrets store → env → `gh` CLI), `sourceControl.github.token` *(sensitive)*,`sourceControl.github.apiBaseUrl` (GitHub Enterprise support), `sourceControl.github.exposeGitCredentialToChildren` *(boolean, default `true` — inject the daemon-managed GitHub credential into child process environments (PTY terminals, agent provider shells) as a scoped github.com-only credential helper; never as a raw `GITHUB_TOKEN`/`GH_TOKEN`)*. Per-provider config is namespaced as`sourceControl.<provider>.*` so future hosts slot in as `sourceControl.gitlab.*`,`sourceControl.bitbucket.*`, etc. (replaces any flat `github.*` keys).
+- **Linear (new in intentd):** `linear.token` *(sensitive)* — the Linear API key, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) under account `linear.token`, the exact entry the `linear.*` namespace's secret-store-first `auto` token resolution reads (§5.28), so `settings.update` on this path is the FE "connect Linear" flow.
+- **Sentry account (new in intentd):** `accounts.sentry.token` *(sensitive)* — the Sentry API tokenused by the `sentry.*` namespace (§5.29); `accounts.sentry.organization` *(string)* — the Sentryorganization slug (non-secret companion).
+- **Voice (new in intentd):** `voice.provider` (enum: `elevenlabs` | `openai`, default `elevenlabs`) — the transcription provider `voice.transcribe` uses when the call carries no per-call `provider` override (§5.41); `voice.language` *(string, optional — no default)* — the default transcription language hint (ISO-639-1 code, e.g. `"en"`) applied when a `voice.transcribe` call carries no per-call `language` (or a blank one — per-call values are trimmed and blank behaves like omitted; §5.41 "Language resolution"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; unset or blank means provider auto-detection); `voice.openai.model` (enum: `gpt-4o-transcribe` | `gpt-4o-mini-transcribe` | `whisper-1`, default `gpt-4o-transcribe`) — the transcription model the OpenAI provider posts (§5.41 "Providers"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`); `voice.vocabulary` *(object, non-sensitive — a JSON string array; default = `["Intent"]`, see §5.41 "Context mapping")* — the user-editable vocabulary biased into every `voice.transcribe` call, read per call and merged ahead of `context.keyterms` (§5.41; SQLite-backed like the other opaque bags — no `origin`; a stored value exactly matching the retired 17-term seed default is deleted on daemon start so the new default applies — user-modified lists are never touched); `voice.workspaceVocabulary.maxTerms` *(number, default `50`, min `0`, max `100`; v5.1)* — the cap on the auto-derived workspace vocabulary injected into `voice.transcribe` calls carrying a `workspaceId` and served by `voice.getWorkspaceVocabulary` (§5.41 "Workspace vocabulary"; TOML-backed under the `[voice]` section of config.toml, like `voice.provider`; `0` disables workspace vocabulary entirely — no derivation, no injection; a change takes effect on the next derivation); `voice.elevenlabs.apiKey` *(sensitive)* and `voice.openai.apiKey` *(sensitive)* — the provider API keys, persisted to the daemon's file-backed secret store (`~/intent/secrets.json`, `0600`) like `linear.token`. Key resolution is secret store first, then the `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` environment variable fallback; the keys are never logged, echoed, or returned over the wire (redacted in `settings.list` / `settings.get` like every sensitive path).
+- **Persisted policy & rules (new in intentd):** `permissions.rules` *(object)* — persisted commandallow/deny/ask entries; `userRules` *(object)* — global user prompt-rule content;`workspaceRules` *(object)* — workspace-scoped prompt-rule content. Each is an opaque bagvalidated by shape only; downstream consumers own the internal schema.
+- **Cross-workspace repos & history (new in intentd):** `repos.known` *(object)* — the daemon-owned known-repository list; `workspace.changeHistory` *(object)* — per-workspace diff-history bags. Both are non-sensitive; the daemon persists the JSON opaquely.
+- **Workspace initializer (new in intentd):** `workspaceInitializer.state` *(object, non-sensitive, default `{}`)* — persisted home-screen workspace-initializer form state, opaque bag owned by the FE.
+- **Hardware console (new in intentd):** `hardwareConsole.state` *(object, non-sensitive, default `{}`)* — persisted hardware-console device configuration (key assignments, action mappings, prompt-picker limit), opaque bag owned by the FE.
+- **Context engine (new in intentd):** `context.enabled`, `context.auggiePath`, `context.allowIndexing`.
+- **Storage / runtime (new in intentd):** `storage.dataDir`, `workspaces.root`, `logging.level`,`agents.maxConcurrent`, `agents.maxConcurrentAdapters` *(number, default `6`, min `1`, max `64`, TOML-backed under `[agents]` — the daemon-wide cap on concurrently live ephemeral ACP adapters: the one-shot `agent.completeOnce` completions (§5.32) and model probes (§5.30) that spawn a provider-CLI chain without holding an `agents.maxConcurrent` slot. Over-limit calls queue instead of spawning and are rejected with `-32603` `adapter-busy` (§9) if their own `timeoutMs` expires while queued. Deliberately **no `0` = unlimited** escape hatch, unlike `server.maxOutstandingRpcs` — an unbounded adapter spawn is the failure this bound fixes, and an out-of-range value is rejected rather than booting uncapped. Read once at boot: a change applies on daemon restart)*, `agents.idleReapMinutes`, `agents.flushQueuedMessages` *(enum `"all" | "systemOnly" | "off"`, default `"all"` — controls how the queue drain batches ready-to-send queued messages into a combined provider turn when an agent goes idle; §5.5 "Queued-message flush". `"all"`: batch every ready entry into ONE combined turn. `"systemOnly"`: batch ALL ready system-origin entries (anywhere in the queue, relative order preserved) into ONE combined turn while user-origin entries still deliver individually, FIFO. `"off"`: the legacy one-message-per-turn drain. Read at drain time, so a `settings.update` takes effect on the next drain. `settings.update` validates the `value` as one of the three strings and rejects a boolean with `-32602`; the legacy boolean shape (`true` → `"all"`, `false` → `"off"`) is accepted only when parsing an existing on-disk `config.toml` from an older daemon, not over `settings.update`)*.
+- **Notifications:** `notifications.enabled`, `notifications.soundEnabled`, `notifications.soundOnlyWhenUnfocused`, `notifications.volume` (0..=1). The four `notifications.*` keys are daemon-owned; every entry is non-secret and reset-able via `settings.reset`.
+- **Workspace API tool output (new in intentd):** `workspaceApi.maxOutputChars` *(number, default `100000`; `0` = unlimited, otherwise `1000..=10000000` — a non-zero value below 1000 rejects with `-32602`)*, `workspaceApi.toonOutput` *(boolean, default `true`)*. TOML-backed under a `[workspaceApi]` config.toml section; they shape the plain success body of the agent-facing MCP `workspace_api` tool — the oversized-output redirect and TOON encoding described in §5.22.
+- **Tools:** `rtk.enabled` *(boolean, default `false`)* — enables RTK compressed CLI output mode in agent prompts. When true and the `rtk` binary is detected on the daemon host's PATH, the system-prompt assembly pipeline injects an instruction layer listing RTK-compatible subcommands (filtered exclusion set). The daemon caches detection per run and never blocks prompt assembly; any failure treats `rtk` as unavailable. The flag is opt-in (default off) and gated behind binary availability, so disabling or removing `rtk` restores the original prompt behavior.
+- **Agent features (new in intentd):** `agentFeatures.backgroundHooks`, `agentFeatures.hostExec`, `agentFeatures.scripts`, `agentFeatures.terminalAccess`, `agentFeatures.browserAutomation`, `agentFeatures.richChatBlocks`, `agentFeatures.structuredQuestions`, `agentFeatures.attentionRequests`, `agentFeatures.stateSnapshot`, `agentFeatures.prMonitor` *(v6.1)*, `agentFeatures.taskGraph` — eleven booleans, TOML-backed under an `[agentFeatures]` config.toml section. The first ten default `true`; `taskGraph` is opt-in and defaults `false`. Per-feature toggles for what agents see and may call: background hooks (`ws.hook.*`), one-shot host command execution (`ws.host.exec`), saved scripts (`ws.script.*`), terminal read access (`ws.terminal.*`), browser automation (`ws.browser.*`), rich chat block prompt guidance (mermaid / ws-block / nav-link), structured questions (`ws.app.question.ask` — additionally **top-level-only** regardless of this toggle: a sub-agent bridge prunes/denies the binding with the §7 top-level-only redirect error, never the settings error; [intent-hq/intentd#1063](https://github.com/intent-hq/intentd/pull/1063)), attention requests (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion` — `ws.agent.reportToParent` and the rest of `ws.agent.*` stay un-gated), the per-turn agent state snapshot injection (the `current ws.agent.snapshot() => {…}` prompt prefix; §5.5 "Per-turn agent state snapshot"), and centralized PR monitoring (`ws.pr.monitor` / `ws.pr.unmonitor` / `ws.pr.monitors`, §5.42 — `ws.pr.snapshot` stays un-gated, and turning the toggle off also scrubs the "prefer `ws.pr.monitor`" cross-references from the `ws.hook.schedule` and `ws.pr.snapshot` doc entries). `taskGraph` is the opt-in setting for task-graph delegation prompt and tool-description guidance; it does not deny dispatch of task-graph parameters. Unblocked-wake teaching uses the `taskGraph` value captured when the parent agent session is created, not the effective setting at wake delivery, so flipping the toggle never changes an existing session's wakes. Toggles are captured at agent-session creation (system prompt) and at per-agent MCP bridge creation (tool surface) — never live-read per call — so a change applies to **new sessions only** unless noted otherwise below; existing sessions keep the surface they were created with. One deliberate exception: `hook.schedule` also checks `agentFeatures.backgroundHooks` live in the services layer, so flipping it off denies **new** hook schedules immediately from all sessions (including pre-flip ones that still advertise `ws.hook.*`); already-active hooks are unaffected and run to their terminal state/TTL. `agentFeatures.stateSnapshot` follows the same captured-at-creation rule as the other toggles ([intentd#1273](https://github.com/intent-hq/intentd/pull/1273)) — it gates the prompt injection only, and the `ws.agent.snapshot()` MCP tool is never gated and stays callable either way.
+- **PR monitor (v6.1):** `prMonitor.debounceSeconds` *(number, default `60`, minimum `10`)* — the quiet window a changed PR must observe before its consolidated wake is delivered — and `prMonitor.pollSeconds` *(number, default `30`, minimum `10`)* — how often the centralized loop polls each monitored PR (§5.42). TOML-backed under a `[prMonitor]` config.toml section. Both are read **live** by the loop (no daemon restart needed); sub-floor values are clamped at read time, and `settings.update` rejects values below the floor.
+
+**Not exposed (FE-only).** Pure frontend/display settings are **out of **`intentd`** scope** and are**not** served by `settings.*`: `theme.*`, `fonts.*`, `ui.*`, `workspaceList.*`, `openIn.*`, `keybindings.*`, `promoBanners.*`, `activityLog.presets`,`model.pickerCollapsedGroups`, `preferences.spellcheckEnabled`, `preferences.betaUpdatesEnabled`,`providers.completedSetup`, `linear.issueFilter`.
+
+```json
+// → request — list all BE-owned settings (sensitive values redacted)
+{ "jsonrpc":"2.0","id":51,"method":"settings.list" }
+// ← response
+{ "jsonrpc":"2.0","id":51,"result":{ "settings": [
+  { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
+    "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
+  { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
+    "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
+```
+
+```json
+// → request — read one setting
+{ "jsonrpc":"2.0","id":52,"method":"settings.get","params":{ "path":"sourceControl.activeProvider" } }
+// ← response
+{ "jsonrpc":"2.0","id":52,"result":{ "path":"sourceControl.activeProvider","value":"github",
+  "origin":"default",
+  "definition":{ "path":"sourceControl.activeProvider","label":"Source-control provider",
+    "description":"Active forge implementation","category":"sourceControl","type":"enum",
+    "enumValues":["github"],"defaultValue":"github" } } }
+```
+
+```json
+// → request — mutate settings (emits settings:changed)
+{ "jsonrpc":"2.0","id":53,"method":"settings.update","params":{ "changes":[
+  { "path":"server.port","value":5182 },
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli","reason":"use gh auth token" } ] } }
+// ← response
+{ "jsonrpc":"2.0","id":53,"result":{ "applied":[
+  { "path":"server.port","value":5182 },
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
+```
+
+```json
+// → request — reset one setting to its default
+{ "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
+// ← response
+{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
+```
+

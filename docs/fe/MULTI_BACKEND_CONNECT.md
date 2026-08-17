@@ -6,10 +6,12 @@ the local sidecar, and how the active backend is switched at runtime.
 > **Scope: FE-only.** This is entirely a cloudlands-fe capability. intentd
 > already serves WSS + a self-signed-cert fingerprint + a bearer token; there
 > is **no daemon/protocol change**. The daemon-side wire contract this rides on
-> is the canonical monorepo doc `docs/PROTOCOL.md` **§1.1–2.3** (Connection URL,
-> TLS & fingerprint pinning, message size, bearer token on upgrade, origin
-> allow-list, where the token lives). Read that for the transport; this doc
-> covers only the FE side.
+> is the canonical monorepo protocol doc set **§1.1–2.3** —
+> [docs/protocol/01-transport.md](../protocol/01-transport.md) and
+> [docs/protocol/02-authentication.md](../protocol/02-authentication.md)
+> (Connection URL, TLS & fingerprint pinning, message size, bearer token on
+> upgrade, origin allow-list, where the token lives). Read those for the
+> transport; this doc covers only the FE side.
 
 ## What it does
 
