@@ -2,7 +2,7 @@
 
 ## 3. Message Envelope (JSON-RPC 2.0)
 
-All application messages are **JSON-RPC 2.0** text frames. The handler is transport-agnostic: ittakes a message string and returns a response string (or `null` for notifications).
+All application messages are **JSON-RPC 2.0** text frames. The handler is transport-agnostic: it takes a message string and returns a response string (or `null` for notifications).
 
 ### 3.1 Request
 

@@ -4,12 +4,12 @@
 
 ### 2.1 Bearer token on upgrade
 
-Every WebSocket upgrade must present a bearer token. The server checks the token **during theHTTP upgrade** (before the socket is upgraded) in this order:
+Every WebSocket upgrade must present a bearer token. The server checks the token **during the HTTP upgrade** (before the socket is upgraded) in this order:
 
 1. `Authorization: Bearer <token>` header.
 2. `?token=<token>` query parameter on the `/ws` (or `/tunnel`, §1.4) URL (for clients that cannot set headers).
 
-Validation is **timing-safe** (constant-time compare) against the stored token. On failure theupgrade is rejected with `HTTP/1.1 401 Unauthorized` and the socket is destroyed.
+Validation is **timing-safe** (constant-time compare) against the stored token. On failure the upgrade is rejected with `HTTP/1.1 401 Unauthorized` and the socket is destroyed.
 
 - The token is **32 random bytes, hex-encoded (64 chars)**, generated once and persisted in appsettings. It can be rotated (regenerated) by the host application.
 - If the WebSocket API is disabled in settings, upgrades are rejected with `403 Forbidden`.
