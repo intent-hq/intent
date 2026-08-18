@@ -85,10 +85,24 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, sinceMessageId?, deltaEncoding? }` — a missing/empty `agentId` is a `-32602` error.
+  `{ agentId, sinceMessageId?, deltaEncoding?, projection? }` — a missing/empty `agentId` is a
+  `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
+- **Slim projection via `projection` (opt-in, additive within v7.1;
+  [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** The optional
+  `projection` param accepts `"slim"` — the same bounded tool/image block projection as
+  `agent.getConversation` (§5.5): oversized `tool_use.input` / `tool_result.output` bodies are
+  replaced by bounded previews with additive `inputTruncated`/`outputTruncated` + `*Bytes` flags
+  (pairing/structural fields intact), and oversized `image.data` is swapped for the write-time
+  thumbnail (`dataTruncated`/`dataIsThumbnail`/`dataBytes`; legacy pre-thumbnail rows serve the
+  block with `data` omitted). The projection is fixed for the subscription's lifetime and applies
+  to **every frame the subscription emits** — the seq-0 snapshot, lag-recovery snapshots, live
+  tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
+  served block shape. Absent / `null` keeps the subscription byte-identical to before (the
+  additive convention); any other value is `-32602`, never coerced. A client holding a truncated
+  slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2).
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
