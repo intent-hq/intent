@@ -122,8 +122,8 @@
       "category": "dev"
     },
     {
-      "name": "run-fe",
-      "command": "make run-fe",
+      "name": "dev-fe",
+      "command": "make dev-fe",
       "mode": "service",
       "category": "dev"
     },
