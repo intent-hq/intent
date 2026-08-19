@@ -237,32 +237,52 @@
 >   There is **no stealing** — a claim on an already-owned tab fails with the structured
 >   `already-claimed` error naming the owning agent. Unowned tabs can only originate
 >   from users.
+> - **`openTab` dedupe is per-agent** — an agent re-opening the same `requestedUrl`
+>   reuses its own existing tab; tabs owned by other agents (or unowned tabs) are
+>   never reused, so two agents opening the same URL get two tabs.
 > - **`listTabs { scope? }`** — `scope: 'mine' | 'unclaimed' | 'all'` (default `all`).
 >   Every returned tab carries `ownerAgentId` (`null` when unowned) plus owner display
 >   info, and **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
 >   deciding to claim or resize.
-> - **Structured ownership errors** — `not-owner` (an op on a tab owned by another
->   agent) and `already-claimed` (a claim lost to an earlier claim) surface as
->   **action-result errors** — inside the per-action `{ action, success: false, error }`
->   envelope, never as JSON-RPC-level errors — and each names the owning agent.
+> - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
+>   own — another agent's tab, or an unowned tab the caller has not claimed) and
+>   `already-claimed` (a claim lost to an earlier claim) surface as **action-result
+>   errors**: inside the per-action `{ action, success: false, error }` envelope, never
+>   as JSON-RPC-level errors. Each names the owning agent when the tab has one; a
+>   `not-owner` on an **unowned** tab carries no owner info (there is no agent to
+>   name — the remedy is `claimTab`). Ownership failures are **never** reported as the
+>   FE's top-level failure envelope (`success: false` + top-level `error`, which the
+>   daemon maps to `-32603`, see above): the FE reports the batch as executed with the
+>   failing action's envelope in `results`, so the error reaches the caller through
+>   the normal single-/multi-action reshape.
 >
 > **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
 > tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
 > emulation, so owned tabs render deterministically offscreen without disturbing the
-> user's panel layout. There is no opt-in and no clear/reset op. Agent-issued `openTab`
-> accepts optional `width` / `height` and the tab is emulated from creation; omitted
-> `width` defaults to a standard desktop viewport of **1280×800**.
-> **`resizeTab { tabId, width, height? }`** changes an owned tab's emulated size —
-> owner-only (on a non-owned tab it returns the structured `not-owner` error); there is
-> no size op for unowned (user) tabs and no reset-to-native form.
+> user's panel layout. There is no opt-in and no clear/reset op. Everywhere they appear
+> (`claimTab` / `openTab` / `resizeTab`), `width` and `height` are **positive
+> integers** (CSS px): zero, negative, fractional, or non-finite values are validation
+> errors — an emulated tab can never carry a disabling zero size. Agent-issued
+> `openTab` accepts optional `width` / `height` and the tab is emulated from creation;
+> omitted `width` defaults to **1280** and omitted `height` to **800** (the standard
+> desktop viewport 1280×800 when both are omitted), and `claimTab` with omitted
+> `height` likewise defaults to **800**.
+> **`resizeTab { tabId, width, height? }`** changes an owned tab's emulated size
+> (omitted `height` keeps the tab's current emulated height) — owner-only (on a tab
+> the caller does not own it returns the structured `not-owner` error); there is no
+> size op for unowned (user) tabs and no reset-to-native form.
 >
-> **Ownership lifecycle.** Ownership persists when the owning agent completes. Agent
-> **deletion destroys all** the agent's tabs — self-opened and claimed alike (there is
-> no release-to-unowned path, so no tab ever transitions emulated→native); workspace
-> archive/delete discards all tabs. A user "close" of an agent-owned tab is a UI-level
-> **hide**, not a destroy: the tab stays alive and continues to appear in `listTabs`
-> for its owner. Unowned tabs close/destroy normally.
+> **Ownership lifecycle.** Ownership is **FE-persisted** alongside the tab and survives
+> app restarts — an owned tab never silently reverts to unowned on relaunch. Ownership
+> persists when the owning agent completes. Agent **deletion destroys all** the agent's
+> tabs — self-opened and claimed alike (there is no release-to-unowned path, so no tab
+> ever transitions emulated→native); destruction happens when the deletion **commits**:
+> an `agent.delete` still inside its `undoDelayMs` grace window (§5.5) leaves the tabs
+> untouched, and `agent.cancelDelete` restores the agent with its tabs intact.
+> Workspace archive/delete discards all tabs. A user "close" of an agent-owned tab is a
+> UI-level **hide**, not a destroy: the tab stays alive and continues to appear in
+> `listTabs` for its owner. Unowned tabs close/destroy normally.
 >
 > **`browser.docs` — not exposed.** The `browser_docs` MCP tool that
 > served static reference docs on-demand has no consumer in the daemon surface (skills-style
