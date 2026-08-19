@@ -49,10 +49,11 @@ in the bullet under this table).
   the daemon serves the request by short-circuiting locally on a local connection, or by
   re-dispatching the same intent to the connected client as the FE-served reverse RPC on a
   remote connection. Reverse-request ids are always in the `rev-<n>` namespace (allocated
-  by the daemon, distinct from the client's own `id` space) with a 30s default timeout; the
-  local branch short-circuits directly on the daemon host without a wire round-trip (via
-  `OsOpener` for `openExternal`, the resolved `host.listInstalledEditors` entry for
-  `openInEditor`, and — when available — a native chooser for `pickApplication`).
+  by the daemon, distinct from the client's own `id` space) with a 30s default timeout;
+  `openInEditor`'s local branch short-circuits directly on the daemon host without a wire
+  round-trip (via the resolved `host.listInstalledEditors` entry). `openExternal` and
+  `pickApplication` have no daemon-side production path at all — they are dispatched to
+  the connected frontend exclusively.
 - **`browser.exec` loopback-hostname convention — FE-side (monorepo#2323).** Because the
   CDP work is FE-served (§5.9), loopback hostnames in `navigate`/`openTab` action URLs are
   interpreted by the frontend per the reserved-hostname convention: `daemon.localhost` →
