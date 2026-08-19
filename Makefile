@@ -372,7 +372,15 @@ dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS soc
 	#   `make run-fe-local` → dev FE against the installed daemon's UDS socket.
 	#   `make dev-prod`     → same, with the packaged app's live daemon.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@if [ ! -S "$(DEV_DATA_DIR)/intentd.sock" ]; then \
+	# The -S pre-check is skipped on Windows (MSYS/MINGW/CYGWIN), where the
+	# daemon socket path is not a filesystem entry — the win32 FE derives a
+	# named pipe from it and reports the connection failure itself (same
+	# rationale as run-fe-local's is_windows guard below).
+	@is_windows=0; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) is_windows=1 ;; \
+	esac; \
+	if [ "$$is_windows" -eq 0 ] && [ ! -S "$(DEV_DATA_DIR)/intentd.sock" ]; then \
 		echo "[dev-fe] ERROR: no dev daemon socket at $(DEV_DATA_DIR)/intentd.sock"; \
 		echo "[dev-fe] Start the dev seat first in another terminal: make dev-daemon"; \
 		exit 1; \
