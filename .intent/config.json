@@ -140,6 +140,12 @@
       "category": "dev"
     },
     {
+      "name": "dev-prod",
+      "command": "make dev-prod",
+      "mode": "service",
+      "category": "other"
+    },
+    {
       "name": "ios-open",
       "command": "make ios-open",
       "mode": "command",

@@ -1,6 +1,6 @@
 # Intent Monorepo Makefile
 #
-# Three postures for local work:
+# Four postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,
 #      serving UDS + insecure TCP (`--insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
 #      (reachable from loopback and LAN). Pairs with `make run-fe` (whose dev default
@@ -14,6 +14,9 @@
 #      is non-fatal and UDS keeps serving.
 #   3. `make run-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
+#   4. `make dev-prod` — FE dev build connected to the already-running packaged
+#      app daemon, showing the same workspaces and agents without starting a
+#      second daemon against production state.
 #
 # `make help` lists every documented target (any recipe whose header ends in
 # `## <description>`).
@@ -51,6 +54,9 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
 DEV_TCP_PORT ?= 5181
 DEV_PORT ?= 5190
+# Injectable platform seam for dev-prod's packaged-daemon socket default.
+# An explicit INTENTD_SOCKET always takes precedence.
+DEV_PROD_PLATFORM ?= $(shell uname -s)
 # Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
 # actually sees the default/override in the child environment.
 export DEV_PORT
@@ -86,7 +92,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd run-fe run-fe-local uds-to-unauthed-wss-bridge dev ios-open ios-info dist-mac
+	run-intentd run-fe run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
 
 all: build
 
@@ -520,6 +526,24 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 		INTENTD_LEGACY_IMPORT_ROOTS="" \
 		pnpm run dev
+
+dev-prod: ensure-fe-submodule ## Run the dev FE against the packaged app's live daemon and production state
+	@socket="$$INTENTD_SOCKET"; \
+		if [ -z "$$socket" ]; then \
+			case "$(DEV_PROD_PLATFORM)" in \
+				Darwin) socket="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+				Linux) socket="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+				*) echo "[dev-prod] ERROR: unsupported platform '$(DEV_PROD_PLATFORM)'; set INTENTD_SOCKET explicitly."; \
+				   exit 1 ;; \
+			esac; \
+		fi; \
+		if [ ! -S "$$socket" ]; then \
+			echo "[dev-prod] ERROR: production daemon socket not found at $$socket"; \
+			echo "[dev-prod] Start the packaged app first, or set INTENTD_SOCKET to its socket path."; \
+			exit 1; \
+		fi; \
+		echo "[dev-prod] Launching dev FE against production daemon: $$socket"; \
+		INTENTD_SOCKET="$$socket" $(MAKE) run-fe
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
