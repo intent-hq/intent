@@ -3,8 +3,8 @@
 # Four postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,
 #      serving UDS + insecure TCP (`--insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
-#      (reachable from loopback and LAN). Pairs with `make run-fe` (whose dev default
-#      is `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
+#      (reachable from loopback and LAN). Pairs with `make dev-fe` (which pins
+#      the FE to the dev seat's UDS socket) and with the iOS app (`make ios-info`).
 #   2. `make release-daemon` — occasional "debug the release app with its own
 #      state" seat. intentd on the real data dir, UDS-always and no
 #      `--insecure`. No TCP port is bound unless the persisted
@@ -12,7 +12,7 @@
 #      listener binds `server.wsApi.port` (default 5181 — the same as
 #      $(DEV_TCP_PORT)); if the dev seat already holds it, the bind failure
 #      is non-fatal and UDS keeps serving.
-#   3. `make run-fe` / `make ios-open` / `make ios-info` — clients pointed at
+#   3. `make dev-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
 #   4. `make dev-prod` — FE dev build connected to the already-running packaged
 #      app daemon, showing the same workspaces and agents without starting a
@@ -39,10 +39,13 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # seat never touches the packaged app's real data dir (Config::resolve in
 # packages/intentd/crates/intent-core/src/config.rs honours INTENTD_DATA_DIR).
 #
-# DEV_TCP_PORT is the intentd TCP/WebSocket base port. 5181 matches the FE's
-# built-in dev default (`DEFAULT_DEV_WS_URL = ws://127.0.0.1:5181/ws` in
-# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts), so
-# `make dev-daemon` + `make run-fe` connect with no env overrides. The daemon
+# DEV_TCP_PORT is the intentd TCP/WebSocket base port for the dev seat's
+# insecure plain-ws:// listener. It serves the iOS app (`make ios-info`) and
+# any client pointed at it explicitly via INTENTD_WS_URL — not the FE's
+# default: the FE's zero-config default is UDS at the platform data-dir
+# socket, honoring INTENTD_DATA_DIR (resolveBackendConfig in
+# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts),
+# and `make dev-fe` pins the FE to the dev seat's UDS socket. The daemon
 # reads it via the INTENTD_TCP_PORT env seam (ws_options_from_env in
 # packages/intentd/crates/intentd/src/main.rs).
 #
@@ -57,7 +60,7 @@ DEV_PORT ?= 5190
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 DEV_PROD_PLATFORM ?= $(shell uname -s)
-# Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
+# Export DEV_PORT so `make dev-fe` (and any recipe that shells out to the FE)
 # actually sees the default/override in the child environment.
 export DEV_PORT
 
@@ -92,7 +95,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd run-fe run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
+	run-intentd dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
 
 all: build
 
@@ -134,7 +137,7 @@ ensure-intentd-submodule:
 	fi
 
 # On-demand init for the FE submodule — pulled in only by targets that need it
-# (`run-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
+# (`dev-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
 ensure-fe-submodule:
 	@if [ ! -e "$(FE_DIR)/.git" ]; then \
 		echo "[ensure-fe-submodule] initializing $(FE_DIR)"; \
@@ -317,11 +320,9 @@ seed-dev-workspaces: ensure-intentd-submodule ## Seed workspace rows from packag
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 			cargo run -q -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- doctor >/dev/null; \
 	fi
-	@if [ "$(SEED_INCLUDE_ARCHIVED)" = "1" ]; then \
-			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" --include-archived; \
-		else \
-			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)"; \
-		fi
+	@python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" \
+		$(if $(filter 1,$(SEED_INCLUDE_ARCHIVED)),--include-archived) \
+		$(if $(SEED_SOURCE_DB),--source "$(SEED_SOURCE_DB)")
 
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
@@ -329,8 +330,9 @@ dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, 
 	@echo "[dev-daemon] INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--insecure` serves the local UDS socket AND a plain ws:// listener on
-	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — matches
-	# the FE's dev default and the iOS simulator/hardware seat.
+	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — serves
+	# the iOS simulator/hardware seat and any explicit INTENTD_WS_URL client;
+	# the FE pairs over UDS via `make dev-fe`.
 	# The daemon fails fast if $(DEV_TCP_PORT) is already bound.
 	# INTENTD_LEGACY_IMPORT_ROOTS="" disables the legacy import hook: the dev
 	# seat starts with a fresh $(DEV_DATA_DIR) DB, so first boot would otherwise
@@ -356,23 +358,36 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
 	@$(MAKE) release-daemon
 
-run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-daemon out of the box)
-	# Launches only the FE dev stack (vite + Electron). The FE does NOT spawn
-	# intentd; pair this with `make dev-daemon` (default) — the FE's dev build
-	# defaults to `ws://127.0.0.1:5181/ws` (DEFAULT_DEV_WS_URL in
-	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts),
-	# which matches dev-daemon's DEV_TCP_PORT. Overrides:
-	#   INTENTD_SOCKET=/path/to.sock  → UDS (highest precedence; e.g. point at
-	#                                    release-daemon's default socket).
-	#   INTENTD_WS_URL=ws://host:port → plain WebSocket to a specific URL.
-	#   `make run-fe-local`           → shorthand that resolves INTENTD_SOCKET to
-	#                                    the installed daemon's default UDS path.
+dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
+	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
+	# stack (vite + Electron) pinned to the dev seat's isolated daemon via
+	# INTENTD_SOCKET=$(DEV_DATA_DIR)/intentd.sock — the highest-precedence
+	# transport override (resolveBackendConfig in
+	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts).
+	# The pin is needed because the FE's zero-config default is UDS at the
+	# PLATFORM data-dir socket (honoring INTENTD_DATA_DIR) — i.e. the installed
+	# daemon, not the dev seat. The FE does NOT spawn intentd; start
+	# `make dev-daemon` in another terminal first, or use `make dev` for the
+	# one-command sidecar mode. Other clients:
+	#   `make run-fe-local` → dev FE against the installed daemon's UDS socket.
+	#   `make dev-prod`     → same, with the packaged app's live daemon.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@if [ ! -S "$(DEV_DATA_DIR)/intentd.sock" ]; then \
+		echo "[dev-fe] ERROR: no dev daemon socket at $(DEV_DATA_DIR)/intentd.sock"; \
+		echo "[dev-fe] Start the dev seat first in another terminal: make dev-daemon"; \
+		exit 1; \
+	fi
+	@INTENTD_SOCKET="$(DEV_DATA_DIR)/intentd.sock" $(MAKE) fe-launch
+
+# Internal FE-launch helper shared by dev-fe and dev-prod (not listed in
+# `make help`): pnpm-install-if-missing guard + `pnpm run dev`, inheriting the
+# caller's INTENTD_SOCKET (and the exported DEV_PORT) from the environment.
+fe-launch: ensure-fe-submodule
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[fe-launch] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && pnpm run dev
 
 run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
-	# Like `run-fe`, but points the FE at the installed Intent daemon's default
+	# Like `dev-fe`, but points the FE at the installed Intent daemon's default
 	# socket path (<data_dir>/intentd.sock, per directories::ProjectDirs):
 	#   macOS   → $$HOME/Library/Application Support/intentd/intentd.sock
 	#   Linux   → $${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock
@@ -404,7 +419,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 			Linux) sock="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
 			MINGW*|MSYS*|CYGWIN*) sock="$$APPDATA/intentd/data/intentd.sock" ;; \
 			*) echo "[run-fe-local] ERROR: unsupported platform $$(uname -s) — no known installed-daemon socket path."; \
-			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: INTENTD_WS_URL=ws://host:5181/ws make run-fe"; \
+			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: cd $(FE_DIR) && INTENTD_WS_URL=ws://host:5181/ws pnpm run dev"; \
 			   exit 1 ;; \
 		esac; \
 	fi; \
@@ -499,7 +514,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	# Always runs the intentd release build first so the sidecar reflects the
 	# current sources; cargo's freshness check makes it a fast no-op when nothing
 	# changed. This is an alternative to the two-terminal flow (dev-daemon +
-	# run-fe); use whichever fits your workflow.
+	# dev-fe); use whichever fits your workflow.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	#
 	# Pins the sidecar to two absolute paths so it does not depend on Electron's cwd:
@@ -543,7 +558,7 @@ dev-prod: ensure-fe-submodule ## Run the dev FE against the packaged app's live 
 			exit 1; \
 		fi; \
 		echo "[dev-prod] Launching dev FE against production daemon: $$socket"; \
-		INTENTD_SOCKET="$$socket" $(MAKE) run-fe
+		INTENTD_SOCKET="$$socket" $(MAKE) fe-launch
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
