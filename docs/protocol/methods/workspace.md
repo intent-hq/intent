@@ -490,8 +490,11 @@ any of it — unlike the delete cascade below, nothing is deleted:
   `workspace:displayStatus-changed` and `workspace:waiting-changed` recomputes (§6.5) —
   the drop lands with the sweep's last cancel — so an archived workspace no longer
   reads `waiting` indefinitely off a stale active-monitor signal (since v6.17 the
-  monitor signal feeds the orthogonal `waiting` flag rather than the `displayStatus`
-  promotion, §5.1 step 3).
+  monitor's wait signal feeds the orthogonal `waiting` flag rather than the
+  `displayStatus` promotion, §5.1 step 3; the cancel also lapses the monitor's
+  open-PR signal on the `displayStatus` PR rungs —
+  [intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329), §5.1
+  step 4).
   Fail-soft per monitor: one row's cancel failure is logged and never aborts
   the sweep or the archive.
 
@@ -618,7 +621,11 @@ each with a dedicated change event (§6.5) that carries the new value:
   clients treat an absent field as not waiting and older daemons interoperate fail-open.
   **Orthogonal to `displayStatus`** — a workspace can read `complete` or `pr_ready` and
   still be waiting; since v6.17 the three wait signals no longer feed the `displayStatus`
-  derivation at all (see step 3 below). Derived on the same `workspace.list` /
+  derivation at all (see step 3 below). (Distinct from the wait signal, an ACTIVE PR
+  monitor's persisted PR **state** does feed the derivation's PR rungs since
+  [intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329) — see step 4
+  below — so a monitor-watching workspace typically reads `pr_open`/`pr_ready` with
+  `waiting: true` alongside.) Derived on the same `workspace.list` /
   `workspace.get` / subscription emit path as `displayStatus` (never persisted; the
   enrichment also seeds the transition baseline for `workspace:waiting-changed`, §6.5),
   short-circuiting on the first live signal, and each probe is best-effort — a store read
@@ -858,22 +865,40 @@ attention is never fabricated.
    child-completion-watch fold — are **unwound**: an idle agent still watching via a
    background hook (§5.40), a PR monitor (§5.42), or delegated-child completion
    watches (§Completion-watch persistence) no longer reads as `in_progress`. Those
-   three signals surface exclusively as the orthogonal `Workspace.waiting` flag
+   three **wait** signals surface exclusively as the orthogonal `Workspace.waiting` flag
    (see the workspace status fields above) — the same probes, anchored the same way
    (watches in the **parent's home workspace**, the watch's `parent_workspace_id`,
    never the child's; watches held by child or background agents never count), all
    best-effort with a store read failure failing open to `false` — so an
    idle-but-watching workspace reads its real rollup (`complete`, a PR stage, `idle`)
    with `waiting: true` alongside. This restores the pre-#856 promotion semantics;
-   the `activity` field's semantics are unchanged.
+   the `activity` field's semantics are unchanged. The monitored PR's own **state**
+   is a separate signal: since
+   [intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329) it feeds
+   the step-4 PR rungs below — an active monitor never promotes to `in_progress`
+   here, but it can read as `pr_open`/`pr_ready` there.
 4. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
       recently updated open/draft entry in `pullRequests` — yields `pr_ready`
-      (`mergeable == true` and not draft) or `pr_open`.
+      (`mergeable == true` and not draft) or `pr_open`. An **ACTIVE PR monitor**
+      (§5.42) whose persisted last snapshot shows the PR open/draft is the same rung
+      ([intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329)):
+      `pr_ready` when the snapshot says mergeable and not draft, else `pr_open` — so
+      a workspace watching an open PR via `ws.pr.monitor` (including a cross-repo PR
+      that never enters the workspace's own PR linkage) never falls through to
+      `complete`/`idle`. A linked open PR wins the shared rung first (richer data);
+      the mapping is identical either way. The monitor signals are derived purely
+      from the persisted rows — no forge calls; an unparseable or missing snapshot
+      (and an active row whose snapshot already shows a terminal state) contributes
+      nothing, and a store read failure fails open to no signal.
    2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
       (`inProgress > 0` or `completed > 0`), else `not_started`.
    3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests`
-      entry) → `pr_merged`.
+      entry) → `pr_merged`. A **COMPLETED monitor** whose final snapshot shows the PR
+      merged feeds this rung too (intentd#1329) — only the **latest** completed
+      monitor (by `updatedAt`) counts, mirroring the linked-PR "most recently
+      updated" semantics, so an older merged watch never masks a newer
+      closed-unmerged one.
    4. **All tasks complete** (`total > 0`, `completed == total`) → `complete`; else
       `not_started`.
 5. **Idle demotion** — when not running and step 4 yields `in_progress` or `not_started`,
@@ -900,18 +925,28 @@ further guarded on the stored flag being `none`: it never downgrades a persisten
 on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
 retires that flag (its documented contract).
 
-A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` for open/draft
-entries) or open tasks (step 4.2 precedes the merged check). Transitions are pushed as
+A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — and the
+monitor signals — for open/draft entries) or open tasks (step 4.2 precedes the merged
+check). Transitions are pushed as
 `workspace:displayStatus-changed` (§6.5), which since intentd#793 also fires on agent
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
 `workspace:activity-changed` (emitting whatever the not-running derivation yields — `idle`,
 a PR stage, or `complete`), so the two stay in lockstep. The hook / PR-monitor /
 completion-watch lifecycle transitions still recompute-and-compare at every choke point,
-but since v6.17 those signals move the orthogonal `waiting` flag, not the rollup — each
+but since v6.17 the wait signals move the orthogonal `waiting` flag, not the rollup — each
 site runs **both** transition-only recomputes (`workspace:displayStatus-changed` and
-`workspace:waiting-changed`, §6.5), and with the fold unwound the displayStatus half is
-normally a silent no-op there while the waiting half emits. Hook lifecycle transitions
+`workspace:waiting-changed`, §6.5). With the fold unwound the displayStatus half is
+normally a silent no-op at the hook and completion-watch sites while the waiting half
+emits; the PR-monitor sites are the exception since intentd#1329 — the monitored PR's
+state feeds the step-4 PR rungs, so those same choke points are where the rung
+transitions actually emit: a register on an open PR can emit `pr_open`/`pr_ready`, the
+poll loop's terminal completion on a merge emits `pr_merged`, and a cancel lapses the
+monitor's signal back to the base rollup (the idempotent re-arm still recomputes and
+stays a silent no-op). A mid-watch snapshot change (e.g. checks turning the PR
+mergeable, `pr_open` → `pr_ready`) does not push its own transition — the poll loop's
+non-terminal refreshes are not recompute sites; the flip surfaces on the next read-path
+enrichment or any later choke-point recompute. Hook lifecycle transitions
 (intentd#856 established the sites): a hook **schedule** (a newly persisted active
 hook can raise `waiting`) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
 both the synchronous ops and the spawned-task run paths — so `waiting` drops when the
