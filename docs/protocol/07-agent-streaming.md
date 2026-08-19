@@ -102,7 +102,13 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
   served block shape. Absent / `null` keeps the subscription byte-identical to before (the
   additive convention); any other value is `-32602`, never coerced. A client holding a truncated
-  slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2).
+  slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2). Slim
+  snapshots additionally inherit the **slim page byte budget** (within v7.2 —
+  [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
+  lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
+  at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
+  `limit` messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
+  pages older history exactly as before, just in more round-trips.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
