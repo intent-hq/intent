@@ -62,6 +62,13 @@ in the bullet under this table).
   result. The daemon forwards the `browser.exec` envelope verbatim — the wire shape is
   unchanged; rewritten action results carry the additive `requestedUrl` / `finalUrl` /
   `rewritten` / `reason` echo fields. Full contract in §5.9.
+- **`browser.exec` agent-scoped tab ownership — FE-enforced (monorepo#2857).** Embedded
+  browser tabs carry a nullable `ownerAgentId`; agents may only manipulate tabs they
+  own, may claim unowned tabs (`claimTab`, atomic first-claim-wins), and agent-owned
+  tabs render under CDP viewport emulation. Enforcement lives entirely on the frontend
+  that serves the reverse RPC — the daemon forwards the `browser.exec` envelope
+  verbatim (agent-initiated calls always carry `agentId`; callers without `agentId`
+  are the user, unrestricted) and the wire shape is unchanged. Full contract in §5.9.
 - `host.exec` is a **daemon-owned one-shot exec** so the FE never spawns workspace-adjacent
   commands itself. It uses `argv` only — **no shell interpolation** — and spawns with the child
   in its own process group and `kill_on_drop` (so `timeoutMs` reaps the whole tree). The

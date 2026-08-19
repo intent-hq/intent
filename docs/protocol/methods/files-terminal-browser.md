@@ -4,7 +4,7 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857) |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
@@ -217,6 +217,52 @@
 > hostname is rewritten (scheme, port, path, query, and hash are preserved), and only
 > top-level `navigate` / `openTab` URLs are interpreted — never URLs inside pages
 > (redirects, fetches, links).
+>
+> **Agent-scoped tab ownership — FE-enforced (monorepo#2857).** Every embedded browser
+> tab carries a **nullable `ownerAgentId`**. User-opened tabs start **unowned**
+> (`ownerAgentId: null`); agent-opened tabs are owned by the opening agent from
+> creation. Agents may only manipulate (navigate / close / evaluate / screenshot / …)
+> tabs they own — other agents' tabs are visible in `listTabs` but not manipulable.
+> Caller attribution rides the existing envelope: agent-initiated `browser.exec` (the
+> MCP `ws.browser.exec` binding, §6.8) **always carries `agentId`**; a call without
+> `agentId` is the **user**, who is unrestricted (no ownership checks apply). Ownership
+> is enforced **entirely on the frontend** that serves the reverse RPC: the action
+> vocabulary is FE-served, the daemon remains a thin proxy, and the `browser.exec`
+> request / reverse-RPC **wire shape is unchanged** — no daemon change is involved.
+>
+> - **`claimTab { tabId, width, height? }`** — claims an **unowned** tab for the calling
+>   agent. `width` is **required** (a claim without `width` is a validation error);
+>   `height` is optional. Claims are **atomic, first-claim-wins**: a successful claim
+>   transfers ownership *and* enables viewport emulation at the given size in one step.
+>   There is **no stealing** — a claim on an already-owned tab fails with the structured
+>   `already-claimed` error naming the owning agent. Unowned tabs can only originate
+>   from users.
+> - **`listTabs { scope? }`** — `scope: 'mine' | 'unclaimed' | 'all'` (default `all`).
+>   Every returned tab carries `ownerAgentId` (`null` when unowned) plus owner display
+>   info, and **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
+>   current `width` / `height` — so an agent can see a tab's current size before
+>   deciding to claim or resize.
+> - **Structured ownership errors** — `not-owner` (an op on a tab owned by another
+>   agent) and `already-claimed` (a claim lost to an earlier claim) surface as
+>   **action-result errors** — inside the per-action `{ action, success: false, error }`
+>   envelope, never as JSON-RPC-level errors — and each names the owning agent.
+>
+> **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
+> tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
+> emulation, so owned tabs render deterministically offscreen without disturbing the
+> user's panel layout. There is no opt-in and no clear/reset op. Agent-issued `openTab`
+> accepts optional `width` / `height` and the tab is emulated from creation; omitted
+> `width` defaults to a standard desktop viewport of **1280×800**.
+> **`resizeTab { tabId, width, height? }`** changes an owned tab's emulated size —
+> owner-only (on a non-owned tab it returns the structured `not-owner` error); there is
+> no size op for unowned (user) tabs and no reset-to-native form.
+>
+> **Ownership lifecycle.** Ownership persists when the owning agent completes. Agent
+> **deletion destroys all** the agent's tabs — self-opened and claimed alike (there is
+> no release-to-unowned path, so no tab ever transitions emulated→native); workspace
+> archive/delete discards all tabs. A user "close" of an agent-owned tab is a UI-level
+> **hide**, not a destroy: the tab stays alive and continues to appear in `listTabs`
+> for its owner. Unowned tabs close/destroy normally.
 >
 > **`browser.docs` — not exposed.** The `browser_docs` MCP tool that
 > served static reference docs on-demand has no consumer in the daemon surface (skills-style
