@@ -121,7 +121,7 @@ make dev-prod
 
 # Two-terminal mode, useful for daemon debugging:
 make dev-daemon   # terminal 1 — dev daemon with an isolated data dir
-make run-fe       # terminal 2 — desktop app, connects to the dev daemon
+make dev-fe       # terminal 2 — desktop app, pinned to the dev daemon's UDS socket
 ```
 
 `make dev-prod` uses `INTENTD_SOCKET` when provided. Otherwise, the packaged
