@@ -108,7 +108,11 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
   `limit` messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
-  pages older history exactly as before, just in more round-trips.
+  pages older history exactly as before, just in more round-trips. The budget covers the
+  live-turn merge too: after the in-flight message is appended it anchors as the newest row
+  (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
+  rows are evicted until the merged page fits, with `truncated`/`nextToken` re-minted at the
+  eviction boundary so the evicted rows stay reachable via `agent.getConversation`.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
