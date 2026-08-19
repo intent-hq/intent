@@ -10,11 +10,13 @@ workspace initializers, onboarding). It is the **richer, additive sibling** of `
 | --- | --- | --- |
 | models.list | providerId?, forceRefresh?: boolean (default false) — no `workspaceId` | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
 
-**ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number }`.
+**ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number, isLegacyModel?: boolean }`.
 `id` is the bare model id (`shortName`/`value`), `name` the display label
 (`displayName`/`label`); the optional fields carry the picker metadata clients
 consume (group/within-group ordering, cost tier `1..3`, badges, effort levels,
-default flag). Optional fields are omitted when the provider does not report them.
+default flag, legacy-model flag). Optional fields are omitted when the provider does not
+report them.
+`isLegacyModel` is present only as `true` when a provider reports that the row is legacy.
 `effortLevels` (v5.2) is the model's reasoning-effort vocabulary — the values a
 client may offer for the `reasoningEffort` session field (§5.5) and the evidence
 the daemon validates delegation/create-time levels against (§5.11 "Delegation
@@ -71,9 +73,10 @@ empties a catalog).
 1. `auggie model list --json` — rich metadata (`id` ← `shortName`, `name` ← `displayName`).
 2. Plain `auggie model list` text fallback (`- Label [model-id]` rows + optional indented
    description) when the JSON form fails or parses empty.
-3. Rows flagged `isLegacyModel` are **filtered out server-side**; the survivors are sorted by
-   `modelGroupPriority`, then `priority`, then `name` (missing priorities sort last). A
-   successful CLI result is cached per the generic per-provider cache above.
+3. All rows are preserved. Rows for which Auggie reports `isLegacyModel: true` keep that flag;
+   current rows omit it. Rows are sorted by `modelGroupPriority`, then `priority`, then `name`
+   (missing priorities sort last). A successful CLI result is cached per the generic
+   per-provider cache above.
 4. When the auggie CLI is unavailable or yields nothing parseable (and no last-good entry
    exists), an **empty list** is returned with `source: "static"` — there is no static
    fallback catalog (the provider CLI owns model discovery, [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
