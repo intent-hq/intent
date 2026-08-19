@@ -4,12 +4,18 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| git.status | workspaceId (req), gitRootId? (v6.15, see "Scoping a read to a registered git root" below) | { branch, ahead, behind, diverged, files: FileStatus[], hasUncommittedChanges, hasUntrackedFiles }. Each `FileStatus` is `{ path, status, staged }` plus, on submodule (gitlink) entries only, the additive gitlink metadata (monorepo#1739): `mode: "160000"`, `oldSha?` (pre-change pin; omitted for a newly added submodule), `newSha?` (post-change pin; omitted for a deleted submodule, or when libgit2 cannot resolve the workdir side). All three fields are omitted on regular file entries, so pre-#1739 clients see the previous shape byte-for-byte |
+| git.status | workspaceId (req), gitRootId? (v6.15, see "Scoping a read to a registered git root" below), forceRefresh?: boolean | { branch, ahead, behind, diverged, files: FileStatus[], hasUncommittedChanges, hasUntrackedFiles }. Each `FileStatus` is `{ path, status, staged }` plus, on submodule (gitlink) entries only, the additive gitlink metadata (monorepo#1739): `mode: "160000"`, `oldSha?` (pre-change pin; omitted for a newly added submodule), `newSha?` (post-change pin; omitted for a deleted submodule, or when libgit2 cannot resolve the workdir side). All three fields are omitted on regular file entries, so pre-#1739 clients see the previous shape byte-for-byte |
 | git.stage | paths (req, CSV string or array) | { ok, paths } — staging ./*/--all is rejected (-32603) |
 | git.commit | message (req) | { ok, hash?, files? } (deprecated; prefer agentCommit) |
 | git.agentCommit | message (req), files?, userRequested? | { ok, hash, files, fileCount } — commit-set selection below; `userRequested: true` also bypasses the auto-commit-disabled gate (wrap-up semantics below) |
 | git.checkMergeConflicts | targetBranch? | { hasConflicts, conflictedFiles, targetBranch, currentBranch, ... } |
 | git.getBranches | repoPath (req), includeRemote? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
+
+**`git.status` refresh behavior.** `forceRefresh` is an optional additive boolean. When it is omitted or `false`, the method keeps the existing cached read and normal single-flight coalescing behavior. When it is `true`, the caller requests an authoritative scan: the method does not accept a cached result or an in-flight scan that began before this request. The result shape is identical in both modes. Existing clients remain compatible because omission preserves the previous behavior.
+
+```json
+{ "jsonrpc":"2.0","id":29,"method":"git.status","params":{ "workspaceId":"ws-abc","forceRefresh":true } }
+```
 
 **Path-based branch reads (`git.getBranches`, `git.branchStatus`).** These two read-only methods take a filesystem `repoPath` instead of a `workspaceId` because the workspace-initializer BranchSelector lists branches for a user-picked repo *before* any workspace referencing it exists — a known-repo gate here is a chicken-and-egg failure (the create flow can never register the repo it cannot list). Mirroring the ungated legacy IPC handlers (`git:getBranches` `{ repoPath }` variant, `git:getBranchStatus`), the daemon accepts **any local path that exists and is a git repository** (registered as a workspace or not) and rejects invalid paths with distinct `-32602` errors: `Repository path does not exist: <path>` for a nonexistent path, `Path is not a git repository: <path>` for an existing non-git directory. `git.pull` (extensions table below) shares the same `repoPath` validation for the same reason — the workspace-create auto-pull runs before the repo is registered; all other mutating `git.*` methods remain workspace-scoped and are unaffected.
 
