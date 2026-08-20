@@ -385,12 +385,21 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   below the **5-second annotation threshold** (monorepo#2353): a sub-threshold hop —
   e.g. a question-wizard answer converted into an enqueue + immediate drain by the #1791
   FIFO-restore branch — is treated like an immediate delivery (no note, no `queueInfo`
-  stamp), so instant queue hops never render a "waited 0s" chip. Alongside the content
+  stamp — except that a sub-threshold entry drained as part of a multi-message batch flush
+  still carries a `queueInfo` holding only `batchId`, below), so instant queue hops never
+  render a "waited 0s" chip. Alongside the content
   note, the drained entry's `messageMetadata` is stamped with structured queue info —
-  `queueInfo: { "queuedAt": "<ISO enqueue timestamp>", "waitedMs": <non-negative millis> }`
+  `queueInfo: { "queuedAt": "<ISO enqueue timestamp>", "waitedMs": <non-negative millis>,
+  "batchId": "<opaque id>"? }`
   — persisted on the user transcript row and round-tripping on chat reads
   (`agent.getConversation` / `chat.subscribe`) like the A2A sender-attribution metadata, so
-  clients can render the wait without parsing the note text. Same guards as the note: an
+  clients can render the wait without parsing the note text. `batchId` is an **optional
+  string**, present on every user row drained together in one multi-message batch flush
+  ("Queued-message flush" below): all rows of one flush share the same value, so clients
+  can group the stacked rows of a batch; it is absent on single-entry drains and on rows
+  persisted by older daemons. Entries whose wait fell below the 5-second annotation
+  threshold still carry a `queueInfo` containing only `batchId` (no `queuedAt`/`waitedMs`,
+  no content note) when they are part of a batch flush. Same guards as the note: an
   existing `queueInfo` is never overwritten (first-delivery numbers stay across requeues),
   `persisted: true` requeues are never stamped, and an unparseable `queuedAt` skips the
   stamp; negative waits (clock skew) sit below the threshold and skip the annotation
@@ -492,7 +501,8 @@ question-hold derivation, and queue persistence/rehydration are all untouched by
   applied per entry in the same order as the single-entry drain arms.
   The combined prompt exists **only on the wire**: it is never persisted as a transcript row.
 - **Per-entry transcript rows.** Each flushed entry persists as its own user message row (own
-  id, own `messageMetadata` — including the `queueInfo` stamp when the entry's wait met the
+  id, own `messageMetadata` — including the `queueInfo` stamp: the shared `batchId` on every
+  row of the flush, plus `queuedAt`/`waitedMs` when the entry's wait met the
   5-second threshold above), so the transcript and UI show
   the same N messages as individual stacked user rows — identical to what a one-at-a-time
   drain would have persisted. Entries already persisted by a terminal-failure requeue
