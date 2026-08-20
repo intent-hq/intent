@@ -85,6 +85,20 @@ cloudlands-fe).
   age bound stops a failed intentd build from deferring fe cuts forever, and the
   check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
   manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
+  BE-dependency freshness guardrail (intent-hq/monorepo#2985): the intentd-first
+  rule orders merges, not releases, so an fe commit can merge after its intentd
+  counterpart and still ship in an alpha whose pinned sidecar predates that BE
+  work. Before merging, the cut resolves the pin from `intentd.version` on fe
+  main and compares `v<pin>...main` on `intent-hq/intentd`: when intentd main has
+  no commits after the pinned tag (the expected common case, one cheap API
+  comparison) the cut proceeds unrestricted; when intentd main is ahead and the
+  cut would ship fe commits merged after that tag was cut, it defers — those
+  commits may depend on intentd work in no published sidecar, and the next
+  intentd alpha's pin-bump push chains into a cut that re-evaluates (push runs
+  with polling budget left retry in-run). Automation commits (the sidecar
+  pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
+  and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
+  unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
 - Stable: dispatch `release-stable.yml` with the `version` input.
 
 ## Release notifier
