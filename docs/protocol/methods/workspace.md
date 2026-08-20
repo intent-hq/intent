@@ -693,6 +693,35 @@ persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) s
 alongside `activePullRequest` and carries the reconciliation candidates the FE matches
 `activePullRequest` against.
 
+**Merged `pullRequests` on the list emit paths (new in intentd;
+[intent-hq/intentd#1330](https://github.com/intent-hq/intentd/pull/1330)).** On
+`workspace.list` and the lite `workspace.subscribe` seq-0 snapshot (§6.9) — the two list
+surfaces — the emitted `pullRequests` is a **merged pool**, not a bare read of the stored
+column: the daemon folds in the PRs persisted on the workspace's registered git roots
+(`workspace_git_root.pull_requests`, the sweep's per-root discovery — §5.6) and the PRs
+known to the workspace's PR monitors (entries synthesized as `PullRequestInfo` from
+`pr_monitor` snapshots, §5.42; `active` and `completed` monitors count, `cancelled` are
+excluded — the same visibility rule as `prMonitor.list`; a snapshotless monitor synthesizes
+URL/title from its repo identity, and a completed monitor without a snapshot verdict maps
+to `closed`, never `merged`). **Dedup is by PR `url`, first-wins by source precedence**
+(workspace stored list > git-root > monitor-derived) — one entry per URL, **no recency
+comparison**: a URL already carried by the workspace's stored list wins outright even when
+a git-root or monitor entry for the same PR is fresher. Entries can therefore be
+**cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
+repository): the entry's `url` is authoritative for which repo it belongs to. The merge is
+computed on emit from already-persisted rows — plain column reads plus an in-memory merge,
+**no forge calls on the read path** — and exists so list/sidebar clients see submodule and
+monitored PRs without opening the workspace. A row with nothing to merge keeps its stored
+serialization untouched (an absent stored `pullRequests` stays omitted); a row that merges
+always serializes a plain array. The merge also runs **after** the `displayStatus`
+enrichment, so the PR/task rollup (the derivation below) reads only the stored
+workspace-level list — merged entries affect the emitted `pullRequests` array, never
+`displayStatus`. Everything else is unchanged: the stored `workspace.pull_requests` column
+keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
+explicit-null clear below still targets only the stored value), `workspace.get` and the
+write-path responses carry the unmerged workspace-level list, and the `pr:*` event
+payloads (§6.5) are untouched.
+
 **Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
 five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
 `pullRequests`) accept three wire forms: **missing** the key leaves the stored value
