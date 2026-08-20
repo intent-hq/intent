@@ -17,6 +17,8 @@
 { "jsonrpc":"2.0","id":29,"method":"git.status","params":{ "workspaceId":"ws-abc","forceRefresh":true } }
 ```
 
+**`git.stage` batch behavior.** For explicit `paths`, a valid path is staged even when another requested path genuinely vanished before the request was applied. A request whose paths all fail to match still returns the current `-32603` pathspec error. This partial success does not make prohibited or unsafe paths, paths inside submodules, or ignored-only requests succeed. On success, the unchanged `{ ok, paths }` result echoes the requested path list; it does not report per-path staged or skipped outcomes.
+
 **Path-based branch reads (`git.getBranches`, `git.branchStatus`).** These two read-only methods take a filesystem `repoPath` instead of a `workspaceId` because the workspace-initializer BranchSelector lists branches for a user-picked repo *before* any workspace referencing it exists — a known-repo gate here is a chicken-and-egg failure (the create flow can never register the repo it cannot list). Mirroring the ungated legacy IPC handlers (`git:getBranches` `{ repoPath }` variant, `git:getBranchStatus`), the daemon accepts **any local path that exists and is a git repository** (registered as a workspace or not) and rejects invalid paths with distinct `-32602` errors: `Repository path does not exist: <path>` for a nonexistent path, `Path is not a git repository: <path>` for an existing non-git directory. `git.pull` (extensions table below) shares the same `repoPath` validation for the same reason — the workspace-create auto-pull runs before the repo is registered; all other mutating `git.*` methods remain workspace-scoped and are unaffected.
 
 ```json
