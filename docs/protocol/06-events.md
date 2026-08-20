@@ -111,6 +111,27 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | gitRoot (new in intentd, v6.15) | gitRoot:registered, gitRoot:updated, gitRoot:unregistered | Workspace-git-root lifecycle (multi git root tracking, §5.6; [monorepo#2053](https://github.com/intent-hq/monorepo/issues/2053)). Self-sufficient payloads (§6.7): `gitRoot:registered` fires when a secondary root is first registered (agent `ws.git.registerRoot` or the sweep's submodule auto-detect) and `gitRoot:updated` when an existing row changes (re-registration attribution merge / auto→agent source upgrade, the sweep's PR-field refresh, the sweep's `registeredCommitSha` backfill stamp) — both carry data { workspaceId, gitRoot } where `gitRoot` is the full persisted `WorkspaceGitRoot` row (§5.6; **no** live-read `branch` — that field is read per call on the serving surfaces only). `gitRoot:unregistered` fires on an explicit `ws.git.unregisterRoot` and on the sweep's auto-prune of a missing path — data { workspaceId, gitRootId, path }, so clients drop the row without a re-list. Actor: system. |
 | workspace transfer (new in intentd, v6.11) | workspace:transfer:progress, workspace:transfer:ready, workspace:transfer:failed | Source-side workspace-export lifecycle (§5.1 `workspace.export.*`; [intent-hq/intentd#1118](https://github.com/intent-hq/intentd/pull/1118)). Self-sufficient payloads (§6.7) so the FE transfer wizard renders progress with no follow-up read. `workspace:transfer:progress` → data { workspaceId, exportId, stage, bytesWritten? } where `stage ∈ { stopping-agents, exporting-rows, bundling-git, writing-archive }` — emitted before each build stage runs, and `bytesWritten` rides only the final post-seal `writing-archive` emission. `workspace:transfer:ready` → data { workspaceId, exportId, manifest, archiveSizeBytes, archiveSha256, maxChunkBytes, totalChunks } — the sealed archive's manifest (byte-identical to the copy embedded in the zip) plus everything the FE hands to `workspace.import.begin` on the target. `workspace:transfer:failed` → data { workspaceId, exportId, reason } — staging cleaned, WIP snapshots unwound, workspace intact; the session is removed, so a retry is a fresh `workspace.export.start`. An aborted build emits **neither** `:ready` nor `:failed` (quiet cleanup). Actor: system. |
 
+#### Pending-question `agent:updated` payloads
+
+A committed pending-question marker mutation emits `agent:updated` with the mutated value in
+`event.data`. A set carries the question-bearing assistant message id:
+
+```json
+{ "type":"agent:updated", "data":{
+  "agentId":"agent-123", "pendingQuestionsMessageId":"msg-question-1" } }
+```
+
+A clear is a **written empty string**, not an omitted field or `null`:
+
+```json
+{ "type":"agent:updated", "data":{
+  "agentId":"agent-123", "pendingQuestionsMessageId":"" } }
+```
+
+Clients must preserve this presence distinction. A non-empty value selects one authoritative
+question-bearing row; `""` authoritatively clears the slot; an absent field means this event is an
+unrelated agent update. On either marker event, clients re-read the `AgentLite` projection (§5.5).
+
 ### 6.6 Turn/event lifecycle & batching window
 
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`

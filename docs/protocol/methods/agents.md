@@ -575,6 +575,14 @@ and the derived hold is immediately **materialized** as a marker, so a hold that
 the upgrade is not lost on the next plain user row. A marker written as the empty string does NOT
 fall back.
 
+*Client compatibility.* A new frontend connected to an old daemon sees the field as absent and
+uses that same non-system transcript-tail rule. An old frontend connected to a new daemon remains
+wire-compatible because the marker and its `agent:updated` payload field are additive. The daemon
+still guarantees the server-side hold, marker persistence, and release ordering, but it cannot make
+an old frontend honor a written-empty clear or a specific non-empty marker. Such a frontend can
+only derive from the transcript rows it loaded: it can re-show an answered question when the answer
+row is outside its page, and it cannot recover a marked question-bearing row that is off-page.
+
 *Marker re-derivation on transcript swaps.* `agent.editAndRegenerate` truncation and
 `agent.replaceMessages` re-mint row ids, so any surviving marker is dangling by construction: both
 re-derive it over the post-swap transcript (newest question-bearing assistant row not answered
