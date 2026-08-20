@@ -261,9 +261,11 @@
 > tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
 > emulation, so owned tabs render deterministically offscreen without disturbing the
 > user's panel layout. There is no opt-in and no clear/reset op. Everywhere they appear
-> (`claimTab` / `openTab` / `resizeTab`), `width` and `height` are **positive
-> integers** (CSS px): zero, negative, fractional, or non-finite values are validation
-> errors — an emulated tab can never carry a disabling zero size. Agent-issued
+> (`claimTab` / `openTab` / `resizeTab`), `width` and `height` are **integers within
+> 320–3840** (CSS px, inclusive): fractional, non-finite, or out-of-range values
+> (below 320 — which covers zero and negatives — or above 3840) are validation
+> errors, reported inside the per-action `{ action, success: false, error }` result
+> envelope — an emulated tab can never carry a disabling zero size. Agent-issued
 > `openTab` accepts optional `width` / `height` and the tab is emulated from creation;
 > omitted `width` defaults to **1280** and omitted `height` to **800** (the standard
 > desktop viewport 1280×800 when both are omitted), and `claimTab` with omitted
