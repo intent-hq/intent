@@ -6,8 +6,7 @@ and must not do around releases), see the root [AGENTS.md](../AGENTS.md) → Rel
 Process.
 
 Releases are per-component and channel-based: merging a release PR publishes to the
-rolling **alpha** channel (several workflows are historically named "beta" but publish
-to alpha); **beta** and **stable** are promotions of existing releases (no new build),
+rolling **alpha** channel; **beta** and **stable** are promotions of existing releases (no new build),
 each triggered by a manual workflow dispatch (`promote-beta.yml` /
 `promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
 cloudlands-fe).
@@ -59,7 +58,7 @@ cloudlands-fe).
   release, then immediately pin-bumps `intentd.version` in cloudlands-fe via a manual
   PR (verify with `node scripts/fetch-sidecar.cjs` from that directory) and cuts the
   cloudlands-fe release.
-- release-please maintains a release PR. Merging it cuts the tag and `release-beta.yml`
+- release-please maintains a release PR. Merging it cuts the tag and `release-alpha.yml`
   publishes to `intent-hq/cloudlands-releases`. All release assets — installers,
   update feeds, and `release-manifest.json` — live **only** on the
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
@@ -69,7 +68,7 @@ cloudlands-fe).
   distribution repo, not the source repo. (intentd differs: cargo-dist publishes
   daemon archives to the source repo's releases, and its channel manifests are
   dual-published — see the intentd section above.)
-- The Release PR merge is automated by `auto-cut-beta.yml`, which is event-chained
+- The Release PR merge is automated by `auto-cut-alpha.yml`, which is event-chained
   with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
   `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
   into a cut run that polls (30s interval, up to 15 min) for release-please to refresh
@@ -85,6 +84,20 @@ cloudlands-fe).
   age bound stops a failed intentd build from deferring fe cuts forever, and the
   check fails open on any lookup error (missing `INTENTD_READ_PAT`, unreachable
   manifest, unreadable tags) so an unreadable intentd never blocks fe releases.
+  BE-dependency freshness guardrail (intent-hq/monorepo#2985): the intentd-first
+  rule orders merges, not releases, so an fe commit can merge after its intentd
+  counterpart and still ship in an alpha whose pinned sidecar predates that BE
+  work. Before merging, the cut resolves the pin from `intentd.version` on fe
+  main and compares `v<pin>...main` on `intent-hq/intentd`: when intentd main has
+  no commits after the pinned tag (the expected common case, one cheap API
+  comparison) the cut proceeds unrestricted; when intentd main is ahead and the
+  cut would ship fe commits merged after that tag was cut, it defers — those
+  commits may depend on intentd work in no published sidecar, and the next
+  intentd alpha's pin-bump push chains into a cut that re-evaluates (push runs
+  with polling budget left retry in-run). Automation commits (the sidecar
+  pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
+  and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
+  unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
 - Stable: dispatch `release-stable.yml` with the `version` input.
 
 ## Release notifier
@@ -125,7 +138,7 @@ The pipeline is event-chained, with hourly crons as backstops: intentd release P
 merge → tag + cargo-dist build → alpha manifest publish →
 `intentd-alpha-published` dispatch → cloudlands-fe pin bump
 (`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
-(`auto-cut-beta.yml` push trigger) → promote each component's stable → monorepo
+(`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
 the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.

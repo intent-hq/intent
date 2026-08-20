@@ -92,10 +92,20 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 - **Conventional commits** are required. PR titles are validated by CI
   (`amannn/action-semantic-pull-request`) against: `feat`, `fix`, `chore`, `docs`,
   `refactor`, `test`, `ci`, `perf`.
+- **Never quote the literal breaking-change footer token.** release-please/release-plz
+  treat `BREAKING CHANGE:` / `BREAKING-CHANGE:` (and `Release-As:`) appearing anywhere
+  in a commit body as a real footer — a commit that merely *quotes* the token causes a
+  false major bump (or, for `Release-As:`, a forced pinned version); this accidentally
+  cut cloudlands-fe v3.0.0 — see intent-hq/monorepo#2988. Squash merges include every
+  branch commit message in the squash body, so the token in any branch commit still
+  lands on main. Never write the
+  literal token in commit messages, PR titles/bodies, or review comments unless an
+  actual breaking change is intended; when describing the mechanism, write "the
+  breaking-change footer token" or similar instead.
 - **Merging**: agents must **NEVER merge a PR or arm auto-merge — in this repo or any
   submodule repo — without explicit permission from a human**. Approved + green checks
   is not enough. Repo-owned automation is exempt (auto-bump-submodules,
-  auto-pin-intentd, auto-cut-beta, and the release PR workflows merge their own
+  auto-pin-intentd, auto-cut-alpha, and the release PR workflows merge their own
   rolling PRs). The repository allows squash and rebase merges; no merge queue is
   enabled. Once a human has given permission, merge with `gh pr merge --squash`
   (optionally `--auto` to merge once checks pass). The GraphQL `enqueuePullRequest`
