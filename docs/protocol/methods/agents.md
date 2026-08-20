@@ -515,8 +515,9 @@ question-hold derivation, and queue persistence/rehydration are all untouched by
   `turnId`, and ALL flushed rows persist — and their `agent:message` echoes are stamped —
   under that same combined `turnId` (not each entry's own), so all N echoes correlate with
   the single `agent:queue:processing` / `agent:stream:*` lifecycle. The queue entries
-  themselves keep their own `turnId`s (entry ids / `messageMetadata` / `queueInfo` are
-  untouched). The merged turn options carry attachments and prepend payloads from all entries
+  themselves keep their own `turnId`s and ids; the only metadata mutation beyond the
+  single-drain annotations is the shared `queueInfo.batchId` grouping stamp on every entry
+  of the batch. The merged turn options carry attachments and prepend payloads from all entries
   in message order, the head entry's `queuedAt` / `interruptPriority` / `messageMetadata`,
   and a user origin when ANY flushed entry is user-origin (a user message is being
   delivered); the turn-begin report clear is suppressed only when EVERY entry is a #576
