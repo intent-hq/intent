@@ -35,7 +35,7 @@ version number by hand.
 1. On every push to `main`, release-please opens (or updates) a **Release PR**
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
-2. The Release PR is auto-merged by `auto-cut-beta.yml` when it is green —
+2. The Release PR is auto-merged by `auto-cut-alpha.yml` when it is green —
    that is the release timing gate. The workflow is event-chained with an
    hourly cron backstop: a sidecar pin-bump squash merge (a push to `main`
    touching `intentd.version`) chains straight into a cut run that polls
@@ -117,9 +117,9 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 Windows builds require no signing secrets — they ship **unsigned** (see
 [Platform builds and runners](#platform-builds-and-runners)).
 
-## Beta Release Workflow
+## Alpha Release Workflow
 
-The beta release workflow is defined in `.github/workflows/release-beta.yml`.
+The alpha release workflow is defined in `.github/workflows/release-alpha.yml`.
 
 **Trigger:** Push of a `v*.*.*` tag (created by release-please when its Release PR is merged). A `workflow_dispatch` fallback is available to (re)build an **existing** tag.
 
@@ -168,7 +168,7 @@ The rollback workflow will restore a previous versioned release to a channel's r
 
 ## Platform Builds and Runners
 
-Each release ships four platform builds, produced by parallel jobs in `release-beta.yml`:
+Each release ships four platform builds, produced by parallel jobs in `release-alpha.yml`:
 
 | Platform      | Runner                                                         | Artifacts                                           | Feed file                |
 | ------------- | -------------------------------------------------------------- | --------------------------------------------------- | ------------------------ |
