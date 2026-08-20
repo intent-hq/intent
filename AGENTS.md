@@ -105,7 +105,7 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 - **Merging**: agents must **NEVER merge a PR or arm auto-merge — in this repo or any
   submodule repo — without explicit permission from a human**. Approved + green checks
   is not enough. Repo-owned automation is exempt (auto-bump-submodules,
-  auto-pin-intentd, auto-cut-beta, and the release PR workflows merge their own
+  auto-pin-intentd, auto-cut-alpha, and the release PR workflows merge their own
   rolling PRs). The repository allows squash and rebase merges; no merge queue is
   enabled. Once a human has given permission, merge with `gh pr merge --squash`
   (optionally `--auto` to merge once checks pass). The GraphQL `enqueuePullRequest`

@@ -4,7 +4,7 @@ This document describes the end-to-end release process for Intent (cloudlands-fe
 
 ## Overview
 
-Releases are built and published by the **Release Beta** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
+Releases are built and published by the **Release Alpha** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
 
 1. Reads the pinned intentd version from `intentd.version` and fetches the matching release asset via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/intentd`); it fails fast if the pinned release or its assets don't exist
 2. Builds the app for all four platforms in parallel jobs — macOS (arm64), Windows (x64), Linux (x64), Linux (arm64) — each with its staged `intentd` sidecar
@@ -44,11 +44,11 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
 
 1. **Merge the release-please Release PR**
 
-   The **Release Beta** workflow triggers automatically when a `v*.*.*` tag is pushed. Tags are created by release-please when its Release PR (which bumps `package.json` and updates the changelog) is merged — releasing is a matter of merging that PR, not typing a version.
+   The **Release Alpha** workflow triggers automatically when a `v*.*.*` tag is pushed. Tags are created by release-please when its Release PR (which bumps `package.json` and updates the changelog) is merged — releasing is a matter of merging that PR, not typing a version.
 
    The workflow validates the tag format, verifies the tag matches the `package.json` version at the tagged commit, and fails if a `v{version}` release already exists on `intent-hq/cloudlands-releases`.
 
-   To rebuild an **existing** tag (e.g., after a transient build failure), use the `workflow_dispatch` fallback: go to [Actions > Release Beta](https://github.com/intent-hq/cloudlands-fe/actions/workflows/release-beta.yml), click "Run workflow", and enter the existing tag (e.g., `v2.1.0`). Note the duplicate-release guard: delete the failed `v{version}` release on `cloudlands-releases` first if it was partially published.
+   To rebuild an **existing** tag (e.g., after a transient build failure), use the `workflow_dispatch` fallback: go to [Actions > Release Alpha](https://github.com/intent-hq/cloudlands-fe/actions/workflows/release-alpha.yml), click "Run workflow", and enter the existing tag (e.g., `v2.1.0`). Note the duplicate-release guard: delete the failed `v{version}` release on `cloudlands-releases` first if it was partially published.
 
    The bundled intentd version comes from the `intentd.version` pin at the tagged commit — there are no intentd-related workflow inputs. Make sure the pinned release exists on `intent-hq/intentd` (with assets for the build targets) before releasing, or the workflow will fail fast at the fetch step.
 
