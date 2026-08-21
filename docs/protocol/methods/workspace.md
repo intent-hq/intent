@@ -713,7 +713,13 @@ URL/title from its repo identity, and a completed monitor without a snapshot ver
 to `closed`, never `merged`). **Dedup is by PR `url`, first-wins by source precedence**
 (workspace stored list > git-root > monitor-derived) — one entry per URL, **no recency
 comparison**: a URL already carried by the workspace's stored list wins outright even when
-a git-root or monitor entry for the same PR is fresher. Entries can therefore be
+a git-root or monitor entry for the same PR is fresher. One exception: a lower-priority
+duplicate carrying a **terminal** `status` (`Merged`/`Closed`) upgrades a non-terminal
+(`Open`/`Draft`) winning entry's `status` + `updatedAt` in place — terminal is
+irreversible, so a stale stored/git-root entry never shadows a monitor that already saw
+the PR merge (monorepo#3127); an entry already terminal is never rewritten (the
+snapshotless completed-monitor `closed` fallback cannot downgrade a `merged` verdict).
+Identity and all other fields still come from the higher-priority source. Entries can therefore be
 **cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
 repository): the entry's `url` is authoritative for which repo it belongs to. The merge is
 computed on emit from already-persisted rows — plain column reads plus an in-memory merge,
