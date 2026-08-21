@@ -260,8 +260,11 @@
 >
 > **Hidden-by-default agent tabs — FE-enforced (monorepo#3045).** Agent-opened tabs
 > start **hidden**: not mounted into the user's panel layout and never stealing focus.
-> Like ownership, visibility is FE-served — the `browser.exec` request / reverse-RPC
-> **wire shape is unchanged** and the daemon stays a thin proxy.
+> Like ownership, visibility is FE-served — `visible?` / `focus?` and `showTab` are
+> action-vocabulary fields inside the opaque `actions` array, not `browser.exec`
+> method params, so the `browser.exec` request / reverse-RPC **wire shape is
+> unchanged**, the daemon stays a thin proxy, and there is **no method-catalog or
+> protocol-version change** (same as the #2857 ownership vocabulary above).
 >
 > - **`openTab { url, visible?, width?, height? }`** — `visible` is optional and
 >   defaults to **`false`**: the tab is created **hidden** — alive, owned by the
@@ -269,7 +272,11 @@
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` opts into opening
 >   directly into the panel layout as before. Per-agent dedupe (above) is unaffected
->   by visibility: a same-URL reopen reuses the agent's tab whether hidden or visible.
+>   by visibility: a same-URL reopen reuses the agent's tab whether hidden or
+>   visible, and on a reuse `visible` applies to the existing tab — `visible: true`
+>   reveals a hidden reused tab (mounted without activation or panel-focus change,
+>   exactly as `showTab` with `focus: false`); `visible` omitted or `false` leaves
+>   the reused tab's visibility unchanged — a reuse **never hides** a visible tab.
 > - **`showTab { tabId, focus? }`** — reveals a hidden tab by mounting it into a
 >   panel; **owner-only** (on a tab the caller does not own it returns the structured
 >   `not-owner` error, per the ownership rules above). `focus` is optional and
