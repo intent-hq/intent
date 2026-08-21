@@ -280,12 +280,19 @@
 >   dedupe hit **never changes the reused tab's visibility**: a hidden tab stays
 >   hidden even when the `openTab` carried `visible: true`, and a visible tab stays
 >   visible. Revealing an existing tab is **`showTab`-only**.
-> - **`showTab { tabId, focus? }`** — reveals a hidden tab by mounting it into a
->   panel; **owner-only** (on a tab the caller does not own it returns the structured
->   `not-owner` error, per the ownership rules above). `focus` is optional and
->   defaults to **`false`**: the tab is mounted **without** being activated and
->   without moving panel focus. `focus: true` reveals **and** activates — the tab
->   becomes the panel's active tab and the panel takes focus. `showTab` is
+> - **`showTab { tabId, focus? }`** — reveals a hidden tab by **activating** it in a
+>   visible panel; **owner-only** (on a tab the caller does not own it returns the
+>   structured `not-owner` error, per the ownership rules above). `focus` is optional
+>   and defaults to **`false`**: the tab is activated in a visible panel **without**
+>   moving panel/keyboard focus and **without** displacing the currently-viewed
+>   conversation — the reveal targets a panel other than the focused one, splitting
+>   the layout when no other panel qualifies. Activation is part of the reveal in
+>   both flavors: a non-active tab renders nothing in the tabless UI, so a reveal
+>   that merely mounted without activating had no user-visible effect
+>   (cloudlands-fe#1560, monorepo#3112). `focus: true` reveals, activates, **and**
+>   focuses — the tab becomes its panel's active tab and the panel takes focus. The
+>   reveal is **persisted**: a revealed tab stays visible across app restarts rather
+>   than reverting to hidden. `showTab` is
 >   **idempotent** on an already-visible tab: with `focus: false` it is a no-op
 >   success; with `focus: true` it still activates the tab and focuses its panel.
 >   An unknown `tabId` fails as an **action-result error** (the per-action
@@ -300,8 +307,9 @@
 > (`openTab` hidden or visible, `closeTab`, `showTab`, `evaluate`, `screenshot`, …)
 > works regardless of workspace visibility — webviews spin up in the background as
 > needed. Visibility/activation effects apply to the **persisted layout state**:
-> `showTab` mounts (and with `focus: true`, activates) the tab in the workspace's
-> layout so the layout is correct when the user next opens the workspace. When the
+> `showTab` activates the tab in a visible panel of the workspace's layout (and with
+> `focus: true`, also focuses it) so the layout is correct when the user next opens
+> the workspace. When the
 > workspace is **not** currently visible in the UI, no actual UI focus/activation
 > side effect is attempted: `showTab { focus: true }`, `focusTab`, and
 > `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
