@@ -305,8 +305,13 @@
 > workspace is **not** currently visible in the UI, no actual UI focus/activation
 > side effect is attempted: `showTab { focus: true }`, `focusTab`, and
 > `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
-> focus attempt**, and the action result carries a **warning** that the workspace is
-> not visible so no UI focus was attempted.
+> focus attempt**, and the action's `result` payload carries an **additive
+> human-readable `warning` string** stating that the workspace is not visible so no
+> UI focus was attempted — the same additive-`warning` channel as the bare-loopback
+> rewrite warning above (monorepo#2323). The per-action
+> `{ action, success, result?, error? }` envelope is unchanged: the warning never
+> rides `error` and never fails the action, and the field is absent when the
+> workspace is visible.
 >
 > **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
 > tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
