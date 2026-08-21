@@ -714,11 +714,14 @@ to `closed`, never `merged`). **Dedup is by PR `url`, first-wins by source prece
 (workspace stored list > git-root > monitor-derived) — one entry per URL, **no recency
 comparison**: a URL already carried by the workspace's stored list wins outright even when
 a git-root or monitor entry for the same PR is fresher. One exception: a lower-priority
-duplicate carrying a **terminal** `status` (`Merged`/`Closed`) upgrades a non-terminal
-(`Open`/`Draft`) winning entry's `status` + `updatedAt` in place — terminal is
-irreversible, so a stale stored/git-root entry never shadows a monitor that already saw
-the PR merge (monorepo#3127); an entry already terminal is never rewritten (the
-snapshotless completed-monitor `closed` fallback cannot downgrade a `merged` verdict).
+duplicate whose `status` sits higher on the lifecycle ladder (`Open`/`Draft` < `Closed` <
+`Merged`) upgrades the winning entry's `status` + `updatedAt` + `isDraft` in place, so a
+stale stored/git-root entry never shadows a monitor that already saw the PR merge
+(monorepo#3127). Status only ever moves up the ladder: `Merged` is irreversible and wins
+over everything (including a stale `Closed`), while `Closed` — the snapshotless
+completed-monitor fallback among others — never downgrades a `Merged` verdict, and
+reopened-after-close is left to the sweep re-fetch. `isDraft` moves with `status` so an
+upgraded entry never reads merged/closed while still claiming draft.
 Identity and all other fields still come from the higher-priority source. Entries can therefore be
 **cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
 repository): the entry's `url` is authoritative for which repo it belongs to. The merge is
