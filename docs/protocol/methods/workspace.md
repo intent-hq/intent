@@ -767,7 +767,15 @@ omitted** (see its bullet below):
   `AgentLite` decision); `lastActivity` is the session `updatedAt`; `parentAgentId` (v2.9, additive)
   is the delegating/spawning agent's id — the same session value surfaced as
   `metadata.createdByAgentId` on `agent.get`/`agent.list` loads (§5.5) — **omitted** for root
-  agents, so clients can rebuild the delegation tree from the summary alone.
+  agents, so clients can rebuild the delegation tree from the summary alone. Since
+  [intent-hq/intentd#1359](https://github.com/intent-hq/intentd/pull/1359)
+  ([monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)), **archived**
+  `workspace.list` rows omit `agentSummary` entirely — the archived tail dominated the
+  serialized list payload while no list consumer reads agent info off archived rows (the HUD
+  filters archived before reading it; iOS decodes it optionally). Active list rows and
+  `workspace.get` — archived included — keep serving it. The slimming runs as a final pass
+  over the merged list after enrichment, so a row degraded by an enrichment failure is
+  slimmed the same way.
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
   **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
   `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
@@ -1099,6 +1107,16 @@ and writes through — clients must not assume `tokenUsage` can never drop back 
 **read** and its change event cross the wire —
 neither the live update nor the scan has an RPC (§6.8). `workspace.getTokenUsage` requires
 `workspaceId`.
+
+**`tokenUsage` is detail-only on the list paths** (since
+[intent-hq/intentd#1359](https://github.com/intent-hq/intentd/pull/1359),
+[monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)): although the tally is
+persisted on the `Workspace` row, `workspace.list` rows and the lite `workspace.subscribe`
+seq-0 snapshot rows (§6.9) **never serve** `tokenUsage` — the field is optional
+(`skip_serializing_if`), so it is simply absent (never `null`), following the v4.2
+`diskUsage` precedent. `workspace.get` keeps serving it, and clients that need usage read
+`workspace.getTokenUsage` + `workspace:tokenUsage-changed` as before (the FE already did
+exactly this — no list consumer read the field off list rows).
 
 | Method | Params | Result |
 | --- | --- | --- |
