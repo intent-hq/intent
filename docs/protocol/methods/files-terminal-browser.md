@@ -295,6 +295,24 @@
 >   **hidden** tab it fails with an action-result error directing the caller to
 >   `showTab` — there is no focusTab overload that reveals a hidden tab.
 >
+> **Workspace-inactive semantics (monorepo#3045).** Agent tab operations do **not**
+> require the tab's workspace to be currently open/visible in the FE: every action
+> (`openTab` hidden or visible, `closeTab`, `showTab`, `evaluate`, `screenshot`, …)
+> works regardless of workspace visibility — webviews spin up in the background as
+> needed. Visibility/activation effects apply to the **persisted layout state**:
+> `showTab` mounts (and with `focus: true`, activates) the tab in the workspace's
+> layout so the layout is correct when the user next opens the workspace. When the
+> workspace is **not** currently visible in the UI, no actual UI focus/activation
+> side effect is attempted: `showTab { focus: true }`, `focusTab`, and
+> `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
+> focus attempt**, and the action's `result` payload carries an **additive
+> human-readable `warning` string** stating that the workspace is not visible so no
+> UI focus was attempted — the same additive-`warning` channel as the bare-loopback
+> rewrite warning above (monorepo#2323). The per-action
+> `{ action, success, result?, error? }` envelope is unchanged: the warning never
+> rides `error` and never fails the action, and the field is absent when the
+> workspace is visible.
+>
 > **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
 > tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
 > emulation, so owned tabs render deterministically offscreen without disturbing the
