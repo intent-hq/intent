@@ -104,10 +104,12 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    - Exist as a published versioned release (`v{VERSION}`) on `intent-hq/cloudlands-releases`
    - Use stable semver format (`X.Y.Z` only — no prerelease or build suffixes)
    - Be greater than the current stable version (or be the first promotion)
+   - Not be ahead of the current beta channel version (beta-first guard, see below)
 
 2. **What the workflow does**
 
    The workflow automatically:
+   - **Beta-first guard**: checks the current beta channel version (read from the `beta` release's `latest-mac.yml` feed) is >= the promoted version — the invariant is that beta can never be behind stable — and fails fast **before any asset is downloaded or uploaded** when the beta feed is missing or unparseable or the beta version is behind the promoted one. For an emergency promotion that must bypass the guard, re-run the workflow with the `skip_beta_check` input checked (default off) — the bypass is logged as a warning
    - Downloads all assets from the versioned release `v{VERSION}`
    - Uploads new assets to the rolling `stable` release tag with `--clobber` (versioned assets first, then `latest-mac.yml` last for atomic feed switch)
    - Deletes old versioned assets from the previous stable promotion (only after new assets are uploaded and live)
