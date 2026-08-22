@@ -569,8 +569,8 @@ the in-memory watch registry loads.
 Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. The first ten
-default `true`; `taskGraph` is opt-in and defaults `false`. Each toggle removes
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. All eleven
+default `true`. Each toggle removes
 an agent-exposed feature from the agent's system prompt, its MCP tool surface,
 or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
 docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
