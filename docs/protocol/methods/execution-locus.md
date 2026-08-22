@@ -93,7 +93,14 @@ in the bullet under this table).
   then captured vars fill gaps. `cwd` requires `workspaceId` so the daemon can enforce the same lexical
   within-workspace containment guard that `file.*` uses;
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
-  workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
+  workspace"`. When `workspaceId` is present and `cwd` is **omitted**, the child runs from the
+  workspace's filesystem root ([intent-hq/intentd#1410](https://github.com/intent-hq/intentd/pull/1410),
+  monorepo#3231) — previously it inherited the daemon's own process cwd, so relative paths in
+  the command (e.g. `git -C .worktrees/x`) silently resolved against the wrong directory. The
+  default is best-effort and containment-neutral: a workspace with no resolvable filesystem
+  root (remote / skip-worktree rows, or a root missing on disk) falls back to the previous
+  daemon-cwd behavior rather than erroring, and requests with neither `workspaceId` nor `cwd`
+  are unchanged. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
   stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
 - `host.execStream` is the **streaming/interactive** counterpart for FE surfaces (e.g.
   `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
@@ -101,7 +108,8 @@ in the bullet under this table).
   workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
   process-group + `kill_on_drop` + `timeoutMs` reap, the child-env contract above — caller
   `env` > daemon process env > captured credential gap-fill, plus enriched PATH,
-  workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
+  workspace-containment on `cwd` and the omitted-`cwd` workspace-root default,
+  secret-safe env) and adds the streaming shape from
   `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
   `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
   daemon publishes one bus frame per output chunk plus one terminal exit frame, all correlated
