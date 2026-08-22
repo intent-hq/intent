@@ -157,7 +157,9 @@ update checks against public GitHub Releases and actions you take yourself:
 
 - **Desktop app auto-updates** — the packaged app checks for and downloads
   updates from GitHub Releases on
-  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases).
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases),
+  and fetches release notes for the installed version from the same repo's
+  GitHub Releases API.
 - **intentd sitter self-update** — the sitter (see [Install](#install))
   downloads the daemon and checks the channel manifests published on the
   public
@@ -166,19 +168,17 @@ update checks against public GitHub Releases and actions you take yourself:
   [intentd releases page](https://github.com/intent-hq/intentd/releases). The
   mirror is the permanent public distribution channel, kept even after the
   intentd repo goes public.
-- **Auggie binary download (on demand)** — installing the Auggie CLI from the
-  desktop app downloads the pre-built binary from the latest public release of
-  [augmentcode/auggie](https://github.com/augmentcode/auggie).
 - **Provider sign-ins (user-initiated)** — signing in to a coding-agent
   provider (Auggie, Claude Code, Codex, OpenCode, Droid, Grok, Pi) runs that
-  provider's own CLI sign-in flow; each provider CLI talks to its own vendor
-  service when you sign in.
+  provider's own CLI/OAuth sign-in flow through the daemon; each provider
+  talks to its own vendor service when you sign in.
 - **User-configured integrations** — connecting GitHub (OAuth device flow or
-  personal access token), Linear (API key), or Sentry calls the respective
-  service's API with credentials you provide. Sentry is opt-in in two places:
-  the desktop app talks to the sentry.io API when you connect a Sentry
-  account, and the daemon's Sentry integration uses an API token you
-  configure. Nothing is sent to any of these services unless you connect them.
+  personal access token), Linear (API key), or Sentry (API token) has the
+  daemon call the respective service's API with credentials you provide.
+  Nothing is sent to any of these services unless you connect them.
+- **User-configured MCP servers** — the daemon connects to the MCP servers
+  you configure (including when testing a server's connection as you set it
+  up) and to no others.
 
 Coding agents you run are external programs and may access the network
 according to their own provider's behavior.
