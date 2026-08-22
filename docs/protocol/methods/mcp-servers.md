@@ -163,8 +163,11 @@ this is a stateless pre-save check for any URL.
   stored `mcp.oauth.*` bag for that id (§5.22.1) and injects
   `Authorization: <token_type> <access_token>` (a lowercase `bearer` is capitalized;
   `token_type` defaults to `Bearer`) — the bag never crosses the wire in either direction.
-  An unknown `serverName` or absent bag is not an error; the probe simply runs without
-  the header.
+  Injection is **guarded by a same-origin check**: the bearer token is attached only when
+  the probe `url` shares the saved server config's origin (scheme + host + port, default
+  ports normalized), so a saved server id cannot be paired with an arbitrary URL to send
+  its token elsewhere. An unknown `serverName`, absent bag, missing saved config, or
+  origin mismatch is not an error; the probe simply runs without the header.
 - **Status mapping** — HTTP 401/403 → `auth_required`; any other status **below 500**
   (2xx–4xx) → `connected` (the server is reachable — 404/405 just mean the endpoint shape
   differs); 5xx → `error`. All three carry `statusCode`. A transport failure — connect
