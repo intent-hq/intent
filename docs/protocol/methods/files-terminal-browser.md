@@ -4,7 +4,7 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` field — see the hidden-by-default block below (monorepo#3045) |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
@@ -242,9 +242,10 @@
 >   never reused, so two agents opening the same URL get two tabs.
 > - **`listTabs { scope? }`** — `scope: 'mine' | 'unclaimed' | 'all'` (default `all`).
 >   Every returned tab carries `ownerAgentId` (`null` when unowned) plus owner display
->   info, and **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
+>   info, **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
->   deciding to claim or resize.
+>   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`**
+>   (monorepo#3045, see the hidden-by-default block below).
 > - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
 >   own — another agent's tab, or an unowned tab the caller has not claimed) and
 >   `already-claimed` (a claim lost to an earlier claim) surface as **action-result
@@ -256,6 +257,69 @@
 >   daemon maps to `-32603`, see above): the FE reports the batch as executed with the
 >   failing action's envelope in `results`, so the error reaches the caller through
 >   the normal single-/multi-action reshape.
+>
+> **Hidden-by-default agent tabs — FE-enforced (monorepo#3045).** Agent-opened tabs
+> start **hidden by default**: not mounted into the user's panel layout and never
+> stealing focus. Unowned (user) tabs are always `visibility: 'visible'` — hidden is
+> an agent-owned-tab state only. Like ownership, visibility is FE-served —
+> `visible?` / `focus?` and `showTab` are action-vocabulary fields inside the opaque
+> `actions` array, not `browser.exec` method params, so the `browser.exec` request /
+> reverse-RPC **wire shape is unchanged**, the daemon stays a thin proxy, and there
+> is **no method-catalog or protocol-version change** (same as the #2857 ownership
+> vocabulary above).
+>
+> - **`openTab { url, visible?, width?, height? }`** — `visible` is optional and
+>   defaults to **`false`**: the tab is created **hidden** — alive, owned by the
+>   opener, emulated (sizing invariant unchanged), returned by `listTabs` (with
+>   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
+>   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
+>   opts into opening directly into the panel layout as before: the tab is mounted
+>   per the usual placement rules with today's activation behavior, exactly as a
+>   pre-#3045 agent `openTab`. Per-agent dedupe (above) is unaffected by visibility —
+>   a same-URL reopen reuses the agent's tab whether hidden or visible — and a
+>   dedupe hit **never changes the reused tab's visibility**: a hidden tab stays
+>   hidden even when the `openTab` carried `visible: true`, and a visible tab stays
+>   visible. Revealing an existing tab is **`showTab`-only**.
+> - **`showTab { tabId, focus? }`** — reveals a hidden tab by **activating** it in a
+>   visible panel; **owner-only** (on a tab the caller does not own it returns the
+>   structured `not-owner` error, per the ownership rules above). `focus` is optional
+>   and defaults to **`false`**: the tab is activated in a visible panel **without**
+>   moving panel/keyboard focus and **without** displacing the currently-viewed
+>   conversation — the reveal targets a panel other than the focused one, splitting
+>   the layout when no other panel qualifies. Activation is part of the reveal in
+>   both flavors: a non-active tab renders nothing in the tabless UI, so a reveal
+>   that merely mounted without activating had no user-visible effect
+>   (cloudlands-fe#1560, monorepo#3112). `focus: true` reveals, activates, **and**
+>   focuses — the tab becomes its panel's active tab and the panel takes focus. The
+>   reveal is **persisted**: a revealed tab stays visible across app restarts rather
+>   than reverting to hidden. `showTab` is
+>   **idempotent** on an already-visible tab: with `focus: false` it is a no-op
+>   success; with `focus: true` it still activates the tab and focuses its panel.
+>   An unknown `tabId` fails as an **action-result error** (the per-action
+>   `{ action, success: false, error }` envelope naming the unknown id — never a
+>   JSON-RPC-level or FE top-level error), like the structured ownership errors above.
+> - **`focusTab` is unchanged for visible tabs** (activate + focus the panel). On a
+>   **hidden** tab it fails with an action-result error directing the caller to
+>   `showTab` — there is no focusTab overload that reveals a hidden tab.
+>
+> **Workspace-inactive semantics (monorepo#3045).** Agent tab operations do **not**
+> require the tab's workspace to be currently open/visible in the FE: every action
+> (`openTab` hidden or visible, `closeTab`, `showTab`, `evaluate`, `screenshot`, …)
+> works regardless of workspace visibility — webviews spin up in the background as
+> needed. Visibility/activation effects apply to the **persisted layout state**:
+> `showTab` activates the tab in a visible panel of the workspace's layout (and with
+> `focus: true`, also focuses it) so the layout is correct when the user next opens
+> the workspace. When the
+> workspace is **not** currently visible in the UI, no actual UI focus/activation
+> side effect is attempted: `showTab { focus: true }`, `focusTab`, and
+> `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
+> focus attempt**, and the action's `result` payload carries an **additive
+> human-readable `warning` string** stating that the workspace is not visible so no
+> UI focus was attempted — the same additive-`warning` channel as the bare-loopback
+> rewrite warning above (monorepo#2323). The per-action
+> `{ action, success, result?, error? }` envelope is unchanged: the warning never
+> rides `error` and never fails the action, and the field is absent when the
+> workspace is visible.
 >
 > **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
 > tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
@@ -286,8 +350,11 @@
 > an `agent.delete` still inside its `undoDelayMs` grace window (§5.5) leaves the tabs
 > untouched, and `agent.cancelDelete` restores the agent with its tabs intact.
 > Workspace archive/delete discards all tabs. A user "close" of an agent-owned tab is a
-> UI-level **hide**, not a destroy: the tab stays alive and continues to appear in
-> `listTabs` for its owner. Unowned tabs close/destroy normally.
+> UI-level **hide**, not a destroy: the tab **returns to hidden** (`visibility:
+> 'hidden'`, monorepo#3045) — it stays alive, continues to appear in `listTabs` for
+> its owner, and can be revealed again via `showTab` (or restored from the sidebar
+> owner group). The destroy paths are unchanged: only agent deletion / workspace
+> archive-delete destroy owned tabs. Unowned tabs close/destroy normally.
 >
 > **`browser.docs` — not exposed.** The `browser_docs` MCP tool that
 > served static reference docs on-demand has no consumer in the daemon surface (skills-style
