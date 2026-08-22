@@ -214,7 +214,7 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
     "backgroundHooks": true, "hostExec": true, "scripts": true,
     "terminalAccess": true, "browserAutomation": true, "richChatBlocks": true,
     "structuredQuestions": true, "attentionRequests": true, "stateSnapshot": true,
-    "prMonitor": true, "taskGraph": false
+    "prMonitor": true, "taskGraph": true
   }
   ```
 
