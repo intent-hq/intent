@@ -24,8 +24,15 @@ cloudlands-fe).
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
-- Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
-  verify `stable.json` on the `channel-stable` release.
+- Stable is promotion-only and beta-first: dispatch `promote-stable.yml` with the
+  `version` input, then verify `stable.json` on the `channel-stable` release. A guard
+  verifies the current beta channel version (`beta.json` on the fixed `channel-beta`
+  release) is >= the promoted version — the invariant is that the beta channel can
+  never be behind stable — and fails fast before any channel asset is touched: a
+  version that never soaked on beta (missing or unparseable `beta.json`, or a beta
+  version behind the promoted one) cannot reach stable. The optional
+  `skip_beta_check` boolean dispatch input (default `false`) bypasses the guard as an
+  emergency escape hatch, logged as a warning.
 - Daemon archives and channel manifests are **mirrored** to the public
   [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) repo
   (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
@@ -98,7 +105,15 @@ cloudlands-fe).
   pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
   and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
   unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
-- Stable: dispatch `release-stable.yml` with the `version` input.
+- Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
+  guard applies: the workflow verifies the current beta channel version (the `beta`
+  release's `latest-mac.yml` feed on `intent-hq/cloudlands-releases`) is >= the
+  promoted version — beta can never be behind stable — and fails fast before any
+  channel asset is downloaded or uploaded: a missing/unparseable beta feed (the
+  version was never promoted to beta) or a beta version behind the promoted one
+  aborts while the live stable channel is still untouched. The optional
+  `skip_beta_check` boolean dispatch input (default `false`) bypasses the guard for
+  emergencies, logged as a warning.
 
 ## Release notifier
 
