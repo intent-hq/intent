@@ -146,15 +146,16 @@ The workflow no longer bumps `package.json`, creates tags, or opens version-bump
 
 ## Promote-to-Stable Workflow
 
-**Workflow:** `.github/workflows/release-stable.yml` (manual `workflow_dispatch` with a `version` input)
+**Workflow:** `.github/workflows/release-stable.yml` (manual `workflow_dispatch` with a `version` input; the optional `skip_beta_check` boolean input, default `false`, bypasses the beta-first guard below)
 
 The promote-to-stable workflow:
 
 1. Validates the version and verifies the versioned release exists on `intent-hq/cloudlands-releases`
-2. Reads the previous stable version from the stable channel's `latest-mac.yml` (tolerates a first promotion)
-3. Copies all artifacts from the versioned release to the `stable` rolling release tag — all feed files (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) are uploaded **last** for an atomic feed switch — then deletes superseded assets and verifies each promoted feed's `sha512`. Promoting an older mac-only release still works: missing platform feeds produce warnings, not failures
-4. Builds aggregated release notes for the range `(prevStable, VERSION]`: a leading summary section (promoted version, previous stable, and a consolidated intentd pin delta recovered from the releases' `release-manifest.json` files and rendered from the intentd compare API via `scripts/generate-stable-summary.mjs`), followed by each version's release body
-5. Updates the `stable` release body with the aggregated notes
+2. **Beta-first guard**: checks the current beta channel version (read from the `beta` release's `latest-mac.yml` feed) is >= the promoted version — the invariant is that beta can never be behind stable (this does not prove the promoted version itself was ever on beta; e.g. beta 2.0.2 still permits promoting stable 2.0.1). Fails fast before any channel asset is downloaded or uploaded when the beta feed is missing or unparseable or the beta version is behind the promoted one. Dispatching with `skip_beta_check: true` bypasses the guard for emergency promotions, logged as a warning
+3. Reads the previous stable version from the stable channel's `latest-mac.yml` (tolerates a first promotion)
+4. Copies all artifacts from the versioned release to the `stable` rolling release tag — all feed files (`latest-mac.yml`, `latest.yml`, `latest-linux.yml`, `latest-linux-arm64.yml`) are uploaded **last** for an atomic feed switch — then deletes superseded assets and verifies each promoted feed's `sha512`. Promoting an older mac-only release still works: missing platform feeds produce warnings, not failures
+5. Builds aggregated release notes for the range `(prevStable, VERSION]`: a leading summary section (promoted version, previous stable, and a consolidated intentd pin delta recovered from the releases' `release-manifest.json` files and rendered from the intentd compare API via `scripts/generate-stable-summary.mjs`), followed by each version's release body
+6. Updates the `stable` release body with the aggregated notes
 
 The summary/notes enrichment is fail-soft — missing manifests, pins, or compare-API failures degrade the summary (down to omitting it entirely) without failing the promotion.
 
