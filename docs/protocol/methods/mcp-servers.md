@@ -141,3 +141,51 @@ unbounded and rotate independently of the config surface.
   { "serverId":"srv-linear","value":"********" } ] } }
 ```
 
+#### 5.22.2 `mcp.testConnection` — one-shot connection/auth probe
+
+Probe an HTTP/SSE MCP endpoint **from the daemon host** to detect whether it is reachable
+and whether it requires authentication, so clients never contact MCP server URLs directly
+(new in v7.3). One JSON-RPC `initialize` POST is sent to the URL (MCP servers answer an
+auth error before processing, and even a 404/405 proves the host is up); only the HTTP
+status is inspected — the response body is never read, no session is established, and
+nothing is registered or persisted. Distinct from the `mcp.servers.*` lifecycle probe
+(§5.22 "Remote transports"), which runs the full MCP handshake against a **saved** config;
+this is a stateless pre-save check for any URL.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.testConnection | url (req), headers?: object, serverName? | { status: "connected"\|"auth_required"\|"error", statusCode?, errorMessage? } |
+
+- **Params** — `url` is required and non-empty (missing/empty → `-32602`). `headers` is an
+  optional object of extra request headers (non-string values are serialized, mirroring
+  the §5.22 `headers` handling). `serverName` optionally names an external MCP server id:
+  when present and no explicit `Authorization` header was supplied, the daemon reads the
+  stored `mcp.oauth.*` bag for that id (§5.22.1) and injects
+  `Authorization: <token_type> <access_token>` (a lowercase `bearer` is capitalized;
+  `token_type` defaults to `Bearer`) — the bag never crosses the wire in either direction.
+  Injection is **guarded by a same-origin check**: the bearer token is attached only when
+  the probe `url` shares the saved server config's origin (scheme + host + port, default
+  ports normalized), so a saved server id cannot be paired with an arbitrary URL to send
+  its token elsewhere. An unknown `serverName`, absent bag, missing saved config, or
+  origin mismatch is not an error; the probe simply runs without the header.
+- **Status mapping** — HTTP 401/403 → `auth_required`; any other status **below 500**
+  (2xx–4xx) → `connected` (the server is reachable — 404/405 just mean the endpoint shape
+  differs); 5xx → `error`. All three carry `statusCode`. A transport failure — connect
+  failure, timeout (requests are bounded at 10 s), or invalid URL — is `error` with
+  **no** `statusCode` and the same actionable `errorMessage` strings as the §5.22 probe
+  (`unreachable from daemon host: <url>`, `timed out connecting to <url>`).
+  `errorMessage` is present on `auth_required` and `error`, never on `connected`.
+- **Never a JSON-RPC error for probe outcomes** — the RPC itself only fails on caller
+  errors (`-32602`); every probe outcome, including unreachable hosts, is a success
+  response with the mapped `status`. Redirects are never followed (headers may carry
+  credentials that would otherwise be forwarded cross-host).
+
+```json
+// → request — probe an MCP endpoint, reusing the stored OAuth bag
+{ "jsonrpc":"2.0","id":64,"method":"mcp.testConnection",
+  "params":{ "url":"https://mcp.example.com/mcp","serverName":"srv-linear" } }
+// ← response — reachable but wants credentials
+{ "jsonrpc":"2.0","id":64,"result":{ "status":"auth_required","statusCode":401,
+  "errorMessage":"authentication required (HTTP 401) — check configured headers" } }
+```
+
