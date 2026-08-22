@@ -53,7 +53,13 @@ expiresAt?, lastRunAt?, nextRunAt?, runCount, perpetual, dispatchCount, lastErro
 lastLogs?, lastState? }` with
 `state ∈ scheduled | running | dispatched | evicted | cancelled | expired`
 (`scheduled`/`running` are the active states;
-`runCount` includes the schedule-time validation run; `lastError` is set on eviction).
+`runCount` includes the schedule-time validation run; `lastError` is set on eviction —
+and, from [intent-hq/intentd#1410](https://github.com/intent-hq/intentd/pull/1410)
+(monorepo#3231), also on a **non-evicting** run whose in-script host exec calls failed
+(nonzero exit code or timeout without a script throw): the run completes as the script
+decided, but a capped failure summary — at most 5 lines of command / exit-or-timeout /
+stderr snippet — persists to `lastError` on the still-active hook so a silently broken
+check is observable, and a later run whose execs all succeed clears it).
 `perpetual` (bool) and `dispatchCount` (number) are the perpetual-hook fields
 ([intent-hq/intentd#979](https://github.com/intent-hq/intentd/pull/979)): `dispatchCount`
 counts **fires so far** for every hook created or updated from v6.0 on — a one-shot hook's
