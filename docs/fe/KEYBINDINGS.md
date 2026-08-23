@@ -9,7 +9,7 @@
 | Shortcut         | Action                        | Context                          |
 | ---------------- | ----------------------------- | -------------------------------- |
 | `Mod+K`          | Open Command Palette          | Anywhere (not in terminal)       |
-| `Mod+T`          | New Tab (creates new agent)   | In workspace                     |
+| `Mod+T`          | Open Blank Working Panel      | In workspace                     |
 | `Mod+P`          | Quick Open (file picker)      | Anywhere (not in terminal)       |
 | `Mod+Shift+P`    | Open Command Palette          | Anywhere (not in terminal)       |
 | `Mod+,`          | Open Settings                 | Anywhere                         |
