@@ -229,7 +229,8 @@ buffer and flush into the next user turn:
   delegated one whose streak cap is spent — instead gets a **system-initiated** `"blocker"`
   attention request through the standard §5.5 attention surfaces (`agent:attention-requested`,
   paired `agent:updated`, persisted session `attentionRequest*` fields), so the workspace
-  shows needs-attention instead of idling silently. When recovery does not redrive, the wake
+  surfaces the stall instead of idling silently (per the §5.1 `displayStatus` derivation, a
+  top-level pending blocker maps to `blocked`). When recovery does not redrive, the wake
   `agent:idle` carries `emptyWakeResponse: true` (additive optional field, presence-detected
   per the §5 convention: **omitted otherwise**, absent ≠ present-false — older daemons never
   send it) so subscribers can tell a no-op recovery wake from a healthy one. Recovery is
