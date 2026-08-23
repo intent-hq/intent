@@ -95,7 +95,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	update \
 	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
+	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
 
 all: build
 
@@ -357,6 +357,10 @@ release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on
 run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
 	@$(MAKE) release-daemon
+
+dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	cd $(FE_DIR) && corepack pnpm run dev:ui
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
