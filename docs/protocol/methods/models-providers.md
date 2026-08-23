@@ -32,10 +32,13 @@ codex has its own effort-grouping parser and is deliberately outside this
 normalization) the adapter's `default` pseudo-row is **hidden**: the daemon
 resolves the real model it stands for — the model select's `currentValue` when
 it names a real row, else the unique sibling row matching the pseudo-row's
-version-bearing model family — drops the pseudo-row, and marks the resolved row
-`isDefault: true`. Fail-soft: a pseudo-row that cannot be resolved to exactly
-one sibling is served as-is with no `isDefault` marking (the resolution never
-empties a catalog).
+version-bearing model family — and marks the resolved row `isDefault: true`.
+The pseudo-row is dropped unconditionally whenever the catalog has at least one
+real model row, resolved or not; when the resolution fails no row is marked
+`isDefault` (the daemon never guesses). The single exception: a catalog whose
+only row is the pseudo-row keeps it, so the resolution never empties a catalog.
+Persisted model-catalog cache entries are sanitized the same way on load, so a
+snapshot written by an older daemon cannot resurface the pseudo-row.
 
 **Per-provider catalog.**
 
