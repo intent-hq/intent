@@ -42,9 +42,10 @@ The result is the existing `workspace-create` proposal resource with
 remain editable; repository metadata is locked. The proposal stores one idempotency key,
 which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
 Dismiss has no create side effect. Delegated and background agents do not receive this
-binding and raw dispatch rejects it; they report the opportunity to their parent. This is
-an MCP binding over the existing `workspace.create` flow, not a JSON-RPC method, and does
-not change Chief of Staff `ws.app.workspaces.create` behavior.
+binding, and raw dispatch rejects it. Agents with a parent report the opportunity upward;
+parentless background agents remain blocked and have no parent-report path. This is an MCP
+binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
+change Chief of Staff `ws.app.workspaces.create` behavior.
 
 ```json
 // → request
