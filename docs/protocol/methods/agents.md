@@ -343,11 +343,12 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   fromAgentName? }` — sender attribution is **lifted to top level** from the entry's
   `agent_message` auto-tag (`messageMetadata.fromAgentId`/`fromAgentName`, §5.5
   `agent.sendMessage`) and is absent for user-sent entries. Note the MCP presentation differs
-  cosmetically from the services-layer snapshot the guard refusal and `agent.diagnostics`
-  embed: both truncate `content` to 200 chars (with a `…` ellipsis) and drop the bulky
-  `imageBlocks`/`fileBlocks` payloads, but the MCP view lifts attribution top-level while
-  the internal snapshot leaves it inside `messageMetadata` — same entries, same order,
-  different attribution placement.
+  cosmetically from the services-layer snapshot `agent.diagnostics` embeds (the guard
+  refusal embeds this presented view, not the internal snapshot): both truncate `content`
+  to 200 chars (with a `…` ellipsis) and drop the bulky `imageBlocks`/`fileBlocks`
+  payloads, but the MCP view lifts attribution top-level while the internal snapshot
+  leaves it inside `messageMetadata` — same entries, same order, different attribution
+  placement.
 - **Queue merged into `ws.agent.status`** — the target's pending queue rides the status
   result inline as `queue` + `queueLength` (same entry shape and drain-order sorting as
   `ws.agent.getQueue`, `content` truncated to 200 chars), so one status call shows both
