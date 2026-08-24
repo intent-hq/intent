@@ -1407,13 +1407,88 @@ exactly this — no list consumer read the field off list rows).
 | workspace.getTokenUsage | workspaceId (req) | { tokenUsage: TokenUsage } — -32602 if the workspace is not found |
 
 **TokenUsage** — `{ byAgentId: { [agentId]: TokenUsageTotals }, totals: TokenUsageTotals,
-byModel: { [modelName]: TokenUsageTotals }, lastScanAt: string | null }`, where
+byModel: { [modelName]: TokenUsageTotals }, byAgentModel?: TokenUsageCrossFilterRow[],
+lastScanAt: string | null }`, where
 **TokenUsageTotals** is the consumption counters plus an optional cost —
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
-the RFC-3339 timestamp of the last recompute — a live turn-end update or a reconciliation pass
-(`null` before the first). Updated values are pushed via `workspace:tokenUsage-changed` (§6.5).
+the RFC-3339 timestamp of the last materialization — a usage or transcript mutation, or a
+reconciliation pass (`null` before the first). Updated values are pushed via
+`workspace:tokenUsage-changed` (§6.5).
+
+**Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
+projection. One **TokenUsageCrossFilterRow** has the exact shape
+`{ agentId: string, model: string, totals: TokenUsageTotals, humanMessages: number,
+agentMessages: number }`. The two counts are non-negative integers. The four base counters in
+`totals` are always present; `thoughtTokens` and `cost` keep the optional rules below. Rows are
+unique by `(agentId, model)` and are ordered by `agentId`, then `model`, in ascending byte order.
+A row is present when that cell has a non-zero token counter, a reported cost, or at least one
+counted message. An all-zero, cost-less, message-less cell is omitted.
+
+The field is presence-detected and additive. A new daemon writes `byAgentModel` on every new or
+recomputed snapshot. It writes `[]` when the workspace has no contributing cell. An **absent**
+field means that the persisted snapshot predates this projection; it does not mean an
+authoritative empty projection. Old clients ignore the field. A new client that receives an
+absent field must keep its legacy, non-cross-filter view and must not invent cells or message
+counts from `byAgentId` and `byModel`. Loading an old persisted snapshot does not backfill it on
+the read path. The next daemon-owned usage or message mutation, or the reconciliation pass,
+materializes the field.
+
+**Projection invariants and scopes.** The existing `totals`, `byAgentId`, and `byModel` fields
+stay required and unchanged. For a snapshot that has `byAgentModel`, the daemon derives all four
+projections from the same cells:
+
+- workspace scope = all rows;
+- agent scope = rows whose `agentId` matches;
+- model scope = rows whose `model` matches;
+- agent × model scope = the one row whose pair matches;
+- token-category scope = the selected counter in the rows of the current scope.
+
+Counter reduction uses saturating sums. Reducing row totals by `agentId`, by `model`, or across
+the workspace must reproduce the corresponding existing counters exactly. Cost reduction uses
+the existing currency rule below, not a currency conversion. Message counts reduce with ordinary
+integer sums. They do not affect cost or token totals. `inputTokens` stays the provider-reported,
+aggregate **In** counter at every scope. It is never split or estimated by human or agent origin.
+`humanMessages` and `agentMessages` are message counts, not token counts, and a client must label
+them separately from token units.
+
+**Exact message-origin rules.** Counts describe the current persisted transcript, not a history
+of events. One qualifying message row contributes at most one count, regardless of its number of
+content blocks:
+
+- A persisted `user` row with user-origin provenance contributes one `humanMessages` count.
+- A persisted `assistant` row contributes one `agentMessages` count.
+- A persisted `user` row with agent-origin delivery provenance contributes one
+  `agentMessages` count. Agent-origin delivery includes an agent-attributed queued or direct
+  delivery, such as a row whose trusted metadata carries a non-empty `fromAgentId`.
+- A `system` or `tool` row contributes to neither count. An automatic system delivery that has no
+  agent-origin provenance also contributes to neither count.
+
+The provenance written by the daemon is authoritative; caller-supplied metadata cannot change
+the classification. For a legacy `user` row that has no persisted origin marker, the stable
+fallback is: a non-empty trusted `messageMetadata.fromAgentId` means agent origin; otherwise the
+row means human origin. Legacy `assistant`, `system`, and `tool` rows follow the role rules above.
+This fallback is applied only during daemon-owned materialization. It is never applied by a
+client and never requires message-body hydration on `workspace.getTokenUsage`.
+
+Each token, cost, and message contribution is assigned to its agent and to the effective model
+that the daemon persists with that contribution. For a legacy contribution that has no persisted
+model provenance, the stable fallback is the owning agent session's effective model at
+materialization time. A missing or empty model is normalized to the literal `"unknown"`, the same
+sentinel used by `byModel`; an empty-string model is never sent. A model change can therefore
+produce more than one row for one agent. ACP session recreation preserves existing cells and
+counts; it does not count a message again. Transcript append, queue drain, agent-to-agent
+delivery, replace, delete, and agent/session delete operations update the counts so that the next
+snapshot describes only the rows that still exist.
+
+**Performance contract.** `byAgentModel` and both message counts use the derived-field write
+rung: the daemon materializes them on daemon-owned transcript/usage writes and on the existing
+off-read-path reconciliation pass. `workspace.getTokenUsage` reads the durable workspace snapshot
+only, and `workspace:tokenUsage-changed` carries that same snapshot. Neither path may hydrate a
+transcript, read message bodies, scan a full transcript, or issue one query per agent or row. A
+reconciliation implementation may use one bounded indexed projection, but it runs outside the
+RPC read path.
 
 **Cost** is sourced from the ACP `usage_update` session notification's `cost` object
 (`{ amount, currency }`, `currency` an ISO 4217 code) and is therefore present **only for
@@ -1425,8 +1500,8 @@ recreate folds it into the same internal baseline as the counters (no reset-to-z
 double count). The two reports are independent: a turn carrying only a cost never zeroes the
 counters, and a turn carrying only counters never drops a cost already reported. Aggregation
 sums amounts per currency within each bucket (`totals`, each `byAgentId` entry, each `byModel`
-entry); in the pathological case of a bucket mixing currencies, the currency with the largest
-sum wins — the daemon never converts between currencies.
+entry, and each `byAgentModel` cell); in the pathological case of a bucket mixing currencies, the
+currency with the largest sum wins — the daemon never converts between currencies.
 
 **`thoughtTokens`** *(additive within v6.0, [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973))*
 is the cumulative reasoning ("thought") token count, sourced from the end-of-turn ACP
@@ -1439,8 +1514,9 @@ subset shape (no backfill).
 It is a `u64` in camelCase, **omitted when zero or unreported** (never a fabricated `0`, never
 `null`), so clients written against the pre-`thoughtTokens` shape are unaffected. It aggregates
 exactly like the other counters — saturating sum into `totals` / each `byAgentId` entry / each
-`byModel` entry, saturating subtraction for the per-turn delta against the previous cumulative
-snapshot (clamped ≥ 0), and folded into the ACP-session-recreate baseline the same way. A tally
+`byModel` entry / each `byAgentModel` cell, saturating subtraction for the per-turn delta against
+the previous cumulative snapshot (clamped ≥ 0), and folded into the ACP-session-recreate baseline
+the same way. A tally
 whose ONLY non-zero counter is `thoughtTokens` still counts as a real token report, so it does
 not fall through to the legacy per-message usage fallback.
 
@@ -1449,11 +1525,28 @@ not fall through to the legacy per-message usage fallback.
 { "jsonrpc":"2.0","id":62,"method":"workspace.getTokenUsage","params":{ "workspaceId":"ws-abc" } }
 // ← response (pushed again as workspace:tokenUsage-changed whenever the tally changes — at turn end or after a reconciliation pass)
 { "jsonrpc":"2.0","id":62,"result":{ "tokenUsage":{
-  "byAgentId":{ "agent-123":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
-  "byModel":{ "opus-4.8":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } } },
+  "byAgentId":{
+    "agent-123":{ "inputTokens":8000,"outputTokens":2400,"cacheReadTokens":4500,"cacheCreationTokens":700,"cost":{ "amount":0.85,"currency":"USD" } },
+    "agent-456":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } }
+  },
+  "byModel":{
+    "opus-4.8":{ "inputTokens":11000,"outputTokens":3000,"cacheReadTokens":7500,"cacheCreationTokens":1100,"cost":{ "amount":1.10,"currency":"USD" } },
+    "sonnet-4.6":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } }
+  },
+  "byAgentModel":[
+    { "agentId":"agent-123","model":"opus-4.8","totals":{ "inputTokens":7000,"outputTokens":2000,"cacheReadTokens":4000,"cacheCreationTokens":600,"cost":{ "amount":0.70,"currency":"USD" } },"humanMessages":3,"agentMessages":4 },
+    { "agentId":"agent-123","model":"sonnet-4.6","totals":{ "inputTokens":1000,"outputTokens":400,"cacheReadTokens":500,"cacheCreationTokens":100,"cost":{ "amount":0.15,"currency":"USD" } },"humanMessages":1,"agentMessages":1 },
+    { "agentId":"agent-456","model":"opus-4.8","totals":{ "inputTokens":4000,"outputTokens":1000,"cacheReadTokens":3500,"cacheCreationTokens":500,"cost":{ "amount":0.40,"currency":"USD" } },"humanMessages":2,"agentMessages":3 }
+  ],
   "totals":{ "inputTokens":12000,"outputTokens":3400,"cacheReadTokens":8000,"cacheCreationTokens":1200,"cost":{ "amount":1.25,"currency":"USD" } },
   "lastScanAt":"2026-06-17T12:00:00Z" } } }
 ```
+
+For this example, workspace message scope is `humanMessages = 6` and
+`agentMessages = 8`; `agent-123` scope is `4` and `5`; `opus-4.8` scope is `5` and `7`;
+and the `agent-123` × `sonnet-4.6` scope is `1` and `1`. Selecting the aggregate In
+category for that last scope reads `totals.inputTokens = 1000`; it does not divide those tokens
+between the two message origins.
 
 ### 5.25 Worktree setup scripts — `workspace.getSetupScript` / `workspace.saveSetupScript` / `workspace.detectProjectType` / `workspace.generateSetupScript`
 
