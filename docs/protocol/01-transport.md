@@ -4,7 +4,7 @@
 
 ### 1.1 Connection URL
 
-When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note below), the backend runs a dedicated **HTTPS server bound to `0.0.0.0`** (LAN-reachable) exposing the JSON-RPC WebSocket endpoint:
+When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note below), the backend runs a dedicated **HTTPS server bound to the address(es) configured by `server.bindAddress`** (default `127.0.0.1`, loopback-only; a single IP or a list of IPs — one listener per entry on the same port, see the `server.bindAddress` entry in [§4 settings](./methods/settings.md); LAN reachability requires configuring a non-loopback address such as a LAN/tailnet IP or `0.0.0.0`) exposing the JSON-RPC WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws
