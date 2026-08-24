@@ -368,12 +368,53 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   agent-origin send while the caller already has a pending entry on the target's queue is
   **refused** (agent-origin sends only: FE/user sends and internal wakes are unaffected;
   `priority: "interrupt"` is included — no bypass; `editing: true` entries don't count,
-  the drain skips them). The refusal echoes the target's full queue plus remediation:
-  keep the pending message, or retract it via `ws.agent.removeQueuedMessage` and resend —
-  noting a retract-and-resend lands at the END of the queue. Different senders may still
+  the drain skips them). The refusal is a successful tool result with `ok: false` and —
+  since [intentd#1439](https://github.com/intent-hq/intentd/pull/1439) — the unmissable
+  `refused: true` discriminator (present only on guard refusals, so a naive sender can
+  tell "refused, act on the instruction" apart from other `ok: false` shapes), echoing
+  the target's presented queue (drain order, content truncated), the caller's pending
+  entry id as `pendingMessageId`, and a remediation `instruction`: keep the existing
+  entry as-is, or re-send ONE message combining everything with `replacePending: true`
+  (below). Manual `ws.agent.removeQueuedMessage` + re-send still works but is **NOT
+  atomic** — the pending entry is gone even if the re-send then fails — and either way a
+  re-sent message lands at the END of the queue. Different senders may still
   each have one pending entry; the guard is per sender/target pair, and is advisory
   check-then-send hygiene (not an atomically enforced invariant — concurrent sends from
-  one caller can race past it).
+  one caller can race past it). *(Refusal shape clarified in
+  [intentd#1440](https://github.com/intent-hq/intentd/pull/1440).)*
+- **`replacePending` replace-and-send *([intentd#1445](https://github.com/intent-hq/intentd/pull/1445))*** —
+  `replacePending: true` (options-object third argument on `ws.agent.send` /
+  `ws.agent.sendToTask`) turns the guard refusal into a **lossless replace**: the NEW
+  message is sent FIRST and the pending entry retracted after, so a failed send never
+  discards the pending entry. The result reports the outcome: retraction success →
+  `replaced: true` + `replacedMessageId` (the retracted entry's id); otherwise
+  `replaced: false` + `replaceOutcome` — `"drained"` (the entry delivered between the
+  guard check and the retraction — nothing left to retract), `"none"` (nothing to
+  replace: the option was passed but the caller had no pending entry), `"reassigned"`
+  (`sendToTask` only: the task's assignee changed mid-call, so the new message went to
+  the new assignee while the pending entry was left untouched in the old assignee's
+  queue), or `"error"` (the retraction failed for a reason other than draining — logged,
+  never masquerading as a drained race). The new message is sent in every arm, so the
+  caller never has to re-drive the sequence; an agent caller passing the option always
+  gets a replace report (fall-through paths report `replaceOutcome: "none"` rather than
+  silently ignoring it). The refusal `instruction` recommends `replacePending` as the
+  atomic remediation over manual remove + re-send.
+- **`delivery` outcome on send success *([intentd#1439](https://github.com/intent-hq/intentd/pull/1439))*** —
+  every successful `ws.agent.send` / `ws.agent.sendToTask` result carries a top-level
+  `delivery: "delivered" | "queued" | "held"` classification, so `ok: true` +
+  silently-queued is unambiguous even to a sender that only glances at the result:
+  `"held"` = parked behind the target's question hold (`heldForQuestions`, "Question
+  hold" below); `"queued"` = parked in the target's queue (busy target / non-interrupt
+  send — but ALSO the indefinite parks `quarantined: true` and `archivedParked: true`,
+  whose underlying flags stay in the result for callers that need the distinction);
+  `"delivered"` = the message is driving a turn now — claimed only on a `turnId`-bearing
+  result (plus the interrupt dedup replay, `deduplicated: true`, whose original delivery
+  did run), so the store-only fallback's persist-only success (`queued: false`, no
+  `turnId`) gets NO `delivery` claim rather than a false "delivered". Non-success shapes
+  (guard refusals, sendToTask's "No agent assigned to task") carry no `delivery` field.
+  Like the guard itself, all three are **MCP-only surface changes** (§6.8 principle) —
+  the wire `agent.sendMessage` / `agent.sendToTask` RPCs and their result shapes are
+  unchanged.
 - **Dequeue-wait annotation** — every drain path (worker drain arms, pre-release drain,
   `agent.sendQueuedMessageNow`) appends a deterministic system note to the delivered
   content — `[SYSTEM NOTE] This message was queued at <queuedAt> and waited <duration>
