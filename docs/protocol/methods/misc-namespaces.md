@@ -37,6 +37,20 @@
 resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
+**Base-tier replacement mode (`INTENTD_SPECIALISTS_DIR` / `intentd serve --specialists-dir`).**
+The effective `specialists.dir` setting (§5.12 — the `INTENTD_SPECIALISTS_DIR` startup pin, else
+a hand-written `[specialists] dir` in config.toml; the `--specialists-dir` serve flag folds into
+the env var pre-runtime, so the flag wins over an inherited env value, and an empty value counts
+as unset — no replacement) wholesale-**replaces** the base tier: the embedded bundle and the
+on-disk bundled `resources/specialists/` directory are both excluded, and the named directory
+becomes the sole base (`bundled`, read-only) tier — shipped ids (`implementor`, `spec-writer`, …)
+resolve only when present there or in the user/project tiers, which fold on top **unchanged**
+(same precedence, inherit-on-omit folds, and file watching as below; the replacement directory
+itself is static and unwatched, like the bundled tier it replaces). A missing or empty
+replacement directory yields an empty base tier. A startup-pinned replacement holds for the
+process lifetime, and session bundle pins never bypass a replacement: session-scoped resolution
+never resurrects shipped bundles the operator excluded.
+
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
   roleReminder?, agentType?, prompt?, hidden?: boolean,
   modelOptions?: [{ model, hint, reasoningEffort? }],
