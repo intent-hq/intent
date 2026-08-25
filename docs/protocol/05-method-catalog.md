@@ -167,19 +167,21 @@ The `system.status` result additionally reports the disk space of the **volume c
 
 #### `system.status` — daemon routing fields (additive)
 
-The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
+The `system.status` result also includes **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
 
 ```jsonc
 {
   "localIps": ["192.168.1.10", "10.0.0.5"], // non-loopback IPv4 addresses (same source as server.pairingInfo)
   "hostname": "studio.local",               // local OS hostname
+  "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
 
 - `localIps` lists the host's non-loopback IPv4 addresses (virtual/container interfaces skipped) — the same list `server.pairingInfo` returns. It may be **empty** on a host with no routable interface, but is always an array, never `null`. The daemon serves it from a background-refreshed cache (~15s TTL), so a freshly changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
-- Both fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
+- `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
+- These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
 #### `system.importLegacy` (UDS-only, v2.2)
 
@@ -266,13 +268,15 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "port": 5181,
   "path": "/ws",
   "localIps": ["192.168.1.10", "10.0.0.5"],
-  "hostname": "my-mac.local"
+  "hostname": "my-mac.local",
+  "prettyHostname": "Clement's Mac Studio"
 }
 ```
 
 - `token` is the long-lived bearer token (64 hex chars, §2.1); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§1.2).
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
 - `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
+- `prettyHostname` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name), falling back to `hostname` when no pretty name is available — matching `host.status` / `system.status`; detect by presence.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
 
 #### `server.rotateToken` (local-only)

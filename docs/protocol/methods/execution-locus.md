@@ -26,7 +26,7 @@ in the bullet under this table).
 
 | Method | Direction | Params | Result |
 | --- | --- | --- | --- |
-| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
+| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, prettyHostname?, hasDisplay, locality, displayServer? } — host capability probe. `prettyHostname?` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available; always present on daemons that ship it, but older daemons omit it — detect by presence |
 | host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. Always dispatched to the connected client, which echoes its selection back as `applicationId?` (or nothing when no chooser is available); there is no daemon-side chooser |
@@ -163,7 +163,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":80,"method":"host.status" }
 // ← response (headless remote host)
 { "jsonrpc":"2.0","id":80,"result":{ "os":"linux","arch":"x86_64","hostname":"build-01",
-  "hasDisplay":false,"locality":"remote" } }
+  "prettyHostname":"Build Box 01","hasDisplay":false,"locality":"remote" } }
 // reverse RPC — daemon → client — open a detected URL on the user's machine (FE-served)
 // ← daemon sends the request (id in the `rev-<n>` namespace)
 { "jsonrpc":"2.0","id":"rev-1","method":"host.openExternal","params":{ "url":"http://localhost:3000" } }
