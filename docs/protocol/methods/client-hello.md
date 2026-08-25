@@ -8,7 +8,7 @@ bookkeeping and never crosses the wire.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| client.hello | clientId?, name?, capabilities? | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, protocolVersion, capabilities } } |
+| client.hello | clientId?, name?, capabilities? | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
   first call a client makes after the auth upgrade (§2) and before scoped work.
@@ -26,7 +26,9 @@ bookkeeping and never crosses the wire.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`
-  (daemon version string), `protocolVersion` (the JSON-RPC surface version, `"6.14"`), and
+  (daemon version string), optional `buildCommit` (the source commit embedded at daemon build
+  time; omitted, never `null`, when unavailable), `protocolVersion` (the JSON-RPC surface
+  version, `"6.14"`), and
   `capabilities` (feature-detection flags, e.g. `{ "liveState": true }` for the snapshot+delta
   channels of §6.9).
 - **`protocolVersion`.** The top-level `protocolVersion` is an explicit copy of

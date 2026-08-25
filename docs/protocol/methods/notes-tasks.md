@@ -262,6 +262,13 @@ agent reports an infrastructure/environment blocker it cannot resolve; like
 `discussion_needed`, it is non-terminal and excluded from `inProgress` in the
 `computeTaskStats` rollups (§5.1 card aggregates / `task.list` stats).
 
+When the MCP caller is the agent assigned to this task, `task.updateNoteStatus` also checks
+the delegated assignment fence (§5.5). A stale assignment is rejected with `-32602` and
+`assignment update quarantined: <reason>` before any note, event, or ready-set change. Status
+itself is not part of the semantic `taskRevision`, so ordinary progress states — including the
+`review_required` transition made by `agent.reportToParent` and the attention states above — do
+not make a current assignment stale. Caller-less client RPC writes keep their existing behavior.
+
 **Task projections & bulk cleanup.** Two read methods project a workspace's task notes into the canonical `WorkspaceTask` shape, and one bulk write clears an agent from every task in a workspace.
 
 | Method | Params | Result |
