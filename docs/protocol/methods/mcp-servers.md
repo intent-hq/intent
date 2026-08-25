@@ -122,8 +122,35 @@ unbounded and rotate independently of the config surface.
   evolve without a daemon change; the typical bag is
   `{ access_token, refresh_token?, expires_at?, token_type? }`.
 - Missing/empty `serverId` yields `-32602`; `mcp.oauth.set` also requires `tokenBag`.
-- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
-  polls / re-fetches on demand.
+- **Recognized bag fields (daemon-internal, best-effort).** The bag stays opaque on the
+  wire, but the internal header-building consumer best-effort recognizes these optional
+  object fields when present: `access_token`, `token_type`, `expires_at` (epoch **seconds
+  or milliseconds** — values > 10^12 read as ms; numeric strings accepted), and the
+  RFC 6749 §6 refresh metadata `refresh_token`, `token_endpoint`, `client_id` (plus
+  optional `client_secret`, `scope`). Bags without them behave exactly as before —
+  recognition never rejects or mutates a bag that lacks the fields.
+- **Daemon-side token refresh (behavior only; [monorepo#3403](https://github.com/intent-hq/monorepo/issues/3403)).**
+  When the internal consumer builds an outbound `Authorization` header and the bag's
+  `expires_at` is within 60 s of now AND the refresh metadata is complete
+  (`refresh_token` + `token_endpoint` + `client_id` all non-empty), the daemon first
+  refreshes the token: a form-encoded `grant_type=refresh_token` POST to the bag's
+  `token_endpoint` (bounded 10 s timeout). On success the response is merged over the
+  stored bag — a rotated `refresh_token` is honored, old values are kept when the
+  response omits them, and `expires_at` is recomputed from `expires_in` (or removed when
+  the response carries none, so a stale value cannot re-fire refresh every build) — and
+  the rewritten bag is re-persisted; the header is built from the refreshed token.
+  Refreshes are **single-flighted per server id** (concurrent header builds reuse the
+  winner's result) and a failed attempt arms a **60 s cooldown** so a dead token endpoint
+  cannot add latency to every build. The whole path is **fail-soft**: a missing/unparseable
+  `expires_at`, incomplete metadata, network error, or non-2xx response logs a warning
+  (never token material) and falls back to the stored `access_token` — never an RPC
+  error. Redaction semantics are unchanged: the bag — refreshed or not — never crosses
+  the wire.
+- No `mcp.oauth:*` events are emitted. Clients remain the only writers via
+  `mcp.oauth.set`, with one exception: after a successful daemon-side refresh grant
+  (above) the daemon rewrites the stored bag itself (`access_token`, recomputed
+  `expires_at`, rotated `refresh_token`). Either way, no event fires — the FE polls /
+  re-fetches on demand.
 
 ```json
 // → request — persist an OAuth bag for one MCP server
