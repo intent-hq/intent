@@ -45,7 +45,13 @@ FE compat path; [intent-hq/ios#66](https://github.com/intent-hq/ios/pull/66) dro
 activity-ping refetch fallback in favor of applying the preview payload directly).
 
 The backend emits the **four** streaming signals in the table below in production. A fifth
-event — the pre-first-token `agent:stream:status` startup hint (§6.5) — also matches the
+event — `agent:stream:status` (§6.5), carrying both the pre-first-token startup hints and
+the mid-turn `stalled` / `resumed` liveness advisories (additive within v7.4,
+[intent-hq/intentd#1462](https://github.com/intent-hq/intentd/pull/1462): one advisory
+`phase: "stalled"` event with the additive `silentMs` field after the stall threshold —
+default 90s, `INTENTD_STREAM_STALL_MS` — of zero `session/update` traffic mid-turn, then
+`phase: "resumed"` when activity returns, re-arming the detector; advisory only, the turn
+is never cancelled) — also matches the
 `agent:stream:*` subscription filter and arrives on the same subscription, so clients
 subscribing to the family should expect it on the wire too (it is documented in §6.5, not
 repeated in the table below; note the converse quirk that `agent:tool:call`, which **is** in
