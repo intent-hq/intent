@@ -322,9 +322,12 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    request is an alert the parent must hear now; the aggregated group wake still folds the
    attention request into that child's line as the record. Non-delegated callers have no
    parent to wake.
-6. **Watcher fan-out** ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229)) —
-   every `wake_on_attention` completion watch on the caller (the explicit
-   `ws.agent.watch` watches, §Completion-watch persistence) receives the same kind-flavored
+6. **Watcher fan-out** ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229);
+   widened by [monorepo#3443](https://github.com/intent-hq/monorepo/issues/3443)) —
+   every active completion watch on the caller — whatever path registered it (explicit
+   `ws.agent.watch`, delegate auto-watch, wakeOrCreate SUB-1, sender auto-subscribe;
+   §Completion-watch persistence), regardless of the `wake_on_attention` flag, which
+   remains only the persisted record of an explicit registration — receives the same kind-flavored
    `[WORKSPACE EVENTS]` wake (`Watched agent <name> (<id>) requests a discussion / reports a
    blocker: <reason>`) with `event_notification` metadata embedding the step-3 payload — the
    caller's parent is excluded (step 5 already woke it directly, so a parent that ALSO
