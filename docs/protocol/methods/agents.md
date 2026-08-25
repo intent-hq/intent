@@ -479,8 +479,10 @@ are persisted.
   `agentWatches` (the caller's active outgoing completion watches, §Completion-watch
   persistence), `queuedMessages` (pending entries in the caller's OWN delivery queue),
   `eventSubscriptions` (the caller's active workspace event subscriptions, §5.5
-  `agent.subscribe`), `runningSubAgents` (delegated children not yet settled — counted over
-  the caller's `parent_agent_id` children **unscoped by workspace**, so a chief parent's
+  `agent.subscribe`), `runningSubAgents` (delegated children genuinely in flight — status
+  `pending`/`active`/`Processing`/`Waiting`; idle/restorable children do **not** count
+  ([intentd#1457](https://github.com/intent-hq/intentd/pull/1457), monorepo#3384) — counted
+  over the caller's `parent_agent_id` children **unscoped by workspace**, so a chief parent's
   cross-workspace delegates count too), `numQuestionsAsked` (structured questions still
   pending presentation/answer, §5.5 question hold), and `pendingAttention`
   (`"blocker"` / `"discussion"` when the caller has an unresolved attention request, §5.5
