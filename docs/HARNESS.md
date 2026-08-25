@@ -38,7 +38,7 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
-  (`intent_core::CURRENT_HARNESS_VERSION`, today `"1.0"`). There is no
+  (`intent_core::CURRENT_HARNESS_VERSION`, today `"1.1"`). There is no
   upgrade/migration/pinning operation; new sessions always get the latest
   version. The stamp depends only on creation time, never on the creator: a
   delegated child mints the current version regardless of the parent's pin,
@@ -79,7 +79,10 @@ The harness lives in `crates/intent-services/src/harness/`:
   call sites carry typed data in and never format doctrine/envelope text
   themselves, so a future version can reword or reorder surfaces without
   touching the managers.
-- **One module per version** — `harness/v1.rs` implements today's text set.
+- **One module per version** — `harness/v1.rs` implements the v1 text set;
+  `harness/v1_1.rs` (v1.1) reuses v1's text surfaces wholesale and swaps in
+  its own doctrine (the feature-section rewrites in `common.md`; every other
+  instruction body and the specialist bundle are byte-identical v1 copies).
   A new version starts as re-exports of the prior version's surface
   functions and overrides only what changed, so the version-to-version diff
   is exactly the changed surfaces.
@@ -110,7 +113,8 @@ bundled markdown is used untouched.
 
 The doctrine text is **byte-pinned**: `intent-services/src/v1_goldens.rs`
 asserts full literal bytes (or a SHA-256 pin for the large bundled layers)
-of every system-generated string that reaches an agent conversation, and
+of every system-generated string that reaches an agent conversation
+(`v1_1_goldens.rs` pins the v1.1 doctrine the same way), and
 `agent_manager::v1_turn_envelope_goldens` pins the composed turn envelope.
 Any wording or whitespace change to a versioned surface fails that
 version's goldens and must be answered by minting a new harness version —
