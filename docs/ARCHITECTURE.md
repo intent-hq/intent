@@ -566,16 +566,24 @@ the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. All eleven
-default `true`. Each toggle removes
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`, `peerAgents`,
+`mcpTools`. All default `true` except the opt-in `peerAgents` (default
+`false`). Each toggle removes
 an agent-exposed feature from the agent's system prompt, its MCP tool surface,
 or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
 docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
 unblocked-wake teaching uses the value captured when the parent session is
-created rather than the live setting at wake delivery.
+created rather than the live setting at wake delivery. `mcpTools` gates the
+`ws.mcp.*` namespace (external MCP server tool forwarding,
+[intentd#1483](https://github.com/intent-hq/intentd/pull/1483)) and is both
+captured at bridge creation like the other toggles AND enforced live
+server-side on every forwarded call in the services layer — which also honors
+the `mcp.enableUserServers` master switch and the per-server disabled state
+(`enabled: false` / `mcp.disabledServers`) — so the bridge-creation capture is
+defense in depth for that toggle.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
