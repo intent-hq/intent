@@ -52,11 +52,11 @@ process lifetime, and session bundle pins never bypass a replacement: session-sc
 never resurrects shipped bundles the operator excluded.
 
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
-  roleReminder?, agentType?, prompt?, hidden?: boolean,
-  modelOptions?: [{ model, hint, reasoningEffort? }],
+  roleReminder?, agentType?, role?, icon?, prompt?, hidden?: boolean,
+  modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
-  scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`) are
-  first-class **string** fields on the wire, not
+  scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
+  `icon`) are first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
   `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
@@ -94,7 +94,8 @@ never resurrects shipped bundles the operator excluded.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
-- **Config scalars (`codingAgent` / `model` / `reasoningEffort` / `agentType`)** — the four
+- **Config scalars (`codingAgent` / `model` / `reasoningEffort` / `agentType` / `role` /
+  `icon`)** — the six
   optional config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
   independently, across the tiers (embedded bundled floor → bundled dir → user → project): a
   file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
@@ -109,7 +110,9 @@ never resurrects shipped bundles the operator excluded.
   rewrites the body.
   `reasoningEffort` is the specialist's default reasoning level (§5.5) — stored as-is, no
   vocabulary validation at this seam; it is the frontmatter rung of the delegation
-  reasoning-effort resolution below.
+  reasoning-effort resolution below. `role` and `icon` are the picker-metadata scalars
+  (below) — they follow this fold verbatim, with `role` additionally enum-validated on write
+  and read-normalized.
 - **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
   [intent-hq/intentd#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
   model options** a specialist's author suggests: `[{ model, hint, reasoningEffort? }]` entries where `model` is
@@ -141,6 +144,40 @@ never resurrects shipped bundles the operator excluded.
   daemon injects each visible specialist's options into the delegating agent's `workspace_api`
   tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
   the explicit `model` param (resolution step 1).
+- **Picker metadata (`role?` / `teamAgents?` / `icon?`) (additive,
+  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** — render-only
+  metadata for client specialist pickers; none of the three fields is ever consulted at
+  delegation time.
+  - **`role?`** — the picker-orchestration enum: `"orchestrator"` (powers the team-mode card)
+    or `"internal"` (excluded from the New Workspace modal's **single-agent** picker only);
+    absent ⇒ a standard pickable specialist. An inherited config scalar (the fold above:
+    omit inherits, explicit `""` clears). Writes are **strict**: `create`/`edit` reject any
+    value other than `"orchestrator"`, `"internal"`, or `""` (including non-strings) with
+    `-32602`. Reads are **lenient**: an out-of-enum on-disk value is normalized to an
+    **omitted** key (which inherits), like an unparseable `teamAgents` — `list`/`get` never
+    serve a value the strict write validation would reject when a client echoes the def back.
+  - **`icon?`** — names a client-side avatar design. An inherited config scalar (omit
+    inherits, explicit `""` clears). Icon names are free-form — no enum — but `create`/`edit`
+    reject a non-string value with `-32602`.
+  - **`teamAgents?`** — the orchestrator's **advisory team roster**: the specialist ids it
+    delegates to, used by clients to render the team-mode card; never enforced at delegation
+    time. On the wire it is an array of non-empty (non-whitespace) strings — `create`/`edit`
+    reject any other shape with `-32602` — emitted on `list`/`get` only when the resolved
+    list is non-empty (never `null`/`[]`). In the file it follows the `modelOptions` pattern:
+    a frontmatter scalar encoded as a **single-line JSON array**
+    (`teamAgents: ["implementor","verifier"]`), resolving through the same 3-tier
+    inherit-on-omit fold with **`[]` as the explicit clear** — an omitted key inherits, a
+    non-empty list overrides **wholesale** (entries never merge across tiers). Reads are
+    **lenient** (files are never rejected): an unparseable scalar or a non-array is treated
+    as an omitted key (inherits), unusable entries (non-strings, empty strings) are skipped
+    individually, and only a **literal `[]`** clears — a non-empty array whose entries are
+    ALL unusable is treated as omitted, so one bad hand-authored entry never silently drops
+    an inherited list.
+  - The v1.1 bundled specialists seed the metadata: `spec-writer` carries
+    `role: "orchestrator"` + `teamAgents: ["implementor","verifier"]`,
+    `implementor`/`verifier` carry `role: "internal"`, and every bundled file names an
+    `icon`. The picker-metadata keys are the only frontmatter allowed to diverge between the
+    v1 and v1.1 bundled copies (the goldens pin every other key to its v1 value).
 - **Delegation reasoning-effort resolution (additive)** — `agent.delegate` and
   `agent.wakeOrCreate`'s create branch resolve the child's `reasoningEffort` (§5.5) in this
   order: (1) the caller's explicit `reasoningEffort` param — an empty/whitespace-only value is
