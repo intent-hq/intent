@@ -360,7 +360,16 @@ run-intentd: ## DEPRECATED alias for release-daemon
 
 dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
-	cd $(FE_DIR) && corepack pnpm run dev:ui
+	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
+		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
+		exit 1; \
+	}; \
+	if [ "$$script" = "dev:ui" ]; then \
+		echo "[dev-ui] using optimized browser-only dev:ui preview"; \
+	else \
+		echo "[dev-ui] dev:ui is unavailable on this frontend pin; falling back to browser-only dev:web"; \
+	fi; \
+	cd $(FE_DIR) && corepack pnpm run "$$script"
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
