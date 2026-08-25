@@ -566,16 +566,24 @@ the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. All eleven
-default `true`. Each toggle removes
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`, `peerAgents`,
+`mcpTools`. All default `true` except the opt-in `peerAgents` (default
+`false`). Each toggle removes
 an agent-exposed feature from the agent's system prompt, its MCP tool surface,
 or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
 docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
 unblocked-wake teaching uses the value captured when the parent session is
-created rather than the live setting at wake delivery.
+created rather than the live setting at wake delivery. `mcpTools` gates the
+`ws.mcp.*` namespace (external MCP server tool forwarding,
+[intentd#1483](https://github.com/intent-hq/intentd/pull/1483)) and is both
+captured at bridge creation like the other toggles AND enforced live
+server-side on every forwarded call in the services layer — which also honors
+the `mcp.enableUserServers` master switch and the per-server disabled state
+(`enabled: false` / `mcp.disabledServers`) — so the bridge-creation capture is
+defense in depth for that toggle.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -669,13 +677,14 @@ created rather than the live setting at wake delivery.
   trivial, and never persisted — the transcript row keeps the undecorated
   content, and all three skip paths (toggle off, trivial snapshot, build
   failure) leave the prompt byte-identical to pre-feature output.
-- **New sessions only (except `hook.schedule`'s live check).** Flags are captured once
+- **New sessions only (except the live services-layer checks).** Flags are captured once
   at agent-session creation (the assembled system prompt is persisted
   per-session) and at per-agent MCP bridge creation — never live-read per call
   (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
   applies only to sessions created afterwards; existing sessions keep the
-  surface they were created with. The one exception above (`hook.schedule`'s
-  services-layer check) acts on existing sessions immediately.
+  surface they were created with. The two exceptions above (`hook.schedule`'s
+  `backgroundHooks` check and the per-call `mcpTools` check on forwarded
+  `ws.mcp.*` calls) act on existing sessions immediately.
 
 ## Agent process-tree memory: characteristics & tuning knobs
 
