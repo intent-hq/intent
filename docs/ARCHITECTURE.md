@@ -677,13 +677,14 @@ defense in depth for that toggle.
   trivial, and never persisted — the transcript row keeps the undecorated
   content, and all three skip paths (toggle off, trivial snapshot, build
   failure) leave the prompt byte-identical to pre-feature output.
-- **New sessions only (except `hook.schedule`'s live check).** Flags are captured once
+- **New sessions only (except the live services-layer checks).** Flags are captured once
   at agent-session creation (the assembled system prompt is persisted
   per-session) and at per-agent MCP bridge creation — never live-read per call
   (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
   applies only to sessions created afterwards; existing sessions keep the
-  surface they were created with. The one exception above (`hook.schedule`'s
-  services-layer check) acts on existing sessions immediately.
+  surface they were created with. The two exceptions above (`hook.schedule`'s
+  `backgroundHooks` check and the per-call `mcpTools` check on forwarded
+  `ws.mcp.*` calls) act on existing sessions immediately.
 
 ## Agent process-tree memory: characteristics & tuning knobs
 
