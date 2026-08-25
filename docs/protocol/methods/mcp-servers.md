@@ -146,8 +146,11 @@ unbounded and rotate independently of the config surface.
   (never token material) and falls back to the stored `access_token` — never an RPC
   error. Redaction semantics are unchanged: the bag — refreshed or not — never crosses
   the wire.
-- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
-  polls / re-fetches on demand.
+- No `mcp.oauth:*` events are emitted. Clients remain the only writers via
+  `mcp.oauth.set`, with one exception: after a successful daemon-side refresh grant
+  (above) the daemon rewrites the stored bag itself (`access_token`, recomputed
+  `expires_at`, rotated `refresh_token`). Either way, no event fires — the FE polls /
+  re-fetches on demand.
 
 ```json
 // → request — persist an OAuth bag for one MCP server
