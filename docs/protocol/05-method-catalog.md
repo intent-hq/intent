@@ -2,26 +2,26 @@
 
 ## 5. Method Catalog
 
-The API exposes **335 dispatchable method names** across the following categories:
+The API exposes **336 dispatchable method names** across the following categories:
 
-- **Router methods:** 296 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 297 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 37 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 335 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 336 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 335 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 336 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
 
-### Router methods by namespace (296 total)
+### Router methods by namespace (297 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
-| agent | 44 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| agent | 45 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
@@ -167,19 +167,21 @@ The `system.status` result additionally reports the disk space of the **volume c
 
 #### `system.status` — daemon routing fields (additive)
 
-The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
+The `system.status` result also includes **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
 
 ```jsonc
 {
   "localIps": ["192.168.1.10", "10.0.0.5"], // non-loopback IPv4 addresses (same source as server.pairingInfo)
   "hostname": "studio.local",               // local OS hostname
+  "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
 
 - `localIps` lists the host's non-loopback IPv4 addresses (virtual/container interfaces skipped) — the same list `server.pairingInfo` returns. It may be **empty** on a host with no routable interface, but is always an array, never `null`. The daemon serves it from a background-refreshed cache (~15s TTL), so a freshly changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
-- Both fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
+- `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
+- These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
 #### `system.importLegacy` (UDS-only, v2.2)
 
@@ -266,13 +268,15 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "port": 5181,
   "path": "/ws",
   "localIps": ["192.168.1.10", "10.0.0.5"],
-  "hostname": "my-mac.local"
+  "hostname": "my-mac.local",
+  "prettyHostname": "Clement's Mac Studio"
 }
 ```
 
 - `token` is the long-lived bearer token (64 hex chars, §2.1); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§1.2).
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
 - `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
+- `prettyHostname` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name), falling back to `hostname` when no pretty name is available — matching `host.status` / `system.status`; detect by presence.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
 
 #### `server.rotateToken` (local-only)

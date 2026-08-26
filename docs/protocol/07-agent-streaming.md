@@ -45,7 +45,19 @@ FE compat path; [intent-hq/ios#66](https://github.com/intent-hq/ios/pull/66) dro
 activity-ping refetch fallback in favor of applying the preview payload directly).
 
 The backend emits the **four** streaming signals in the table below in production. A fifth
-event — the pre-first-token `agent:stream:status` startup hint (§6.5) — also matches the
+event — `agent:stream:status` (§6.5), carrying both the pre-first-token startup hints and
+the mid-turn `stalled` / `resumed` liveness advisories (additive within v7.4,
+[intent-hq/intentd#1462](https://github.com/intent-hq/intentd/pull/1462): one advisory
+`phase: "stalled"` event with the additive `silentMs` field after the stall threshold —
+default 5 minutes (300000 ms), `INTENTD_STREAM_STALL_MS` — of zero `session/update`
+traffic mid-turn (tool-call-aware per
+[intent-hq/monorepo#3466](https://github.com/intent-hq/monorepo/issues/3466): while ≥1
+recorded tool call is still open the advisory is fully suppressed regardless of silence
+duration — long tool runs are expected silence, with the 30-minute prompt idle timeout as
+the backstop for hung tools; once the last open call resolves, the standard threshold
+applies to subsequent silence), then
+`phase: "resumed"` when activity returns, re-arming the detector; advisory only, the turn
+is never cancelled) — also matches the
 `agent:stream:*` subscription filter and arrives on the same subscription, so clients
 subscribing to the family should expect it on the wire too (it is documented in §6.5, not
 repeated in the table below; note the converse quirk that `agent:tool:call`, which **is** in
@@ -90,9 +102,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
-- **Slim projection via `projection` (opt-in, additive within v7.1;
-  [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** The optional
-  `projection` param accepts `"slim"` — the same bounded tool/image block projection as
+- **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
+  [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
+  subscription serves the same bounded tool/image block projection as
   `agent.getConversation` (§5.5): oversized `tool_use.input` / `tool_result.output` bodies are
   replaced by bounded previews with additive `inputTruncated`/`outputTruncated` + `*Bytes` flags
   (pairing/structural fields intact), and oversized `image.data` is swapped for the write-time
@@ -100,8 +112,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   block with `data` omitted). The projection is fixed for the subscription's lifetime and applies
   to **every frame the subscription emits** — the seq-0 snapshot, lag-recovery snapshots, live
   tool-block deltas, and the seq-0 live-turn merge — so slim snapshots and deltas agree on the
-  served block shape. Absent / `null` keeps the subscription byte-identical to before (the
-  additive convention); any other value is `-32602`, never coerced. A client holding a truncated
+  served block shape. Absent / `null` selects slim (the v8.0 default, BREAKING over the v7.1
+  "byte-identical" opt-in contract) and `projection: "slim"` is an explicit no-op; any other
+  value is `-32602`, never coerced. A client holding a truncated
   slim block fetches the full body on demand via `agent.getMessageBlock` (§5.5, v7.2). Slim
   snapshots additionally inherit the **slim page byte budget** (within v7.2 —
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and

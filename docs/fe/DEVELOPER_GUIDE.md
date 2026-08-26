@@ -7,31 +7,106 @@ This guide reflects the current Intent repository layout and APIs as of package 
 ### Prerequisites
 
 - Node.js 18+
-- `pnpm`
+- Corepack with the repository-pinned `pnpm` version
 - Git
 - Auggie CLI for the default ACP provider workflow
 
 ### Install and Run
 
-```bash
-pnpm install
+From the monorepo root, start the fast component preview. The target installs the
+locked frontend dependencies when `node_modules` is missing.
 
-# Start the Electron app with the Chrome DevTools Protocol flow enabled
-pnpm run dev:cdp
+```bash
+make dev-ui
 ```
+
+`DEV_PORT` selects the Vite port and stays available to the frontend process. Use a
+different value for each concurrent workspace:
+
+```bash
+make dev-ui DEV_PORT=5290
+```
+
+From `packages/cloudlands-fe`, the equivalent fresh setup is:
+
+```bash
+corepack pnpm install --frozen-lockfile
+DEV_PORT=5290 corepack pnpm run dev:ui
+```
+
+Choose the smallest launcher that includes the behavior under test:
+
+- `dev:ui` starts the fast named-state component preview. It does not start Electron,
+  native helpers, the daemon, or production application sagas.
+- `dev:web` starts the complete browser renderer. Use it for browser behavior that needs
+  the mock client or a daemon connection but does not need Electron APIs.
+- `dev:cdp` starts the Electron development stack with Chrome DevTools Protocol support.
+  Use it for main-process, preload, native, window, or Electron-shell work.
+- `dev` starts the standard Electron development stack without the explicit CDP flow.
 
 ### Common Commands
 
 ```bash
-pnpm run dev           # Standard development launcher
-pnpm run dev:cdp       # Development launcher with CDP support
-pnpm run build         # Production build
-pnpm run check         # Svelte + TypeScript checks
-pnpm run lint          # ESLint
-pnpm run format        # Prettier write pass
-pnpm run test:unit     # Vitest suite
-pnpm run test:playwright
+corepack pnpm run dev:ui        # Fast named-state UI preview
+corepack pnpm run dev:web       # Complete plain-browser renderer
+corepack pnpm run dev           # Standard Electron launcher
+corepack pnpm run dev:cdp       # Electron launcher with CDP support
+corepack pnpm run build         # Production build
+corepack pnpm run check         # Svelte + TypeScript checks
+corepack pnpm run lint          # ESLint
+corepack pnpm run format        # Prettier write pass
+corepack pnpm run test:unit     # Vitest suite
+corepack pnpm run test:playwright
 ```
+
+## Fast UI Preview Workflow
+
+Open a named preview after the server prints its URL. These examples use the isolated
+port from the command above:
+
+```text
+http://127.0.0.1:5290/sandbox/button?state=default&theme=system&width=420&motion=full
+http://127.0.0.1:5290/sandbox/button?state=loading&theme=dark&width=420&motion=reduced
+http://127.0.0.1:5290/sandbox/button?state=disabled&theme=light&width=320&motion=full
+http://127.0.0.1:5290/sandbox/button?state=destructive&theme=dark&width=960&motion=full
+http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=idle&theme=light&width=320&motion=full
+http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=waiting&theme=dark&width=420&motion=reduced
+http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=error&theme=system&width=420&motion=full
+```
+
+`theme` accepts `system`, `light`, or `dark`. `width` accepts an integer from 240 to
+1600 pixels. `motion` accepts `full` or `reduced`. Keep the URL stable while you edit;
+Vite hot module replacement updates the same tab.
+
+The sandbox installs a small browser API. Run these expressions in the page:
+
+```javascript
+window.__INTENT_PREVIEW__.list();
+await window.__INTENT_PREVIEW__.states("button");
+window.__INTENT_PREVIEW__.current();
+```
+
+`list()` returns preview IDs. `states(id)` returns the named states for one preview.
+`current()` returns the ready preview's slug, state, width, and status, or `null` while
+no named preview is ready. Wait for `[data-preview-ready=true]` before inspection or
+capture.
+
+For an agent, run the long-lived command through a workspace service script. Call
+`ws.browser.listTabs` before opening the URL and reuse a matching tab. A new
+`ws.browser.openTab` tab is hidden by default, but DOM, accessibility, evaluation, and
+screenshot actions still work. Keep that hidden tab open during edits so Vite HMR can
+update it. Call `ws.browser.showTab` only when a person wants to see it; pass
+`focus: true` when it must also receive focus. Use `http://daemon.localhost:5290` in
+`ws.browser` URLs so the browser tool can resolve a local or remote daemon correctly.
+
+Run the focused avatar component test from `packages/cloudlands-fe`:
+
+```bash
+corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
+```
+
+The component-test harness currently reserves port 3100 and has no port override. If
+that port is occupied, stop the process that owns it before rerunning the command.
 
 ## Project Structure
 
