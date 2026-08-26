@@ -217,7 +217,7 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
 `agent.get` / `agent.create` / `agent.update` results) projections:
 
 - `harnessVersion` (string, always present) — the harness version the session was
-  created under, currently `"1.1"`. **Immutable for the session's life**: a daemon
+  created under, currently `"2.0"`. **Immutable for the session's life**: a daemon
   upgrade never changes it, and there is no upgrade/migration/pinning op — new sessions
   always get the latest version. The stamp depends only on creation time, never on the
   creator: a delegated child mints the CURRENT version regardless of the delegating

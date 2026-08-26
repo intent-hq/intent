@@ -29,6 +29,24 @@
 | workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
 | workspace.export.abort *(v6.11)* | exportId (req) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
 
+**Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
+agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
+baseRef? })`. `title` and `initialPrompt` are required non-empty strings. Unknown fields,
+including repository-selection fields, are rejected; repository identity and path come
+from the caller workspace. An omitted `baseRef` uses the repository default. A named ref
+must exist; an unresolved ref is warned before Apply and fails through the existing
+`workspace.create` structured error without fallback.
+
+The result is the existing `workspace-create` proposal resource with
+`preview.workspaceCreate.mode: "sibling"`. The title, prompt, specialist, and base ref
+remain editable; repository metadata is locked. The proposal stores one idempotency key,
+which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
+Dismiss has no create side effect. Delegated and background agents do not receive this
+binding, and raw dispatch rejects it. Agents with a parent report the opportunity upward;
+parentless background agents remain blocked and have no parent-report path. This is an MCP
+binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
+change Chief of Staff `ws.app.workspaces.create` behavior.
+
 ```json
 // → request
 { "jsonrpc": "2.0", "id": 1, "method": "workspace.list", "params": { "includeArchived": false } }

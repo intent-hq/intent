@@ -38,7 +38,7 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
-  (`intent_core::CURRENT_HARNESS_VERSION`, today `"1.1"`). There is no
+  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.0"`). There is no
   upgrade/migration/pinning operation; new sessions always get the latest
   version. The stamp depends only on creation time, never on the creator: a
   delegated child mints the current version regardless of the parent's pin,
@@ -83,7 +83,9 @@ The harness lives in `crates/intent-services/src/harness/`:
 - **One module per version** — `harness/v1.rs` implements the v1 text set;
   `harness/v1_1.rs` (v1.1) reuses v1's text surfaces wholesale and swaps in
   its own doctrine (the feature-section rewrites in `common.md`; every other
-  instruction body and the specialist bundle are byte-identical v1 copies).
+  instruction body and the specialist bundle are byte-identical v1 copies),
+  and `harness/v2.rs` reuses the unchanged system text while selecting the v2
+  doctrine.
   A new version starts as re-exports of the prior version's surface
   functions and overrides only what changed, so the version-to-version diff
   is exactly the changed surfaces.
@@ -129,11 +131,11 @@ A new version is warranted when doctrine text or the feature defaults a
 version's doctrine assumes change materially. The mechanical steps:
 
 1. Bump `CURRENT_HARNESS_VERSION` in `intent-core` (`model.rs`).
-2. Add `resources/agent-instructions/<ver>/` and
-   `resources/specialists/<ver>/` directories (copy-then-edit from the
-   prior version) and a new `InstructionSet` static in `instructions.rs`.
-3. Add a `harness/v<N>.rs` module: re-export the prior version's surfaces,
-   override only what changed.
+2. Copy and edit each changed resource set under its new version. Unchanged
+   instruction bodies or specialist bundles can reuse the prior version. Add
+   the new `InstructionSet` static in `instructions.rs`.
+3. Add a `harness/v<N>.rs` module that reuses the prior system-text surfaces
+   and overrides only what changed.
 4. Add the version's `HarnessEntry` row to the `REGISTRY` (oldest first).
 5. Add goldens for the new version; the prior version's goldens stay
    untouched — they pin the old doctrine forever.
