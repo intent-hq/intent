@@ -78,9 +78,10 @@ filing on both repos proceed fully in parallel — nothing serializes until merg
 Both merges require explicit human permission (see Conventions → Merging), and the
 only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
 (or arm auto-merge on it, or add it to the merge queue) until the intentd PR is
-confirmed merged** — approved/green is not enough. This intentd-first rule applies specifically to protocol changes (the
-daemon↔fe wire contract, `docs/protocol/`): whenever a feature touches the protocol,
-the daemon side must land first. Rationale: cloudlands-fe may depend on daemon
+confirmed merged** — approved/green is not enough. This intentd-first rule applies
+specifically to protocol changes (the daemon↔fe wire contract, `docs/protocol/`):
+whenever a feature touches the protocol, the daemon side must land first.
+Rationale: cloudlands-fe may depend on daemon
 behavior/protocol that only exists once the intentd change has landed, so an fe-first
 merge can break main or ship against a contract that doesn't exist yet. This rule is
 about submodule PR merges, not monorepo bumps — after both are merged, the
@@ -108,10 +109,13 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
   (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
   workflows merge their own rolling PRs). All three repos (monorepo, intentd,
   cloudlands-fe) route `main` merges through a **merge queue** (squash method): once
-  a human has given permission, `gh pr merge --squash` adds the PR to the queue, the
-  queue runs CI on the actual merged tree (`merge_group` runs of the same required
-  check), and the PR lands when that passes — so merging no longer requires the
+  a human has given permission, `gh pr merge --squash` adds the PR to the queue, and
+  the PR lands when the queue's gate passes — so merging no longer requires the
   branch to be up to date first, and there is no update-branch/re-check treadmill.
+  In intentd and cloudlands-fe the queue runs CI on the actual merged tree
+  (`merge_group` runs of the same required check) before landing; the monorepo
+  ruleset has no required status checks, so its queue serializes merges but gates on
+  nothing and lands entries without a CI run.
   `--auto` remains useful to enqueue once still-pending PR checks pass. A queue
   failure kicks the PR out of the queue (it does not land); fix and re-enqueue.
   When squash-merging, the commit title defaults to the commit message (or PR title
