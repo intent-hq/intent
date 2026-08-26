@@ -54,6 +54,7 @@ never resurrects shipped bundles the operator excluded.
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
   roleReminder?, agentType?, role?, icon?, prompt?, hidden?: boolean,
   modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
+  aliases?: [string],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
   scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
   `icon`) are first-class **string** fields on the wire, not
@@ -176,8 +177,37 @@ never resurrects shipped bundles the operator excluded.
   - The v1.1 bundled specialists seed the metadata: `spec-writer` carries
     `role: "orchestrator"` + `teamAgents: ["implementor","verifier"]`,
     `implementor`/`verifier` carry `role: "internal"`, and every bundled file names an
-    `icon`. The picker-metadata keys are the only frontmatter allowed to diverge between the
-    v1 and v1.1 bundled copies (the goldens pin every other key to its v1 value).
+    `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
+    frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
+    every other key to its v1 value).
+- **Specialist aliases (`aliases?`) (additive,
+  [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
+  specialist's alternate ids: spawn/delegation callers may address the specialist by any
+  listed alias, and resolution maps the alias to the claiming (canonical) definition. On the
+  wire and in the file `aliases` follows the `teamAgents` contract exactly: an array of
+  non-empty (non-whitespace) strings — `create`/`edit` reject any other shape with `-32602`
+  — encoded in frontmatter as a **single-line JSON array** (`aliases: ["coordinator"]`),
+  resolving through the same 3-tier inherit-on-omit fold (omit inherits, literal `[]`
+  clears, a non-empty list overrides wholesale) with the same lenient reads.
+  - **Resolution order** — direct id lookup always runs first; the alias scan only runs on
+    a miss, so a **canonical id always beats an alias** with the same spelling. When
+    multiple specialists claim the same alias, the **lexicographically smallest canonical
+    id** wins (deterministic ascending-id catalog scan). The resolved def is the canonical
+    specialist's — its `id` carries the canonical id, never the alias — so `specialist.get`
+    on an alias serves the canonical resolved view.
+  - **Canonical-id persistence** — `agent.create` (and the seams that funnel through it:
+    `agent.delegate`, `agent.wakeOrCreate`, and `workspace.create`'s `initialAgent`, §5.1)
+    canonicalizes an alias **before** any downstream resolution runs: display-name
+    derivation, model/effort resolution, and the frozen prompt snapshot all see the
+    canonical id, and the session persists it — `metadata.specialist` carries
+    `"spec-writer"` when the caller spawned with `"coordinator"`, never the alias.
+    `agent.update`'s `specialist` change runs the same rewrite, so the invariant holds on
+    the update seam too — a wire client cannot persist an alias into
+    `metadata.specialist`. Unknown specialist ids keep the existing lenient pass-through
+    (unchanged by this feature).
+  - The v1.1 bundled `spec-writer` claims `aliases: ["coordinator"]` (the v1 bundle stays
+    frozen), so `coordinator` resolves as a specialist id everywhere specialists are
+    accepted.
 - **Delegation reasoning-effort resolution (additive)** — `agent.delegate` and
   `agent.wakeOrCreate`'s create branch resolve the child's `reasoningEffort` (§5.5) in this
   order: (1) the caller's explicit `reasoningEffort` param — an empty/whitespace-only value is
