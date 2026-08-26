@@ -727,7 +727,9 @@ boundaries**, so workspace ordering does not churn on every mid-turn mutation: (
 agent **turn end** — a status persist transitioning the session OUT of an active state
 (to idle, error, or a terminal state); turn-start and mid-turn status flips do not
 schedule; (b) a **user-origin message send** — the FE `agent.sendMessage` direct send,
-a user-origin queue-drain delivery, and a user-role `agent.appendMessage`; and (c) an
+a user-origin queue-drain delivery, a user-role `agent.appendMessage`, and the
+user-origin `agent.sendQueuedMessageNow` store-only force-send (the manager-backed
+send-now routes through the direct-send gate); and (c) an
 **attention raise** (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion`, §5.5).
 Agent-origin appends, agent-to-agent sends, queued-wake deliveries, system-injected
 turns, `agent.setModel` / `agent.update` / `agent.reportToParent` mutations, and
