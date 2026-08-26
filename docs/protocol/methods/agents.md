@@ -270,7 +270,7 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
     "backgroundHooks": true, "hostExec": true, "scripts": true,
     "terminalAccess": true, "browserAutomation": true, "richChatBlocks": true,
     "structuredQuestions": true, "attentionRequests": true, "stateSnapshot": true,
-    "prMonitor": true, "taskGraph": true
+    "prMonitor": true, "taskGraph": true, "peerAgents": false, "mcpTools": true
   }
   ```
 
@@ -281,13 +281,18 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
   and the wire report never disagrees with the runtime surface. This covers the
   per-turn snapshot-line injection too: `agentFeatures.stateSnapshot` gates it from
   the captured snapshot like every other toggle
-  ([intentd#1273](https://github.com/intent-hq/intentd/pull/1273)). One documented
-  exception stays live: `agentFeatures.backgroundHooks` is
+  ([intentd#1273](https://github.com/intent-hq/intentd/pull/1273)). Two documented
+  exceptions stay live: `agentFeatures.backgroundHooks` is
   re-checked live in the services layer on every `hook.schedule` (defense in depth
   behind the MCP dispatch deny) — a flip to `false` denies new schedules from ALL
   sessions regardless of their snapshot, while already-active hooks are unaffected and
-  run to their terminal state/TTL. There, the captured value records the
-  creation-time setting without freezing the behavior. The pre-existing per-session
+  run to their terminal state/TTL — and `agentFeatures.mcpTools`
+  ([intentd#1483](https://github.com/intent-hq/intentd/pull/1483)) is re-checked
+  live in the services layer on every forwarded `ws.mcp.*` call (alongside the
+  `mcp.enableUserServers` master switch and per-server disabled state) — a flip to
+  `false` denies MCP tool calls immediately from ALL sessions, including pre-flip
+  ones whose snapshot still advertises `ws.mcp.*`. For both, the captured value
+  records the creation-time setting without freezing the behavior. The pre-existing per-session
   `taskGraph` pin folds into the snapshot: readers prefer `harnessFeatures.taskGraph`,
   falling back to the legacy per-session column for older rows (behavior identical).
   The wire always carries a value: a legacy pre-snapshot row (NULL in the store)

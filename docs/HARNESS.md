@@ -53,10 +53,11 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
   from the persisted snapshot, not the live settings, so the wire report
   never disagrees with the runtime surface. This covers the per-turn
   state-snapshot injection too — `stateSnapshot` is resolved from the
-  captured snapshot like every other toggle. One documented exception stays
-  live (`backgroundHooks` is re-checked live on every `hook.schedule`) —
-  there, the captured value records the creation-time setting without
-  freezing the behavior.
+  captured snapshot like every other toggle. Two documented exceptions stay
+  live (`backgroundHooks` is re-checked live on every `hook.schedule`, and
+  `mcpTools` is re-checked live on every forwarded `ws.mcp.*` call — a flip
+  to `false` acts on existing sessions immediately) — there, the captured
+  value records the creation-time setting without freezing the behavior.
 
 Legacy sessions persisted before the feature snapshot existed (NULL in the
 store) follow the live effective settings on read until their first
