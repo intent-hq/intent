@@ -196,12 +196,15 @@ never resurrects shipped bundles the operator excluded.
     specialist's — its `id` carries the canonical id, never the alias — so `specialist.get`
     on an alias serves the canonical resolved view.
   - **Canonical-id persistence** — `agent.create` (and the seams that funnel through it:
-    `agent.delegate`, `agent.wakeOrCreate`) canonicalize an alias **before** any downstream
-    resolution runs: display-name derivation, model/effort resolution, and the frozen
-    prompt snapshot all see the canonical id, and the session persists it —
-    `metadata.specialist` carries `"spec-writer"` when the caller spawned with
-    `"coordinator"`, never the alias. Unknown specialist ids keep the existing lenient
-    pass-through (unchanged by this feature).
+    `agent.delegate`, `agent.wakeOrCreate`, and `workspace.create`'s `initialAgent`, §5.1)
+    canonicalizes an alias **before** any downstream resolution runs: display-name
+    derivation, model/effort resolution, and the frozen prompt snapshot all see the
+    canonical id, and the session persists it — `metadata.specialist` carries
+    `"spec-writer"` when the caller spawned with `"coordinator"`, never the alias.
+    `agent.update`'s `specialist` change runs the same rewrite, so the invariant holds on
+    the update seam too — a wire client cannot persist an alias into
+    `metadata.specialist`. Unknown specialist ids keep the existing lenient pass-through
+    (unchanged by this feature).
   - The v1.1 bundled `spec-writer` claims `aliases: ["coordinator"]` (the v1 bundle stays
     frozen), so `coordinator` resolves as a specialist id everywhere specialists are
     accepted.
