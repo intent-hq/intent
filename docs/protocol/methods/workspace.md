@@ -405,9 +405,12 @@ When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's 
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
 explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an unknown specialist or a resolution
-failure never fails the create — the name falls back to the generated
-`Agent {6-hex}` placeholder (not explicitly set).
+rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+resolves to no known id or alias — is rejected with `-32602` naming the id and the
+known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
+while a known specialist whose display-name resolution fails still never fails the
+create — the name falls back to the generated `Agent {6-hex}` placeholder (not
+explicitly set).
 The agent's id is **server-assigned**: whenever a session is created the daemon mints a
 fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected with `-32602`
 ("agent IDs are server-assigned and the field must be omitted") **before any side
