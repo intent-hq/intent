@@ -712,6 +712,34 @@ derives it on every path that returns a `Workspace` on the wire (`workspace.list
 `deriveWorkspaceLastActivity` parity). It is always present on the wire —
 clients never need to recompute it from notes/agents.
 
+**Push cadence — turn boundaries only
+([intent-hq/intentd#1489](https://github.com/intent-hq/intentd/pull/1489)).** Between
+reads, the daemon pushes changes via a **debounced** `workspace:updated` event whose
+`changes` delta carries only `lastActivity` (§6.5): rapid triggers for the same
+workspace coalesce into at most one event per 3-second window (the timer resets on each
+trigger, carrying the latest derived value), the recomputed value is compared against
+the stored one and an unchanged value emits nothing, and the derived value is also
+persisted through a **scoped, monotonic** column write (only the `lastActivity` column
+moves, and a late out-of-order timer can never walk it back) so the cheap non-deriving
+read paths — `list_workspaces_lite` and the `workspace.subscribe` seq-0 snapshot —
+serve a fresh value after a daemon restart. The debounce is scheduled **only at turn
+boundaries**, so workspace ordering does not churn on every mid-turn mutation: (a) an
+agent **turn end** — a status persist transitioning the session OUT of an active state
+(to idle, error, or a terminal state); turn-start and mid-turn status flips do not
+schedule; (b) a **user-origin message send** — the FE `agent.sendMessage` direct send,
+a user-origin queue-drain delivery, a user-role `agent.appendMessage`, and the
+user-origin `agent.sendQueuedMessageNow` store-only force-send (the manager-backed
+send-now routes through the direct-send gate); and (c) an
+**attention raise** (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion`, §5.5).
+Agent-origin appends, agent-to-agent sends, queued-wake deliveries, system-injected
+turns, `agent.setModel` / `agent.update` / `agent.reportToParent` mutations, and
+token-usage recomputes deliberately do NOT schedule — mid-turn activity surfaces at the
+turn's end. The event is a **change signal**, not the authority: the inline derivation
+above still runs fresh on every `Workspace`-returning read, so a `workspace.get`
+mid-turn serves an up-to-date `lastActivity` even though no event has fired yet.
+Behavior only — the derivation formula, the delta shape, and the debounce window are
+unchanged; no version bump.
+
 **PR-field ownership (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`, `pullRequests`).**
 These five fields are BE-owned: the daemon writes them from PR discovery / refresh
 (§5.9, §6.5 `pr:*` events) and clients read them off the returned `Workspace`. All five
