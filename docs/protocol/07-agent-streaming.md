@@ -50,7 +50,12 @@ the mid-turn `stalled` / `resumed` liveness advisories (additive within v7.4,
 [intent-hq/intentd#1462](https://github.com/intent-hq/intentd/pull/1462): one advisory
 `phase: "stalled"` event with the additive `silentMs` field after the stall threshold —
 default 5 minutes (300000 ms), `INTENTD_STREAM_STALL_MS` — of zero `session/update`
-traffic mid-turn, then
+traffic mid-turn (tool-call-aware per
+[intent-hq/monorepo#3466](https://github.com/intent-hq/monorepo/issues/3466): while ≥1
+recorded tool call is still open the advisory is fully suppressed regardless of silence
+duration — long tool runs are expected silence, with the 30-minute prompt idle timeout as
+the backstop for hung tools; once the last open call resolves, the standard threshold
+applies to subsequent silence), then
 `phase: "resumed"` when activity returns, re-arming the detector; advisory only, the turn
 is never cancelled) — also matches the
 `agent:stream:*` subscription filter and arrives on the same subscription, so clients
