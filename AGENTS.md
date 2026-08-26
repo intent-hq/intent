@@ -77,10 +77,11 @@ For features that need changes in both intentd and cloudlands-fe, development an
 filing on both repos proceed fully in parallel — nothing serializes until merge time.
 Both merges require explicit human permission (see Conventions → Merging), and the
 only ordering constraint is the final merge: **do not merge the cloudlands-fe PR
-(or arm auto-merge on it) until the intentd PR is confirmed merged** — approved/green
-is not enough. This intentd-first rule applies specifically to protocol changes (the
-daemon↔fe wire contract, `docs/protocol/`): whenever a feature touches the protocol,
-the daemon side must land first. Rationale: cloudlands-fe may depend on daemon
+(or arm auto-merge on it, or add it to the merge queue) until the intentd PR is
+confirmed merged** — approved/green is not enough. This intentd-first rule applies
+specifically to protocol changes (the daemon↔fe wire contract, `docs/protocol/`):
+whenever a feature touches the protocol, the daemon side must land first.
+Rationale: cloudlands-fe may depend on daemon
 behavior/protocol that only exists once the intentd change has landed, so an fe-first
 merge can break main or ship against a contract that doesn't exist yet. This rule is
 about submodule PR merges, not monorepo bumps — after both are merged, the
@@ -102,20 +103,26 @@ rolling bump PR may cover both submodule refs); do not file a manual bump PR.
   literal token in commit messages, PR titles/bodies, or review comments unless an
   actual breaking change is intended; when describing the mechanism, write "the
   breaking-change footer token" or similar instead.
-- **Merging**: agents must **NEVER merge a PR or arm auto-merge — in this repo or any
-  submodule repo — without explicit permission from a human**. Approved + green checks
-  is not enough. Repo-owned automation is exempt (auto-bump-submodules,
-  auto-pin-intentd, auto-cut-alpha, and the release PR workflows merge their own
-  rolling PRs). The repository allows squash and rebase merges; no merge queue is
-  enabled. Once a human has given permission, merge with `gh pr merge --squash`
-  (optionally `--auto` to merge once checks pass). The GraphQL `enqueuePullRequest`
-  mutation fails with "Merge queues are not enabled" — it is only relevant if a merge
-  queue is enabled later. When squash-merging, the commit title defaults to the commit
-  message (or PR title as fallback), and the commit message includes all commit
-  messages from the PR. On single-commit PRs, ensure the branch commit message is
-  itself a valid conventional commit (amend auto-commits like "Coordinator" before
-  pushing) to prevent non-conventional commits from landing on main (e.g., PR #102
-  incident).
+- **Merging**: agents must **NEVER merge a PR, arm auto-merge, or add a PR to the
+  merge queue — in this repo or any submodule repo — without explicit permission from
+  a human**. Approved + green checks is not enough. Repo-owned automation is exempt
+  (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
+  workflows merge their own rolling PRs). All three repos (monorepo, intentd,
+  cloudlands-fe) route `main` merges through a **merge queue** (squash method): once
+  a human has given permission, `gh pr merge --squash` adds the PR to the queue, and
+  the PR lands when the queue's gate passes — so merging no longer requires the
+  branch to be up to date first, and there is no update-branch/re-check treadmill.
+  In intentd and cloudlands-fe the queue runs CI on the actual merged tree
+  (`merge_group` runs of the same required check) before landing; the monorepo
+  ruleset has no required status checks, so its queue serializes merges but gates on
+  nothing and lands entries without a CI run.
+  `--auto` remains useful to enqueue once still-pending PR checks pass. A queue
+  failure kicks the PR out of the queue (it does not land); fix and re-enqueue.
+  When squash-merging, the commit title defaults to the commit message (or PR title
+  as fallback), and the commit message includes all commit messages from the PR. On
+  single-commit PRs, ensure the branch commit message is itself a valid conventional
+  commit (amend auto-commits like "Coordinator" before pushing) to prevent
+  non-conventional commits from landing on main (e.g., PR #102 incident).
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: run the package gates before opening a PR — `make check` / `make test`
   from the monorepo root; see `packages/intentd/AGENTS.md` → Gates.
