@@ -39,41 +39,6 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.subscribe (deprecated) | eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — not the WS streaming surface (use events.subscribe). Registers a real internal subscription: when `agentId` names a subscriber agent, matching workspace events (category wildcards or exact types) are coalesced over `batchWindow` ms (default 500) and delivered as one `[WORKSPACE EVENTS]` wake message per batch, with `event_notification` message metadata; `excludeSelf` (default true) drops the subscriber's own events. **Agent events are off-limits to agent subscribers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229)):** when the call carries a subscriber agent, every explicit `agent:`-prefixed entry — exact types, the `agent:*` wildcard itself, and the observability events — plus `chat:stream:delta` is rejected with `-32602` at subscribe time, atomically (a mixed list like `["note:*", "agent:*"]` registers NOTHING; the error text redirects to `ws.agent.watch(agentId)` and lists the non-agent categories that remain available). A bare `*` is NOT rejected: it silently narrows to the non-agent category wildcards at resolution time (front-door `*` expansion is unchanged and still includes `agent:*`). A **match-time guard** backs the subscribe-time one: agent-owned delivery filters set `exclude_agent_events`, so legacy `agent:*` rows persisted before the guard existed never deliver agent events after a daemon restart. Subscriber-less (FE front-door) subscriptions are exempt from all of this and keep the full stream. Agent-owned subscriptions persist across daemon restarts (rows whose subscriber is gone — or whose workspace no longer exists, `__chief__` exempt — are pruned at startup, monorepo#947). Live subscriptions are listed via `agent.getSubscriptions` (`eventSubscriptions`) and reported by `agent.diagnostics`. `workspace.delete` drops the workspace's event subscriptions (delivery tasks aborted, rows deleted). Without `agentId` (FE front door) the subscription is match-only in memory — no wake target. Over the MCP seam (`ws.agent.subscribe` / `ws.event.subscribe`) the subscriber is the calling agent automatically (so the restriction applies; the MCP binding's `*` expansion moved into the daemon for the per-subscriber resolution). |
 | agent.unsubscribe (deprecated) | subscriptionId (req) | service result `{ success: true, subscriptionId }` — stops delivery; unknown id errors |
 
-**Delegation assignment fences (additive).** This is the current assignment contract and
-supersedes the pre-fence result shapes in the method-table row above. The single-task
-`agent.delegate` form accepts `scope?: string[]`. Each entry must be a non-empty
-repository-relative path. The daemon trims it, changes `\` to `/`, removes `.` and repeated
-separators, then sorts and deduplicates the list. Absolute paths, `..`, paths outside the
-workspace, and a scope that spans more than one Git repository are rejected with `-32602`
-before child creation. The batch `tasks` form rejects an explicit top-level `scope`; batch
-delegation stays semantic-only.
-
-Every new single delegation result adds `taskRevision`, `expectedHeadSha`, and `scopeHash`.
-`taskRevision` and `scopeHash` are SHA-256 hex strings. `expectedHeadSha` is a Git commit SHA or
-JSON `null` when HEAD is unavailable; the key is always present on the single result. A started
-batch row carries `taskRevision` and `scopeHash`, and carries `expectedHeadSha` only when a SHA
-is available. The same fence is persisted in the delegated session metadata and is served as
-optional `metadata.taskRevision`, `metadata.expectedHeadSha`, `metadata.scopeHash`, and
-canonical `metadata.scope` fields on `AgentLite`/`AgentSession`; old sessions can omit all
-fence fields and keep legacy behavior.
-
-`taskRevision` covers the trimmed task title, task content before the first `## Progress`
-heading, acceptance criteria, resolved delegation instructions, and canonical scope. It does
-not cover task status, timestamps, actors, or progress text. Thus progress and status updates do
-not invalidate an assignment by themselves. A non-empty scope also records the selected
-repository HEAD. At report/status/attention time the expected commit must still be an ancestor
-of HEAD, and files changed since that commit must not overlap a scoped path or its ancestors or
-descendants. Unrelated out-of-scope changes are valid. An omitted scope has an empty canonical
-list and keeps semantic-only compatibility; it does not apply the Git-head conflict check.
-
-Before an assigned child reports, changes its linked task status, or raises an attention
-request, the daemon verifies the persisted scope hash, task identity and semantic revision,
-newest assignment, and the scoped-head rule. A stale `agent.reportToParent` or attention call
-returns `{ ok:false, quarantined:true, reason, taskRevision, scopeHash }` and makes no report,
-task, attention, event, or wake side effect. A stale agent-authored `task.updateNoteStatus`
-returns `-32602` with `assignment update quarantined: <reason>`. Legacy sessions without a
-complete fence fail open for compatibility.
-
 **Progress wakes and durable final wakes.** This is the current delivery contract and
 supersedes the older report-delivery wording in the method-table row above.
 `agent.reportToParent` persists the report and, for an ungrouped child, sends one immediate
