@@ -13,7 +13,7 @@
 | workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. -32602 if not found. |
 | workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
-| workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen (clears unread `attention`) |
+| workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
@@ -423,9 +423,12 @@ When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's 
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
 explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an unknown specialist or a resolution
-failure never fails the create — the name falls back to the generated
-`Agent {6-hex}` placeholder (not explicitly set).
+rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+resolves to no known id or alias — is rejected with `-32602` naming the id and the
+known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
+while a known specialist whose display-name resolution fails still never fails the
+create — the name falls back to the generated `Agent {6-hex}` placeholder (not
+explicitly set).
 The agent's id is **server-assigned**: whenever a session is created the daemon mints a
 fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected with `-32602`
 ("agent IDs are server-assigned and the field must be omitted") **before any side
@@ -620,11 +623,31 @@ each with a dedicated change event (§6.5) that carries the new value:
   `workspace:activity-changed` (§6.5).
 - `attention` — **dismissible (blue dot).** A small flag raised by BE transitions, e.g.
   `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
-  clears it for all clients. The two clears are **not** interchangeable (intentd#945):
-  `workspace.dismissAttention` retires the flag whatever its value, while
-  `workspace.markSeen` is **guarded on `unread`** — it clears the turn-end blue dot and
-  leaves a persistent `review_required` in place (see the attention-flag write guard under
-  the derived `displayStatus` block below). Both surface via
+  clears it for all clients. **The served `unread` value is DERIVED from per-agent seen
+  markers** on the `workspace.list` / `workspace.get` / subscription emit path:
+  `unread` = any **top-level (no parent, non-background, non-deleted)** session whose
+  newest user/assistant message is an assistant message the v4.5 seen marker has not
+  caught up with (`lastMessageId` set, `lastMessageRole == "assistant"`,
+  `metadata.lastSeenMessageId` absent or ≠ `lastMessageId` — the same equality-only
+  comparison as the client-side per-agent derivation, §5.5 `agent.markSeen`). A stored
+  `review_required` always wins over the derivation; the stored `unread` flag is no
+  longer the read-path source of truth — the turn-end raise still writes it (back-compat
+  + the transition emit), but a stale stored value can neither show nor hide the blue
+  dot. Archived rows skip the derivation and keep the stored value (the turn-end raise
+  skips archived workspaces, so no blue dot until unarchive — intentd#1075). Bounded
+  cost over persisted session columns: list-shaped reads (`workspace.list`, the seq-0
+  subscription snapshot) derive the whole list's unread set in ONE batched statement,
+  single-row reads run one bounded EXISTS probe; a derivation failure keeps the stored
+  value (degrade, never fail the read). Reading a conversation clears its share:
+  `agent.markSeen` re-derives after each marker advance and, when the LAST unread
+  session is read, clears the stored legacy flag and emits ONE
+  `workspace:attention-changed { none }` (partial reads stay silent). The two
+  workspace-level clears are **not** interchangeable (intentd#945):
+  `workspace.dismissAttention` retires the stored flag whatever its value (a derived
+  `unread` resurfaces on the next read while unseen messages remain), while
+  `workspace.markSeen` marks every top-level conversation seen (see its row above) and
+  leaves a persistent `review_required` in place (see the attention-flag write guard
+  under the derived `displayStatus` block below). Both surface via
   `workspace:attention-changed` (§6.5). This is shared BE state rather than
   per-client local state (the daemon is single-user in v1; per-viewer cursors are a future
   extension).
@@ -709,6 +732,34 @@ derives it on every path that returns a `Workspace` on the wire (`workspace.list
 `createdAt`, every note's `updatedAt`, and every agent session's `updatedAt` (FE
 `deriveWorkspaceLastActivity` parity). It is always present on the wire —
 clients never need to recompute it from notes/agents.
+
+**Push cadence — turn boundaries only
+([intent-hq/intentd#1489](https://github.com/intent-hq/intentd/pull/1489)).** Between
+reads, the daemon pushes changes via a **debounced** `workspace:updated` event whose
+`changes` delta carries only `lastActivity` (§6.5): rapid triggers for the same
+workspace coalesce into at most one event per 3-second window (the timer resets on each
+trigger, carrying the latest derived value), the recomputed value is compared against
+the stored one and an unchanged value emits nothing, and the derived value is also
+persisted through a **scoped, monotonic** column write (only the `lastActivity` column
+moves, and a late out-of-order timer can never walk it back) so the cheap non-deriving
+read paths — `list_workspaces_lite` and the `workspace.subscribe` seq-0 snapshot —
+serve a fresh value after a daemon restart. The debounce is scheduled **only at turn
+boundaries**, so workspace ordering does not churn on every mid-turn mutation: (a) an
+agent **turn end** — a status persist transitioning the session OUT of an active state
+(to idle, error, or a terminal state); turn-start and mid-turn status flips do not
+schedule; (b) a **user-origin message send** — the FE `agent.sendMessage` direct send,
+a user-origin queue-drain delivery, a user-role `agent.appendMessage`, and the
+user-origin `agent.sendQueuedMessageNow` store-only force-send (the manager-backed
+send-now routes through the direct-send gate); and (c) an
+**attention raise** (`ws.agent.reportBlocker` / `ws.agent.requestDiscussion`, §5.5).
+Agent-origin appends, agent-to-agent sends, queued-wake deliveries, system-injected
+turns, `agent.setModel` / `agent.update` / `agent.reportToParent` mutations, and
+token-usage recomputes deliberately do NOT schedule — mid-turn activity surfaces at the
+turn's end. The event is a **change signal**, not the authority: the inline derivation
+above still runs fresh on every `Workspace`-returning read, so a `workspace.get`
+mid-turn serves an up-to-date `lastActivity` even though no event has fired yet.
+Behavior only — the derivation formula, the delta shape, and the debounce window are
+unchanged; no version bump.
 
 **PR-field ownership (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`, `pullRequests`).**
 These five fields are BE-owned: the daemon writes them from PR discovery / refresh

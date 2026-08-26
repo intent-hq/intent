@@ -53,10 +53,11 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
   from the persisted snapshot, not the live settings, so the wire report
   never disagrees with the runtime surface. This covers the per-turn
   state-snapshot injection too — `stateSnapshot` is resolved from the
-  captured snapshot like every other toggle. One documented exception stays
-  live (`backgroundHooks` is re-checked live on every `hook.schedule`) —
-  there, the captured value records the creation-time setting without
-  freezing the behavior.
+  captured snapshot like every other toggle. Two documented exceptions stay
+  live (`backgroundHooks` is re-checked live on every `hook.schedule`, and
+  `mcpTools` is re-checked live on every forwarded `ws.mcp.*` call — a flip
+  to `false` acts on existing sessions immediately) — there, the captured
+  value records the creation-time setting without freezing the behavior.
 
 Legacy sessions persisted before the feature snapshot existed (NULL in the
 store) follow the live effective settings on read until their first
@@ -79,8 +80,12 @@ The harness lives in `crates/intent-services/src/harness/`:
   call sites carry typed data in and never format doctrine/envelope text
   themselves, so a future version can reword or reorder surfaces without
   touching the managers.
-- **One module per version** — `harness/v1.rs` implements the original text set;
-  `harness/v2.rs` reuses its unchanged system text and selects the v2 doctrine.
+- **One module per version** — `harness/v1.rs` implements the v1 text set;
+  `harness/v1_1.rs` (v1.1) reuses v1's text surfaces wholesale and swaps in
+  its own doctrine (the feature-section rewrites in `common.md`; every other
+  instruction body and the specialist bundle are byte-identical v1 copies),
+  and `harness/v2.rs` reuses the unchanged system text while selecting the v2
+  doctrine.
   A new version starts as re-exports of the prior version's surface
   functions and overrides only what changed, so the version-to-version diff
   is exactly the changed surfaces.
@@ -111,7 +116,8 @@ bundled markdown is used untouched.
 
 The doctrine text is **byte-pinned**: `intent-services/src/v1_goldens.rs`
 asserts full literal bytes (or a SHA-256 pin for the large bundled layers)
-of every system-generated string that reaches an agent conversation, and
+of every system-generated string that reaches an agent conversation
+(`v1_1_goldens.rs` pins the v1.1 doctrine the same way), and
 `agent_manager::v1_turn_envelope_goldens` pins the composed turn envelope.
 Any wording or whitespace change to a versioned surface fails that
 version's goldens and must be answered by minting a new harness version —
