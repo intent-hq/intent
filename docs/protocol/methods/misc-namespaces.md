@@ -203,8 +203,9 @@ never resurrects shipped bundles the operator excluded.
     `"spec-writer"` when the caller spawned with `"coordinator"`, never the alias.
     `agent.update`'s `specialist` change runs the same rewrite, so the invariant holds on
     the update seam too — a wire client cannot persist an alias into
-    `metadata.specialist`. Unknown specialist ids keep the existing lenient pass-through
-    (unchanged by this feature).
+    `metadata.specialist`. Unknown specialist ids are rejected with `-32602` at every
+    spawn/update seam (monorepo#3497 — the alias feature initially left them passing
+    through verbatim); see "Specialist validation (strict)" on `agent.create` (§5.5).
   - The v1.1 bundled `spec-writer` claims `aliases: ["coordinator"]` (the v1 bundle stays
     frozen), so `coordinator` resolves as a specialist id everywhere specialists are
     accepted.
