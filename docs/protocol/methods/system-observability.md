@@ -1,4 +1,11 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.37 Managed Unsloth server — `unsloth.*` · §5.39 Token-rate history — `stats.getRateHistory` · §5.43 Daemon stack sampling — `debug.sampleStacks`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.7 daemon status identity · §5.37 Managed Unsloth server — `unsloth.*` · §5.39 Token-rate history — `stats.getRateHistory` · §5.43 Daemon stack sampling — `debug.sampleStacks`.
+
+### 5.7 Daemon build identity — `system.status`
+
+The `system.status` result keeps its required `version` field and can also carry the additive
+`buildCommit` string. `buildCommit` is the source commit embedded when the daemon binary was
+built. It is omitted, never `null`, when that identity is unavailable. Clients must detect it
+by field presence and must continue to use `version` as the release version.
 
 ### 5.37 Managed Unsloth server — `unsloth.status` / `unsloth.stop` *(v2.5)*
 
