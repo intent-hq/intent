@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security vulnerabilities **privately** through
-[GitHub Security Advisories on intent-hq/monorepo](https://github.com/intent-hq/monorepo/security/advisories/new)
+[GitHub Security Advisories on intent-hq/intent](https://github.com/intent-hq/intent/security/advisories/new)
 — the single tracker for all Intent components. Do **not** open a public issue
 or pull request for a security problem.
 
