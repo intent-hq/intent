@@ -89,7 +89,8 @@ SWEEP_DAYS ?= 3
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
 # --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
-# verified with cargo 1.97 and nextest 0.9.143. The -2 defaults leave two
+# verified with the pinned cargo 1.96.0 (packages/intentd/rust-toolchain.toml)
+# and nextest 0.9.143. The -2 defaults leave two
 # cores of headroom so local runs do not saturate a laptop; override for
 # full speed, e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`
 # or `make coverage-all TEST_THREADS=num-cpus BUILD_JOBS=default`.
