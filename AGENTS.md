@@ -33,7 +33,7 @@ monorepo pin advance (Phase 2) then happens automatically.
    human** (see Conventions → Merging). Approved + green checks is not enough.
 
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
-`Fixes intent-hq/monorepo#N` — in the squash-commit message or PR body. GitHub
+`Fixes intent-hq/intent#N` — in the squash-commit message or PR body. GitHub
 auto-closes the issue on merge, and the release notifier (see Release Process) comments
 on it once a release actually contains the complete fix.
 
@@ -49,7 +49,7 @@ land within about a minute of a submodule merge; a cron run every 30 minutes act
 backstop; and manual `workflow_dispatch` is available for urgent bumps. The
 `repository_dispatch` notifications are sent by the submodule repos using the
 `MONOREPO_DISPATCH_TOKEN` secret (stored in each submodule repo; a fine-grained PAT with
-contents:write on `intent-hq/monorepo`), and are fail-soft: when the secret is absent
+contents:write on `intent-hq/intent`), and are fail-soft: when the secret is absent
 the notify step logs a warning and skips, and the cron backstop still advances the pins.
 
 **Agents (and humans) must NOT file manual submodule bump PRs on the monorepo.** The
@@ -65,7 +65,7 @@ unaffected and still follow the normal PR flow.
 
 The workflow authenticates with the `SUBMODULE_BUMP_TOKEN` secret — a fine-grained PAT
 with contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and
-`intent-hq/ios`, plus contents:write and pull-requests:write on `intent-hq/monorepo`.
+`intent-hq/ios`, plus contents:write and pull-requests:write on `intent-hq/intent`.
 Like `INTENTD_RELEASES_TOKEN` / `MONOREPO_ISSUES_TOKEN`, it is fail-soft: when the
 secret is absent the workflow logs a warning and exits successfully. The private
 `packages/ios` submodule is best-effort — if its tip cannot be read, it is skipped
@@ -164,17 +164,17 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 
 When you encounter a bug or limitation while working on the codebase (including while
 dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
-[intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues) — the single tracker
+[intent-hq/intent](https://github.com/intent-hq/intent/issues) — the single tracker
 for all components.
 
 - **Labels**: apply the appropriate `component:*` label (`component:intentd`,
   `component:fe`, `component:ios`) plus `agent-filed`.
 - **Aggressive dedup**: search existing issues first
-  (`gh issue list --repo intent-hq/monorepo --search "<keywords>" --state all`) and
+  (`gh issue list --repo intent-hq/intent --search "<keywords>" --state all`) and
   comment on / link the existing issue instead of filing a duplicate.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
   `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
-  `Fixes intent-hq/monorepo#N` so the issue auto-closes on merge and the release
+  `Fixes intent-hq/intent#N` so the issue auto-closes on merge and the release
   notifier comments on it once a release contains the complete fix (see Release
   Process).
 

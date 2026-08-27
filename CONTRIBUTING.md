@@ -13,8 +13,8 @@ driven by AI agents working against a shared workflow. At launch, the public
 repository is a **read-only snapshot mirror** of that development.
 
 - **Bug reports and feature requests are very welcome.** Please file them via
-  the [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose) on
-  [intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues), the single
+  the [issue forms](https://github.com/intent-hq/intent/issues/new/choose) on
+  [intent-hq/intent](https://github.com/intent-hq/intent/issues), the single
   tracker for all components.
 - **External pull requests are not being accepted yet.** PRs will be closed
   with thanks. We expect this posture to change post-launch as the project
@@ -86,7 +86,7 @@ Keep the relevant checks green before opening a PR:
 
 ## Filing issues
 
-- Use the [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose)
+- Use the [issue forms](https://github.com/intent-hq/intent/issues/new/choose)
   (bug report / feature request) and pick the affected component(s).
 - **Search first** — check existing open *and* closed issues and comment on or
   link an existing issue instead of filing a duplicate.

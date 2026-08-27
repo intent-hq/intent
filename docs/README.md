@@ -87,8 +87,8 @@ The **stabilization and hardening phase** ran post-initial-port as file-based is
 tracking (`STABILIZATION.md` + `KNOWN_ISSUES.md`) while development moved onto the
 self-hosted Intent stack (`intentd` + `cloudlands-fe`). The phase concluded on
 2026-07-22: all open items were migrated to
-[GitHub issues](https://github.com/intent-hq/monorepo/issues) and the directory was
-removed. Bugs are now filed directly as GitHub issues on `intent-hq/monorepo`.
+[GitHub issues](https://github.com/intent-hq/intent/issues) and the directory was
+removed. Bugs are now filed directly as GitHub issues on `intent-hq/intent`.
 
 Durable conventions carried forward from that phase:
 
@@ -105,4 +105,4 @@ Durable conventions carried forward from that phase:
 
 For the agent commit/PR workflow and issue tracking, see the root
 [AGENTS.md](../AGENTS.md). Bugs and open work are tracked as
-[GitHub issues](https://github.com/intent-hq/monorepo/issues).
+[GitHub issues](https://github.com/intent-hq/intent/issues).

@@ -121,7 +121,7 @@ cloudlands-fe).
 
 - Both component repos run `scripts/notify-fixed-issues.sh` from their release (tag
   build) workflows only — promotion workflows post nothing. Each release scans for
-  `intent-hq/monorepo#N` / full issue URL references (commit messages plus
+  `intent-hq/intent#N` / full issue URL references (commit messages plus
   squash-merged PR bodies, resolved via the `(#N)` subject suffix): intentd scans its
   released tag range; cloudlands-fe scans its own range plus the bundled intentd
   delta `v{prev pin}..v{new pin}`, so an fe release that merely bumps the sidecar
@@ -144,7 +144,7 @@ cloudlands-fe).
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
-  `intent-hq/monorepo` plus pull-requests:read on `intent-hq/intentd` and
+  `intent-hq/intent` plus pull-requests:read on `intent-hq/intentd` and
   `intent-hq/cloudlands-fe` — the PR reads power the completeness gate) in both
   component repos. Notifier steps are fail-soft (`continue-on-error`; skipped with a
   warning when the secret is absent) — they never block a release.

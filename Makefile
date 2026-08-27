@@ -319,7 +319,7 @@ sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES
 		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
 		exit 1; \
 	}
-	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR); do \
+	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR) $(WORKSPACES_DIR)/*/intent/$(INTENTD_DIR); do \
 		[ -d "$$dir" ] || continue; \
 		if [ -d "$$dir/target" ]; then \
 			echo "[sweep-all] sweeping $$dir"; \

@@ -95,8 +95,8 @@ Releases. Until then, you can [build it from source](#build-from-source).
 ## Build from source
 
 ```sh
-git clone --recurse-submodules https://github.com/intent-hq/monorepo.git
-cd monorepo
+git clone --recurse-submodules https://github.com/intent-hq/intent.git
+cd intent
 
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
@@ -187,12 +187,12 @@ according to their own provider's behavior.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — bug reports and feature requests are
   very welcome via the
-  [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose);
+  [issue forms](https://github.com/intent-hq/intent/issues/new/choose);
   external pull requests are deferred for now while the public repository is a
   read-only snapshot mirror.
 - [SECURITY.md](SECURITY.md) — report security vulnerabilities privately, not
   through public issues.
-- [Issue tracker](https://github.com/intent-hq/monorepo/issues) — the single
+- [Issue tracker](https://github.com/intent-hq/intent/issues) — the single
   tracker for all Intent components.
 
 ## iOS companion app
