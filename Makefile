@@ -84,6 +84,19 @@ BRIDGE_PLATFORM ?= $(shell uname -s)
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
+# Parallelism caps shared by the Rust build/test/coverage targets
+# (build-intentd, clippy, test-intentd, coverage-e2e, coverage-all).
+# Negative values mean "logical CPUs minus N" (clamped to at least 1):
+# cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
+# --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
+# verified with the pinned cargo 1.96.0 (packages/intentd/rust-toolchain.toml)
+# and nextest 0.9.143. The -2 defaults leave two
+# cores of headroom so local runs do not saturate a laptop; override for
+# full speed, e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`
+# or `make coverage-all TEST_THREADS=num-cpus BUILD_JOBS=default`.
+TEST_THREADS ?= -2
+BUILD_JOBS ?= -2
+
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
 # OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
 # app; default to 16 GB. dist-mac exports this via NODE_OPTIONS so every child
@@ -93,7 +106,8 @@ FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
-	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
+	build build-intentd build-sidecar test test-intentd coverage-e2e coverage-all \
+	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
 
@@ -235,28 +249,50 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && cargo build --workspace
+	cd $(INTENTD_DIR) && cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets -- -D warnings
+	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextest)
+test: test-intentd ## Run the Rust test suite (cargo nextest, CPUs-2 by default; override TEST_THREADS/BUILD_JOBS)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
 # retries, slow-timeout). nextest does not run doctests; the workspace has
 # none, so nothing is lost.
+# Capped to $(TEST_THREADS) test threads / $(BUILD_JOBS) build jobs (CPUs-2
+# by default) so a local run leaves CPU headroom; override for full speed,
+# e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`.
 test-intentd: ensure-intentd-submodule
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo nextest run --workspace
+	cd $(INTENTD_DIR) && cargo nextest run --workspace --build-jobs $(BUILD_JOBS) --test-threads $(TEST_THREADS)
+
+# Local reproduction of the CI coverage jobs (packages/intentd
+# .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
+# scripts CI runs. These are instrumented (cargo-llvm-cov) full-suite runs —
+# slow, and deliberately NOT part of `make test`. The scripts install
+# cargo-llvm-cov / cargo-nextest / llvm-tools if missing.
+# NEXTEST_TEST_THREADS / CARGO_BUILD_JOBS carry the $(TEST_THREADS) /
+# $(BUILD_JOBS) caps into the scripts so local coverage runs also leave CPU
+# headroom by default (override e.g. TEST_THREADS=num-cpus BUILD_JOBS=default).
+# Optional COVERAGE_FLOOR passes the scripts' positional fail-under-lines
+# floor (CI uses 40), e.g. `make coverage-e2e COVERAGE_FLOOR=40`; when unset
+# it expands to nothing and no floor is enforced locally.
+coverage-e2e: ensure-intentd-submodule ## Reproduce CI e2e coverage locally (slow, instrumented; not part of make test)
+	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
+		./scripts/coverage-e2e.sh $(COVERAGE_FLOOR)
+
+coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage locally (slow, instrumented; not part of make test)
+	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
+		./scripts/coverage-all.sh $(COVERAGE_FLOOR)
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
