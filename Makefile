@@ -84,13 +84,15 @@ BRIDGE_PLATFORM ?= $(shell uname -s)
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
-# Parallelism caps shared by the Rust test/coverage targets. Negative values
-# mean "logical CPUs minus N" (clamped to at least 1): cargo-nextest accepts
-# them for test threads (NEXTEST_TEST_THREADS / --test-threads) and cargo for
-# build jobs (CARGO_BUILD_JOBS / --jobs) — verified with cargo 1.97 and
-# nextest 0.9.143. The -2 defaults leave two cores of headroom so local runs
-# do not saturate a laptop; override for full speed, e.g.
-# `make coverage-all TEST_THREADS=num-cpus BUILD_JOBS=default`.
+# Parallelism caps shared by the Rust build/test/coverage targets
+# (build-intentd, clippy, test-intentd, coverage-e2e, coverage-all).
+# Negative values mean "logical CPUs minus N" (clamped to at least 1):
+# cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
+# --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
+# verified with cargo 1.97 and nextest 0.9.143. The -2 defaults leave two
+# cores of headroom so local runs do not saturate a laptop; override for
+# full speed, e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`
+# or `make coverage-all TEST_THREADS=num-cpus BUILD_JOBS=default`.
 TEST_THREADS ?= -2
 BUILD_JOBS ?= -2
 
@@ -246,28 +248,31 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && cargo build --workspace
+	cd $(INTENTD_DIR) && cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets -- -D warnings
+	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextest)
+test: test-intentd ## Run the Rust test suite (cargo nextest, CPUs-2 by default; override TEST_THREADS/BUILD_JOBS)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
 # retries, slow-timeout). nextest does not run doctests; the workspace has
 # none, so nothing is lost.
+# Capped to $(TEST_THREADS) test threads / $(BUILD_JOBS) build jobs (CPUs-2
+# by default) so a local run leaves CPU headroom; override for full speed,
+# e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`.
 test-intentd: ensure-intentd-submodule
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo nextest run --workspace
+	cd $(INTENTD_DIR) && cargo nextest run --workspace --build-jobs $(BUILD_JOBS) --test-threads $(TEST_THREADS)
 
 # Local reproduction of the CI coverage jobs (packages/intentd
 # .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
