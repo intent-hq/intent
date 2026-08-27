@@ -412,6 +412,37 @@ dispatch layer denies it with the standard top-level-only redirect error, while 
   `agent.get`/`agent.getSession`/`agent.getConversation`, still searchable), and the
   user/FE-only `agent.restore` undo — is on the `agent.restore` row in the table above.
 
+**Retire cascade & cleanup.** Retiring a session is more than the `retiredAt` mark — the
+retire op guards on, cascades over, and cleans up around the retiring agent's live work:
+
+- **Active-descendant guard**: the retire FAILS (`-32602`, nothing mutated — no partial
+  cascade) while any descendant — transitive over `parent_agent_id`, grandchildren
+  included — is still running a turn, with the error naming each active child
+  (`cannot retire: N active child agent(s) still running a turn: <name> (<id>), …`).
+  Retired descendants are inert and never count; idle/waiting children pass the guard.
+- **Child cascade**: on success every non-terminal, not-already-retired descendant is
+  cascade-retired with the parent, each through the same full per-session cleanup and its
+  own `agent:retired` emit with `reason: "parent <name> retired"`. A child that started a
+  turn AFTER the guard passed is skipped (left running, un-retired) rather than stopped —
+  best-effort per child, a failure logs and moves on. Restoring the parent does NOT
+  restore cascaded children; each row is individually restorable via `agent.restore`.
+- **Hook / PR-monitor sweep**: the retiring session's ACTIVE background hooks (§5.40) and
+  PR monitors (§5.42) are cancelled through the shared cancel transitions —
+  `hook:cancelled` / `prMonitor:cancelled` emitted — with NO wake notice parked (the owner
+  retired itself and is inert; mirrors the `workspace.archive` sweeps). Its event
+  subscriptions are dropped the same way; the pending message queue is kept (restore may
+  drain it later).
+- **Incoming-watch settlement**: `agent:retired` is a terminal completion signal for the
+  AS-3 delivery loop — watchers holding a completion watch on the retiring agent get ONE
+  wake noting the retirement (the retired-notice tail: the watch is consumed and "The
+  agent retired and cannot be re-watched or woken again" — no re-arm pointer, since
+  `agent.watch` rejects retired targets), and a retired child records in its parent's
+  `after_all` group like a deletion (terminal, non-completing), so groups never hang on it.
+- **Restore does not resurrect**: `agent.restore` clears the mark only — cancelled hooks
+  and PR monitors stay `cancelled` (the agent re-registers if the condition still
+  matters, the unarchive precedent) and consumed watches stay consumed (a watcher
+  re-arms with `ws.agent.watch`).
+
 **Agent-facing queue visibility & sender hygiene *(new in intentd, [intentd#816](https://github.com/intent-hq/intentd/pull/816))*.**
 Agents get visibility into pending message queues plus a guard against queue-flooding on A2A
 sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; the existing
