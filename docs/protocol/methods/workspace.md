@@ -563,14 +563,46 @@ byte-for-byte; `agentName` is `null` when the agent's session-name lookup fails
 workspace is skipped without a read, and the whole path is **best-effort**: a
 workspace-read or unarchive failure logs a warning and the turn proceeds anyway — a
 workspace stuck Archived is strictly better than a lost turn. Non-archived workspaces
-pay one point read per turn start and nothing else. Concurrent turn starts are not
-serialized: two agents winning the slot near-simultaneously in the same archived
-workspace can each observe `archived: true` and both emit a stamped delta — the row
-writes are idempotent, so consumers keying UI (e.g. a toast) on the stamp should dedup
-per workspace. The residual-race stray turn above passes through the same choke point:
+pay one point read per turn start and nothing else. The row flip is **conditional**
+([intent-hq/intentd#1521](https://github.com/intent-hq/intentd/pull/1521); behavior
+only, no wire-shape change): the write runs `WHERE archived = 1`, so concurrent
+unarchivers — two turn starts racing in the same archived workspace, or a turn start
+racing a manual `workspace.unarchive` — serialize at the statement and exactly ONE
+caller performs the flip. On the auto path a losing racer emits NO delta at all (the
+winner's stamped delta already went out; this supersedes the earlier both-emit /
+dedup-per-workspace guidance from #1216), while the manual RPC stays idempotent — a
+no-flip manual unarchive still re-derives and re-emits its unstamped delta. The
+residual-race stray turn above passes through the same choke point:
 when its claim observes the already-persisted archived row it auto-unarchives like any
 other turn start (only a claim that raced ahead of the archive persist still runs
 archived once).
+
+**Auto-unarchive transcript notice + one-turn prompt injection**
+*([intent-hq/intentd#1521](https://github.com/intent-hq/intentd/pull/1521); additive
+`agent_message.metadata` type, no method-catalog or wire-shape change).* A
+**confirmed** flip — this claim's conditional write actually flipped the row; never a
+lost flip race, the suppressed re-claim path, or an unarchive failure — additionally
+does two things for the **triggering agent**, both **best-effort** (a persist/publish
+failure is logged and the turn proceeds):
+
+- **Persists ONE system transcript row** in the triggering agent's conversation:
+  `role: "system"`, one text block
+  `"Workspace was automatically unarchived because a message was sent to this agent."`,
+  row `metadata = { "type": "auto_unarchived", "reason": "agent_activity" }` —
+  following the `model_changed` system-notice precedent (§5.5 `agent.setModel`).
+  Emits the standard `agent:message` event (`role: "system"`, §6.5) with agent-list
+  cache invalidation so clients update live. Like every system row it is excluded
+  from supervisor-XML history replay.
+- **Injects a one-turn prompt notice**: the SAME turn that triggered the unarchive
+  gets one additional trailing text block appended to its outbound provider prompt —
+  `[SYSTEM NOTICE] This workspace was archived; it has been automatically unarchived because this message was sent.`
+  The notice rides a one-shot in-memory flag armed only while the claim still holds
+  its in-flight slot and consumed at prompt build, so ONLY the triggering turn
+  carries it: never replayed on later turns (a separate mechanism from history
+  replay, which still excludes system rows — see the §5.5 qualification on the
+  `model_changed` row), never persisted, and a stale flag is dropped with the slot
+  release, so a claim whose turn never builds a prompt (e.g. a pre-spawn persist
+  failure) cannot leak the notice into a later, non-triggering turn.
 
 **Delete cascade (`workspace.delete`).** Before the store cascade drops the
 workspace's `agent_session` rows, the daemon sweeps every live in-memory piece of
