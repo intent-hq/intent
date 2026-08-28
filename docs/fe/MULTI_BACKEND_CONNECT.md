@@ -1,7 +1,10 @@
 # Multi-backend connect (FE)
 
-How cloudlands-fe connects to a **remote intentd** (another machine) alongside
-the local sidecar, and how the active backend is switched at runtime.
+How cloudlands-fe talks to **multiple intentd daemons at once** — the local
+sidecar plus any number of paired remotes — under the **Open-only** model:
+every window is permanently bound to one backend, "Open" is the only
+cross-backend action, and there is no whole-app switch and no "active backend"
+as a routing concept.
 
 > **Scope: FE-only.** This is entirely a cloudlands-fe capability. intentd
 > already serves WSS + a self-signed-cert fingerprint + a bearer token; there
@@ -13,20 +16,50 @@ the local sidecar, and how the active backend is switched at runtime.
 > upgrade, origin allow-list, where the token lives). Read those for the
 > transport; this doc covers only the FE side.
 
-## What it does
+## The model
 
-The **daemon-status dropdown** (`DaemonStatusIndicator.svelte`) gains a
-"Connect to another intentd" action and a past-connections list:
+- **Window ↔ backend binding is the identity.** Every `BrowserWindow` is
+  stamped at creation with the backend id its renderer talks to
+  (`main/window-backend.ts`); the stamp never changes for the life of the
+  window. Per-window IPC routing (`backend:request` / `backend:subscribe` /
+  status pushes) resolves the sender's stamp to that backend's pooled client —
+  fail-closed: a non-local id without a live client throws instead of silently
+  retargeting another backend (`getBackendClientForId`).
+- **One pooled JSON-RPC client per backend.** `backend.ipc.ts` keeps a
+  `Map<connectionId, JsonRpcClient>`. The **local** member is always-on and
+  lazily built from the env/UDS default (`getLocalBackendClient`) — main-process
+  services whose data must come from the local daemon (app settings, workspace
+  paths, config persistence, sidecar surfaces) pin to it. Remote members are
+  built on demand from the pinned config; all of a backend's windows share its
+  client.
+- **"Open" is the only cross-backend action.** Opening another backend connects
+  its pooled client and opens/focuses its windows *next to* your current ones;
+  nothing tears down or retargets any other backend. You leave a backend by
+  closing its windows.
+- **No active/primary backend.** The persisted `activeId` stays on disk for
+  backward compatibility but no longer drives client routing, service
+  targeting, or teardown. It is read only as a legacy default: which saved
+  bucket restores first at boot (its first window becomes the main window),
+  and the fallback backend for a fresh first window.
 
-- The list's first, non-forgettable entry is **"This machine (local)"** (the UDS
-  sidecar, which always keeps running). Remote connections are added after it.
+## What the user sees
+
+- The **daemon-status dropdown** (`DaemonStatusIndicator.svelte`) lists
+  **"This machine (local)"** first (non-forgettable), then paired remotes.
+  Per-backend actions: **Open** (connect + open/focus that backend's windows),
+  **Forget** (remotes only), and **Update** for a connected remote running
+  behind the app's pinned intentd version (`connections:update-backend` routes
+  `system.requestUpdate` to that backend's pooled client).
 - Adding a remote is manual **IP:port + token** entry with **trust-on-first-use**
   (TOFU) self-signed-cert confirmation: the FE dials the remote once, shows the
   presented certificate fingerprint, and only pins it once the user confirms.
-- Switching the active backend is a **clean full teardown + reload** that is
-  **multi-backend aware** for window/session state — the old daemon is fully
-  disconnected before the new one connects, and each backend restores its own
-  window layout.
+- The **Fleet HUD is per-backend** (`main/hud-window.ts`): opening the HUD binds
+  it to the opener window's backend, one HUD per backend, HUDs for different
+  backends coexist. The HUD footer's status dot opens a backend menu with Open
+  actions (`features/hud/components/HudBackendMenu.svelte`).
+- At **boot**, every backend that had windows open is restored to its own
+  windows — an unreachable backend's windows still open and sit behind the
+  per-window daemon-stopped overlay until its client reconnects.
 
 ## Pieces
 
@@ -45,70 +78,115 @@ The **daemon-status dropdown** (`DaemonStatusIndicator.svelte`) gains a
 
 ### Connections store (main)
 
-`features/backend/main/connections-store.ts` persists remotes + the active
-selection to `backend-connections.json` under `app.getPath('userData')`
-(separate from `local-prefs.json`). Each remote's bearer token is encrypted at
-rest with Electron **`safeStorage`** when `isEncryptionAvailable()`, with an
-explicit **plaintext fallback** (`encrypted: false`) when it is not. The local
-sidecar is **not** a persisted record — a synthetic, non-forgettable
+`features/backend/main/connections-store.ts` persists remotes to
+`backend-connections.json` under `app.getPath('userData')` (separate from
+`local-prefs.json`). Each remote's bearer token is encrypted at rest with
+Electron **`safeStorage`** when `isEncryptionAvailable()`, with an explicit
+**plaintext fallback** (`encrypted: false`) when it is not. The local sidecar
+is **not** a persisted record — a synthetic, non-forgettable
 "This machine (local)" entry (id `local`) is always synthesized as the first
-item of `list()`, and `activeId` defaults to `local`. Tokens never leave the
-main process on a returned record shape.
+item of `list()`. The file also carries the legacy `activeId` field (defaults
+to `local`; see "The model" above for the little it still does). Tokens never
+leave the main process on a returned record shape.
 
-### Switch orchestration + IPC (main)
+### Pooled clients + IPC (main)
 
-`features/backend/main/backend.ipc.ts` owns the `connections:*` IPC channels
-(`list`, `capture-fingerprint`, `add`, `forget`, `switch`; plus the main→renderer
-push events `connections:changed` and `connections:cert-mismatch`) and the
-`switchBackend(id)` orchestration:
+`features/backend/main/backend.ipc.ts` owns the client pool and the
+`connections:*` IPC channels (`list`, `capture-fingerprint`, `add`, `open`,
+`forget`, `update-backend`, plus the keychain-sync and self-publish channels;
+main→renderer push events: `connections:changed`, `connections:cert-mismatch`,
+`connections:auth-rejected`, `connections:protocol-mismatch`). There is no
+`switch` channel. Mutating operations run through one enqueued critical
+section so concurrent backend operations cannot interleave.
 
-1. **Resolve + validate the target first** (`buildConfigForConnection`) — a bad
-   id or missing token throws _before_ any teardown, leaving the live backend
-   untouched.
-2. **Capture + close** the outgoing backend's windows while they are still live
-   (T4 hook `captureAndCloseWindowsForBackendSwitch`).
-3. **Dispose** the previous JSON-RPC client and all its subscriptions **before**
-   the new target connects — no leaked socket/timers/listeners.
-4. **Flip** the persisted active id and **build + start** the new client from
-   the pinned config (or the local/env default for a switch back to local).
-5. **Restore** the incoming backend's windows (T4 hook
-   `restoreWindowsForBackend`), then broadcast the changed list.
+- **Open** (`openBackendWindow(id)`): connect the pooled client
+  (`connectBackendClient` — idempotent; concurrent connects share one
+  construction), complete an **authenticated `host.status` probe** before any
+  renderer is created (a cert/token failure rejects this remote only, and its
+  just-built client is disposed — the always-on local member is never torn
+  down), then open/focus that backend's windows.
+- **Forget**: remove the stored record (keychain-sync tombstone), ensure a
+  local window survives if the forgotten backend owned every live window,
+  close only that backend's windows, dispose its pooled client, broadcast.
+- **Last-window close**: closing a non-local backend's last window disposes
+  its pooled client (`disconnectBackendClient`), and the session bucket is
+  tombstoned for the rest of the session so a dock-activate restore does not
+  resurrect it. Open reconnects it and restores its saved layout.
+- **Re-pair in place** (`connections:add` upserts by host:port): a backend
+  with a live pooled client gets that client rebuilt with the refreshed
+  token/fingerprint without closing any of its windows, followed by a
+  synthetic `reconnected` replay so subscriptions re-arm.
 
-`forget` of the _active_ remote falls back to a full switch to local rather than
-stranding the FE. At boot, `reconcileActiveConnectionOnBoot()` resets a stale
-persisted remote `activeId` to `local` (the live client is always built from the
-local default at startup, and a remote may be unreachable).
-
-**Stable forwarders (T8/T9).** Long-lived main-process services (terminal
-registry, script manager, notification/app-settings services, ACP terminal)
-attach their reconnect / notification / status listeners **exactly once** via
+**Stable forwarders.** Long-lived main-process services (terminal registry,
+script manager, notification/app-settings services, ACP terminal) attach their
+reconnect / notification / status listeners **exactly once** via
 `onBackendReconnected` / `onBackendNotification` / `onBackendStatus`. These
 attach to persistent `EventEmitter` forwarders that **outlive every client
-swap** — not to the live client instance — so a post-switch daemon event still
-drives terminal output/exit, script state, `agent:idle`, and `settings:changed`.
-Each freshly built client's events are piped into the forwarders, and
-`switchBackend` nudges the reconnect forwarder once so services resubscribe
-against the new target. Without this, a service's listener would strand on the
-disposed client and its events would be silently dropped for the rest of the
-session.
+rebuild** (e.g. a re-pair) — not to the live client instance — and every
+forwarded event carries the originating **connection id**, so services route
+per backend. Each freshly built client's events are piped into the forwarders.
 
-### Backend-keyed window sessions (main)
+### Per-backend failure surfaces (main + renderer)
+
+Cert mismatch (`PinMismatchError` → blocking modal), **auth rejected**
+(HTTP 401/403 on the WSS upgrade → actionable re-pair state; retrying with the
+same token cannot succeed) and **protocol mismatch** (remote's major
+`protocolVersion` differs from local — warn-but-allow) are all keyed by
+connection id and **scoped to the affected backend's windows only**. Each is a
+one-shot event per client plus a **sticky latched copy** in main, replayed on
+`connections:list` for the requesting window's backend — so a window created
+or reloaded *after* the one-shot broadcast fired (e.g. boot restore connects
+pooled clients before their windows exist) still surfaces the state. The latch
+clears whenever a fresh client for that id is constructed.
+
+### Backend-keyed window sessions + boot restore (main)
 
 `main/window.ts` stores `window-sessions.json` as a **backend-keyed map**
-(`Record<backendId, WindowSession[]>`) instead of a single global array, so each
-backend restores its own window layout on switch. A legacy top-level array is
-lazily migrated into the `local` bucket. `saveWindowSessions(backendId)` /
-`loadWindowSessions(backendId)` default to `local`; the switch hooks
-(`captureAndCloseWindowsForBackendSwitch` / `restoreWindowsForBackend`) persist
-the outgoing bucket and restore the incoming one (or open a fresh window).
+(`Record<backendId, WindowSession[]>`); a legacy top-level array is lazily
+migrated into the `local` bucket. `saveWindowSessions(backendId)` /
+`loadWindowSessions(backendId)` default to `local`.
+
+At boot (and on macOS dock-activate with no windows),
+`restoreAllBackendWindowSessions` restores **every backend that has a saved
+session bucket**, not just one: each bucket's pooled client is connected
+(idempotent) *before* its windows open, so restored windows resolve their own
+daemon. Fail-soft per bucket: a backend whose client config cannot even be
+built (forgotten remote, missing token) is skipped with a log, while an
+**unreachable-but-buildable** backend still restores — client construction
+does not await reachability, and the per-window daemon-stopped overlay shows
+until its client connects. The legacy `activeId` bucket restores first so its
+first window becomes the main window. `openOrFocusWindowsForBackend` backs the
+Open action; `ensureLocalWindowBeforeClosingBackend` guarantees closing one
+backend can never destroy the app's final live window.
+
+### Daemon-stopped overlay (renderer)
+
+`features/daemon-status/DaemonStoppedOverlay.svelte` is **per-window** and
+driven by the window's own backend status: it appears (after a short grace
+period) while that backend's health is down and auto-dismisses when its pooled
+client reconnects. Recovery actions never retarget the window:
+
+- **Local window**: "Start local intentd" spawns the app-managed sidecar on
+  demand; the window's client reconnects to the UDS socket on its own.
+- **Remote window**: "Open local" (`openLocalAndSpawn`) spawns the sidecar if
+  needed and opens/focuses the *local backend's* windows — this window keeps
+  its own (dead) backend and its overlay. Other saved backends are offered as
+  one-click **Open** actions.
+- **Auth rejected**: the generic cannot-connect copy is replaced by a re-pair
+  posture (re-adding the same host:port refreshes the stored token).
 
 ### Renderer (store + UI)
 
 - `store/renderer/slices/connections/` — the connections slice, selectors, and
-  types (list + active selection + pairing/switch UI state).
+  types. State carries `windowBackendId` (the backend bound to this renderer's
+  window), `connectedIds` (backends with a live, connected pooled client —
+  gates connected-only actions like remote Update), and the per-backend
+  failure events; selectors gate every per-window surface on
+  `windowBackendId`, so a failure renders only in the affected backend's
+  windows.
 - `store/renderer/slices/connections/sagas/connections-saga.ts` — bridges the
-  slice to the `connections:*` IPC channels and folds `connections:changed` /
-  `connections:cert-mismatch` push events back into the store.
+  slice to the `connections:*` IPC channels and folds the push events back
+  into the store.
 - `store/renderer/seeders/connections-bridge-seeder.ts` — seeds the initial list.
 - `lib/components/layout/ConnectBackendModal.svelte` — the add-remote /
   TOFU-confirm flow. `CertMismatchModal.svelte` — the blocking failure modal
@@ -118,10 +196,13 @@ the outgoing bucket and restore the incoming one (or open a fresh window).
 ## Tests
 
 - `features/backend/main/__tests__/multi-backend-connect.integration.test.ts` —
-  the end-to-end journey (add → confirm → switch → back → mismatch → failure
-  modal) through the real store, plus the T9 notification-survival guard.
-- `backend-ipc-connections.test.ts`, `backend-ipc-switch-robustness.test.ts` —
-  switch teardown ordering, boot reconciliation, and the stable forwarders.
+  the end-to-end journey (add → confirm → open → mismatch → failure modal)
+  through the real store, plus the notification-survival guard.
+- `backend-ipc-connections.test.ts`, `backend-ipc-client-robustness.test.ts` —
+  pool lifecycle, open/forget teardown ordering, and the stable forwarders.
+- `backend-ipc-protocol-mismatch.test.ts` — the latched per-backend
+  protocol-mismatch replay.
 - `connections-store.test.ts` — encrypted/plaintext token round-trips.
 - `main/__tests__/window-sessions-multibackend.test.ts` — backend-keyed window
-  save/restore + switch hooks.
+  save/restore + multi-backend boot restore.
+- `main/__tests__/hud-window.test.ts` — the per-backend HUD registry.
