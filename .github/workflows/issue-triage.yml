@@ -21,9 +21,12 @@ name: Issue triage
 # repro/expected-vs-actual sections) and near-empty blank issues get ONE
 # templated nudge comment + `needs-info`. The nudge comment embeds a hidden
 # HTML marker (same idempotency precedent as notify-fixed-issues.sh), so
-# edits/re-runs never double-post or re-apply the label once nudged. The
-# issue AUTHOR's next comment removes `needs-info` and re-runs the pass-1
-# label derivation; comments from anyone else do not.
+# edits/re-runs never double-post or re-apply the label once nudged; outside
+# `opened`, nudging also requires `needs-triage` to still be present, so
+# already-triaged issues are never nudged retroactively. The issue AUTHOR's
+# next comment removes `needs-info` and re-runs the pass-1 label derivation
+# (comments from anyone else do not), and a body edit that completes the
+# issue removes the label too (only when the marker shows we applied it).
 
 on:
   issues:
@@ -154,12 +157,14 @@ jobs:
               return;
             }
 
+            const action = context.eventName === 'issues' ? context.payload.action : 'manual';
             const assessment = needsInfo.assessCompleteness(issue.body || '');
             core.info(`completeness: ${assessment.incomplete ? 'incomplete' : 'ok'}` +
               (assessment.reasons.length ? ` — ${assessment.reasons.join('; ')}` : ''));
-            if (!assessment.incomplete) return;
 
             const labels = issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+            if (!assessment.incomplete && !labels.includes(needsInfo.NEEDS_INFO_LABEL)) return;
+
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -167,9 +172,38 @@ jobs:
               per_page: 100,
             });
             const commentBodies = comments.map((c) => c.body || '');
-            const actions = needsInfo.nudgeActions({ assessment, labels, commentBodies });
+
+            // A body edit that completed the issue clears the label — but
+            // only when the marker shows we applied it (a human-applied
+            // needs-info without our nudge is not ours to remove).
+            if (!assessment.incomplete) {
+              if (!needsInfo.shouldClearOnEdit({ assessment, labels, commentBodies })) return;
+              if (dryRun) {
+                core.notice(`[dry-run] Would remove ${needsInfo.NEEDS_INFO_LABEL} from #${issueNumber} (body now complete)`);
+                return;
+              }
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: needsInfo.NEEDS_INFO_LABEL,
+                });
+                core.info(`Removed ${needsInfo.NEEDS_INFO_LABEL} (body now complete).`);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+              return;
+            }
+
+            const actions = needsInfo.nudgeActions({
+              assessment,
+              labels,
+              commentBodies,
+              isOpened: action === 'opened',
+            });
             if (!actions.postComment && !actions.addLabel) {
-              core.info('Already nudged (marker comment present); skipping.');
+              core.info('No nudge (marker already present, or issue no longer in the needs-triage queue).');
               return;
             }
 

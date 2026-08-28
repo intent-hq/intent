@@ -17,6 +17,7 @@
 const { splitSections } = require('./parse-issue.js');
 
 const NEEDS_INFO_LABEL = 'needs-info';
+const NEEDS_TRIAGE_LABEL = 'needs-triage';
 
 // Hidden marker embedded in the nudge comment; its presence anywhere in the
 // issue's comments means the nudge was already posted (re-runs never
@@ -63,7 +64,9 @@ function meaningfulLength(body) {
 //   - Everything else (e.g. feature requests) is never flagged.
 function assessCompleteness(body) {
   const reasons = [];
-  const sections = splitSections(body || '');
+  // Keep fenced content: a repro/log/stack-trace code block is real content
+  // here, even though label derivation rightly ignores it.
+  const sections = splitSections(body || '', { includeFenced: true });
   const isBugTemplate = REQUIRED_BUG_SECTIONS.some((name) => sections[name]);
   if (isBugTemplate) {
     for (const name of REQUIRED_BUG_SECTIONS) {
@@ -103,15 +106,29 @@ function buildNudgeComment(reasons) {
 // two actions are decided independently — apply the label first, then post
 // the comment — so a partial failure (label applied, comment failed) is
 // recovered on the next run instead of getting stuck half-nudged.
-function nudgeActions({ assessment, labels, commentBodies }) {
+//
+// Outside the `opened` event the nudge is also gated on `needs-triage` still
+// being present, so touching an old, already-triaged issue (edited/reopened
+// after pass 2 or a human retired needs-triage) never nudges retroactively.
+function nudgeActions({ assessment, labels, commentBodies, isOpened }) {
   const nothing = { addLabel: false, postComment: false };
   if (!assessment || !assessment.incomplete) return nothing;
   const bodies = commentBodies || [];
   if (bodies.some((b) => typeof b === 'string' && b.includes(NEEDS_INFO_MARKER))) return nothing;
+  if (!isOpened && !(labels || []).includes(NEEDS_TRIAGE_LABEL)) return nothing;
   return {
     addLabel: !(labels || []).includes(NEEDS_INFO_LABEL),
     postComment: true,
   };
+}
+
+// True when a body carries the marker as its own line — i.e. it IS the nudge
+// (or a bot-authored copy of it), not a "Quote reply" to it: quoted lines
+// keep their "> " prefix, so a genuine author quote-reply does not match.
+function isNudgeComment(body) {
+  return String(body || '')
+    .split(/\r?\n/)
+    .some((line) => line.trim() === NEEDS_INFO_MARKER);
 }
 
 // Clear `needs-info` only when the ISSUE AUTHOR comments on a labeled issue.
@@ -120,8 +137,18 @@ function nudgeActions({ assessment, labels, commentBodies }) {
 function shouldClearNeedsInfo({ labels, issueAuthor, commentAuthor, commentBody }) {
   if (!(labels || []).includes(NEEDS_INFO_LABEL)) return false;
   if (!issueAuthor || !commentAuthor || commentAuthor !== issueAuthor) return false;
-  if (typeof commentBody === 'string' && commentBody.includes(NEEDS_INFO_MARKER)) return false;
+  if (isNudgeComment(commentBody)) return false;
   return true;
+}
+
+// Clear `needs-info` when a body EDIT completed the issue: the assessment is
+// now complete, the label is present, and the marker comment exists (we — not
+// a human — applied the label, so removing it here is ours to do).
+function shouldClearOnEdit({ assessment, labels, commentBodies }) {
+  if (!assessment || assessment.incomplete) return false;
+  if (!(labels || []).includes(NEEDS_INFO_LABEL)) return false;
+  const bodies = commentBodies || [];
+  return bodies.some((b) => typeof b === 'string' && b.includes(NEEDS_INFO_MARKER));
 }
 
 module.exports = {
@@ -131,4 +158,5 @@ module.exports = {
   buildNudgeComment,
   nudgeActions,
   shouldClearNeedsInfo,
+  shouldClearOnEdit,
 };

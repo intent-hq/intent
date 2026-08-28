@@ -15,6 +15,7 @@ const {
   buildNudgeComment,
   nudgeActions,
   shouldClearNeedsInfo,
+  shouldClearOnEdit,
 } = require('./needs-info.js');
 
 const fixture = (name) =>
@@ -33,6 +34,15 @@ test('bug with placeholder repro and n/a expected-vs-actual is incomplete', () =
 
 test('bug with real repro and expected-vs-actual is complete', () => {
   assert.strictEqual(assessCompleteness(fixture('bug-full.md')).incomplete, false);
+});
+
+test('bug whose repro and expected-vs-actual are fenced code blocks is complete', () => {
+  assert.strictEqual(assessCompleteness(fixture('bug-fenced-repro.md')).incomplete, false);
+});
+
+test('a fence containing only placeholder words is still incomplete', () => {
+  const body = '### Reproduction steps\n\n```\ntbd\n```\n\n### Expected vs actual\n\nn/a\n';
+  assert.strictEqual(assessCompleteness(body).incomplete, true);
 });
 
 test('bug with _No response_ expected-vs-actual is incomplete on that section only', () => {
@@ -83,23 +93,27 @@ test('nudge comment lists each reason and embeds the hidden marker', () => {
 const incomplete = { incomplete: true, reasons: ['x'] };
 const NOTHING = { addLabel: false, postComment: false };
 
-test('fresh incomplete issue gets both the label and the nudge comment', () => {
+test('fresh incomplete issue (opened) gets both the label and the nudge comment', () => {
   assert.deepStrictEqual(
-    nudgeActions({ assessment: incomplete, labels: ['bug'], commentBodies: [] }),
+    nudgeActions({ assessment: incomplete, labels: ['bug'], commentBodies: [], isOpened: true }),
     { addLabel: true, postComment: true }
   );
 });
 
 test('complete issue never gets a nudge', () => {
   assert.deepStrictEqual(
-    nudgeActions({ assessment: { incomplete: false, reasons: [] }, labels: [], commentBodies: [] }),
+    nudgeActions({ assessment: { incomplete: false, reasons: [] }, labels: [], commentBodies: [], isOpened: true }),
     NOTHING
   );
 });
 
 test('label present without marker still posts the comment (recovers a failed comment)', () => {
   assert.deepStrictEqual(
-    nudgeActions({ assessment: incomplete, labels: ['bug', NEEDS_INFO_LABEL], commentBodies: [] }),
+    nudgeActions({
+      assessment: incomplete,
+      labels: ['bug', 'needs-triage', NEEDS_INFO_LABEL],
+      commentBodies: [],
+    }),
     { addLabel: false, postComment: true }
   );
 });
@@ -110,6 +124,7 @@ test('marker comment suppresses everything, even after the label was removed', (
       assessment: incomplete,
       labels: ['bug'],
       commentBodies: ['unrelated', `Thanks!\n\n${NEEDS_INFO_MARKER}`],
+      isOpened: true,
     }),
     NOTHING
   );
@@ -121,8 +136,28 @@ test('marker comment plus label present changes nothing (fully nudged)', () => {
       assessment: incomplete,
       labels: ['bug', NEEDS_INFO_LABEL],
       commentBodies: [buildNudgeComment(['x'])],
+      isOpened: true,
     }),
     NOTHING
+  );
+});
+
+test('edited/reopened issue without needs-triage is never nudged retroactively', () => {
+  assert.deepStrictEqual(
+    nudgeActions({ assessment: incomplete, labels: ['bug'], commentBodies: [], isOpened: false }),
+    NOTHING
+  );
+});
+
+test('edited issue still in the needs-triage queue is nudged', () => {
+  assert.deepStrictEqual(
+    nudgeActions({
+      assessment: incomplete,
+      labels: ['bug', 'needs-triage'],
+      commentBodies: [],
+      isOpened: false,
+    }),
+    { addLabel: true, postComment: true }
   );
 });
 
@@ -170,6 +205,53 @@ test('the marker-carrying nudge comment itself never clears the label', () => {
 test('missing author information never clears the label', () => {
   assert.strictEqual(
     shouldClearNeedsInfo({ labels: labeled, issueAuthor: undefined, commentAuthor: undefined, commentBody: 'hi' }),
+    false
+  );
+});
+
+test('an author "Quote reply" to the nudge (marker quoted with "> ") clears the label', () => {
+  const quoted = buildNudgeComment(['x'])
+    .split('\n')
+    .map((l) => `> ${l}`)
+    .join('\n');
+  assert.strictEqual(
+    shouldClearNeedsInfo({
+      labels: labeled, issueAuthor: 'alice', commentAuthor: 'alice',
+      commentBody: `${quoted}\n\nHere are the actual repro steps: run make dev, click Save.`,
+    }),
+    true
+  );
+});
+
+// --- shouldClearOnEdit (body edit completes the issue) -------------------------
+
+const complete = { incomplete: false, reasons: [] };
+const nudgeBody = buildNudgeComment(['x']);
+
+test('edit to a complete body clears needs-info when we nudged (marker present)', () => {
+  assert.strictEqual(
+    shouldClearOnEdit({ assessment: complete, labels: labeled, commentBodies: [nudgeBody] }),
+    true
+  );
+});
+
+test('edit clears nothing when needs-info was applied by a human (no marker)', () => {
+  assert.strictEqual(
+    shouldClearOnEdit({ assessment: complete, labels: labeled, commentBodies: ['unrelated'] }),
+    false
+  );
+});
+
+test('still-incomplete edit clears nothing', () => {
+  assert.strictEqual(
+    shouldClearOnEdit({ assessment: incomplete, labels: labeled, commentBodies: [nudgeBody] }),
+    false
+  );
+});
+
+test('edit on an unlabeled issue clears nothing', () => {
+  assert.strictEqual(
+    shouldClearOnEdit({ assessment: complete, labels: ['bug'], commentBodies: [nudgeBody] }),
     false
   );
 });
