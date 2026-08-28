@@ -26,10 +26,14 @@ const COMPONENT_PREFIXES = [
 
 // Split a rendered issue-form body into { sectionLabel: contentLines }.
 // Issue forms render each field as a `### <label>` heading. Lines inside
-// fenced code blocks (``` / ~~~) are skipped entirely so template markdown
-// pasted into a fence (logs, "here's my template output") cannot derive
-// spurious headings or checkboxes.
-function splitSections(body) {
+// fenced code blocks (``` / ~~~) never derive headings or checkboxes, so
+// template markdown pasted into a fence (logs, "here's my template output")
+// cannot produce spurious sections. By default fenced lines are dropped from
+// section content too (right for label derivation); `includeFenced: true`
+// keeps them as plain content (right for completeness assessment, where a
+// repro/log code block is real content).
+function splitSections(body, opts) {
+  const includeFenced = Boolean(opts && opts.includeFenced);
   const sections = Object.create(null);
   let current = null;
   let inFence = false;
@@ -38,7 +42,10 @@ function splitSections(body) {
       inFence = !inFence;
       continue;
     }
-    if (inFence) continue;
+    if (inFence) {
+      if (includeFenced && current) sections[current].push(line);
+      continue;
+    }
     const heading = line.match(/^###\s+(.+?)\s*$/);
     if (heading) {
       current = heading[1];
@@ -102,4 +109,4 @@ function labelsForIssueBody(body) {
   return [...new Set(labels)];
 }
 
-module.exports = { labelsForIssueBody };
+module.exports = { labelsForIssueBody, splitSections };

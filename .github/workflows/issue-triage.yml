@@ -16,10 +16,24 @@ name: Issue triage
 # `needs-triage` is added only on `opened` (or an explicit
 # `apply_needs_triage` dispatch), never re-added on `edited`/`reopened`
 # once removed.
+#
+# Needs-info completeness loop: incomplete bug reports (placeholder
+# repro/expected-vs-actual sections) and near-empty blank issues get ONE
+# templated nudge comment + `needs-info`. The nudge comment embeds a hidden
+# HTML marker (same idempotency precedent as notify-fixed-issues.sh), so
+# edits/re-runs never double-post or re-apply the label once nudged; outside
+# `opened`, nudging also requires `needs-triage` to still be present, so
+# already-triaged issues are never nudged retroactively. The issue AUTHOR's
+# next comment removes `needs-info` and re-runs the pass-1 label derivation
+# (comments from anyone else do not), and a body edit that completes the
+# issue removes the label too (only when the marker shows we applied it).
 
 on:
   issues:
     types: [opened, edited, reopened]
+  # Needs-info loop: an author reply clears the label and re-triggers pass 1.
+  issue_comment:
+    types: [created]
   # Manual runs double as a dry-run mode: they print the intended label
   # operations without writing unless dry_run is unset.
   workflow_dispatch:
@@ -47,6 +61,7 @@ concurrency:
 
 jobs:
   triage:
+    if: github.event_name != 'issue_comment'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -105,6 +120,184 @@ jobs:
               core.notice(`[dry-run] Would add labels to #${issueNumber}: ${toAdd.join(', ')}`);
               return;
             }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: toAdd,
+            });
+            core.info(`Added labels: ${toAdd.join(', ')}`);
+
+      - name: Needs-info completeness check
+        uses: actions/github-script@v7
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        with:
+          script: |
+            const path = require('path');
+            const needsInfo = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/issue-triage/needs-info.js')
+            );
+
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`Invalid issue number: ${JSON.stringify(process.env.ISSUE_NUMBER)}`);
+              return;
+            }
+            const dryRun = process.env.DRY_RUN === 'true';
+
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+            if (issue.state !== 'open') {
+              core.info(`issue #${issueNumber} is ${issue.state}; skipping completeness check.`);
+              return;
+            }
+
+            const action = context.eventName === 'issues' ? context.payload.action : 'manual';
+            const assessment = needsInfo.assessCompleteness(issue.body || '');
+            core.info(`completeness: ${assessment.incomplete ? 'incomplete' : 'ok'}` +
+              (assessment.reasons.length ? ` — ${assessment.reasons.join('; ')}` : ''));
+
+            const labels = issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+            if (!assessment.incomplete && !labels.includes(needsInfo.NEEDS_INFO_LABEL)) return;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              per_page: 100,
+            });
+            const commentBodies = comments.map((c) => c.body || '');
+
+            // A body edit that completed the issue clears the label — but
+            // only when the marker shows we applied it (a human-applied
+            // needs-info without our nudge is not ours to remove).
+            if (!assessment.incomplete) {
+              if (!needsInfo.shouldClearOnEdit({ assessment, labels, commentBodies })) return;
+              if (dryRun) {
+                core.notice(`[dry-run] Would remove ${needsInfo.NEEDS_INFO_LABEL} from #${issueNumber} (body now complete)`);
+                return;
+              }
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  name: needsInfo.NEEDS_INFO_LABEL,
+                });
+                core.info(`Removed ${needsInfo.NEEDS_INFO_LABEL} (body now complete).`);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+              return;
+            }
+
+            const actions = needsInfo.nudgeActions({
+              assessment,
+              labels,
+              commentBodies,
+              isOpened: action === 'opened',
+            });
+            if (!actions.postComment && !actions.addLabel) {
+              core.info('No nudge (marker already present, or issue no longer in the needs-triage queue).');
+              return;
+            }
+
+            const comment = needsInfo.buildNudgeComment(assessment.reasons);
+            if (dryRun) {
+              core.notice(`[dry-run] Would ${actions.addLabel ? `add ${needsInfo.NEEDS_INFO_LABEL} and ` : ''}post the needs-info nudge on #${issueNumber}`);
+              core.info(comment);
+              return;
+            }
+            // Label first, comment second: if the comment fails after the
+            // label was applied, the next run still posts it (the marker is
+            // the comment's own idempotency guard, not the label's).
+            if (actions.addLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: [needsInfo.NEEDS_INFO_LABEL],
+              });
+              core.info(`Added ${needsInfo.NEEDS_INFO_LABEL}.`);
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: comment,
+            });
+            core.info('Posted the nudge comment.');
+
+  # Author reply on a needs-info issue: remove the label and re-run the
+  # pass-1 label derivation on the current body. Non-author comments (and
+  # our own marker-carrying nudge) change nothing.
+  needs-info-reply:
+    if: github.event_name == 'issue_comment' && !github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Clear needs-info on author reply and re-run pass 1
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const path = require('path');
+            const scriptsDir = path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/issue-triage');
+            const { labelsForIssueBody } = require(path.join(scriptsDir, 'parse-issue.js'));
+            const needsInfo = require(path.join(scriptsDir, 'needs-info.js'));
+
+            const issueNumber = context.payload.issue.number;
+            const comment = context.payload.comment;
+
+            // Re-fetch the issue: the event payload's label snapshot can
+            // predate the labeling run (e.g. the author comments right after
+            // opening, before the opened-triage run added needs-info).
+            const { data: fresh } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+            const labels = fresh.labels.map((l) => (typeof l === 'string' ? l : l.name));
+            const clear = needsInfo.shouldClearNeedsInfo({
+              labels,
+              issueAuthor: fresh.user && fresh.user.login,
+              commentAuthor: comment.user && comment.user.login,
+              commentBody: comment.body || '',
+            });
+            if (!clear) {
+              core.info('Not an issue-author reply on a needs-info issue; nothing to do.');
+              return;
+            }
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                name: needsInfo.NEEDS_INFO_LABEL,
+              });
+              core.info(`Removed ${needsInfo.NEEDS_INFO_LABEL} (author reply).`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              core.info(`${needsInfo.NEEDS_INFO_LABEL} was already removed.`);
+            }
+
+            // Re-run the pass-1 parse on the current body (add-only, and
+            // never re-adds needs-triage or needs-info).
+            const derived = labelsForIssueBody(fresh.body || '');
+            const current = new Set(
+              fresh.labels.map((l) => (typeof l === 'string' ? l : l.name))
+            );
+            const toAdd = [...new Set(derived)].filter((l) => !current.has(l));
+            core.info(`pass-1 re-run derived: [${derived.join(', ')}]; to add: [${toAdd.join(', ')}]`);
+            if (toAdd.length === 0) return;
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
