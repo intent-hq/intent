@@ -75,3 +75,24 @@ test('duplicate sections do not produce duplicate labels', () => {
     '### Component\n\n- [x] intentd (Rust backend daemon)\n';
   assert.deepStrictEqual(labelsForIssueBody(body), ['component:intentd']);
 });
+
+test('template markdown pasted inside a code fence is ignored', () => {
+  assert.deepStrictEqual(labelsForIssueBody(fixture('fenced-template.md')), [
+    'component:fe',
+    'priority:P2',
+  ]);
+});
+
+test('body that is only a fenced template copy yields no labels', () => {
+  const body =
+    'log dump:\n\n```\n### Component\n\n- [x] intentd (Rust backend daemon)\n\n' +
+    '### Severity\n\nP0 — crash\n```\n';
+  assert.deepStrictEqual(labelsForIssueBody(body), []);
+});
+
+test('tilde fences are skipped and sections after a fence still parse', () => {
+  const body =
+    '### Description\n\n~~~\n- [x] intentd (Rust backend daemon)\n~~~\n\n' +
+    '### Component\n\n- [x] docs / tooling\n';
+  assert.deepStrictEqual(labelsForIssueBody(body), ['docs']);
+});

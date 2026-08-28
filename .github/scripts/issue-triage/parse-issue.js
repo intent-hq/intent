@@ -25,11 +25,20 @@ const COMPONENT_PREFIXES = [
 ];
 
 // Split a rendered issue-form body into { sectionLabel: contentLines }.
-// Issue forms render each field as a `### <label>` heading.
+// Issue forms render each field as a `### <label>` heading. Lines inside
+// fenced code blocks (``` / ~~~) are skipped entirely so template markdown
+// pasted into a fence (logs, "here's my template output") cannot derive
+// spurious headings or checkboxes.
 function splitSections(body) {
   const sections = Object.create(null);
   let current = null;
+  let inFence = false;
   for (const line of String(body).split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
     const heading = line.match(/^###\s+(.+?)\s*$/);
     if (heading) {
       current = heading[1];

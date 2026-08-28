@@ -3,9 +3,19 @@ name: Issue triage
 # Pass 1 of the triage pipeline: deterministic normalization. Template
 # fields become labels (component checkboxes, severity dropdown, agent-filed
 # checkbox) and `needs-triage` marks the untriaged queue on open. The parser
-# only ever ADDS labels — it never removes any, so human corrections stick
-# and re-runs are idempotent. `needs-triage` is added only on `opened`,
-# never re-added on `edited`/`reopened` once removed.
+# only ever ADDS labels — it never removes any — so re-runs are idempotent
+# and this job never fights pass 2 or human re-classification.
+#
+# Add-only tradeoffs (accepted for pass 1):
+#   - A label the CURRENT body still derives is re-added on the next
+#     `edited` event, so removing such a label by hand does not stick; to
+#     make a correction stick, fix the body's checkbox/dropdown itself.
+#   - Editing the severity dropdown accumulates priority labels (P2 -> P0
+#     leaves both); the stale one is retired by pass 2 or a human.
+#
+# `needs-triage` is added only on `opened` (or an explicit
+# `apply_needs_triage` dispatch), never re-added on `edited`/`reopened`
+# once removed.
 
 on:
   issues:
@@ -22,6 +32,10 @@ on:
         description: Print intended label operations without applying them
         type: boolean
         default: true
+      apply_needs_triage:
+        description: Also apply needs-triage (recovery when the opened run was missed)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,6 +58,7 @@ jobs:
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           DRY_RUN: ${{ inputs.dry_run == true }}
+          APPLY_NEEDS_TRIAGE: ${{ inputs.apply_needs_triage == true }}
         with:
           script: |
             const path = require('path');
@@ -52,6 +67,10 @@ jobs:
             );
 
             const issueNumber = Number(process.env.ISSUE_NUMBER);
+            if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+              core.setFailed(`Invalid issue number: ${JSON.stringify(process.env.ISSUE_NUMBER)}`);
+              return;
+            }
             const dryRun = process.env.DRY_RUN === 'true';
             const action = context.eventName === 'issues' ? context.payload.action : 'manual';
 
@@ -65,7 +84,9 @@ jobs:
             });
 
             const derived = labelsForIssueBody(issue.body || '');
-            if (action === 'opened') derived.push('needs-triage');
+            if (action === 'opened' || process.env.APPLY_NEEDS_TRIAGE === 'true') {
+              derived.push('needs-triage');
+            }
 
             const current = new Set(
               issue.labels.map((l) => (typeof l === 'string' ? l : l.name))
