@@ -63,3 +63,16 @@ jobs:
         with:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
+
+  # The issue-triage body parser (.github/scripts/issue-triage/) is also
+  # zero-dependency Node with a fixture-driven node:test suite.
+  triage-parser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test .github/scripts/issue-triage/parse-issue.test.js

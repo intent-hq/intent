@@ -1,0 +1,93 @@
+name: Issue triage
+
+# Pass 1 of the triage pipeline: deterministic normalization. Template
+# fields become labels (component checkboxes, severity dropdown, agent-filed
+# checkbox) and `needs-triage` marks the untriaged queue on open. The parser
+# only ever ADDS labels — it never removes any, so human corrections stick
+# and re-runs are idempotent. `needs-triage` is added only on `opened`,
+# never re-added on `edited`/`reopened` once removed.
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  # Manual runs double as a dry-run mode: they print the intended label
+  # operations without writing unless dry_run is unset.
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to triage
+        required: true
+        type: string
+      dry_run:
+        description: Print intended label operations without applying them
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number || inputs.issue_number }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Derive and apply labels from template fields
+        uses: actions/github-script@v7
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        with:
+          script: |
+            const path = require('path');
+            const { labelsForIssueBody } = require(
+              path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/issue-triage/parse-issue.js')
+            );
+
+            const issueNumber = Number(process.env.ISSUE_NUMBER);
+            const dryRun = process.env.DRY_RUN === 'true';
+            const action = context.eventName === 'issues' ? context.payload.action : 'manual';
+
+            // Re-fetch the issue so body and labels are current (the event
+            // payload can be stale on rapid edits, and workflow_dispatch has
+            // no issue payload at all).
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+
+            const derived = labelsForIssueBody(issue.body || '');
+            if (action === 'opened') derived.push('needs-triage');
+
+            const current = new Set(
+              issue.labels.map((l) => (typeof l === 'string' ? l : l.name))
+            );
+            const toAdd = [...new Set(derived)].filter((l) => !current.has(l));
+
+            core.info(`issue #${issueNumber} (${action})`);
+            core.info(`derived from body: [${derived.join(', ')}]`);
+            core.info(`already present:   [${[...current].join(', ')}]`);
+
+            if (toAdd.length === 0) {
+              core.info('No labels to add.');
+              return;
+            }
+            if (dryRun) {
+              core.notice(`[dry-run] Would add labels to #${issueNumber}: ${toAdd.join(', ')}`);
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              labels: toAdd,
+            });
+            core.info(`Added labels: ${toAdd.join(', ')}`);
