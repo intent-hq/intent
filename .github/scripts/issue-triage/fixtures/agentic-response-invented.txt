@@ -1,0 +1,13 @@
+```json
+{
+  "duplicates": [
+    { "number": "abc", "confidence": "high", "reason": "not a number" },
+    { "number": -3, "confidence": "high", "reason": "negative" }
+  ],
+  "component": "backend",
+  "type": "documentation",
+  "priority": "P5",
+  "security": "yes",
+  "reasons": { "component": "an invented component name" }
+}
+```

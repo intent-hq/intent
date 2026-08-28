@@ -27,6 +27,15 @@ name: Issue triage
 # next comment removes `needs-info` and re-runs the pass-1 label derivation
 # (comments from anyone else do not), and a body edit that completes the
 # issue removes the label too (only when the marker shows we applied it).
+#
+# Pass 2 — agentic triage (`agentic-triage` job): on `opened` only, after
+# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates,
+# component/type labels when pass 1 derived none, and a priority; it posts
+# one marker-idempotent summary comment and retires `needs-triage`.
+# Fail-soft: continue-on-error, and skipped with a warning when the
+# AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it only
+# adds labels/comments, never closes or edits anything. Logic + local
+# dry-run CLI: .github/scripts/issue-triage/agentic-triage.js.
 
 on:
   issues:
@@ -305,3 +314,60 @@ jobs:
               labels: toAdd,
             });
             core.info(`Added labels: ${toAdd.join(', ')}`);
+
+  # Pass 2 — agentic triage. Runs once per NEW issue, after the
+  # deterministic pass so its label gating sees pass-1 output; also on
+  # workflow_dispatch as the recovery path for a partially-failed opened
+  # run (the script's marker check keeps re-runs idempotent, and the
+  # dispatch dry_run input maps to the script's --dry-run). Fail-soft
+  # end to end: the whole job is continue-on-error (an LLM hiccup never
+  # marks the run failed), and a missing AUGMENT_SESSION_AUTH secret skips
+  # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
+  # SUBMODULE_BUMP_TOKEN elsewhere). The issue number is the only event
+  # data that reaches the shell — the script fetches title/body itself and
+  # passes them around as argv/stdin data, never shell-interpolated.
+  agentic-triage:
+    needs: triage
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened') ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Check for LLM credential
+        id: gate
+        env:
+          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+        run: |
+          if [ -z "$AUGMENT_SESSION_AUTH" ]; then
+            echo "::warning::AUGMENT_SESSION_AUTH secret is absent; skipping agentic triage (fail-soft)."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          node-version: 22
+
+      # Pinned: this job holds issues:write and the AUGMENT_SESSION_AUTH
+      # secret, so latest-at-runtime would let an unreviewed release land
+      # here on the next issue opened.
+      - name: Install Auggie CLI
+        if: steps.gate.outputs.run == 'true'
+        run: npm install -g @augmentcode/auggie@0.36.0
+
+      - name: Run agentic triage
+        if: steps.gate.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
+          TRIAGE_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+        run: node .github/scripts/issue-triage/agentic-triage.js $DRY_RUN "$ISSUE_NUMBER"

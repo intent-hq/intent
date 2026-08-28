@@ -75,4 +75,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test .github/scripts/issue-triage/parse-issue.test.js .github/scripts/issue-triage/needs-info.test.js
+      - run: node --test .github/scripts/issue-triage/parse-issue.test.js .github/scripts/issue-triage/needs-info.test.js .github/scripts/issue-triage/agentic-triage.test.js

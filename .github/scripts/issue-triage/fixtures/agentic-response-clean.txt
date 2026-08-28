@@ -1,0 +1,21 @@
+I analyzed the issue against the candidates. Here is my triage assessment:
+
+```json
+{
+  "duplicates": [
+    { "number": 101, "confidence": "high", "reason": "Same panic in the workspace store on startup" },
+    { "number": 102, "confidence": "medium", "reason": "Related subsystem but a different error" }
+  ],
+  "component": "intentd",
+  "type": "bug",
+  "priority": "P1",
+  "security": false,
+  "reasons": {
+    "component": "The stack trace is in intentd Rust code",
+    "type": "Reports a panic, clearly a defect",
+    "priority": "Daemon crash on startup but a restart recovers"
+  }
+}
+```
+
+Let me know if you need anything else.
