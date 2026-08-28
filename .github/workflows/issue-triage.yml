@@ -350,9 +350,12 @@ jobs:
         with:
           node-version: 22
 
+      # Pinned: this job holds issues:write and the AUGMENT_SESSION_AUTH
+      # secret, so latest-at-runtime would let an unreviewed release land
+      # here on the next issue opened.
       - name: Install Auggie CLI
         if: steps.gate.outputs.run == 'true'
-        run: npm install -g @augmentcode/auggie
+        run: npm install -g @augmentcode/auggie@0.36.0
 
       - name: Run agentic triage
         if: steps.gate.outputs.run == 'true'

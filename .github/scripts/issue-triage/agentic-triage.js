@@ -35,6 +35,7 @@ const { execFileSync } = require('node:child_process');
 
 const AGENTIC_MARKER = '<!-- issue-triage: agentic -->';
 const NEEDS_TRIAGE_LABEL = 'needs-triage';
+const NEEDS_INFO_LABEL = 'needs-info';
 const POSSIBLE_DUPLICATE_LABEL = 'possible-duplicate';
 const SECURITY_REPORT_URL =
   'https://github.com/intent-hq/intent/security/advisories';
@@ -109,12 +110,16 @@ function truncate(text, max) {
 
 // Model-provided text is sanitized before it can reach a public comment:
 // HTML comments are stripped (no forged idempotency markers), @-mentions
-// are neutralized with a zero-width space (no pinging users), whitespace
-// is collapsed, and length is capped.
+// are neutralized with a zero-width space (no pinging users), markdown
+// links and bare URLs are dropped (no attacker-steered links in a
+// maintainer-voiced comment), whitespace is collapsed, and length is
+// capped.
 function sanitizeText(text, max = 240) {
   return String(text || '')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<!--/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/https?:\/\/\S+/gi, ' ')
     .replace(/@(\w)/g, '@\u200b$1')
     .replace(/\s+/g, ' ')
     .trim()
@@ -246,7 +251,11 @@ function parseTriageResponse(text) {
 //     escalates to P0 regardless of the model's priority pick,
 //   - duplicate suggestions must be high-confidence AND name an issue the
 //     search actually returned (the model cannot invent issue numbers),
-//   - needs-triage is removed when present (this pass completes triage).
+//     deduplicated by number,
+//   - needs-triage is removed when present (this pass completes triage) —
+//     unless needs-info is also present: an incomplete issue stays in the
+//     triage queue, and the needs-info re-nudge gate outside `opened`
+//     requires needs-triage to survive.
 function planActions({ response, currentLabels, candidateNumbers }) {
   const current = new Set(currentLabels || []);
   const addLabels = [];
@@ -279,9 +288,14 @@ function planActions({ response, currentLabels, candidateNumbers }) {
   }
 
   const candidateSet = new Set(candidateNumbers || []);
-  const duplicates = response.duplicates.filter(
-    (d) => d.confidence === 'high' && candidateSet.has(d.number)
-  );
+  const seen = new Set();
+  const duplicates = response.duplicates.filter((d) => {
+    if (d.confidence !== 'high' || !candidateSet.has(d.number) || seen.has(d.number)) {
+      return false;
+    }
+    seen.add(d.number);
+    return true;
+  });
   if (duplicates.length > 0 && !current.has(POSSIBLE_DUPLICATE_LABEL)) {
     addLabels.push(POSSIBLE_DUPLICATE_LABEL);
   }
@@ -291,7 +305,8 @@ function planActions({ response, currentLabels, candidateNumbers }) {
     labelReasons,
     duplicates,
     security: response.security,
-    removeNeedsTriage: current.has(NEEDS_TRIAGE_LABEL),
+    removeNeedsTriage:
+      current.has(NEEDS_TRIAGE_LABEL) && !current.has(NEEDS_INFO_LABEL),
   };
 }
 
@@ -341,6 +356,7 @@ function buildSummaryComment(plan) {
 
 module.exports = {
   AGENTIC_MARKER,
+  NEEDS_INFO_LABEL,
   NEEDS_TRIAGE_LABEL,
   POSSIBLE_DUPLICATE_LABEL,
   buildPrompt,
@@ -409,13 +425,39 @@ function searchCandidates(repo, issueNumber, queries) {
 
 // Same invocation pattern as generate-release-notes.ts: the instruction is
 // an argv element, so untrusted issue text is never shell-interpolated.
+//
+// Unlike the release-notes script (which processes trusted maintainer
+// commit messages), the prompt here embeds attacker-controlled issue text,
+// so the agent is hardened down to pure text-in/text-out: every tool is
+// removed and denied belt-and-braces, the run is capped at one turn, and
+// the GitHub token is scrubbed from the subprocess env (the script's own
+// `gh` calls keep the parent env). A prompt-injected body therefore cannot
+// steer the agent into running `gh`/shell commands or exfiltrating the
+// token — the only thing it can influence is the JSON text this script
+// then clamps to the fixed label vocabulary.
+const AUGGIE_DENIED_TOOLS = [
+  'launch-process', 'view', 'str-replace-editor', 'save-file',
+  'remove-files', 'web-fetch', 'web-search', 'codebase-retrieval',
+  'github-api',
+];
 function runAuggie(instruction) {
-  return execFileSync('auggie', ['--print', '-i', instruction], {
-    encoding: 'utf8',
-    stdio: ['pipe', 'pipe', 'inherit'],
-    timeout: 300000,
-    maxBuffer: 16 * 1024 * 1024,
-  });
+  return execFileSync(
+    'auggie',
+    [
+      '--print', '--quiet', '--max-turns', '1', '--dont-save-session',
+      ...AUGGIE_DENIED_TOOLS.flatMap((t) => [
+        '--remove-tool', t, '--permission', `${t}:deny`,
+      ]),
+      '-i', instruction,
+    ],
+    {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'inherit'],
+      timeout: 300000,
+      maxBuffer: 16 * 1024 * 1024,
+      env: { ...process.env, GH_TOKEN: '', GITHUB_TOKEN: '' },
+    }
+  );
 }
 
 function main() {
@@ -444,6 +486,18 @@ function main() {
     warn(`issue #${issueNumber} is ${issue.state}; continuing (dry-run only)`);
   }
   const currentLabels = (issue.labels || []).map((l) => l.name);
+
+  // Pass 1 flagged the report as incomplete: skip entirely. An LLM pass
+  // over a placeholder body is low-signal, and running it would retire
+  // needs-triage — pulling the issue out of the triage queue and disabling
+  // the needs-info re-nudge gate. The author's next comment re-runs pass 1
+  // only; a human (or a future run on a completed issue) finishes triage.
+  if (currentLabels.includes(NEEDS_INFO_LABEL)) {
+    console.log(
+      `issue #${issueNumber} has ${NEEDS_INFO_LABEL}; skipping agentic triage until the report is complete.`
+    );
+    return;
+  }
 
   // Idempotency: the marker anywhere in the existing comments means pass 2
   // already ran. The marker contains no JSON-escaped characters, so a plain

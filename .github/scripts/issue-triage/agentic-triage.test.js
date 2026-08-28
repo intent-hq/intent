@@ -71,6 +71,16 @@ test('sanitize: strips HTML-comment marker forgery and neutralizes mentions', ()
   assert.ok(sanitizeText('x'.repeat(500)).length <= 240);
 });
 
+test('sanitize: strips markdown links and bare URLs, keeps link text', () => {
+  const s = sanitizeText(
+    'see [the fix](https://evil.example/x) and https://evil.example/y for details'
+  );
+  assert.ok(!s.includes('http'), s);
+  assert.ok(!s.includes(']('), s);
+  assert.ok(s.includes('the fix'));
+  assert.ok(s.includes('details'));
+});
+
 test('queries: title keywords, error line, broad fallback; qualifiers cannot be smuggled', () => {
   const qs = extractSearchQueries(
     'Daemon crashes when label:needs-info opening the settings panel',
@@ -114,6 +124,32 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
   assert.deepStrictEqual(gated.addLabels, []);
   assert.deepStrictEqual(gated.duplicates, []);
   assert.strictEqual(gated.removeNeedsTriage, false);
+});
+
+test('plan: needs-info keeps needs-triage in place', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const plan = planActions({
+    response,
+    currentLabels: ['needs-triage', 'needs-info'],
+    candidateNumbers: [101],
+  });
+  assert.strictEqual(plan.removeNeedsTriage, false);
+});
+
+test('plan: repeated duplicate numbers are deduped', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.duplicates = [
+    { number: 101, confidence: 'high', reason: 'first' },
+    { number: 101, confidence: 'high', reason: 'second' },
+    { number: 102, confidence: 'high', reason: 'other' },
+  ];
+  const plan = planActions({
+    response,
+    currentLabels: [],
+    candidateNumbers: [101, 102],
+  });
+  assert.deepStrictEqual(plan.duplicates.map((d) => d.number), [101, 102]);
+  assert.strictEqual(plan.duplicates[0].reason, 'first');
 });
 
 test('plan: docs label counts as a component; security escalates priority to P0', () => {
