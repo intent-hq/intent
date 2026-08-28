@@ -97,15 +97,21 @@ function buildNudgeComment(reasons) {
   ].join('\n');
 }
 
-// Nudge at most once: never when the body is complete, the label is already
-// present, or any existing comment carries the marker (i.e. we nudged before,
-// even if the label was since removed).
-function shouldNudge({ assessment, labels, commentBodies }) {
-  if (!assessment || !assessment.incomplete) return false;
-  if ((labels || []).includes(NEEDS_INFO_LABEL)) return false;
+// Nudge at most once. The marker comment is the terminal idempotency guard:
+// once it exists, nothing is posted or labeled again (so an author reply that
+// removed the label can never see it re-applied). Until the marker exists the
+// two actions are decided independently — apply the label first, then post
+// the comment — so a partial failure (label applied, comment failed) is
+// recovered on the next run instead of getting stuck half-nudged.
+function nudgeActions({ assessment, labels, commentBodies }) {
+  const nothing = { addLabel: false, postComment: false };
+  if (!assessment || !assessment.incomplete) return nothing;
   const bodies = commentBodies || [];
-  if (bodies.some((b) => typeof b === 'string' && b.includes(NEEDS_INFO_MARKER))) return false;
-  return true;
+  if (bodies.some((b) => typeof b === 'string' && b.includes(NEEDS_INFO_MARKER))) return nothing;
+  return {
+    addLabel: !(labels || []).includes(NEEDS_INFO_LABEL),
+    postComment: true,
+  };
 }
 
 // Clear `needs-info` only when the ISSUE AUTHOR comments on a labeled issue.
@@ -123,6 +129,6 @@ module.exports = {
   NEEDS_INFO_MARKER,
   assessCompleteness,
   buildNudgeComment,
-  shouldNudge,
+  nudgeActions,
   shouldClearNeedsInfo,
 };

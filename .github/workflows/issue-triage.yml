@@ -167,16 +167,29 @@ jobs:
               per_page: 100,
             });
             const commentBodies = comments.map((c) => c.body || '');
-            if (!needsInfo.shouldNudge({ assessment, labels, commentBodies })) {
-              core.info('Already nudged (needs-info label or marker comment present); skipping.');
+            const actions = needsInfo.nudgeActions({ assessment, labels, commentBodies });
+            if (!actions.postComment && !actions.addLabel) {
+              core.info('Already nudged (marker comment present); skipping.');
               return;
             }
 
             const comment = needsInfo.buildNudgeComment(assessment.reasons);
             if (dryRun) {
-              core.notice(`[dry-run] Would comment the needs-info nudge on #${issueNumber} and add ${needsInfo.NEEDS_INFO_LABEL}`);
+              core.notice(`[dry-run] Would ${actions.addLabel ? `add ${needsInfo.NEEDS_INFO_LABEL} and ` : ''}post the needs-info nudge on #${issueNumber}`);
               core.info(comment);
               return;
+            }
+            // Label first, comment second: if the comment fails after the
+            // label was applied, the next run still posts it (the marker is
+            // the comment's own idempotency guard, not the label's).
+            if (actions.addLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: [needsInfo.NEEDS_INFO_LABEL],
+              });
+              core.info(`Added ${needsInfo.NEEDS_INFO_LABEL}.`);
             }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -184,13 +197,7 @@ jobs:
               issue_number: issueNumber,
               body: comment,
             });
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              labels: [needsInfo.NEEDS_INFO_LABEL],
-            });
-            core.info(`Posted nudge comment and added ${needsInfo.NEEDS_INFO_LABEL}.`);
+            core.info('Posted the nudge comment.');
 
   # Author reply on a needs-info issue: remove the label and re-run the
   # pass-1 label derivation on the current body. Non-author comments (and
@@ -212,12 +219,21 @@ jobs:
             const { labelsForIssueBody } = require(path.join(scriptsDir, 'parse-issue.js'));
             const needsInfo = require(path.join(scriptsDir, 'needs-info.js'));
 
-            const issue = context.payload.issue;
+            const issueNumber = context.payload.issue.number;
             const comment = context.payload.comment;
-            const labels = issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+
+            // Re-fetch the issue: the event payload's label snapshot can
+            // predate the labeling run (e.g. the author comments right after
+            // opening, before the opened-triage run added needs-info).
+            const { data: fresh } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+            const labels = fresh.labels.map((l) => (typeof l === 'string' ? l : l.name));
             const clear = needsInfo.shouldClearNeedsInfo({
               labels,
-              issueAuthor: issue.user && issue.user.login,
+              issueAuthor: fresh.user && fresh.user.login,
               commentAuthor: comment.user && comment.user.login,
               commentBody: comment.body || '',
             });
@@ -230,7 +246,7 @@ jobs:
               await github.rest.issues.removeLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: issue.number,
+                issue_number: issueNumber,
                 name: needsInfo.NEEDS_INFO_LABEL,
               });
               core.info(`Removed ${needsInfo.NEEDS_INFO_LABEL} (author reply).`);
@@ -241,11 +257,6 @@ jobs:
 
             // Re-run the pass-1 parse on the current body (add-only, and
             // never re-adds needs-triage or needs-info).
-            const { data: fresh } = await github.rest.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-            });
             const derived = labelsForIssueBody(fresh.body || '');
             const current = new Set(
               fresh.labels.map((l) => (typeof l === 'string' ? l : l.name))
@@ -256,7 +267,7 @@ jobs:
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: issue.number,
+              issue_number: issueNumber,
               labels: toAdd,
             });
             core.info(`Added labels: ${toAdd.join(', ')}`);

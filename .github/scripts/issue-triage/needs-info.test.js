@@ -13,7 +13,7 @@ const {
   NEEDS_INFO_MARKER,
   assessCompleteness,
   buildNudgeComment,
-  shouldNudge,
+  nudgeActions,
   shouldClearNeedsInfo,
 } = require('./needs-info.js');
 
@@ -78,39 +78,51 @@ test('nudge comment lists each reason and embeds the hidden marker', () => {
   assert.ok(comment.includes(NEEDS_INFO_LABEL));
 });
 
-// --- shouldNudge (marker idempotency) ----------------------------------------
+// --- nudgeActions (marker idempotency) ----------------------------------------
 
 const incomplete = { incomplete: true, reasons: ['x'] };
+const NOTHING = { addLabel: false, postComment: false };
 
-test('fresh incomplete issue gets a nudge', () => {
-  assert.strictEqual(
-    shouldNudge({ assessment: incomplete, labels: ['bug'], commentBodies: [] }),
-    true
+test('fresh incomplete issue gets both the label and the nudge comment', () => {
+  assert.deepStrictEqual(
+    nudgeActions({ assessment: incomplete, labels: ['bug'], commentBodies: [] }),
+    { addLabel: true, postComment: true }
   );
 });
 
 test('complete issue never gets a nudge', () => {
-  assert.strictEqual(
-    shouldNudge({ assessment: { incomplete: false, reasons: [] }, labels: [], commentBodies: [] }),
-    false
+  assert.deepStrictEqual(
+    nudgeActions({ assessment: { incomplete: false, reasons: [] }, labels: [], commentBodies: [] }),
+    NOTHING
   );
 });
 
-test('needs-info label already present suppresses the nudge', () => {
-  assert.strictEqual(
-    shouldNudge({ assessment: incomplete, labels: ['bug', NEEDS_INFO_LABEL], commentBodies: [] }),
-    false
+test('label present without marker still posts the comment (recovers a failed comment)', () => {
+  assert.deepStrictEqual(
+    nudgeActions({ assessment: incomplete, labels: ['bug', NEEDS_INFO_LABEL], commentBodies: [] }),
+    { addLabel: false, postComment: true }
   );
 });
 
-test('marker comment suppresses re-nudge even after the label was removed', () => {
-  assert.strictEqual(
-    shouldNudge({
+test('marker comment suppresses everything, even after the label was removed', () => {
+  assert.deepStrictEqual(
+    nudgeActions({
       assessment: incomplete,
       labels: ['bug'],
       commentBodies: ['unrelated', `Thanks!\n\n${NEEDS_INFO_MARKER}`],
     }),
-    false
+    NOTHING
+  );
+});
+
+test('marker comment plus label present changes nothing (fully nudged)', () => {
+  assert.deepStrictEqual(
+    nudgeActions({
+      assessment: incomplete,
+      labels: ['bug', NEEDS_INFO_LABEL],
+      commentBodies: [buildNudgeComment(['x'])],
+    }),
+    NOTHING
   );
 });
 
