@@ -102,4 +102,4 @@ function labelsForIssueBody(body) {
   return [...new Set(labels)];
 }
 
-module.exports = { labelsForIssueBody };
+module.exports = { labelsForIssueBody, splitSections };
