@@ -183,6 +183,27 @@ The `system.status` result also includes **additive** routing fields so an authe
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
 - These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
+#### `system.status` — file-watch coverage fields (additive)
+
+The `system.status` result additionally reports the daemon's live **file-watch coverage** — whether the roots the daemon *wants* watched (workspace checkouts and other watch roots) are actually registered with the OS ([intent-hq/intent#3708](https://github.com/intent-hq/intent/issues/3708), [intent-hq/intentd#1550](https://github.com/intent-hq/intentd/pull/1550)):
+
+```jsonc
+{
+  "fileWatch": {
+    "activeStreams": 1, // shared OS watch streams whose watcher is actually live
+    "totalRoots": 12,   // watch roots currently requested, whatever their registration state
+    "failedRoots": 0    // roots whose OS registration failed; 0 when coverage is healthy
+  }
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fileWatch` follows the **presence-detection convention** at object granularity: the whole object is **absent** — never `null` — until the watcher registry attaches shortly after daemon start (registry init is backgrounded so it cannot delay the UDS bind), and again once the registry is dropped at shutdown. Once attached it is **always present**, healthy or degraded — a degraded reading is a real value, never an absence — so clients must presence-detect the object, then read the counts.
+- `activeStreams` counts the shared OS watch streams (groups; one `notify` watcher each) whose watcher is **actually created**. A stream stuck in the watcher-creation retry loop is NOT counted, so it reads `0` while `totalRoots > 0` under creation failure — the degradation this object exists to surface. On Linux all roots share a single global stream, so a healthy Linux daemon reads `activeStreams: 1`; on macOS streams group per parent directory, so the healthy count scales with distinct parent directories.
+- `totalRoots` counts the watch roots currently requested across every stream, whatever their registration state.
+- `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
+- All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
+
 #### `system.importLegacy` (UDS-only, v2.2)
 
 Runs the daemon's legacy workspace import over RPC — the same engine behind the `intentd import-legacy` CLI and the first-boot hook — so a client can trigger a recovery import without shell access. Scans the default legacy roots and imports per-directory legacy workspaces (notes, comments, agent sessions, assets) into the live store.
