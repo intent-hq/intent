@@ -601,15 +601,27 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   auto-tag above — always overwritten with the real caller identity for agent callers),
   never from caller-supplied text, and the gate is that stamped `fromAgentId` — sends
   without it (the human FE/RPC `agent.sendMessage` front door, internal event wakes) stay
-  **byte-identical**, and a body that self-claims a sender identity gains nothing. Applied
+  **byte-identical**, and a body that self-claims a sender identity gains nothing. Two
+  enforcement details make the gate hold: the user-origin RPC front doors
+  (`agent.sendMessage`, `agent.sendToTask`, `agent.wakeOrCreate`) **strip** the reserved
+  `fromAgentId`/`fromAgentName` fields from caller-supplied `messageMetadata` at the
+  router ingress (a wire caller cannot forge an agent-origin send; all other metadata
+  fields pass through untouched), and the rendered display name is **sanitized** —
+  newlines/control characters collapse to single spaces (a name that sanitizes to empty
+  renders the name-absent shape), so the header always stays single-line. Applied
   BEFORE persist/enqueue on every agent-origin path (direct sends, busy-queue and
   question-hold parks, the store-only fallback, `ws.agent.create` kickoffs and
   `ws.agent.wakeOrCreate` context wakes), so the persisted user row, chat reads, queue
   snapshots, and the delivered prompt all agree. **Idempotent across requeues and layered
-  front doors** via the stable `[MESSAGE FROM AGENT` prefix guard (same contract as the
-  dequeue-wait note): content already carrying the header is never re-annotated, so a
-  terminal-failure requeue, a held entry drained later, or a batch flush never stacks a
-  second header. `messageMetadata` is **never modified** by the annotation — the
+  front doors** by **exact header match**: the annotation rebuilds the header this
+  entry's stamped attribution would render and skips only when the content already
+  starts with exactly that header + blank line, so a terminal-failure requeue, a held
+  entry drained later, or a batch flush never stacks a second header — byte-stable
+  because the name is re-read from the same stamped metadata, never a live lookup (same
+  contract as the dequeue-wait note). A caller-authored lookalike first line (any other
+  `[MESSAGE FROM AGENT…` text) does NOT suppress annotation: the genuine header is
+  prepended ABOVE it, so a spoof visibly sits below the real attribution.
+  `messageMetadata` is **never modified** by the annotation — the
   attribution fields keep driving the single-pending-message guard,
   `ws.agent.removeQueuedMessage` ownership, and the question-answer intake exactly as
   before, and they remain the authoritative attribution for clients (the header is a
