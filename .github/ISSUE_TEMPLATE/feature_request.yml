@@ -21,9 +21,9 @@ body:
     attributes:
       label: Component
       description: >
-        Check all that apply. Checkboxes do not apply labels automatically —
-        a triager will add the matching label (`component:intentd`,
-        `component:fe`, `component:ios`, `docs`).
+        Check all that apply. Labels are applied automatically from the
+        checked boxes (`component:intentd`, `component:fe`, `component:ios`,
+        `docs`).
       options:
         - label: intentd (Rust backend daemon)
         - label: cloudlands-fe (Electron + SvelteKit desktop frontend)

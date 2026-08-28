@@ -1,1 +1,8 @@
 blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/intent-hq/intent/security/advisories
+    about: Please report security vulnerabilities privately via GitHub security advisories, not the public issue tracker.
+  - name: Ask a question
+    url: https://github.com/intent-hq/intent/discussions
+    about: Use discussions for questions, ideas, and general help.

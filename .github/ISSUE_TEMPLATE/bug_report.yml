@@ -30,23 +30,32 @@ body:
     attributes:
       label: Component
       description: >
-        Check all that apply. Checkboxes do not apply labels automatically —
-        a triager will add the matching label (`component:intentd`,
-        `component:fe`, `component:ios`, `docs`).
+        Check all that apply. Labels are applied automatically from the
+        checked boxes (`component:intentd`, `component:fe`, `component:ios`,
+        `docs`).
       options:
         - label: intentd (Rust backend daemon)
         - label: cloudlands-fe (Electron + SvelteKit desktop frontend)
         - label: ios (SwiftUI companion app)
         - label: docs / tooling
+  # Severity → label mapping (each option maps 1:1 onto a priority:* label,
+  # keyed on the leading "Pn" token):
+  #   P0 — … → priority:P0
+  #   P1 — … → priority:P1
+  #   P2 — … → priority:P2
+  #   P3 — … → priority:P3
   - type: dropdown
     id: severity
     attributes:
       label: Severity
-      description: Per the taxonomy in docs/README.md
+      description: >
+        The matching `priority:*` label is applied automatically from your
+        selection.
       options:
-        - P0 — crash, data-loss, or corruption; blocks shipping to external users
+        - P0 — crash, data loss, or corruption; blocks shipping to external users
         - P1 — broken feature; app still usable but with significant workaround required
-        - P2 — papercut; annoying but does not block workflows
+        - P2 — degraded behavior; should be fixed, but impact is limited
+        - P3 — papercut; annoying but does not block workflows
     validations:
       required: true
   - type: checkboxes
@@ -54,4 +63,4 @@ body:
     attributes:
       label: Agent-filed
       options:
-        - label: This issue was filed by an AI agent (a triager will add the `agent-filed` label)
+        - label: This issue was filed by an AI agent (the `agent-filed` label is applied automatically)
