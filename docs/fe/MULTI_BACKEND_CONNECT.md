@@ -38,9 +38,11 @@ as a routing concept.
   closing its windows.
 - **No active/primary backend.** The persisted `activeId` stays on disk for
   backward compatibility but no longer drives client routing, service
-  targeting, or teardown. It is read only as a legacy default: which saved
+  targeting, or teardown. Its remaining reads are legacy defaults: which saved
   bucket restores first at boot (its first window becomes the main window),
-  and the fallback backend for a fresh first window.
+  the fallback backend for a fresh first window, and a couple of
+  wire/on-disk compatibility shims (the `connections:add` rebuild-if-active
+  check + its `switched` result field, and the browser-capture state-dir key).
 
 ## What the user sees
 
