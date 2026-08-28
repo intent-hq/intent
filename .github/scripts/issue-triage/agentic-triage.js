@@ -499,12 +499,20 @@ function main() {
     return;
   }
 
-  // Idempotency: the marker anywhere in the existing comments means pass 2
-  // already ran. The marker contains no JSON-escaped characters, so a plain
-  // substring check on the raw (possibly multi-page) API output is sound.
-  let commentsRaw = '';
+  // Idempotency: the marker in an existing comment means pass 2 already
+  // ran. Only comments authored by the actions bot (what this workflow
+  // posts as) or a repo maintainer (local runs of this script) count — any
+  // user can type the public marker literal into a comment, and a forged
+  // marker must not suppress triage. The jq filter emits only the trusted
+  // comment bodies, so a plain substring check over them is sound (the
+  // marker contains no JSON-escaped characters).
+  let trustedCommentBodies = '';
   try {
-    commentsRaw = gh(['api', `repos/${repo}/issues/${issueNumber}/comments`, '--paginate']);
+    trustedCommentBodies = gh([
+      'api', `repos/${repo}/issues/${issueNumber}/comments`, '--paginate',
+      '--jq',
+      '.[] | select(.user.login == "github-actions[bot]" or (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR"))) | .body',
+    ]);
   } catch {
     if (dryRun) {
       warn('could not read existing comments (marker check skipped in dry-run)');
@@ -513,7 +521,26 @@ function main() {
       return;
     }
   }
-  if (commentsRaw.includes(AGENTIC_MARKER)) {
+  if (trustedCommentBodies.includes(AGENTIC_MARKER)) {
+    // Partial-failure recovery: a run that posted the comment but died
+    // before the final step leaves needs-triage behind; retire it here so
+    // a re-run (workflow_dispatch) completes the pass instead of no-oping.
+    if (currentLabels.includes(NEEDS_TRIAGE_LABEL)) {
+      if (dryRun) {
+        console.log(
+          `issue #${issueNumber}: marker present; would remove leftover ${NEEDS_TRIAGE_LABEL} (dry-run).`
+        );
+      } else {
+        gh([
+          'issue', 'edit', String(issueNumber), '--repo', repo,
+          '--remove-label', NEEDS_TRIAGE_LABEL,
+        ]);
+        console.log(
+          `issue #${issueNumber}: marker present; removed leftover ${NEEDS_TRIAGE_LABEL}.`
+        );
+      }
+      return;
+    }
     console.log(`issue #${issueNumber}: already triaged (marker present); nothing to do.`);
     return;
   }

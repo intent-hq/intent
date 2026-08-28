@@ -316,7 +316,10 @@ jobs:
             core.info(`Added labels: ${toAdd.join(', ')}`);
 
   # Pass 2 — agentic triage. Runs once per NEW issue, after the
-  # deterministic pass so its label gating sees pass-1 output. Fail-soft
+  # deterministic pass so its label gating sees pass-1 output; also on
+  # workflow_dispatch as the recovery path for a partially-failed opened
+  # run (the script's marker check keeps re-runs idempotent, and the
+  # dispatch dry_run input maps to the script's --dry-run). Fail-soft
   # end to end: the whole job is continue-on-error (an LLM hiccup never
   # marks the run failed), and a missing AUGMENT_SESSION_AUTH secret skips
   # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
@@ -325,7 +328,9 @@ jobs:
   # passes them around as argv/stdin data, never shell-interpolated.
   agentic-triage:
     needs: triage
-    if: github.event_name == 'issues' && github.event.action == 'opened'
+    if: >-
+      (github.event_name == 'issues' && github.event.action == 'opened') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -363,5 +368,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           AUGMENT_SESSION_AUTH: ${{ secrets.AUGMENT_SESSION_AUTH }}
           TRIAGE_REPO: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: node .github/scripts/issue-triage/agentic-triage.js "$ISSUE_NUMBER"
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+        run: node .github/scripts/issue-triage/agentic-triage.js $DRY_RUN "$ISSUE_NUMBER"
