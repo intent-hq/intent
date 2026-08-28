@@ -864,6 +864,64 @@ sweep, not every path that can reclaim an idle tree. A seat still hitting the
 accumulation path should reach for `idleReapMinutes` first, then
 `memoryBudgetMb`.
 
+## File watching: shared OS watchers & Linux host limits
+
+Wire contract: PROTOCOL.md §5 (`system.status` — file-watch coverage fields).
+File events (`file:*`, plus the skills/specialists rescans) come from recursive
+`notify` watchers over watch roots. Watchers are **shared streams**: one OS
+watcher serves many roots, with a demux narrowing each event to the
+subscriber's own root. Grouping is per platform — on macOS (FSEvents) roots
+group per parent directory; on **Linux (inotify) ALL roots share a single
+global stream** ([intent-hq/intentd#1550](https://github.com/intent-hq/intentd/pull/1550)).
+That matters because every `notify` watcher costs one inotify **instance**
+(one fd, capped by `fs.inotify.max_user_instances`, default 128): the earlier
+per-parent-directory grouping made the instance count scale with the workspace
+count and exhausted the cap on multi-workspace hosts
+([intent-hq/intent#3708](https://github.com/intent-hq/intent/issues/3708));
+the single global stream keeps it at one instance total.
+
+Recursive **watches** still scale with directory count: on Linux each watched
+directory consumes one slot of `fs.inotify.max_user_watches` (default 8192 on
+many distros, 65536 on newer kernels) regardless of how streams are grouped,
+so a host with many or large checkouts can exhaust the watch cap even with a
+single inotify instance.
+
+**Tuning a multi-workspace Linux host:**
+
+- Raise `fs.inotify.max_user_watches` — e.g. `1048576` (each slot costs ~1 KB
+  of kernel memory only while in use):
+
+  ```bash
+  sudo sysctl fs.inotify.max_user_watches=1048576
+  echo fs.inotify.max_user_watches=1048576 | sudo tee /etc/sysctl.d/60-inotify.conf
+  ```
+
+- Check the daemon's open-file limit (`ulimit -n` / `nofile`): the global
+  watch group holds inotify instances at one, but sockets, PTYs, and child
+  pipes still consume fds — a low `nofile` (1024 on some distros) surfaces as
+  the same class of resource failures on busy multi-workspace hosts.
+
+**Symptoms of exhausted limits.** Watch-coverage degradation is WARN-logged;
+the creation/registration WARNs carry the live `/proc/sys/fs/inotify` limits
+(as `os_watch_limits: inotify max_user_instances=… max_user_watches=…`) so an
+operator can judge at a glance whether a failure is cap exhaustion:
+
+- `"shared watcher creation failed; roots in this group are unwatched until a
+  retry succeeds"` — the OS watcher itself could not be created (e.g. inotify
+  instance exhaustion). Creation is retried with capped exponential backoff
+  (about once a minute at the cap), and the group's roots are re-registered
+  once it succeeds.
+- `"shared watch registration failed"` — one root's recursive registration
+  failed (e.g. `ENOSPC` watch-slot exhaustion, or the directory vanished).
+- `"shared watcher callback error; events may be missed"` — the live watcher
+  reported an error on its event stream (e.g. `notify`'s "OS file watch limit
+  reached").
+
+The same degradation is surfaced on the wire as the `system.status`
+`fileWatch` object (`failedRoots > 0`, or `activeStreams` below the expected
+count — `0` while `totalRoots > 0` under creation failure), so coverage loss
+is visible to clients, not just in the daemon log.
+
 ## Read-path performance principles
 
 Hot read RPCs — the methods clients poll or fan out on focus (`workspace.list`
