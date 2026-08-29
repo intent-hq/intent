@@ -1,10 +1,10 @@
 # Intent
 
-**Intent** is a local-first agentic coding platform. A Rust daemon (`intentd`)
-runs on your machine and owns everything — workspaces, notes, tasks, coding
-agents, git, terminals, and events — exposing it all through a JSON-RPC API.
-A desktop app (Electron + SvelteKit) and an iOS companion app connect to the
-daemon as thin clients.
+**Intent** is a platform for coordinating coding agents at scale. A Rust
+daemon (`intentd`) runs on your machine and owns everything — workspaces,
+notes, tasks, coding agents, git, terminals, and events — exposing it all
+through a JSON-RPC API. A desktop app (Electron + SvelteKit) and an iOS
+companion app connect to the daemon as thin clients.
 
 <!-- TODO: screenshot/demo -->
 
