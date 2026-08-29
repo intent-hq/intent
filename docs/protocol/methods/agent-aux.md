@@ -448,8 +448,10 @@ cacheCreationTokens, thoughtTokens? }`:
   the token counters, completed prompt turns, agent sessions started, the longest single
   turn in milliseconds (MAX), and agent-attributed line churn.
 - **byModel** — `{ model, runs } & UsageTotals` per normalized model name, sorted descending by
-  total tokens — the sum of all five counters, `thoughtTokens` included (ties break on model
-  name ascending).
+  total tokens — the sum of all five counters, `thoughtTokens` included. Safe because the
+  stored buckets are **disjoint**: providers whose wire `thoughtTokens` is a subset of
+  `outputTokens` (codex, grok) have the subset carved out of `outputTokens` at ingestion
+  (intent-hq/intent#3796). Ties break on model name ascending.
 - **byProvider** — `{ provider, runs } & UsageTotals` per resolved agent-provider id, sorted
   descending by the same five-counter total-token sum (ties break on provider id ascending).
   The wire carries **raw
@@ -475,13 +477,17 @@ is the cumulative reasoning ("thought") token count — the per-bucket counterpa
 `TokenUsageTotals.thoughtTokens` counter (§5.23) and the `RateSample.thoughtTokens` counter
 (§5.39), persisted in the hourly buckets via the additive defaulted migration
 `0087_usage_stats_thought_tokens.sql` (pre-migration buckets read back as zero, exactly like an
-hour in which no provider broke reasoning out of `outputTokens`). It is a `u64` in camelCase,
+hour in which no provider reported reasoning tokens). It is a `u64` in camelCase,
 **omitted when zero or unreported** (never a fabricated `0`, never `null`) — on `totals` and on
 every `byModel` / `byProvider` / `byHourOfDay` / `byMonth` cell alike — so clients written
 against the pre-`thoughtTokens` shape see the previous response byte-for-byte. It aggregates
 exactly like the other counters (the same clamped-≥ 0 per-turn delta folded into the same
-buckets), and it counts toward the `byModel` / `byProvider` "total tokens" ranking, which sums
-all five counters.
+buckets), and it is **disjoint** from `outputTokens`: providers whose wire report is a subset
+(codex, grok) have it carved out of `outputTokens` at ingestion (intent-hq/intent#3796), so it
+counts toward the `byModel` / `byProvider` "total tokens" ranking, which sums all five
+counters, and clients may sum all five counters freely. Codex buckets recorded before the
+ingestion carve-out shipped retain the subset shape (no backfill), so historical codex totals
+may over-count reasoning slightly.
 
 ```json
 // → request

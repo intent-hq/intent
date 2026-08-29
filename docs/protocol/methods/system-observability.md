@@ -106,7 +106,9 @@ cacheCreationTokens, thoughtTokens }`:
   field, samples here are **dense**: every counter is always present, so a minute with no
   reasoning tokens (including every bucket recorded before this field shipped) emits
   `"thoughtTokens": 0`. Clients written against the pre-`thoughtTokens` shape are
-  unaffected — the counter is additional, never carved out of `outputTokens` by the daemon.
+  unaffected — the counter is additional. It is **disjoint** from `outputTokens`: providers
+  whose wire report is a subset (codex, grok) have it carved out of `outputTokens` at
+  ingestion (intent-hq/intent#3796), so clients may sum all five counters freely.
 
 Note the trailing-window semantics: like §5.36's `24h` period this is an **absolute
 rolling window** ending at the current minute; there is no timezone parameter — samples

@@ -1255,8 +1255,13 @@ entry); in the pathological case of a bucket mixing currencies, the currency wit
 sum wins — the daemon never converts between currencies.
 
 **`thoughtTokens`** *(additive within v6.0, [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973))*
-is the cumulative reasoning ("thought") token count, sourced from the ACP `usage_update`
-report's `thoughtTokens` field for the providers that break reasoning out of `outputTokens`.
+is the cumulative reasoning ("thought") token count, sourced from the end-of-turn ACP
+`PromptResponse.usage` report's `thoughtTokens` field (not the `usage_update` notification,
+which carries only `used`/`size`/`cost`). It is **disjoint** from `outputTokens`: providers
+whose wire report is a subset of `outputTokens` (codex, grok) have it carved out at ingestion
+(`output − thought`, saturating), so clients may sum all five counters freely
+(intent-hq/intent#3796). Codex tallies recorded before the carve-out shipped retain the
+subset shape (no backfill).
 It is a `u64` in camelCase, **omitted when zero or unreported** (never a fabricated `0`, never
 `null`), so clients written against the pre-`thoughtTokens` shape are unaffected. It aggregates
 exactly like the other counters — saturating sum into `totals` / each `byAgentId` entry / each
