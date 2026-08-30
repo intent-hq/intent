@@ -206,7 +206,7 @@ The `system.status` result additionally reports the daemon's live **file-watch c
 
 #### `system.status` — `updateSupported` (additive)
 
-The `system.status` result additionally reports whether the daemon can act on `system.requestUpdate` (v8.6, below) — i.e. whether it is **sitter-supervised** — so a client can proactively hide an Update affordance for daemons that cannot self-update instead of failing reactively ([intent-hq/intent#3875](https://github.com/intent-hq/intent/issues/3875); the intentd change is in flight):
+The `system.status` result additionally reports whether the daemon can act on `system.requestUpdate` (v8.6, below) — i.e. whether it is **sitter-supervised** — so a client can proactively hide an Update affordance for daemons that cannot self-update instead of failing reactively ([intent-hq/intent#3875](https://github.com/intent-hq/intent/issues/3875), [intent-hq/intentd#1582](https://github.com/intent-hq/intentd/pull/1582)):
 
 ```jsonc
 {
