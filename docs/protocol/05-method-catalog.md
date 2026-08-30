@@ -98,7 +98,7 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, �
 
 #### `system.status` — process resource fields (additive, optional)
 
-The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `host`):
+The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `updateSupported` (v8.7, below), `host`):
 
 ```jsonc
 {
@@ -204,7 +204,7 @@ The `system.status` result additionally reports the daemon's live **file-watch c
 - `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
 - All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
 
-#### `system.status` — `updateSupported` (additive)
+#### `system.status` — `updateSupported` (additive, v8.7)
 
 The `system.status` result additionally reports whether the daemon can act on `system.requestUpdate` (v8.6, below) — i.e. whether it is **sitter-supervised** — so a client can proactively hide an Update affordance for daemons that cannot self-update instead of failing reactively ([intent-hq/intent#3875](https://github.com/intent-hq/intent/issues/3875), [intent-hq/intentd#1582](https://github.com/intent-hq/intentd/pull/1582)):
 
@@ -218,7 +218,7 @@ The `system.status` result additionally reports whether the daemon can act on `s
 - `updateSupported` is `true` **exactly** when the daemon is sitter-supervised: `<data_dir>/sitter/sitter.pid` names the daemon's **direct parent** AND that process carries a sitter binary name — the same check `system.requestUpdate` performs before signaling. It is `false` otherwise, **including on platforms without Unix signals** (where sitter supervision cannot exist).
 - Evaluated at **read time** on every `system.status` call, so a supervision change mid-session (sitter started or stopped) is reflected on the next read; clients that only read on (re)connect pick it up at the next reconnect.
 - `updateSupported: true` reports that the supervision check **passed at read time** — not a delivery guarantee: the sitter can exit (or signaling can fail) between the status read and a later `system.requestUpdate`, so callers must still handle that call's documented `-32603`. It also says nothing about whether an update exists — the check outcome is observed out-of-band (see `system.requestUpdate` below).
-- **Additive** optional response field (the method surface is unchanged); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
+- **Additive** response field carrying the **v8.7** minor bump (the method surface is unchanged). **Always present** on 8.7+ daemons (a plain boolean, never `null`); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
 
 #### `system.importLegacy` (UDS-only, v2.2)
 
