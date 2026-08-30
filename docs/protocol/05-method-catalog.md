@@ -217,7 +217,7 @@ The `system.status` result additionally reports whether the daemon can act on `s
 
 - `updateSupported` is `true` **exactly** when the daemon is sitter-supervised: `<data_dir>/sitter/sitter.pid` names the daemon's **direct parent** AND that process carries a sitter binary name — the same check `system.requestUpdate` performs before signaling. It is `false` otherwise, **including on platforms without Unix signals** (where sitter supervision cannot exist).
 - Evaluated at **read time** on every `system.status` call, so a supervision change mid-session (sitter started or stopped) is reflected on the next read; clients that only read on (re)connect pick it up at the next reconnect.
-- `updateSupported: true` means `system.requestUpdate` would be **accepted** (the signal is deliverable), not that an update exists — the check outcome is still observed out-of-band (see `system.requestUpdate` below).
+- `updateSupported: true` reports that the supervision check **passed at read time** — not a delivery guarantee: the sitter can exit (or signaling can fail) between the status read and a later `system.requestUpdate`, so callers must still handle that call's documented `-32603`. It also says nothing about whether an update exists — the check outcome is observed out-of-band (see `system.requestUpdate` below).
 - **Additive** optional response field (the method surface is unchanged); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
 
 #### `system.importLegacy` (UDS-only, v2.2)
@@ -281,7 +281,7 @@ Asks the daemon's supervising [`intentd-sitter`](https://github.com/intent-hq/in
 - Available on **both** UDS and WSS — unlike `system.shutdown`, a remote client is exactly who needs to trigger an update.
 - `-32603` with a human-readable reason when the daemon is not sitter-supervised (missing/unparsable/stale pidfile, or a pidfile whose pid the OS recycled to a non-sitter process), when signaling fails, or on a platform without Unix signals.
 - `{ "ok": true }` means the signal was **delivered**, not that an update exists: the check outcome (restart or no-op) is observed out-of-band (e.g. the daemon restarting, `system.status` `version`/`uptimeSeconds`).
-- Clients can read `updateSupported` on `system.status` (above) to know in advance whether this call would be accepted, instead of probing for the `-32603` failure.
+- Clients can read `updateSupported` on `system.status` (above) to gate the update affordance instead of probing for the `-32603` failure. It is a read-time hint, not a guarantee: supervision can change between the status read and this call, so callers must still handle `-32603` here.
 
 #### `pairing.getInfo` (local-only)
 
