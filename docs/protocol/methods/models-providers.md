@@ -55,7 +55,7 @@ snapshot written by an older daemon cannot resurface the pseudo-row.
   "providerId": "auggie",
   "models": [ /* ModelInfo rows */ ],
   "source": "auggie",          // the provider id, or "static" on fallback
-  "stale": true,               // optional — present whenever last-good data is served: after a failed probe, or on an aged entry while a background refresh runs
+  "stale": true,               // optional — present only when the served list is stale: last-good after a failed probe, or an aged entry while a background refresh runs (never on a fresh cache hit)
   "warning": "..."             // optional — human-readable reason for fallback/stale/empty data
 }
 ```
