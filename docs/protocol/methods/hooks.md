@@ -2,8 +2,10 @@
 
 ### 5.40 Background hooks — `hook.*` *(v2.10)*
 
-A **background hook** is a small agent-authored JS script the daemon runs on a fixed
-interval until it *dispatches* (wakes its owning agent with a message and ends), fails
+A **background hook** is a small agent-authored JS script the daemon runs on one of
+three **schedule kinds** — a fixed `delayMs` cadence, a recurring `cron` expression, or
+a one-shot `runAt` timestamp (within v8.7, intentd#1586; see the schedule-kinds block
+below) — until it *dispatches* (wakes its owning agent with a message and ends), fails
 (is *evicted* and wakes the owner with the error), is *cancelled*, or *expires* (its
 TTL passes — v3.1). Hooks let an agent
 watch for a condition (CI results, file changes) without burning turns polling. (For PR
@@ -12,16 +14,20 @@ watching specifically, agents are steered to the centralized `ws.pr.monitor` ins
 not.)
 Per the §6.8 principle, **scheduling is not on the wire**: hooks are created only by
 agents via the `ws.hook.schedule` MCP binding (`{ name ≤ 50 chars, code, delayMs ≥
-10000, ttlMs?, perpetual? }` — `name` is a short human-readable description shown to the user
+10000 | cron | runAt, ttlMs?, perpetual? }` — exactly ONE schedule kind is required
+(within v8.7, see the schedule-kinds block below); `name` is a short human-readable description shown to the user
 (cap raised from 19 within v5.1, intentd#929); the first run happens immediately as validation — a failing script rejects the
 call, a dispatching one wakes without persisting a schedule — unless the hook is
 **perpetual**, whose dispatching validation run wakes the owner AND persists the active
 schedule (see the perpetual block below); per-agent cap on active
 hooks, default 5). Every hook carries a **TTL** (v3.1) counted from creation, not the
-last run: `ttlMs` defaults to and is capped at 86 400 000 (24 hours — raised from the
+last run: for `delayMs` hooks `ttlMs` defaults to and is capped at 86 400 000 (24 hours — raised from the
 original 60-minute cap within v7.0, [intent-hq/intentd#1290](https://github.com/intent-hq/intentd/pull/1290);
-values are clamped into `[10000, 86400000]`, never rejected), and `expiresAt = createdAt + ttlMs`
-persists on the Hook. When the deadline passes the daemon stops the hook (terminal
+values are clamped into `[10000, 86400000]`, never rejected); `cron` hooks lift the cap —
+`ttlMs` defaults to and is capped at 7 days (same 10-second floor); a `runAt` hook's
+expiry is implied (fire time + 1-hour grace) and an explicit `ttlMs` is rejected (see the
+schedule-kinds block below). `expiresAt` (= `createdAt` + clamped `ttlMs`, or the implied
+`runAt` deadline) persists on the Hook. When the deadline passes the daemon stops the hook (terminal
 state `expired`, `nextRunAt` cleared), emits `hook:expired` (§6.5), and wakes the owner
 (`messageMetadata.reason: "expired"`) naming the hook and its `runCount` so the model
 can consciously reschedule — a perpetual hook, which may have fired repeatedly before
@@ -46,10 +52,10 @@ delete cascade). The FE
 | --- | --- | --- |
 | hook.list | workspaceId (req) | `{ hooks: Hook[] }` — every hook in the workspace, all states |
 | hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the wire path may cancel **any** hook in the workspace and the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake — see the ownership scoping below) |
-| hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run |
+| hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run (a `cron` hook's next fire is recomputed from the expression; a `runAt` hook fires its one shot early and retires — schedule-kinds block below) |
 
-**Hook** — `{ hookId, workspaceId, agentId, name, code, delayMs, state, createdAt,
-expiresAt?, lastRunAt?, nextRunAt?, runCount, perpetual, dispatchCount, lastError?,
+**Hook** — `{ hookId, workspaceId, agentId, name, code, delayMs, cron?, runAt?, state,
+createdAt, expiresAt?, lastRunAt?, nextRunAt?, runCount, perpetual, dispatchCount, lastError?,
 lastLogs?, lastState? }` with
 `state ∈ scheduled | running | dispatched | evicted | cancelled | expired`
 (`scheduled`/`running` are the active states;
@@ -68,9 +74,18 @@ sole fire counts too, so only a perpetual hook ever exceeds 1 — and both are a
 `dispatchCount: 0` unconditionally, so a retained pre-migration row that had already
 dispatched reads back `dispatchCount: 0` despite having fired — the "fires so far" contract
 only holds going forward, not retroactively for that one field on migrated rows).
-`expiresAt` (v3.1) is the TTL deadline (`createdAt` + clamped `ttlMs`, ≤ 24 hours from
-creation); it is set on every hook scheduled from v3.1 on and absent only on pre-TTL
+`expiresAt` (v3.1) is the TTL deadline (`createdAt` + clamped `ttlMs` — ≤ 24 hours from
+creation for `delayMs` hooks, ≤ 7 days for `cron` hooks — or the fire time + 1-hour grace
+for `runAt` hooks); it is set on every hook scheduled from v3.1 on and absent only on pre-TTL
 legacy rows, which never expire.
+`cron` / `runAt` (within v8.7,
+[intent-hq/intentd#1586](https://github.com/intent-hq/intentd/pull/1586)) are the
+schedule-kind fields — presence-detected additive fields, each present only on a hook of
+that kind: `cron` is the recurring 5-field cron expression (evaluated in UTC), `runAt`
+the one-shot RFC3339 fire time (normalized to UTC on persist). `delayMs` serializes as
+`0` for both new kinds, and pre-existing rows read back with both fields absent (additive
+nullable migration `0107_hook_schedule_kinds.sql`) — `delayMs` hooks are byte-for-byte
+unchanged on the wire.
 `lastLogs` is the **last run's** `console.log/info/warn/error` output (newline-joined,
 overwritten each run; absent when the run logged nothing) — the capture is capped at 100
 lines / 8 KiB per run, head-truncated with an `[earlier log lines truncated]` marker. A
@@ -84,6 +99,50 @@ line is appended to that run's `lastLogs`). The schedule-time validation run per
 its returned state too. `hook:*` event payloads (§6.5) stay light
 and do **not** carry `lastLogs` or `lastState` (they do carry `perpetual`/`dispatchCount`);
 clients read the heavy fields via `hook.list`.
+
+**Schedule kinds: `cron` and `runAt`** (within v8.7 — additive Hook wire fields plus
+MCP-only schedule params, no method-catalog change;
+[intent-hq/intentd#1586](https://github.com/intent-hq/intentd/pull/1586)).
+`ws.hook.schedule` accepts **exactly one** of `delayMs` | `cron` | `runAt` — zero or more
+than one schedule kind is rejected at schedule time. All three kinds share the same run
+contract (validation-run semantics, dispatch/evict/cancel outcomes, `hookState`
+carry-over, log capture, `hook:*` events, per-agent cap, the never-start-at/after-
+`expiresAt` guard, and the in-flight-run-at-expiry rule); the kinds differ only in how
+the next fire and the TTL are computed:
+
+- **`delayMs`** (the original fixed cadence) is unchanged: inter-run delay in ms
+  (≥ 10 000), `ttlMs` clamped into `[10000, 86400000]` with the 24-hour default/cap.
+- **`cron`** is a recurring standard **5-field** cron expression (minute hour
+  day-of-month month day-of-week — no seconds field), evaluated in **UTC**. Invalid or
+  six-field expressions are rejected at schedule time. The next fire is recomputed from
+  the expression after **every** run — natural ticks, `hook.runNow`, and the perpetual
+  dispatch re-arm alike — so a triggered early run never skews the cadence. An
+  expression with no computable future occurrence at schedule time is rejected; one
+  that becomes **exhausted** later (no next occurrence after a run) expires the hook
+  (terminal `expired`, owner woken) rather than leaving the row active with no future
+  fire. Because meaningful cron cadences (nightly, weekly) outlive the 24-hour cap,
+  `ttlMs` for cron hooks defaults to and is capped at **7 days** (floor unchanged).
+  `perpetual` composes as usual.
+- **`runAt`** is a **one-shot** fire at a future RFC3339 timestamp (any offset accepted,
+  normalized to UTC on persist; non-RFC3339 or past timestamps are rejected, as is one
+  so far out that fire + grace would overflow the supported date range — "too far in
+  the future", a validation error, never a panic). `nextRunAt` is the fire time itself, and the expiry is **implied**:
+  `expiresAt` = fire time + a fixed **1-hour grace** window — an explicit `ttlMs` and
+  `perpetual: true` are both rejected (a one-shot timer has nothing to re-arm). After
+  the fire the hook **retires regardless of outcome**: a dispatching run retires it
+  through the normal dispatch path (`dispatched`, owner woken with the message), and a
+  non-dispatching fire retires it as `expired` with a distinct **timer-fired** wake
+  (the notice says the one-shot timer fired, not that a TTL elapsed; same `hook:expired`
+  event and `reason: "expired"` wake metadata as TTL expiry). `hook.runNow` fires the
+  one shot early and retires it the same way. The grace window is the watchdog for a
+  fire missed while the daemon was down: a `runAt` row whose fire time passed during
+  downtime still runs at boot rehydration (overdue ⇒ immediate), while one past
+  `expiresAt` is expired like any other hook.
+
+Restart rehydration is kind-aware: `cron` and `runAt` rows resume to their **absolute**
+persisted deadline (overdue ⇒ immediate run), while `delayMs` rows resume to the earlier
+of the persisted deadline and a fresh `now + delayMs` countdown, exactly as before.
+
 
 **Perpetual hooks: dispatch is non-terminal** (behavior only, no method-catalog or
 wire-shape change beyond the two additive Hook/event fields above;
