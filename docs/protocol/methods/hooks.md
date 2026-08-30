@@ -43,8 +43,8 @@ passed while the daemon was down is expired at boot, owner woken then too). Work
 teardown also ends hooks ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896)):
 `workspace.archive` cancels every ACTIVE hook in the workspace (`hook:cancelled`
 emitted, owner woken with an archive notice; the wake itself parks behind the §5.1
-archived gate, and a later user message into the archived workspace flushes it FIFO in
-the same combined auto-unarchiving turn as that message —
+archived gate, and under the `"all"` flush mode a later user message into the archived
+workspace flushes it FIFO in the same combined auto-unarchiving turn as that message —
 [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587); unarchive
 does not resurrect the hooks — §5.1
 archive active-work teardown), and `workspace.delete` eagerly aborts live hook
