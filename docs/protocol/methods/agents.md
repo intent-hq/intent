@@ -762,6 +762,18 @@ question-hold derivation, and queue persistence/rehydration are all untouched by
   under a hold at all — the hold's release is a user-origin entry, which `systemOnly` by
   definition excludes — so eligible user-origin entries drain solo, FIFO, exactly like the
   single-entry path, and automatic entries stay parked.
+- **Archived workspace.** The §5.1 archived gate follows the same pattern
+  ([intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587); fixes
+  intent-hq/intent#3883): while the workspace is archived the drain proceeds only when a
+  ready **user-origin** entry queued at or after the archive (`queuedAt >= archivedAt`)
+  exists — a user send made INTO the archived workspace is the explicit resurrection
+  signal; a pre-archive parked user entry does not qualify, and with no qualifying entry
+  everything stays parked (no regression on the intentd#1293 archive/auto-unarchive
+  loop fix). In `"all"` mode the flush then carries EVERY ready entry — parked
+  archive-cancellation wakes included — FIFO in the user-led combined turn, whose claim
+  performs the §5.1 auto-unarchive at the turn-start choke point; the batch and
+  single-entry dequeues require user-origin under this exemption exactly as under a
+  hold.
 - **Never-lost requeue.** If an entry's row append exhausts the bounded persist retry
   (#547), the agent parks in `Error` and the drained entries are requeued in their original
   order — the failed entry at the queue front of its slice with `persisted: false`, entries
@@ -858,7 +870,12 @@ parked entries FIFO in the SAME combined turn as the user message (see the Queue
 flush "Question hold" bullet above). The conversion applies only when entries are parked, the
 flush mode is `"all"`, and the session is not parked in `Error` (whose documented recovery is
 the direct fresh send); under `"systemOnly"`/`"off"` — where no combined turn exists to carry
-the parked entries — the direct-send bypass stands unchanged.
+the parked entries — the direct-send bypass stands unchanged. The same conversion pattern
+covers a user send into an **archived** workspace with parked ready entries
+([intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587); §5.1 archive
+active-work teardown): identical guards, identical queued result, with the parked
+archive-cancellation wakes flushed FIFO in the combined auto-unarchiving turn (see the
+"Archived workspace" flush bullet above).
 
 **Release.** The hold ends when (1) a user row lands whose `messageMetadata` is
 `{ "type": "question_answers", "answeredQuestionsMessageId": "<marked assistant message id>" }`
