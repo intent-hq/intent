@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `8.6`
+**Protocol Version:** `8.7`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
