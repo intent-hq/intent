@@ -427,6 +427,23 @@ compact proposal JSON as `text`), so the standalone block is identical to the ar
 Ordinary collapsed tool outputs never pass the guards, and the `tool_result`'s `output` stays
 the collapsed object untouched.
 
+*Pending-proposal tracking (within v8.7 — [intentd#1580](https://github.com/intent-hq/intentd/pull/1580),
+[intentd#1581](https://github.com/intent-hq/intentd/pull/1581)).* When a turn persists lifted
+proposal resource blocks (either path above — the array lift and the collapsed-output fallback
+both land as persisted standalone blocks, so one turn-end scan covers both; the interruption
+flush included), the daemon records each proposal's id — **`applyToolCallId ?? preview.title`**,
+the same identity `proposal_resource_uri` encodes, parsed from the block's embedded proposal
+JSON — plus the carrying `messageId` in the ordered `pendingProposals` session-metadata list,
+lifted into the `AgentLite` `metadata` projection (`agent.list` / `agent.get`) with
+`agent:updated` emitted on change. The list is a set (multiple proposals across turns pend
+together; a re-proposed id replaces its older entry, newest wins), is reconciled after
+`agent.replaceMessages` / `agent.editAndRegenerate` transcript swaps, and is drained by the
+`agent.resolveProposal` RPC, which persists the outcome in the `proposalResolutions` map and
+delivers a `proposal_resolved` system notice to the model on BOTH outcomes (applied and
+dismissed). Full contract: §5.5 ([methods/agents.md](./methods/agents.md) — the
+`agent.resolveProposal` row and the "Pending proposals" section).
+
+
 **Standalone question-resource blocks (`AtTurnEnd`, [monorepo#732](https://github.com/intent-hq/monorepo/issues/732)).**
 The second resource MIME type is `application/vnd.intent.question+json` — structured clarifying
 questions an agent asks mid-task via the MCP `ws.app.question.ask` binding. Unlike the proposal
