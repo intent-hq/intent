@@ -719,11 +719,13 @@ at `workspace.create` — the initializer's context mentions — persisted on th
 row and returned on every `Workspace` payload so any client opening the workspace can
 seed its layout from the linked pages. The param is `contextLinks?: ContextLink[]` where
 `ContextLink = { kind: "issue" | "pr", url: string, owner: string, repo: string,
-number: number }` (`kind` lowercase on the wire; an unknown `kind` rejects `-32602` at
-parse time). Validated at the very top of the create op, before any state change, so a
+number: number }` (`kind` lowercase on the wire; an unknown `kind` — or a negative or
+fractional `number`, which fails the unsigned-integer field type — rejects `-32602` at
+parse time with a generic deserialization message). Validated at the very top of the
+create op, before any state change, so a
 bad list rejects `-32602` without leaving a partially created workspace behind: at most
 **20** entries, `url`/`owner`/`repo` non-empty (whitespace-only counts as empty), and
-`number` a positive integer — each error names the offending entry
+`number` non-zero — each of these post-parse errors names the offending entry
 (`contextLinks[i].field`). Write-once at create: `workspace.update` does not accept the
 field, and the daemon never mutates it after insert. An empty list (and every workspace
 created without the param) persists as absent, so the wire shape **omits** the field
