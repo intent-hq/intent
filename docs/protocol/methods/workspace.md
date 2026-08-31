@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; see the `contextLinks` notes below)); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; validated at the very top of the op, before any state change, so a bad reference rejects `-32602` without leaving a partially created workspace behind)*, fileBlocks? *(v6.12; same per-entry exactly-one-of-`data`/`attachmentId` validation as `agent.sendMessage`, `-32602` before any side effect — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; validated at the very top of the op, before any state change, so a bad reference rejects `-32602` without leaving a partially created workspace behind)*, fileBlocks? *(v6.12; same per-entry exactly-one-of-`data`/`attachmentId` validation as `agent.sendMessage`, `-32602` before any side effect — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -54,7 +54,11 @@ change Chief of Staff `ws.app.workspaces.create` behavior.
 { "jsonrpc": "2.0", "id": 1, "result": { "workspaces": [ { "id": "ws-abc", "title": "My Workspace" } ] } }
 ```
 
-**Branch naming (`workspace.create`).** An explicit `branch` is used untouched. Otherwise
+**Branch naming (`workspace.create`).** An explicit `branch` is used untouched. On a
+PR-aware create (a pr-kind `contextLinks` entry — see the PR-aware create notes below),
+an omitted `branch` defaults to the PR's **head branch**, which then behaves exactly like
+an explicit branch: no slug generation, no prefix, no uniquification — the point is to
+check out the EXISTING branch. Otherwise
 the daemon auto-names the branch with a friendly `word-word` slug (TS parity): extracted
 from `initialAgent.prompt` via local keyword heuristics when possible (`generateLocalSlug`
 — e.g. "fix the auth flow" → `auth-fix`), else a random adjective-animal pair
@@ -81,8 +85,17 @@ slugified `repositoryName` (basename fallback) — checked out on the workspace 
 (auto-named as above when not supplied), created from `baseRef` resolved as
 `refs/remotes/<remote>/<baseRef>` (remote defaults to `origin`) → `refs/heads/<baseRef>` →
 any rev-parsable spec, else `HEAD`. No network fetch is performed — the base resolves from
-local state. The returned `Workspace` carries `worktreePath`, `baseCommitSha` (the
-checked-out tip), and `checkoutMode` (`"worktree"` here; see the CoW and cache-hydration
+local state. A `branch` that already exists locally is reused rather than recreated; a
+branch that exists **only as a remote-tracking ref** (`refs/remotes/<remote>/<branch>` —
+e.g. a PR head branch never checked out locally) is **materialized** as a local branch at
+the remote tip with best-effort upstream tracking (a failure to record tracking never
+fails provisioning), instead of a fresh branch at the base commit, so the checkout
+carries the branch's existing commits. Materialization applies to **every**
+explicit-branch create naming a remote-only ref — not just PR-aware ones — and across
+all three checkout modes (worktree / CoW / direct). The returned `Workspace` carries
+`worktreePath`, `baseCommitSha` (the
+checked-out tip; for a PR-derived branch, the merge-base boundary — see the PR-aware
+create notes below), and `checkoutMode` (`"worktree"` here; see the CoW and cache-hydration
 notes below). An
 unresolvable `baseRef` on a valid repo fails with `-32602` carrying the
 `base-ref-unresolvable` `error.data` payload (§9).
@@ -731,6 +744,54 @@ field, and the daemon never mutates it after insert. An empty list (and every wo
 created without the param) persists as absent, so the wire shape **omits** the field
 (never `null` / `[]`); `workspace.duplicate` deliberately does not copy the source's
 links (they describe the original creation context).
+
+**PR-aware create (pr-kind `contextLinks`, new in intentd,
+[intent-hq/intentd#1606](https://github.com/intent-hq/intentd/pull/1606)).** When the
+`contextLinks` list carries a `kind: "pr"` entry, the workspace is PR-linked from birth
+and the checkout lands on the PR's branches. With multiple pr-kind links the **first
+wins** (deliberate tie-break: the FE puts the primary link first). Semantics, in order:
+
+- **Cross-repo guard.** A pr-kind link whose `owner`/`repo` mismatch the workspace's
+  known repository identity (caller-supplied or URL-derived; compared case-insensitively,
+  blank fields never mismatch) is **ignored with a warn log** — deriving another
+  repository's branch names onto this checkout would check out unrelated content or fail
+  the create on an unresolvable `baseRef`. The link still persists in `contextLinks`;
+  it just drives no PR-aware setup.
+- **Linkage from the link itself.** `prNumber`/`prUrl` seed from the link's `number`/
+  `url` — not from the forge lookup — so the linkage survives a degraded forge. Blank
+  `repositoryOwner`/`repositoryName` are seeded from the link's `owner`/`repo` (also on
+  the degraded path) so the persisted linkage stays functional for the background
+  PR-refresh sweep (§5.7 `pr.refresh`).
+- **Bounded forge lookup.** The create path fetches the PR via the configured
+  source-control provider, wrapped in a timeout (`pr_refresh_fetch_timeout`, 60 s in
+  production — the same bound as the PR-refresh sweep's per-entry fetch), so a hung forge
+  connection degrades instead of stalling the interactive create. On success: an omitted
+  (or empty) `branch` defaults to the PR's **head branch** and an omitted `baseRef` to
+  the PR's **base branch** — so ahead/behind and diffs reflect the merge target — and
+  `prStatus` + the `activePullRequest` snapshot (+ `pullRequests`) fill from the lookup.
+  **Explicit `branch`/`baseRef` params always win** over the PR-derived values.
+- **Graceful fallback.** A failed or timed-out lookup — or no source-control provider —
+  is **non-fatal** (warn log only): the create proceeds without the PR-derived git setup,
+  keeping the `prNumber`/`prUrl` linkage from the link (the PR-refresh sweep heals status
+  later). Non-PR creates (no links, or issue-kind only) are byte-for-byte unchanged.
+- **Checkout.** The PR-derived head branch is treated as an EXISTING branch (no slug
+  generation, no uniquification — see Branch naming above); a head existing only as a
+  remote-tracking ref is materialized at the remote tip with upstream tracking (see
+  Worktree provisioning above — the materialization applies across worktree / CoW /
+  direct modes).
+- **`baseCommitSha` = merge-base boundary.** A PR-derived branch checks out at the PR
+  head, not the base, so the row records the **merge-base** of the checked-out HEAD with
+  `baseRef` — preserving the contract that `baseCommitSha` is the base boundary — falling
+  back to the checked-out tip when the boundary cannot be resolved (e.g. the head
+  degraded to a fresh branch at the base commit, where tip = boundary anyway).
+- **Fork-hosted heads degrade loudly.** `PullRequest` carries no head-repo info, so a
+  head living in a fork has no `refs/remotes/<remote>/<branch>` in the base-repo clone —
+  the checkout falls back to a **fresh branch at the base commit** (named like the head,
+  without its commits) while `prNumber`/`prUrl` keep the linkage. The same applies to a
+  never-fetched branch on a local-repo create (provisioning does no network fetch;
+  cache-hydrated creates are fine — the cache refresh fetches). The daemon WARNs before
+  provisioning when a PR-derived head has no local or remote-tracking ref, so the
+  degradation is visible.
 
 **`statusImageAssetId` (new in intentd, migration `0062`).** An agent-authored workspace
 status screenshot reference (intent-hq/monorepo#997). The value is a content-addressed
