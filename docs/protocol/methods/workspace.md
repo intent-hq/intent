@@ -220,7 +220,8 @@ remote's default branch checked out. Flow:
    worktree path above.
 
 The workspace's `repositoryPath` **is** the checkout (`worktreePath` carries the same
-path), `baseCommitSha` is the checked-out tip, and `repositoryOwner`/`repositoryName`
+path), `baseCommitSha` is the checked-out tip (for a PR-derived branch, the merge-base
+boundary — see the PR-aware create notes below), and `repositoryOwner`/`repositoryName`
 derive from the URL when the caller left them blank. Progress streams through the same
 `git:clone:progress` / `git:clone:done` frame shapes as a network clone (scoped to the
 newly minted `workspaceId`). Without a `progressId` the legacy framing applies: **synthetic
@@ -766,7 +767,8 @@ wins** (deliberate tie-break: the FE puts the primary link first). Semantics, in
   source-control provider, wrapped in a timeout (`pr_refresh_fetch_timeout`, 60 s in
   production — the same bound as the PR-refresh sweep's per-entry fetch), so a hung forge
   connection degrades instead of stalling the interactive create. On success: an omitted
-  (or empty) `branch` defaults to the PR's **head branch** and an omitted `baseRef` to
+  (or empty) `branch` defaults to the PR's **head branch** and an omitted (or empty)
+  `baseRef` to
   the PR's **base branch** — so ahead/behind and diffs reflect the merge target — and
   `prStatus` + the `activePullRequest` snapshot (+ `pullRequests`) fill from the lookup.
   **Explicit `branch`/`baseRef` params always win** over the PR-derived values.
