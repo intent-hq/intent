@@ -32,11 +32,11 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 
 | Method | Params | Result |
 | --- | --- | --- |
-| mcp.servers.list | workspaceId? | { servers: McpServerConfig[] } — sensitive `env`/`headers` redacted |
+| mcp.servers.list | workspaceId? | { servers: McpServerConfig[] } — sensitive `env`/`headers` redacted; with `workspaceId` every entry adds `workspaceDisabled: boolean` (see "Per-workspace disable") |
 | mcp.servers.create | config (req): McpServerConfig | { server: McpServerConfig } |
 | mcp.servers.update | serverId (req), config (req): McpServerConfig | { server: McpServerConfig } |
 | mcp.servers.delete | serverId (req) | { success: true } |
-| mcp.servers.toggle | serverId (req), enabled (req): boolean | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop) |
+| mcp.servers.toggle | serverId (req), enabled (req): boolean, workspaceId? | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop). With `workspaceId` the toggle is workspace-scoped instead and returns { status, workspaceDisabled } (see "Per-workspace disable") |
 | mcp.servers.restart | serverId (req) | { status: McpServerStatus } — stop-then-start |
 | mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
@@ -93,6 +93,37 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 // ← response (emits mcp.servers:status-changed)
 { "jsonrpc":"2.0","id":61,"result":{ "status":{
   "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 } } }
+```
+
+- **Per-workspace disable** — a second, workspace-scoped disabled layer sits over the global
+  setting: **a global disable always wins; the workspace layer only narrows an
+  otherwise-enabled server.**
+  - `mcp.servers.toggle` with `workspaceId` sets (`enabled: false`) or clears
+    (`enabled: true`) the per-workspace disabled marker for that server **only** — the
+    global config's `enabled` flag, `mcp.disabledServers`, and the hub lifecycle are
+    untouched (the hub is one shared runtime; other workspaces may still use the server,
+    and enforcement happens per call on the agent surface). The result is
+    `{ status: McpServerStatus, workspaceDisabled: boolean }`, and the daemon emits a
+    self-sufficient `workspace:updated` delta (§6.5) carrying
+    `{ mcpServerToggled: { serverId, workspaceDisabled } }`. Unknown `serverId` **or**
+    unknown `workspaceId` → `-32602` with `data.code: "not-found"` (§9).
+  - `mcp.servers.list` with `workspaceId` adds `workspaceDisabled: boolean` to **every**
+    server entry; without it the key is absent entirely. The scoped read is lenient — an
+    unknown `workspaceId` yields `workspaceDisabled: false` on every entry, never an error.
+  - Agent surface (`ws.mcp.*`, no wire method): `listServers` keeps workspace-disabled
+    servers listed with `workspaceDisabled: true` (parity with globally disabled servers,
+    which stay listed with `enabled: false`); `listTools`/`callTool` against a
+    workspace-disabled server are rejected with
+    `mcp server <id> is disabled for this workspace`.
+
+```json
+// → request — disable an MCP server for ONE workspace (global config untouched)
+{ "jsonrpc":"2.0","id":62,"method":"mcp.servers.toggle",
+  "params":{ "serverId":"srv-fs","enabled":false,"workspaceId":"ws-1" } }
+// ← response (emits workspace:updated with { mcpServerToggled })
+{ "jsonrpc":"2.0","id":62,"result":{ "status":{
+  "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 },
+  "workspaceDisabled":true } }
 ```
 
 > **No `memories.*` wire surface.** Long-term agent **memories** exist as an internal context source the
