@@ -2,18 +2,18 @@
 
 ## 5. Method Catalog
 
-The API exposes **337 dispatchable method names** across the following categories:
+The API exposes **338 dispatchable method names** across the following categories:
 
 - **Router methods:** 298 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 37 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 38 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 337 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 338 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 337 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 338 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
 
@@ -60,15 +60,15 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-### Fast-path methods (37 total)
+### Fast-path methods (38 total)
 
-The following 37 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 38 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.requestUpdate, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
-**UDS-only methods:** `system.shutdown` and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). (The third UDS-only method, the v2.2 legacy workspace import, was removed in v9.0 — see versioning.md.) `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
+**UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
 **`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
 
@@ -219,6 +219,33 @@ The `system.status` result additionally reports whether the daemon can act on `s
 - Evaluated at **read time** on every `system.status` call, so a supervision change mid-session (sitter started or stopped) is reflected on the next read; clients that only read on (re)connect pick it up at the next reconnect.
 - `updateSupported: true` reports that the supervision check **passed at read time** — not a delivery guarantee: the sitter can exit (or signaling can fail) between the status read and a later `system.requestUpdate`, so callers must still handle that call's documented `-32603`. It also says nothing about whether an update exists — the check outcome is observed out-of-band (see `system.requestUpdate` below).
 - **Additive** response field carrying the **v8.7** minor bump (the method surface is unchanged). **Always present** on 8.7+ daemons (a plain boolean, never `null`); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
+
+#### `system.importLegacy` (UDS-only, v2.2)
+
+Runs the daemon's legacy workspace import over RPC — the same engine behind the `intentd import-legacy` CLI and the first-boot hook — so a client can trigger a recovery import without shell access. Scans the default legacy roots and imports per-directory legacy workspaces (notes, comments, agent sessions, assets) into the live store.
+
+**Request:** `{ force?: boolean }` — `force` is optional and defaults to `false`. When `true`, workspaces whose id already exists in the DB are **updated (overwritten)** instead of skipped. `force` is overwrite-only: explicit runs (this RPC and the CLI) are never gated by the first-boot completion marker, so `force` is not needed to re-run. A non-boolean `force` → `-32602 "force must be a boolean"`.
+
+**Response:**
+
+```json
+{
+  "imported": 3, "updated": 0, "skipped": 1,
+  "notes": 12, "comments": 4, "agents": 2, "assets": 5,
+  "skipSummary": [ { "id": "ws-existing", "reason": "already in DB" } ],
+  "compatibilityFailures": false,
+  "markerWritten": true
+}
+```
+
+- `imported` / `updated` / `skipped` count workspaces; `notes`, `comments`, `assets` are total rows/files imported across all workspaces, and `agents` counts imported agent **sessions**.
+- `skipSummary` lists the first **20** skipped workspaces as `{ id, reason }`.
+- `compatibilityFailures` is `true` when any workspace was skipped for a non-operational reason (unreadable/unparseable `workspace.json`, missing id, etc.). Operational skips — `already in DB` and transient `update failed:` / `insert failed:` / `lookup failed:` — do not count.
+- `markerWritten` reports whether the first-boot completion marker was (re)written after this run. The marker is **not** written when compatibility failures occur, so the first-boot hook stays armed to retry; explicit CLI/RPC runs are not gated by the marker either way.
+- **UDS-only:** a remote (TCP/WSS) caller is rejected with `-32001 "system.importLegacy is available over UDS only"`.
+- A run that fails outright (e.g. the store cannot be read) → `-32603` with the underlying message. Per-workspace problems are soft: they surface as skips in the result, not as errors.
+- Concurrent calls are serialized behind an internal lock, so overlapping runs cannot race workspace inserts or asset copies.
+- **No bus events:** the import writes to the store directly and publishes no `workspace:*` / `note:*` events; clients must refresh (e.g. `workspace.list`) to see imported workspaces.
 
 #### `system.gitCredential` (UDS-only, v2.5)
 
