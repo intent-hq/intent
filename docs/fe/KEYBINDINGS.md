@@ -108,7 +108,6 @@
 | `Enter`       | Send Message                   | In chat input                |
 | `Mod+Enter`   | Send Message (force/interrupt) | In chat input                |
 | `Shift+Enter` | Insert New Line                | In chat input                |
-| `Escape`      | Stop Agent Generation          | During agent response        |
 | `/`           | Focus Chat Input               | Not in editable element      |
 | `Mod+/`       | Enhance Prompt                 | Chat inputs / prompt editors |
 | `Mod+↑`       | Navigate to Previous Message   | Not in inputs                |
