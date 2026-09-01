@@ -109,7 +109,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	build build-intentd build-sidecar test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev dev-prod ios-open ios-info dist-mac
+	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
 
 all: build
 
@@ -519,6 +519,29 @@ uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHEN
 		echo "[uds-to-unauthed-wss-bridge] Bridging installed daemon socket: $$socket"; \
 		echo "[uds-to-unauthed-wss-bridge] WARNING: this exposes the FULL UNAUTHENTICATED daemon API as plain ws:// on 127.0.0.1:$(BRIDGE_PORT) — no TLS, no auth. Loopback-only by design; any process on this machine can drive the daemon while the bridge runs."; \
 		INTENTD_SOCKET="$$socket" BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs
+
+dev-web-live: ensure-fe-submodule ## Run the web FE against the installed daemon through the loopback-only UDS bridge
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-web-live] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@bridge_pid=""; \
+		cleanup() { \
+			if [ -n "$$bridge_pid" ] && kill -0 "$$bridge_pid" 2>/dev/null; then kill "$$bridge_pid" 2>/dev/null || true; fi; \
+			if [ -n "$$bridge_pid" ]; then wait "$$bridge_pid" 2>/dev/null || true; fi; \
+		}; \
+		trap 'exit 130' INT; \
+		trap 'exit 143' HUP TERM; \
+		trap cleanup EXIT; \
+		BRIDGE_HOST=127.0.0.1 BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs & \
+		bridge_pid=$$!; \
+		attempt=0; \
+		until node -e 'const net = require("node:net"); const socket = net.connect(Number(process.argv[1]), "127.0.0.1", () => { socket.end(); process.exit(0); }); socket.on("error", () => process.exit(1)); setTimeout(() => process.exit(1), 250).unref();' "$(BRIDGE_PORT)" 2>/dev/null; do \
+			if ! kill -0 "$$bridge_pid" 2>/dev/null; then wait "$$bridge_pid"; exit $$?; fi; \
+			attempt=$$((attempt + 1)); \
+			if [ "$$attempt" -ge 100 ]; then echo "[dev-web-live] ERROR: bridge did not listen on 127.0.0.1:$(BRIDGE_PORT) within 10 seconds."; exit 1; fi; \
+			sleep 0.1; \
+		done; \
+		if ! kill -0 "$$bridge_pid" 2>/dev/null; then wait "$$bridge_pid"; exit $$?; fi; \
+		echo "[dev-web-live] Bridge is ready; starting the web FE with VITE_INTENTD_WS_URL=ws://127.0.0.1:$(BRIDGE_PORT)/ws"; \
+		cd $(FE_DIR) && VITE_INTENTD_WS_URL="ws://127.0.0.1:$(BRIDGE_PORT)/ws" pnpm run dev:web
 
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and

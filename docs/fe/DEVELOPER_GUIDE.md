@@ -59,6 +59,10 @@ corepack pnpm run test:unit     # Vitest suite
 corepack pnpm run test:playwright
 ```
 
+For Loop A work against the installed daemon, run `make dev-web-live` from the
+monorepo root. It starts the loopback-only UDS bridge, waits for it, and starts
+`dev:web`; Ctrl-C stops both processes.
+
 ## Fast UI Preview Workflow
 
 Open a named preview after the server prints its URL. These examples use the isolated
