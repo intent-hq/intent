@@ -1091,9 +1091,11 @@ and background sessions never count: their attention surface is the parent/subsc
 §5.5 attention-retire taxonomy). A pending attention request raised MID-TURN whose
 user-facing surfacing is still parked on the deferred-attention registry does not count
 either ([intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639), §5.5
-idle-deferred surfacing): the workspace reads `in_progress` while the raising turn runs,
-and the turn-end flush's recompute promotes it to `blocked` / `needs_attention` exactly at
-the surfacing point. Best-effort: a store read failure fails open to `false`
+idle-deferred surfacing): the request feeds these axes only from the turn-end flush
+onward — while the raising turn runs the derivation proceeds without it (typically
+reading `in_progress` via step 3, absent other signals), and the flush's recompute folds
+it in under the ordinary precedence (a terminal-failure flush's `error` park still reads
+`failed`, step 0). Best-effort: a store read failure fails open to `false`
 (the question-hold derivation fails open itself), so list/get emission is never wedged and
 attention is never fabricated.
 

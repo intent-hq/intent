@@ -319,8 +319,8 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    (kind `discussion`) (§5.1 steps 1–2), pushed as
    `workspace:displayStatus-changed` on an actual transition (§6.5); for a mid-turn raise
    the raise-side recompute runs at the turn-end flush, not at tool-call time — a pending
-   request whose surfacing is still parked does not feed the derivation, so the workspace
-   stays `in_progress` while the raising turn runs (idle-deferred surfacing, below).
+   request whose surfacing is still parked does not feed the derivation (idle-deferred
+   surfacing, below).
 2. **Transcript notice** — a system-role message is appended with a single text block carrying
    the reason and `meta.kind = "discussion-request"` / `"blocker-report"` (the
    `InterruptionNotice` shape, §5.35), emitting the standard `agent:message`
@@ -381,9 +381,13 @@ settlement, harness-wake idle, user interrupt, or terminal turn failure, always 
 BEFORE the paired `agent:idle` / `agent:failed` emit so subscribers never see a quiet
 idle that later grows an attention card. A raise with no in-flight turn surfaces
 immediately, as before. While the marker is parked the workspace's `displayStatus`
-derivation skips the pending request (the workspace reads `in_progress` while the
-raising turn runs) and promotes to `blocked` / `needs_attention` exactly at the flush
-(§5.1 steps 1–2). A request **cleared before its flush** — a mid-turn user-origin
+derivation skips the pending request; the request feeds the derivation from the flush
+onward, subject to the ordinary §5.1 precedence and eligibility rules — the typical
+sequence for a top-level foreground caller is `in_progress` while the raising turn runs,
+then `blocked` / `needs_attention` at the flush (§5.1 steps 1–2), but a higher-precedence
+axis still outranks it (a terminal-failure flush's `error` park reads `failed`, §5.1
+step 0) and a child/background caller's request never feeds the derivation at all.
+A request **cleared before its flush** — a mid-turn user-origin
 delivery, or an interrupt-with-message whose follow-up delivery clears it at turn
 begin — retires the marker WITHOUT surfacing: no toast, no transcript notice, only the
 plain `attentionRequestCleared` turn-begin emit. The marker is in-memory only: the
