@@ -352,9 +352,17 @@ function main() {
     console.error('[uds-ws-bridge] if you really must, pass --unsafe-allow-non-loopback or BRIDGE_UNSAFE_NON_LOOPBACK=1.');
     process.exit(2);
   }
-  if (!fs.existsSync(socketPath)) {
+  let socketStat;
+  try {
+    socketStat = fs.statSync(socketPath);
+  } catch {
     console.error(`[uds-ws-bridge] error: intentd UDS socket not found at ${socketPath}`);
     console.error('[uds-ws-bridge] is intentd running? Override with INTENTD_SOCKET or --socket.');
+    process.exit(1);
+  }
+  if (!socketStat.isSocket()) {
+    console.error(`[uds-ws-bridge] error: intentd UDS path is not a Unix domain socket: ${socketPath}`);
+    console.error('[uds-ws-bridge] start intentd or point INTENTD_SOCKET/--socket at its socket.');
     process.exit(1);
   }
   const bridge = createBridge({ socketPath, host, port });

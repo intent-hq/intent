@@ -337,6 +337,20 @@ test('non-loopback host is refused at startup without the unsafe opt-out', async
   assert.match(stderr, /--unsafe-allow-non-loopback/);
 });
 
+test('existing non-socket paths are refused at startup', async () => {
+  for (const socketPath of [process.execPath, os.tmpdir()]) {
+    const child = spawn(process.execPath, [BRIDGE_PATH, '--socket', socketPath, '--port', '0']);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    const [code] = await once(child, 'exit');
+    assert.equal(code, 1);
+    assert.match(stderr, /not a Unix domain socket/);
+    assert.doesNotMatch(stdout, /listening on/);
+  }
+});
+
 test('UDS connect failure closes the WS client with a clear reason', async (t) => {
   const bridge = createBridge({ socketPath: tmpSockPath(), host: '127.0.0.1', port: 0 });
   await new Promise((resolve) => bridge.listen(resolve));
