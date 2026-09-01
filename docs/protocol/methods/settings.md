@@ -7,9 +7,9 @@
 | Method | Params | Result |
 | --- | --- | --- |
 | settings.list | — | { settings: SettingDefinitionWithValue[], revision: number } (sensitive values redacted; TOML-backed entries carry `origin`) |
-| settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
-| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }], revision: number }; triggers settings:changed |
-| settings.reset | path (req) | { path, value, revision: number } (restores defaultValue) — -32602 if path is unknown |
+| settings.get | path (req) | { path, value, definition, origin?, revision: number } — -32602 if path is unknown |
+| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value, origin? }], revision: number }; triggers settings:changed |
+| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue) — -32602 if path is unknown |
 
 `SettingDefinition`** shape:**
 
@@ -30,7 +30,7 @@ interface SettingDefinition {
 // SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
 ```
 
-`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
+`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value, origin? }` pairs (sensitive values redacted).
 
 Provider/model default selection is one logical mutation. When a selection changes the
 provider, clients MUST send `providers.active` and the complete updated
@@ -45,7 +45,9 @@ daemon process and strictly increases after every committed settings mutation, i
 wire updates/resets and accepted `config.toml` live reloads. A rejected atomic batch does
 not advance it. The successful mutation response and its `settings:changed` event carry
 the same revision; an empty/tolerated-only update returns the current revision and emits
-no event. Clients should ignore snapshots or events older than their highest revision for
+no event. Every authoritative read (`settings.list` and `settings.get`) also carries the
+revision at which its values and origins were read. Clients should ignore reads, mutation
+results, or events older than their highest revision for
 the current backend connection. Because revisions are process-local, clients must clear
 that watermark whenever the backend connection changes or reconnects, then seed it from
 the next `settings.list` snapshot. An event or mutation result at the watermark is a valid
@@ -65,6 +67,10 @@ machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitial
 `hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
 `endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
 (secrets stay in `secrets.json`, state blobs stay in SQLite).
+Successful update/reset results and `settings:changed` entries carry the post-commit
+`origin` for TOML-backed paths as well. This field is required for convergence even when
+the effective value is unchanged: explicitly writing a schema default changes its origin
+to `"file"`, while resetting that explicit value changes it back to `"default"`.
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
 comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
 re-parse, debounced; invalid content keeps last-good values) and emit the same
