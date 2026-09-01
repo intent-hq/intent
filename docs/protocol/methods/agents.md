@@ -289,7 +289,7 @@ missing credentials). There is **no wire method** (MCP bindings only, following 
 principle); both return `{ ok: true, kind, reason, savedAt }`. Available to EVERY agent —
 delegated or not, with or without a linked task. `reason` is required (trimmed; empty →
 `-32602`), an unknown kind is `-32602`, and a caller-context-free invocation is rejected
-(agents only). One shared services op behind both bindings does five things:
+(agents only). One shared services op behind both bindings does six things:
 
 1. **Session persistence** — the pending request is persisted on the caller's session as
    `attentionRequestKind` (`"discussion" | "blocker"`), `attentionRequestReason`, and
