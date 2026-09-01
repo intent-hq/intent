@@ -6,10 +6,10 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted; TOML-backed entries carry `origin`) |
+| settings.list | — | { settings: SettingDefinitionWithValue[], revision: number } (sensitive values redacted; TOML-backed entries carry `origin`) |
 | settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
-| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }] }; triggers settings:changed |
-| settings.reset | path (req) | { path, value } (restores defaultValue) — -32602 if path is unknown |
+| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }], revision: number }; triggers settings:changed |
+| settings.reset | path (req) | { path, value, revision: number } (restores defaultValue) — -32602 if path is unknown |
 
 `SettingDefinition`** shape:**
 
@@ -31,6 +31,16 @@ interface SettingDefinition {
 ```
 
 `changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
+
+`revision` is an unsigned, daemon-issued ordering watermark. It starts at `0` for each
+daemon process and strictly increases after every committed settings mutation, including
+wire updates/resets and accepted `config.toml` live reloads. A rejected atomic batch does
+not advance it. The successful mutation response and its `settings:changed` event carry
+the same revision; an empty/tolerated-only update returns the current revision and emits
+no event. Clients should ignore snapshots or events older than their highest revision for
+the current backend connection. Because revisions are process-local, clients must clear
+that watermark whenever the backend connection changes or reconnects, then seed it from
+the next `settings.list` snapshot. These fields are additive; older clients may ignore them.
 
 **Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
 persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`.
@@ -112,4 +122,3 @@ the overriding flag ("overridden by startup flag …").
 // ← response
 { "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
 ```
-
