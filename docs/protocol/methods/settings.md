@@ -6,10 +6,10 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| settings.list | — | { settings: SettingDefinitionWithValue[] } (sensitive values redacted; TOML-backed entries carry `origin`) |
-| settings.get | path (req) | { path, value, definition, origin? } — -32602 if path is unknown |
-| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value }] }; triggers settings:changed |
-| settings.reset | path (req) | { path, value } (restores defaultValue) — -32602 if path is unknown |
+| settings.list | — | { settings: SettingDefinitionWithValue[], revision: number } (sensitive values redacted; TOML-backed entries carry `origin`) |
+| settings.get | path (req) | { path, value, definition, origin?, revision: number } — -32602 if path is unknown |
+| settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value, origin? }], revision: number }; triggers settings:changed |
+| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue) — -32602 if path is unknown |
 
 `SettingDefinition`** shape:**
 
@@ -30,7 +30,34 @@ interface SettingDefinition {
 // SettingDefinitionWithValue = SettingDefinition & { value: unknown }  // current value (redacted if sensitive)
 ```
 
-`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
+`changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value, origin? }` pairs (sensitive values redacted).
+
+Provider/model default selection is one logical mutation. When a selection changes the
+provider, clients MUST send `providers.active` and the complete updated
+`model.providerDefaults` object in one `settings.update` batch. Object-valued settings are
+whole-value replacements, so the client must preserve entries for providers it is not
+changing. Splitting the two paths across requests exposes an invalid intermediate default
+to agent creation and other clients. The daemon validates and commits the whole batch, or
+rejects it without changing either path, advancing the revision, or emitting an event.
+
+`revision` is an unsigned, daemon-issued ordering watermark. It starts at `0` for each
+daemon process and strictly increases after every committed settings mutation, including
+wire updates/resets and accepted `config.toml` live reloads. A rejected atomic batch does
+not advance it. The successful mutation response and its `settings:changed` event carry
+the same revision. An empty/tolerated-only update, an update whose entries already match
+the stored value and origin, or a reset whose value is already absent is a no-op: it
+returns the current revision and emits no event (`settings.update.applied` also omits
+unchanged entries). Every authoritative read (`settings.list` and `settings.get`) carries the
+revision at which its values and origins were read. Clients should ignore reads, mutation
+results, or events older than their highest revision for
+the current backend connection. Because revisions are process-local, clients must clear
+that watermark whenever the backend connection changes or reconnects, then seed it from
+the next `settings.list` snapshot. An event or mutation result at the watermark is a valid
+duplicate view of the same commit and may be applied idempotently; only a lower revision is
+stale. A client talking to an older daemon that omits these additive fields may retain its
+legacy arrival-order behavior, but MUST NOT compare a missing revision with a numbered
+watermark. See [frontend reconciliation](../../ARCHITECTURE.md#settings-state-reconciliation)
+for connection-generation handling.
 
 **Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
 persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`.
@@ -42,6 +69,10 @@ machine-state blobs (`repos.known`, `workspace.changeHistory`, `workspaceInitial
 `hardwareConsole.state`, `permissions.rules`, `userRules` / `workspaceRules`,
 `endUserRules`, `voice.vocabulary`) have **no** `origin` — they never live in config.toml
 (secrets stay in `secrets.json`, state blobs stay in SQLite).
+Successful update/reset results and `settings:changed` entries carry the post-commit
+`origin` for TOML-backed paths as well. This field is required for convergence even when
+the effective value is unchanged: explicitly writing a schema default changes its origin
+to `"file"`, while resetting that explicit value changes it back to `"default"`.
 `settings.update` on a TOML-backed key rewrites config.toml atomically (temp file + rename,
 comment/layout-preserving); external hand-edits of config.toml are live-reloaded (strict
 re-parse, debounced; invalid content keeps last-good values) and emit the same
@@ -81,7 +112,8 @@ the overriding flag ("overridden by startup flag …").
   { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
     "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
   { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
-    "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
+    "category":"sourceControl","type":"string","sensitive":true,"value":null } ],
+  "revision":7 } }
 ```
 
 ```json
@@ -103,13 +135,30 @@ the overriding flag ("overridden by startup flag …").
 // ← response
 { "jsonrpc":"2.0","id":53,"result":{ "applied":[
   { "path":"server.port","value":5182 },
-  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ],
+  "revision":8 } }
+```
+
+```json
+// → request — atomically select a model owned by another provider
+{ "jsonrpc":"2.0","id":54,"method":"settings.update","params":{ "changes":[
+  { "path":"providers.active","value":"codex" },
+  { "path":"model.providerDefaults","value":{
+    "claude-code":"claude-code:opus-4.8",
+    "codex":"codex:gpt-5.6-codex"
+  } } ] } }
+// ← response (settings:changed carries these changes and revision 9)
+{ "jsonrpc":"2.0","id":54,"result":{ "applied":[
+  { "path":"providers.active","value":"codex" },
+  { "path":"model.providerDefaults","value":{
+    "claude-code":"claude-code:opus-4.8",
+    "codex":"codex:gpt-5.6-codex"
+  } } ],"revision":9 } }
 ```
 
 ```json
 // → request — reset one setting to its default
-{ "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
+{ "jsonrpc":"2.0","id":55,"method":"settings.reset","params":{ "path":"server.port" } }
 // ← response
-{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
+{ "jsonrpc":"2.0","id":55,"result":{ "path":"server.port","value":5181,"revision":10 } }
 ```
-

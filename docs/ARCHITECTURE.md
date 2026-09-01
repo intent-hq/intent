@@ -273,6 +273,30 @@ Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
   mutation path). Bundled specialists carry no frontmatter `model` and inherit
   the user's configured default (or the provider CLI default).
 
+## Settings state reconciliation
+
+The daemon is the authority for backend-owned settings. Each committed mutation is an
+atomic state transition identified by the process-local `revision` described in protocol
+§5.12. A provider/model default selection that crosses providers is therefore one batch:
+`providers.active` and the complete `model.providerDefaults` map are written together.
+Frontend code must not persist those paths independently or treat the map as a patch.
+
+Each client connection maintains a highest-applied settings revision. A numbered
+`settings.list` snapshot, mutation result, or `settings:changed` event is applied only when
+its revision is at least that watermark; lower revisions are stale. Equal revisions are
+the response/event views of one commit and must be harmless to apply more than once. This
+ordering rule lets optimistic UI survive delayed snapshots while still converging on the
+daemon's committed state. A rejected batch leaves both authoritative state and the
+watermark unchanged; the client rolls back or rehydrates instead of synthesizing a partial
+success.
+
+The watermark belongs to a backend connection generation, not to durable frontend state.
+On disconnect, reconnect, or backend/daemon switch, invalidate in-flight work from the old
+generation, clear the watermark, and hydrate from a fresh `settings.list` before accepting
+that generation's events. This is required because a restarted daemon begins again at
+revision `0`. For compatibility with older daemons, an absent revision selects the legacy
+arrival-order path; it is never coerced to `0` or compared with a numbered watermark.
+
 ## Local models: the unsloth provider
 
 The `unsloth` provider runs Unsloth GGUF models fully locally. It has no agent
