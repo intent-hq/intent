@@ -174,6 +174,7 @@ The `system.status` result also includes **additive** routing fields so an authe
   "localIps": ["192.168.1.10", "10.0.0.5"], // non-loopback IPv4 addresses (same source as server.pairingInfo)
   "hostname": "studio.local",               // local OS hostname
   "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
+  "tcAddress": "tc7f2a91.tailcat.net",      // tailcat tunnel address — present only while the tunnel sidecar is running
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
@@ -181,6 +182,7 @@ The `system.status` result also includes **additive** routing fields so an authe
 - `localIps` lists the host's non-loopback IPv4 addresses (virtual/container interfaces skipped) — the same list `server.pairingInfo` returns. It may be **empty** on a host with no routable interface, but is always an array, never `null`. The daemon serves it from a background-refreshed cache (~15s TTL), so a freshly changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12), served alongside `localIps` to local and remote callers alike so a connected client can refresh its stored tunnel route from `system.status` alone. Present only while the tunnel sidecar is actually running; **omitted** — never `null` — when the tunnel is disabled or the sidecar is down (including the restart-backoff window after an unexpected sidecar exit, so the field never advertises a route nothing is serving). Same address as `server.pairingInfo` / `pairing.getInfo`; detect by presence.
 - These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
 #### `system.status` — file-watch coverage fields (additive)
@@ -293,17 +295,19 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 
 ```json
 {
-  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...",
+  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...&tc=tc7f2a91.tailcat.net",
   "hosts": ["192.168.1.10", "10.0.0.5"],
   "port": 5181,
   "fingerprint": "AA:BB:...",
   "token": "abab...",
-  "version": 1
+  "version": 1,
+  "tcAddress": "tc7f2a91.tailcat.net"
 }
 ```
 
-- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`) are provided so clients can render their own payloads.
+- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&tc=<addr>]` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
 - Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd pair`, so all pairing surfaces stay consistent.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12). Present only while the tunnel sidecar is running; **omitted** — never `null` — when the tunnel is disabled or down; detect by presence. When present it is also appended to `uri` as the **final** `tc=` query param (percent-encoded); when absent the URI carries no `tc=` param. The param is additive: clients that predate it tolerate the unknown query param, so the URI stays parseable everywhere.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
 - Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available. The listener-down failure carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator. The no-address failure keeps its plain descriptive message.
 
@@ -323,7 +327,8 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "path": "/ws",
   "localIps": ["192.168.1.10", "10.0.0.5"],
   "hostname": "my-mac.local",
-  "prettyHostname": "Clement's Mac Studio"
+  "prettyHostname": "Clement's Mac Studio",
+  "tcAddress": "tc7f2a91.tailcat.net"
 }
 ```
 
@@ -331,6 +336,7 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
 - `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
 - `prettyHostname` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name), falling back to `hostname` when no pretty name is available — matching `host.status` / `system.status`; detect by presence.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12) — the same field `pairing.getInfo` and `system.status` carry, with the same availability semantics: present only while the tunnel sidecar is running, **omitted** — never `null` — when the tunnel is disabled or down; detect by presence.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
 
 #### `server.rotateToken` (local-only)
