@@ -32,6 +32,14 @@ interface SettingDefinition {
 
 `changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value }` pairs (sensitive values redacted).
 
+Provider/model default selection is one logical mutation. When a selection changes the
+provider, clients MUST send `providers.active` and the complete updated
+`model.providerDefaults` object in one `settings.update` batch. Object-valued settings are
+whole-value replacements, so the client must preserve entries for providers it is not
+changing. Splitting the two paths across requests exposes an invalid intermediate default
+to agent creation and other clients. The daemon validates and commits the whole batch, or
+rejects it without changing either path, advancing the revision, or emitting an event.
+
 `revision` is an unsigned, daemon-issued ordering watermark. It starts at `0` for each
 daemon process and strictly increases after every committed settings mutation, including
 wire updates/resets and accepted `config.toml` live reloads. A rejected atomic batch does
@@ -40,7 +48,12 @@ the same revision; an empty/tolerated-only update returns the current revision a
 no event. Clients should ignore snapshots or events older than their highest revision for
 the current backend connection. Because revisions are process-local, clients must clear
 that watermark whenever the backend connection changes or reconnects, then seed it from
-the next `settings.list` snapshot. These fields are additive; older clients may ignore them.
+the next `settings.list` snapshot. An event or mutation result at the watermark is a valid
+duplicate view of the same commit and may be applied idempotently; only a lower revision is
+stale. A client talking to an older daemon that omits these additive fields may retain its
+legacy arrival-order behavior, but MUST NOT compare a missing revision with a numbered
+watermark. See [frontend reconciliation](../../ARCHITECTURE.md#settings-state-reconciliation)
+for connection-generation handling.
 
 **Storage & the `origin` field.** Non-secret human-editable settings are **TOML-backed**: they
 persist in `<data_dir>/config.toml`, layered `defaults < config.toml < startup flags/env`.
@@ -91,7 +104,8 @@ the overriding flag ("overridden by startup flag …").
   { "path":"server.port","label":"WS port","description":"TCP port for the WSS listener",
     "category":"server","type":"number","min":1024,"max":65535,"defaultValue":5181,"value":5181 },
   { "path":"sourceControl.github.token","label":"GitHub token","description":"PAT used by octocrab",
-    "category":"sourceControl","type":"string","sensitive":true,"value":null } ] } }
+    "category":"sourceControl","type":"string","sensitive":true,"value":null } ],
+  "revision":7 } }
 ```
 
 ```json
@@ -113,12 +127,30 @@ the overriding flag ("overridden by startup flag …").
 // ← response
 { "jsonrpc":"2.0","id":53,"result":{ "applied":[
   { "path":"server.port","value":5182 },
-  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ] } }
+  { "path":"sourceControl.github.tokenSource","value":"gh-cli" } ],
+  "revision":8 } }
+```
+
+```json
+// → request — atomically select a model owned by another provider
+{ "jsonrpc":"2.0","id":54,"method":"settings.update","params":{ "changes":[
+  { "path":"providers.active","value":"codex" },
+  { "path":"model.providerDefaults","value":{
+    "claude-code":"claude-code:opus-4.8",
+    "codex":"codex:gpt-5.6-codex"
+  } } ] } }
+// ← response (settings:changed carries these changes and revision 9)
+{ "jsonrpc":"2.0","id":54,"result":{ "applied":[
+  { "path":"providers.active","value":"codex" },
+  { "path":"model.providerDefaults","value":{
+    "claude-code":"claude-code:opus-4.8",
+    "codex":"codex:gpt-5.6-codex"
+  } } ],"revision":9 } }
 ```
 
 ```json
 // → request — reset one setting to its default
-{ "jsonrpc":"2.0","id":54,"method":"settings.reset","params":{ "path":"server.port" } }
+{ "jsonrpc":"2.0","id":55,"method":"settings.reset","params":{ "path":"server.port" } }
 // ← response
-{ "jsonrpc":"2.0","id":54,"result":{ "path":"server.port","value":5181 } }
+{ "jsonrpc":"2.0","id":55,"result":{ "path":"server.port","value":5181,"revision":10 } }
 ```
