@@ -44,8 +44,10 @@ rejects it without changing either path, advancing the revision, or emitting an 
 daemon process and strictly increases after every committed settings mutation, including
 wire updates/resets and accepted `config.toml` live reloads. A rejected atomic batch does
 not advance it. The successful mutation response and its `settings:changed` event carry
-the same revision; an empty/tolerated-only update returns the current revision and emits
-no event. Every authoritative read (`settings.list` and `settings.get`) also carries the
+the same revision. An empty/tolerated-only update, an update whose entries already match
+the stored value and origin, or a reset whose value is already absent is a no-op: it
+returns the current revision and emits no event (`settings.update.applied` also omits
+unchanged entries). Every authoritative read (`settings.list` and `settings.get`) carries the
 revision at which its values and origins were read. Clients should ignore reads, mutation
 results, or events older than their highest revision for
 the current backend connection. Because revisions are process-local, clients must clear
