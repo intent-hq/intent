@@ -492,7 +492,32 @@ any of it — unlike the delete cascade below, nothing is deleted:
   **User-origin sends are exempt**: a direct user message (FE `agent.sendMessage`)
   passes the gate untouched and reaches the turn-start choke point, where the
   auto-unarchive block below flips the workspace back to Active — the user talking to
-  an agent is an explicit resurrection signal; automatic machinery is not. The parked
+  an agent is an explicit resurrection signal; automatic machinery is not. Since
+  [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587) (behavior
+  only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
+  refinements. **Combined flush of parked archive notices**: under the `"all"` flush
+  mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
+  workspace whose queue holds parked ready-to-send entries (hook / PR-monitor
+  archive-cancellation wakes, parked automatic sends) no longer runs a DIRECT turn
+  past them — the send converts to a user-origin enqueue + immediate drain kick
+  (modeled on the monorepo#1791 question-hold conversion, §5.5), returning the
+  ordinary queued result `{ success: true, queued: true, queuedMessage, turnId }`,
+  and the batch flush delivers every parked ready entry FIFO in the SAME combined
+  turn as the user message, with the one-shot unarchive prompt notice trailing —
+  so the model learns its hooks were cancelled in the same turn it is resumed,
+  not in confusing later turns. The conversion is skipped when nothing is parked
+  (the common empty-queue direct send is untouched), under `"systemOnly"`/`"off"`
+  (no combined turn exists to carry the parked entries), and for a session parked
+  in `Error` (whose documented recovery is the direct fresh send). **The drain-gate
+  exemption is time-tightened**: only a ready user-origin entry queued at or after
+  the archive (`queuedAt >= archivedAt`) releases the archived gate — a user entry
+  parked by a busy race BEFORE archival is not a post-archive user action and stays
+  parked with everything else (without the cut, the interrupted worker's end-of-turn
+  re-kick would find that older entry and immediately unarchive a freshly archived
+  workspace); pre-archive parked entries flush only on manual `workspace.unarchive`
+  or by riding the combined turn of a NEW post-archive user message. An entry with
+  an unparseable `queuedAt` never matches; a row missing or with an unparseable
+  `archivedAt` (legacy data) fails open to the untimed user-origin check. The parked
   send's internal result carries the additive `archivedParked: true` marker alongside
   `queued: true` (surfaced through the MCP send bindings, so an agent can tell an
   archived park from an ordinary busy-queue fallback). The virtual chief workspace
@@ -554,7 +579,13 @@ messages and wakes park while archived" above), so in practice only a **user-ori
 send — the user deliberately messaging an agent in the archived workspace — reaches
 this choke point while archived and triggers the flip; automatic wakes
 (completion-watch, reportToParent, attention, event-subscription, agent-to-agent sends)
-queue instead and do not auto-unarchive — with one bounded exception: the residual-race
+queue instead and do not auto-unarchive (since
+[intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587) the
+user-origin trigger may arrive via the queue DRAIN rather than a direct send: the
+combined-flush conversion above enqueues the user message, the drain's archived gate
+is released by that post-archive user-origin entry, and its claim reaches this same
+choke point — so the flip, the flushed parked entries, and the user message share
+ONE combined turn) — with one bounded exception: the residual-race
 stray turn above (a drain whose row read raced ahead of the archive persist) still
 reaches the choke point and flips the workspace once. The flip goes through the same machinery as
 `workspace.unarchive` (row flip, parked-queue drain re-kick, `lastActivity` derivation)
