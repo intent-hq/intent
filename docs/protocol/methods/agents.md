@@ -377,9 +377,12 @@ while the **user-facing surfacing bundle** — the `agent:attention-requested` e
 (step 3), the paired `agent:updated` attention-fields emit (step 1), the transcript
 notice (step 2), and the `displayStatus` recompute/promotion — is parked on an in-memory
 deferred-attention marker and flushed when the raising agent goes idle: clean prompt-turn
-settlement, harness-wake idle, user interrupt, or terminal turn failure, always ordered
+settlement, harness-wake idle, user interrupt, or terminal turn failure, ordered
 BEFORE the paired `agent:idle` / `agent:failed` emit so subscribers never see a quiet
-idle that later grows an attention card. A raise with no in-flight turn surfaces
+idle that later grows an attention card (one exception: the §6.6 idle-timeout-cap
+failure, where the drain loop publishes its own `agent:failed` before the
+terminal-failure handler's flush, so the surfacing lands just AFTER that emit).
+A raise with no in-flight turn surfaces
 immediately, as before. While the marker is parked the workspace's `displayStatus`
 derivation skips the pending request; the request feeds the derivation from the flush
 onward, subject to the ordinary §5.1 precedence and eligibility rules — the typical
