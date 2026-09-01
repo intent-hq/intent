@@ -305,7 +305,7 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 }
 ```
 
-- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&tc=<addr>]` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, `tcAddress`) are provided so clients can render their own payloads.
+- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&tc=<addr>]` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
 - Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd pair`, so all pairing surfaces stay consistent.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12). Present only while the tunnel sidecar is running; **omitted** — never `null` — when the tunnel is disabled or down; detect by presence. When present it is also appended to `uri` as the **final** `tc=` query param (percent-encoded); when absent the URI carries no `tc=` param. The param is additive: clients that predate it tolerate the unknown query param, so the URI stays parseable everywhere.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
