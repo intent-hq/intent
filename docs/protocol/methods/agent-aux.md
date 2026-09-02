@@ -34,8 +34,8 @@ namespace (§5.5).
 
 **Provider gate ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Enhance-prompt is an
 auggie-specific capability, gated on auggie being the **settings-derived effective default
-provider** — the provider prefix of `model.default` when compound and registry-valid, else
-`providers.active` (§5.12). When the effective provider is not auggie — **including
+provider** — `model.defaultProvider` (§5.12; registry-validated, so a stale or mistyped
+value reads as unset — [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)). When the effective provider is not auggie — **including
 unset/undecidable settings, which resolve the gate CLOSED** rather than falling through to
 the first registered provider (which would functionally reinstate the removed hardcoded
 auggie default) — the method returns `{ available: false, reason }` (a typed unavailable
@@ -50,7 +50,9 @@ result, not an error) so clients hide the affordance gracefully.
   `<augment-enhanced-prompt>…</augment-enhanced-prompt>` payload from the model reply;
   `"layout"` skips the template and returns the full cleaned reply (covers the FE
   `agent:generate-layout` use). Any other value is `-32602`.
-- `model` — optional auggie model id, passed as `--model`; omitted → CLI default.
+- `model` — optional auggie model id, passed as `--model`; omitted → CLI default. Must be a
+  **bare** model id: a compound `provider:model` value is rejected with `-32602` (same guard
+  as §5.5, [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
 - `workspaceId` — optional; when present the CLI runs with the workspace's worktree as its
   working directory (unknown workspace → `-32602`). Without it the CLI runs without a `cwd`
   (mirrors the FE, which drops `cwd` when no workspace is bound).
@@ -101,8 +103,8 @@ there is nothing to garbage-collect on the error path. Part of the
 | agent.completeOnce | prompt (req), systemPrompt?, model?, type?, workspaceId?, timeoutMs? | { text } — or { available: false, reason } when the provider gate is closed |
 
 **Provider-neutral routing.** Unlike `agent.enhancePrompt` (§5.31, auggie-only), completion
-is routed on the settings-derived effective default provider — the provider prefix of
-`model.default` when compound and registry-valid, else `providers.active` (§5.12):
+is routed on the settings-derived effective default provider — `model.defaultProvider`
+(§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)):
 
 - **auggie** → the `auggie --print` CLI path described under *Execution — auggie route*.
 - **claude-code / codex / pi** → an **ephemeral ACP session** (*Execution — ACP route*).
@@ -116,7 +118,7 @@ never parse or match on it:
 
 | Condition | `reason` |
 | --- | --- |
-| No decidable effective default provider (both `model.default` prefix and `providers.active` unset/unregistered) | `completeOnce requires a decidable effective default provider` |
+| No decidable effective default provider (`model.defaultProvider` unset/unregistered — no positional fallback, [intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044)) | `completeOnce requires a decidable effective default provider` |
 | Effective provider has no one-shot route (not auggie and not claude-code / codex / pi) | `completeOnce is not supported for the effective default provider: <providerId>` |
 | One-shot-capable provider whose adapter resolves to nothing (no binary, and no npx for the pinned package) | `<providerId>: no adapter could be resolved (binary not found and npx unavailable)` |
 | *(defensive)* ACP one-shot provider id missing from the provider registry — unreachable for the three hardcoded ids | `unknown provider: <providerId>` |
@@ -164,9 +166,9 @@ client gets them for free:
 4. Otherwise none — the provider CLI's own default applies.
 
 Steps 2–3 are provider-guarded — the settings value is user-authored and easily outlives a
-provider switch, so it is never fed to a foreign CLI. A **compound** id
-(`{provider}:{model}`) must name the resolved effective provider, and is passed on **bare**
-(prefix stripped) since the one-shot launch takes a raw model id; a prefix that is not a
+provider switch, so it is never fed to a foreign CLI. An explicit `model` param must be a **bare** model id: a compound `provider:model` value
+is rejected at the wire boundary with `-32602` (same guard as §5.5,
+[intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)), and the bare id is passed on unchanged since the one-shot launch takes a raw model id; a prefix that is not a
 registered provider id counts as foreign. A **bare** id reuses §5.5's asymmetric
 cached-catalog evidence rule: it is dropped only when the effective provider's own cached
 catalog affirmatively disproves ownership, so a cold start passes it through. Every drop
