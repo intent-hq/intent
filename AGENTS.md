@@ -213,6 +213,7 @@ bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 
 ```bash
 git submodule update --init --recursive   # skips the private packages/ios (update = none)
+make doctor   # report gaps; BOOTSTRAP_YES=1 make bootstrap-dev-host installs missing prerequisites
 make check
 make test
 ```

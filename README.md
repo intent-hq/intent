@@ -98,6 +98,7 @@ Releases. Until then, you can [build it from source](#build-from-source).
 git clone --recurse-submodules https://github.com/intent-hq/intent.git
 cd intent
 
+make doctor  # report missing development prerequisites; use BOOTSTRAP_YES=1 make bootstrap-dev-host to install them
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
