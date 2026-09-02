@@ -705,6 +705,7 @@ are persisted.
   counts are over the caller's `parent_agent_id` children without workspace scoping, so a chief
   parent's cross-workspace delegates count too. Other fields are `numQuestionsAsked`
   (structured questions still pending presentation/answer, §5.5 question hold),
+  `prMonitors` (the caller's active PR monitors as labels — see below),
   `prs` (the workspace's tracked open PRs grouped by state — see below), and
   `pendingAttention`
   (`"blocker"` / `"discussion"` when the caller has an unresolved attention request, §5.5
@@ -712,9 +713,19 @@ are persisted.
   `0`, never `null`). A workspace mismatch on the resolved session fails closed as
   `NotFound` (defense-in-depth against bare-id probes, like `getSessionStats`). The cheap
   counterpart to `ws.agent.diagnostics`, which is unchanged and remains the deep-dive tool.
+- **`prMonitors` — the caller's active PR monitors** — a list of `"<owner>/<name>#<number>"`
+  labels, one per ACTIVE monitor the caller owns (§5.42 centralized PR monitoring), each
+  suffixed `" (changes pending)"` while a debounced emit is accumulating (the monitor holds
+  observed changes not yet delivered as a wake). Distinct from `prs` below: `prs` covers the
+  WORKSPACE's tracked open PRs grouped by state, `prMonitors` THIS AGENT's registered
+  monitors. Best-effort — a monitor store read failure reads as empty rather than failing
+  the snapshot build — and omitted when the caller monitors nothing, so a non-empty
+  `prMonitors` alone makes an otherwise-trivial snapshot non-trivial and forces the
+  per-turn injection line below.
 - **`prs` — tracked open PRs grouped by state** — `prs?: { draft?, blocked?, mergeable?,
-  unknown? }`, each group a list of `"<owner>/<name>#<number>"` labels (the same label shape
-  as `prMonitors`). Sourced from **known git roots only** — persisted columns, no forge
+  unknown? }`, each group a list of `"<owner>/<name>#<number>"` labels (the same base label
+  shape as `prMonitors` above, though `prs` labels never carry the pending-changes
+  suffix). Sourced from **known git roots only** — persisted columns, no forge
   calls, no per-PR statements (RPC cost contract): the workspace row's discovered
   `pullRequests` under its `repositoryOwner`/`repositoryName`, plus each registered git
   root's `pullRequests` under its `repoOwner`/`repoName` (a root without repo identity is
@@ -735,11 +746,12 @@ are persisted.
   (specialist and non-specialist, unlike the role reminder), and is **never persisted**: the
   transcript's user row keeps the undecorated content.
 - **Skipped when trivial** — when every field other than `time` would be omitted (all counts
-  zero, no tracked open PRs, no pending attention) the whole line is dropped, so `time` alone
-  never forces an injection and an idle agent's prompt stays byte-identical to pre-feature
-  output. Building the snapshot **fails open**: a store error yields no line rather than
-  failing the turn (and `prs` itself is best-effort — a workspace or git-root lookup failure
-  skips that pool rather than failing the build).
+  zero, no active PR monitors, no tracked open PRs, no pending attention) the whole line is
+  dropped, so `time` alone never forces an injection and an idle agent's prompt stays
+  byte-identical to pre-feature output. Building the snapshot **fails open**: a store error
+  yields no line rather than failing the turn (and `prMonitors` / `prs` are themselves
+  best-effort — a monitor store read failure reads `prMonitors` as empty, and a workspace or
+  git-root lookup failure skips that `prs` pool, rather than failing the build).
 - **Toggle** — the injection (and only the injection) is gated by
   `agentFeatures.stateSnapshot` (§5.12), resolved from the session's **captured harness
   feature snapshot** like every other toggle
