@@ -211,6 +211,25 @@ The packaged artifacts (`.dmg`/`.zip`, `.exe`, AppImage/`.deb`) will be in `dist
 
 **Note:** Local builds will not be signed or notarized unless you configure the signing environment variables locally (`CLOUDLANDS_APPLE_ID`, `CLOUDLANDS_APPLE_APP_SPECIFIC_PASSWORD`, `CLOUDLANDS_APPLE_TEAM_ID`, or legacy `APPLE_*` equivalents).
 
+## Manual Signed Build (PR test builds)
+
+`.github/workflows/manual-signed-build.yml` ("Manual Signed Build") is dispatch-only
+and builds any branch/ref — e.g. a PR branch — into platform installers for manual
+testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
+`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert).
+Installers are uploaded as short-lived workflow artifacts (7-day retention),
+version-suffixed `-manual.<run_number>`; nothing is published to
+`intent-hq/cloudlands-releases` and no auto-updater feed is produced.
+
+**`intentd_ref` input:** empty (default) fetches the pinned intentd release from
+`intentd.version`, exactly like `release-alpha.yml`. Non-empty accepts any
+intent-hq/intentd git ref — a full 40-char commit SHA, branch, or tag
+(`actions/checkout` cannot resolve abbreviated SHAs) — and compiles the intentd
+sidecar **from source in-workflow** at that ref on every selected leg (macOS,
+Windows, and both Linux arches), staging it at the same `resources/sidecar/` path.
+The run summary reports the resolved intentd SHA. Expect extra build time: a cold
+cargo build adds roughly 15 minutes per leg (cached across repeat dispatches).
+
 ## Operational Notes
 
 - All release workflows run on GitHub Actions; there are no manual upload scripts
