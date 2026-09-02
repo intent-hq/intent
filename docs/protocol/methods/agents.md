@@ -289,14 +289,16 @@ missing credentials). There is **no wire method** (MCP bindings only, following 
 principle); both return `{ ok: true, kind, reason, savedAt }`. Available to EVERY agent —
 delegated or not, with or without a linked task. `reason` is required (trimmed; empty →
 `-32602`), an unknown kind is `-32602`, and a caller-context-free invocation is rejected
-(agents only). One shared services op behind both bindings does five things:
+(agents only). One shared services op behind both bindings does six things:
 
 1. **Session persistence** — the pending request is persisted on the caller's session as
    `attentionRequestKind` (`"discussion" | "blocker"`), `attentionRequestReason`, and
    `attentionRequestTimestamp` (= the result `savedAt`), served on BOTH the `AgentSession`
    projection (top-level fields, `agent.getSession`) and the `AgentLite` `metadata` block
-   (`agent.list`/`agent.get`), omitted when absent. The raise emits `agent:updated` with
-   `data { agentId, attentionRequestKind, attentionRequestTimestamp }`. The request is
+   (`agent.list`/`agent.get`), omitted when absent. The persist is immediate; the paired
+   `agent:updated` raise emit — `data { agentId, attentionRequestKind,
+   attentionRequestTimestamp }` — is part of the idle-deferred surfacing bundle (see the
+   block after step 6) when the raise comes from inside a live turn. The request is
    **pending state, not status**: `AgentStatus` and `stopReason` are untouched (the turn ends
    normally; no retry affordance), and the request retires when the agent next receives a
    **user-origin** delivery — `agent.sendMessage` (the FE/router front door),
@@ -311,19 +313,26 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    dismiss a request the user has not seen. The turn-begin clear emits `agent:updated` with
    `data { agentId, attentionRequestCleared: true }` and removes all three session fields
    (skipped silently when none is pending); no new wire surface is introduced by the
-   child/background automatic retire. Both the raise and the retire also
+   child/background automatic retire. Both the surfacing and the retire also
    recompute-and-compare the workspace's derived `displayStatus` — a top-level foreground
    agent's pending request promotes it to `blocked` (kind `blocker`) or `needs_attention`
    (kind `discussion`) (§5.1 steps 1–2), pushed as
-   `workspace:displayStatus-changed` on an actual transition (§6.5).
+   `workspace:displayStatus-changed` on an actual transition (§6.5); for a mid-turn raise
+   the raise-side recompute runs at the turn-end flush, not at tool-call time — a pending
+   request whose surfacing is still parked does not feed the derivation (idle-deferred
+   surfacing, below).
 2. **Transcript notice** — a system-role message is appended with a single text block carrying
    the reason and `meta.kind = "discussion-request"` / `"blocker-report"` (the
    `InterruptionNotice` shape, §5.35), emitting the standard `agent:message`
    (`role: "system"`), so the conversation renders a distinct card that survives rehydration.
    Best-effort: an append failure is logged and swallowed (the session fields above are the
-   durable contract).
+   durable contract). Appended at surfacing time — deferred to turn end for mid-turn raises
+   (idle-deferred surfacing, below), so the notice lands after the turn's own output rather
+   than interleaved with it.
 3. **`agent:attention-requested` event** — the self-sufficient (§6.7) toast-driving event,
-   `data { workspaceId, agentId, agentName, kind, reason, parentAgentId? }` (§6.5).
+   `data { workspaceId, agentId, agentName, kind, reason, parentAgentId? }` (§6.5), emitted
+   at surfacing time (deferred to turn end for mid-turn raises — idle-deferred surfacing,
+   below).
    `parentAgentId` ([intentd#788](https://github.com/intent-hq/intentd/pull/788)) is present
    only when the caller is a delegated/parented agent (the session's `parent_agent_id`) and
    **omitted entirely otherwise — never `null`, and when present always the parent's
@@ -358,6 +367,35 @@ delegated or not, with or without a linked task. `reason` is required (trimmed; 
    caller's parent is excluded (step 5 already woke it directly, so a parent that ALSO
    explicitly watches its child never receives a duplicate attention wake). Watches are left
    in place: attention is not a completion.
+
+**Idle-deferred surfacing *(new in intentd —
+[intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639))*.** A raise from
+inside a live turn does NOT surface to the user at tool-call time. The op splits in two:
+the **immediate** half — the step-1 session persist, the step-4 linked-task transition,
+the step-5 parent wake, and the step-6 watcher fan-out — runs at the raise as before,
+while the **user-facing surfacing bundle** — the `agent:attention-requested` event
+(step 3), the paired `agent:updated` attention-fields emit (step 1), the transcript
+notice (step 2), and the `displayStatus` recompute/promotion — is parked on an in-memory
+deferred-attention marker and flushed when the raising agent goes idle: clean prompt-turn
+settlement, harness-wake idle, user interrupt, or terminal turn failure, ordered
+BEFORE the paired `agent:idle` / `agent:failed` emit so subscribers never see a quiet
+idle that later grows an attention card (one exception: the §6.6 idle-timeout-cap
+failure, where the drain loop publishes its own `agent:failed` before the
+terminal-failure handler's flush, so the surfacing lands just AFTER that emit).
+A raise with no in-flight turn surfaces
+immediately, as before. While the marker is parked the workspace's `displayStatus`
+derivation skips the pending request; the request feeds the derivation from the flush
+onward, subject to the ordinary §5.1 precedence and eligibility rules — the typical
+sequence for a top-level foreground caller is `in_progress` while the raising turn runs,
+then `blocked` / `needs_attention` at the flush (§5.1 steps 1–2), but a higher-precedence
+axis still outranks it (a terminal-failure flush's `error` park reads `failed`, §5.1
+step 0) and a child/background caller's request never feeds the derivation at all.
+A request **cleared before its flush** — a mid-turn user-origin
+delivery, or an interrupt-with-message whose follow-up delivery clears it at turn
+begin — retires the marker WITHOUT surfacing: no toast, no transcript notice, only the
+plain `attentionRequestCleared` turn-begin emit. The marker is in-memory only: the
+persisted session fields survive a daemon restart and keep feeding reads and the
+`displayStatus` derivation, but a parked toast/notice lost to a restart is not replayed.
 
 **Peer agents *(within v7.5; reshaped within v8.1 — `spawnPeer` merged into `create`)*.** Two
 MCP `workspace_api` surfaces — the `topLevel: true` option on `ws.agent.create` and the
