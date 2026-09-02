@@ -9,8 +9,8 @@
 #      state" seat. intentd on the real data dir, UDS-always and no
 #      `--insecure`. No TCP port is bound unless the persisted
 #      `server.wsApi.enabled` setting is true, in which case the secure WSS
-#      listener binds `server.wsApi.port` (default 5181 — the same as
-#      $(DEV_TCP_PORT)); if the dev seat already holds it, the bind failure
+#      listener binds `server.wsApi.port` (default 5181, outside the derived
+#      $(DEV_TCP_PORT) range); if another process holds it, the bind failure
 #      is non-fatal and UDS keeps serving.
 #   3. `make dev-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
@@ -55,8 +55,17 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
-DEV_TCP_PORT ?= 5181
-DEV_PORT ?= 5190
+# Resolve one stable, free port block for this worktree. The `?=` assignments
+# below preserve exact command-line and environment overrides; the resolver's
+# own override validation applies when it is invoked directly. The marker
+# makes a default-resolution error fatal during Make parsing.
+DEV_PORT_VALUES := $(shell DEV_PORT= DEV_TCP_PORT= BRIDGE_PORT= CDP_PORT= scripts/dev-ports.sh || printf '__DEV_PORTS_ERROR__=1\n')
+ifneq ($(filter __DEV_PORTS_ERROR__=1,$(DEV_PORT_VALUES)),)
+$(error Could not resolve development ports; see the dev-ports error above)
+endif
+dev_port_value = $(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
+DEV_PORT ?= $(call dev_port_value,DEV_PORT)
+DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 DEV_PROD_PLATFORM ?= $(shell uname -s)
@@ -66,13 +75,18 @@ export DEV_PORT
 
 # BRIDGE_PORT is the loopback port for `make uds-to-unauthed-wss-bridge` — the
 # source-only dev shim that exposes the installed daemon's UDS socket as an
-# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. 51337 stays clear of 5181
-# (held by the daemon's authed WSS for iOS). Overridable, e.g.
+# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. Its derived default stays
+# clear of 5181 (held by the daemon's authed WSS for iOS). Overridable, e.g.
 # `make uds-to-unauthed-wss-bridge BRIDGE_PORT=5182`.
-BRIDGE_PORT ?= 51337
+BRIDGE_PORT ?= $(call dev_port_value,BRIDGE_PORT)
+CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # Injectable platform seam for the bridge's installed-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
+
+.PHONY: ports
+ports: ## Print this worktree's resolved development ports
+	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
@@ -104,7 +118,7 @@ BUILD_JOBS ?= -2
 # make dist-mac FE_BUILD_HEAP_MB=24576.
 FE_BUILD_HEAP_MB ?= 16384
 
-.PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+.PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
 	build build-intentd build-sidecar test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
@@ -115,6 +129,12 @@ all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+doctor: ## Report missing intentd + cloudlands-fe development prerequisites
+	@scripts/bootstrap-dev-host.sh --check
+
+bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
+	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
 
 # The iOS submodule is private and marked `update = none` in .gitmodules, so
 # the generic `git submodule update --init` would silently skip it while
