@@ -88,6 +88,30 @@ about submodule PR merges, not monorepo bumps — after both are merged, the
 auto-bump-submodules workflow advances both monorepo pins automatically (a single
 rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 
+### Manual test builds for complex changes
+
+For **complex features/fixes** (intentd and/or cloudlands-fe), pair the stacked PRs
+with a manual test build **before merging anything**: dispatch cloudlands-fe's
+`manual-signed-build.yml` on the cloudlands-fe PR branch to produce a manual `.dmg`
+carrying the full stack, and hold all merges until that `.dmg` has been tested:
+
+```bash
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <fe-pr-branch> -f build_macos=true -f intentd_ref=<intentd PR head SHA>
+```
+
+`intentd_ref` accepts any intent-hq/intentd git ref (full 40-char commit SHA, branch,
+or tag) and compiles the intentd sidecar from source in-workflow; see
+[docs/fe/DEPLOYING.md](./docs/fe/DEPLOYING.md#manual-signed-build-pr-test-builds).
+**Complex cloudlands-fe-only changes** use the same route — omit `intentd_ref` to get
+the pinned intentd — so PRs are not merged until the full stack is complete and a
+manual `.dmg` is prepped for testing.
+
+**Exception — SQLite schema changes:** features/fixes that add or change intent-store
+migrations must **not** be tested via this manual-install route: running the
+hash-built daemon applies its migrations and mutates the tester's local database,
+with no rollback.
+
 ## Conventions
 
 - **Conventional commits** are required. PR titles are validated by CI
