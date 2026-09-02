@@ -98,7 +98,7 @@ Errors: `-32603` only on internal failure; probe/CLI failures degrade as describ
     "isDefault":true,"priority":1 } ] } }
 ```
 
-### 5.38 Provider catalog — `providers.catalog` *(v2.6; wire shape changed by [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922))*
+### 5.38 Provider catalog — `providers.catalog` *(v2.6; wire shape changed by [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922); `supportsTestPrompt` added in v9.3 by [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
 
 The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global**: no params and no `workspaceId` (like `system.capabilities`), available on both UDS and WSS. The data is **compiled into the daemon** — there is no cache or TTL; the result only changes when the daemon binary does.
 
@@ -118,7 +118,8 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "loginCommandHint": "auggie login",           // optional
       "loginDocsUrl": "https://docs.augmentcode.com/cli/overview",  // optional
       "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
-      "visible": true
+      "visible": true,
+      "supportsTestPrompt": true                    // always present; false only for unsloth (v9.3)
     },
     {
       "id": "claude-code",
@@ -127,7 +128,8 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "command": "claude-agent-acp",
       "canBeDisabled": true,
       "loginDocsUrl": "https://code.claude.com/docs/en/quickstart#step-2-log-in-to-your-account",  // optional
-      "visible": true
+      "visible": true,
+      "supportsTestPrompt": true
     },
     {
       "id": "cortex",
@@ -136,10 +138,12 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "command": "cortex-acp",
       "canBeDisabled": true,
       "requiresEnvVar": "INTENTD_ENABLE_CORTEX",    // optional — raw gating field passed through
-      "visible": false                              // daemon-evaluated: env var absent in the daemon environment
+      "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
+      "supportsTestPrompt": true
     },
     // ... one row per registered provider (opencode, unsloth, pi, droid, grok, ...) ...
     // droid carries requiresEnvVar: "INTENTD_ENABLE_DROID" and is likewise visible: false by default
+    // unsloth is the one row with supportsTestPrompt: false — its first prompt can trigger a very long model download/load cycle
     {
       "id": "mock",
       "displayName": "Mock (E2E)",
@@ -147,7 +151,8 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "command": "node",
       "canBeDisabled": true,
       "requiresEnvVar": "MOCK_AGENT_SCRIPT_PATH",   // optional — raw gating field passed through
-      "visible": false                              // daemon-evaluated: env var absent in the daemon environment
+      "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
+      "supportsTestPrompt": true
     }
   ]
 }
@@ -157,5 +162,6 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `command` is the registry's **logical CLI name** (the `ACP_PROVIDERS` `command` field, e.g. `claude-agent-acp` for `claude-code`) — provider metadata, **not** necessarily the binary the daemon spawns. Launch resolution belongs to `host.providerDiscovery` (§5.14), whose `command` reports what the daemon actually resolves and launches — so the two can differ: an npx-only provider like `claude-code` launches via `npx <npxPackage>` and reports `command: "npx"` there. Clients must not assume the values match across the two methods.
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; no registered provider currently carries one, but the mechanism remains for future providers). `cortex` and `droid` carry `requiresEnvVar` (`INTENTD_ENABLE_CORTEX` / `INTENTD_ENABLE_DROID`) and are hidden by default — not yet well-tested; setting the env var in the daemon's environment restores the provider. The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
 - The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
+- `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` only for `unsloth`, whose first prompt can trigger a very long model download/load cycle; calling the RPC for such a provider answers the structured `unsupported` result without resolving or spawning anything.
 - **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: the provider prefix of `model.default` when it is a compound id naming a registered provider, else `providers.active` (§5.12), else the first registered provider — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
