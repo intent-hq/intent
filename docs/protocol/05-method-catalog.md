@@ -2,18 +2,18 @@
 
 ## 5. Method Catalog
 
-The API exposes **338 dispatchable method names** across the following categories:
+The API exposes **339 dispatchable method names** across the following categories:
 
 - **Router methods:** 298 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 38 methods intercepted before the router for performance or per-connection state
+- **Fast-path methods:** 39 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 338 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 339 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 338 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 339 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
 
@@ -60,11 +60,11 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
-### Fast-path methods (38 total)
+### Fast-path methods (39 total)
 
-The following 38 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 39 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
+browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
@@ -402,6 +402,25 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 - `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it. Since intentd#725, the install gate also honors **valid `providers.paths` overrides** for the providers whose gate command is the registry primary — `auggie`, `opencode`, `droid`, `grok` — so an override-only install is probed, while an invalid override contributes nothing and the gate falls through to auto-detection. For `opencode` / `droid` / `grok` a valid override is an absolute path to an executable file (the same validation as spawn resolution); `auggie`'s gate instead follows the `host.checkAuggie` precedence (`context.auggiePath` setting → `providers.paths.auggie`, with checkAuggie's file/symlink validation) before falling through to auggie auto-detection. `claude-code`, `codex`, and `pi` gate on the real `claude` / `codex` / `pi` CLIs — distinct from the adapter binaries their `providers.paths` keys describe — so adapter overrides are ignored for their gates.
 - **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie`, `claude-code`, and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok` and `opencode` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, and `opencode models` requires at least one `provider/model` line beyond exit 0), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
+
+#### `host.providerTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
+
+Live end-to-end provider test: spawns the provider's ACP adapter through the same launch resolution as `agent.completeOnce` (§5.32) — `providers.paths` overrides honored, npx fallback, isolated throwaway `CODEX_HOME` for codex — runs `initialize` → `session/new` → one `session/prompt` with the literal text `"say hello"`, and tears the process down. This is the **only conclusive auth check**: some providers (claude-code) serve local probes uncredentialed and only fail at `session/prompt`, so `host.providerAuthStatus` can report `true` for a provider that cannot actually answer.
+
+**Request:** `{ "providerId": "claude-code", "model": "claude-sonnet-4-5" }` — `providerId` required (a missing/empty/non-string value or an unknown provider yields `-32602`); `model` optional (must be a non-empty string when present, applied exactly as `agent.completeOnce` applies it: launch args or post-`session/new` config option, provider-dependent).
+
+**Response** — always a **result**, never a wire error, once the provider id is known:
+
+```jsonc
+{ "ok": true }                                                    // the adapter answered the live prompt
+{ "ok": false, "reason": "auth-required", "message": "..." }      // failure: structured reason + human-readable detail
+```
+
+- `reason` ∈ `"unsupported" | "not-installed" | "spawn-failed" | "auth-required" | "busy" | "timeout" | "error"`. `unsupported` = the provider opts out of the test prompt (see `supportsTestPrompt` below), answered without resolving or spawning anything; `not-installed` = no adapter could be resolved (binary not found and npx unavailable); `spawn-failed` = the adapter process could not be spawned; `auth-required` = the adapter rejected a call with an auth-required error (the same `-32000`/auth-pattern/`401` classification as the runtime spawn seam); `busy` = pre-spawn queueing pressure — the daemon-wide adapter bound never freed a slot, no provider was ever launched, and the client can back off and retry (the structured-result analogue of `agent.completeOnce`'s `adapter-busy` split, §5.32); `timeout` = the setup phase or prompt phase hit its budget with the provider actually running; `error` = any other adapter failure (JSON-RPC error, transport failure, early exit).
+- Unlike `agent.completeOnce` (curated to claude-code / codex / pi because its *answer* is the product), the test prompt covers the whole catalog: every provider is driven through the same ACP adapter and launch args real agent sessions spawn, and only turn completion matters. Providers outside the completeOnce set are intentionally best-effort — an adapter that cannot complete a bare one-shot turn surfaces a structured failure, never a wire error.
+- **Any successfully completed turn is a pass** — the answer is never surfaced or streamed, and a turn that completes with no assistant text still passes. The prompt phase budget is **90 seconds** (absorbs a first-run npx package download); setup keeps the launch's npx-aware staged budgets, and the run claims a slot in the same daemon-wide adapter bound as `agent.completeOnce` (§5.32).
+- **Auth-verdict cache coupling:** a passed test **promotes** the provider's cached `host.providerAuthStatus` verdict to a hard `true`; an `auth-required` failure **demotes** it to a hard `false` (the same demotion seam as the runtime spawn/prompt auth mapping) — in both directions the live result supersedes any probe already in flight. Other failure reasons leave the cache untouched.
+- `providers.catalog` rows (§5.38) carry the always-present `supportsTestPrompt` boolean so clients know which providers can be tested this way; it is `false` only for `unsloth`, whose first prompt can trigger a very long model download/load cycle.
 
 #### `host.providerDiscovery`
 
