@@ -74,8 +74,8 @@ never resurrects shipped bundles the operator excluded.
   resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
   request param supplies the resolution context: absent/empty defaults to the
-  settings-derived default provider (provider of `model.default`, else `providers.active`,
-  else the first registered provider — [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
+  settings-derived default provider (`model.defaultProvider`, §5.12 — [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648); unset means
+  no preview provider and no positional fallback, [intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044) — [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
   an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
   methods. **Both fields are omitted** (never `null`) when resolution falls to the provider
   CLI default — clients render "Provider default". A specialist with no model config
@@ -116,14 +116,16 @@ never resurrects shipped bundles the operator excluded.
   and read-normalized.
 - **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
   [intent-hq/intentd#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
-  model options** a specialist's author suggests: `[{ model, hint, reasoningEffort? }]` entries where `model` is
-  the model id to pass on delegation — typically an internal compound id (e.g.
-  `opencode:kimi-k3`); validation requires only a non-empty string — and `hint` is the author's
+  model options** a specialist's author suggests: `[{ provider?, model, hint, reasoningEffort? }]` entries where `model` is a **bare** model
+  id ([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)): specialist create/edit writes reject a compound `provider:model` value with
+  `-32602` naming the offending entry (`modelOptions[<i>].model`), while legacy compound ids
+  already stored in frontmatter still split on read into the `(provider, model)` pair — the
+  stored prefix winning over an entry-level `provider` field ([intent-hq/intentd#1654](https://github.com/intent-hq/intentd/pull/1654)) — and `hint` is the author's
   free-text guidance for choosing that option (`""` when none was given). Carried additively on
   `specialist.get`/`list`/`create`/`edit` — emitted when the resolved list is non-empty, omitted
   otherwise (never `null`/`[]` on the wire) — and accepted in `create`/`edit` `spec` bodies. In
   the file it is a frontmatter scalar encoded as a **single-line JSON array**
-  (`modelOptions: [{"model":"opencode:kimi-k3","hint":"cheap"}]`) so it fits the line-based
+  (`modelOptions: [{"provider":"opencode","model":"kimi-k3","hint":"cheap"}]`) so it fits the line-based
   frontmatter parser and round-trips parse→write→parse losslessly. Resolution follows the same
   3-tier **inherit-on-omit** fold as the config scalars above, with **`[]` as the explicit
   clear** (the array analogue of `key: ""`): an omitted key inherits the lower tiers' effective
