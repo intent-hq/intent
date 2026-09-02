@@ -704,13 +704,29 @@ are persisted.
   in-flight status meaning; it is **not** an alias of `unsettledSubAgents`. All three child
   counts are over the caller's `parent_agent_id` children without workspace scoping, so a chief
   parent's cross-workspace delegates count too. Other fields are `numQuestionsAsked`
-  (structured questions still pending presentation/answer, §5.5 question hold) and
+  (structured questions still pending presentation/answer, §5.5 question hold),
+  `prs` (the workspace's tracked open PRs grouped by state — see below), and
   `pendingAttention`
   (`"blocker"` / `"discussion"` when the caller has an unresolved attention request, §5.5
   attention-request flow). Every field except `time` is **omitted when zero/absent** (never
   `0`, never `null`). A workspace mismatch on the resolved session fails closed as
   `NotFound` (defense-in-depth against bare-id probes, like `getSessionStats`). The cheap
   counterpart to `ws.agent.diagnostics`, which is unchanged and remains the deep-dive tool.
+- **`prs` — tracked open PRs grouped by state** — `prs?: { draft?, blocked?, mergeable?,
+  unknown? }`, each group a list of `"<owner>/<name>#<number>"` labels (the same label shape
+  as `prMonitors`). Sourced from **known git roots only** — persisted columns, no forge
+  calls, no per-PR statements (RPC cost contract): the workspace row's discovered
+  `pullRequests` under its `repositoryOwner`/`repositoryName`, plus each registered git
+  root's `pullRequests` under its `repoOwner`/`repoName` (a root without repo identity is
+  skipped — no label can be formed). Merged/closed PRs are excluded entirely; each open PR
+  lands in exactly one group by precedence `draft` > `blocked` > `mergeable` > `unknown`
+  (draft when `isDraft` or status `Draft`; blocked on a `blocked`/`dirty`/`behind`
+  `mergeableState` or `mergeable: false`; mergeable on a `clean`/`unstable`/`has_hooks`
+  `mergeableState` or `mergeable: true`; otherwise unknown). PRs are deduped by
+  `(owner, name, number)` with the workspace pool taking priority over a git-root duplicate.
+  Empty groups are omitted, and the whole field is omitted when no open PR survives — so a
+  non-empty `prs` alone makes an otherwise-trivial snapshot non-trivial and forces the
+  per-turn injection line below.
 - **Per-turn injection** — when not skipped, `build_turn_prompt` prefixes the outbound prompt
   with the single line `current ws.agent.snapshot() => {json}` (the same JSON object,
   serialized on one line), followed by a blank line. It is the outermost **recurring** per-turn
@@ -719,9 +735,11 @@ are persisted.
   (specialist and non-specialist, unlike the role reminder), and is **never persisted**: the
   transcript's user row keeps the undecorated content.
 - **Skipped when trivial** — when every field other than `time` would be omitted (all counts
-  zero, no pending attention) the whole line is dropped, so `time` alone never forces an
-  injection and an idle agent's prompt stays byte-identical to pre-feature output. Building
-  the snapshot **fails open**: a store error yields no line rather than failing the turn.
+  zero, no tracked open PRs, no pending attention) the whole line is dropped, so `time` alone
+  never forces an injection and an idle agent's prompt stays byte-identical to pre-feature
+  output. Building the snapshot **fails open**: a store error yields no line rather than
+  failing the turn (and `prs` itself is best-effort — a workspace or git-root lookup failure
+  skips that pool rather than failing the build).
 - **Toggle** — the injection (and only the injection) is gated by
   `agentFeatures.stateSnapshot` (§5.12), resolved from the session's **captured harness
   feature snapshot** like every other toggle
