@@ -432,7 +432,10 @@ daemon minimally creates the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
 An omitted `initialAgent.model` resolves through the same daemon-side creation-time
-default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution").
+default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution");
+a supplied one must be a **bare** model id — a compound `provider:model` value is rejected
+with `-32602` naming `initialAgent.model`, before any provisioning side effect
+([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
