@@ -25,6 +25,11 @@ INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
+# cargo install may place subcommands outside PATH when cargo itself comes from
+# a distro package. Make every recipe discover the effective install bin dir.
+CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
+export PATH := $(CARGO_BIN_DIR):$(PATH)
+
 # `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
 # any that are missing. The FE and iOS submodules are heavy and not needed for
 # backend-only workflows, so those workflows use the narrower per-submodule
