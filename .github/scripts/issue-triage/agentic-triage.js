@@ -4,10 +4,12 @@
 // LLM judgment pass over a newly opened issue, run after the deterministic
 // pass 1: duplicate-candidate detection, component/type inference when the
 // template checkboxes left the issue unlabeled, priority suggestion with
-// escalation, and ONE auditable summary comment. Suggest-don't-destroy: it
-// only ever ADDS labels and comments — it never closes issues, never edits
-// bodies, and the only label it removes is `needs-triage` (the triage
-// queue marker) after a successful pass.
+// escalation, the issue Type field (Bug / Feature / Task) when the issue
+// has none, and ONE auditable summary comment. Suggest-don't-destroy: it
+// only ever ADDS labels and comments and only ever FILLS an empty Type —
+// it never closes issues, never edits bodies, never overwrites an existing
+// Type, and the only label it removes is `needs-triage` (the triage queue
+// marker) after a successful pass.
 //
 // The summary comment embeds a hidden HTML marker (same idempotency
 // precedent as packages/cloudlands-fe/scripts/notify-fixed-issues.sh):
@@ -21,7 +23,7 @@
 // label vocabulary and sanitized before it reaches a public comment.
 //
 // Usage: agentic-triage.js [--dry-run] <issue-number>
-//   --dry-run prints the full plan (labels + comment) without writing.
+//   --dry-run prints the full plan (labels + Type + comment) without writing.
 // Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh; auggie
 // auth via AUGMENT_SESSION_AUTH (CI) or an interactive login (local).
 //
@@ -45,6 +47,11 @@ const SECURITY_REPORT_URL =
 const COMPONENTS = ['intentd', 'fe', 'ios'];
 const TYPES = ['bug', 'enhancement', 'question'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+
+// Type label → GitHub issue Type name. The repo enables exactly Task, Bug,
+// and Feature (no "Question" Type), so questions map to Task. Type IDs are
+// resolved at runtime from `repository.issueTypes`, never hardcoded.
+const ISSUE_TYPE_BY_LABEL = { bug: 'Bug', enhancement: 'Feature', question: 'Task' };
 
 const MAX_ISSUE_BODY_CHARS = 4000;
 const MAX_CANDIDATE_BODY_CHARS = 400;
@@ -255,8 +262,15 @@ function parseTriageResponse(text) {
 //   - needs-triage is removed when present (this pass completes triage) —
 //     unless needs-info is also present: an incomplete issue stays in the
 //     triage queue, and the needs-info re-nudge gate outside `opened`
-//     requires needs-triage to survive.
-function planActions({ response, currentLabels, candidateNumbers }) {
+//     requires needs-triage to survive,
+//   - the issue Type is set only when the issue has none (see planIssueType).
+function planActions({
+  response,
+  currentLabels,
+  candidateNumbers,
+  currentIssueType = null,
+  issueTypes = [],
+}) {
   const current = new Set(currentLabels || []);
   const addLabels = [];
   const labelReasons = [];
@@ -305,14 +319,46 @@ function planActions({ response, currentLabels, candidateNumbers }) {
     labelReasons,
     duplicates,
     security: response.security,
+    issueType: planIssueType({ response, currentLabels, currentIssueType, issueTypes }),
     removeNeedsTriage:
       current.has(NEEDS_TRIAGE_LABEL) && !current.has(NEEDS_INFO_LABEL),
+  };
+}
+
+// Decide the issue Type (Bug / Feature / Task) to set, or null. Pure, so
+// the gating is unit-testable:
+//   - an existing Type always wins (never overwritten, suggest-don't-destroy),
+//   - the source is the effective type label: an existing bug/enhancement/
+//     question label (pass 1 / human) first, else the model's inference,
+//   - the name maps through ISSUE_TYPE_BY_LABEL and must resolve to an
+//     enabled Type in `issueTypes` (the runtime `repository.issueTypes`
+//     list) — an empty list (lookup failed, Types disabled) sets nothing.
+function planIssueType({ response, currentLabels, currentIssueType, issueTypes }) {
+  if (currentIssueType) return null;
+  const current = new Set(currentLabels || []);
+  const existingLabel = TYPES.find((t) => current.has(t));
+  const typeLabel = existingLabel || (response && response.type) || null;
+  if (!typeLabel) return null;
+  const name = ISSUE_TYPE_BY_LABEL[typeLabel];
+  const match = (issueTypes || []).find(
+    (t) => t && t.name === name && t.isEnabled !== false && t.id
+  );
+  if (!match) return null;
+  return {
+    id: match.id,
+    name,
+    reason: existingLabel
+      ? `from the \`${existingLabel}\` label`
+      : (response.reasons && response.reasons.type) || 'inferred from the issue text',
   };
 }
 
 // The one auditable, marker-idempotent summary comment.
 function buildSummaryComment(plan) {
   const lines = ['### Automated triage', ''];
+  if (plan.issueType) {
+    lines.push(`Type set: **${plan.issueType.name}** — ${plan.issueType.reason}`, '');
+  }
   if (plan.labelReasons.length > 0) {
     lines.push('Labels applied:');
     for (const { label, reason } of plan.labelReasons) {
@@ -347,7 +393,7 @@ function buildSummaryComment(plan) {
     );
   }
   lines.push(
-    '<sub>Automated agentic triage (pass 2). Labels are suggestions — maintainers may adjust them.</sub>',
+    '<sub>Automated agentic triage (pass 2). Labels and Type are suggestions — maintainers may adjust them.</sub>',
     '',
     AGENTIC_MARKER
   );
@@ -356,6 +402,7 @@ function buildSummaryComment(plan) {
 
 module.exports = {
   AGENTIC_MARKER,
+  ISSUE_TYPE_BY_LABEL,
   NEEDS_INFO_LABEL,
   NEEDS_TRIAGE_LABEL,
   POSSIBLE_DUPLICATE_LABEL,
@@ -364,6 +411,7 @@ module.exports = {
   extractSearchQueries,
   parseTriageResponse,
   planActions,
+  planIssueType,
   sanitizeText,
 };
 
@@ -389,6 +437,71 @@ function gh(args, opts = {}) {
 
 function ghJson(args) {
   return JSON.parse(gh(args));
+}
+
+// One repository-scoped GraphQL read for everything the Type decision
+// needs: the enabled Types (IDs resolved at runtime, never hardcoded), the
+// issue's current Type, and its node id for the mutation. Repository scope
+// (not `organization.issueTypes`) is what the Actions token's
+// `issues: write` can read. Fail-soft: on any error the caller gets an
+// empty Type list, so planIssueType sets nothing and triage continues.
+function fetchIssueTypeContext(repo, issueNumber) {
+  const [owner, name] = repo.split('/');
+  try {
+    const data = ghJson([
+      'api', 'graphql',
+      '-f', 'query=query($owner: String!, $name: String!, $number: Int!) {'
+        + ' repository(owner: $owner, name: $name) {'
+        + ' issueTypes(first: 50) { nodes { id name isEnabled } }'
+        + ' issue(number: $number) { id issueType { name } } } }',
+      '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${issueNumber}`,
+    ]);
+    const repository = data && data.data && data.data.repository;
+    if (!repository || !repository.issue) throw new Error('empty repository/issue in response');
+    return {
+      issueNodeId: repository.issue.id,
+      currentIssueType: repository.issue.issueType ? repository.issue.issueType.name : null,
+      issueTypes: (repository.issueTypes && repository.issueTypes.nodes) || [],
+    };
+  } catch (e) {
+    warn(`could not read issue Types (Type assignment skipped): ${e.message}`);
+    return { issueNodeId: null, currentIssueType: null, issueTypes: [] };
+  }
+}
+
+// Set the Type via `updateIssue(issueTypeId)`. Returns true on success;
+// a failure (e.g. a token that cannot set Types) is a warning, not an
+// abort — the rest of the pass still completes. The planning read is a
+// point-in-time snapshot and `updateIssue` replaces unconditionally, so
+// the Type is re-read immediately before the write: a Type set by a human
+// in the meantime (or during the label write) is left alone.
+function setIssueType(issueNodeId, issueType) {
+  try {
+    const fresh = ghJson([
+      'api', 'graphql',
+      '-f', 'query=query($id: ID!) { node(id: $id) { ... on Issue { issueType { name } } } }',
+      '-f', `id=${issueNodeId}`,
+    ]);
+    const node = fresh && fresh.data && fresh.data.node;
+    if (!node) throw new Error('empty node in pre-write re-read');
+    if (node.issueType && node.issueType.name) {
+      console.log(
+        `issue Type is now ${node.issueType.name} (set since the plan was made); leaving it unchanged.`
+      );
+      return false;
+    }
+    gh([
+      'api', 'graphql',
+      '-f', 'query=mutation($id: ID!, $typeId: ID!) {'
+        + ' updateIssue(input: { id: $id, issueTypeId: $typeId }) {'
+        + ' issue { issueType { name } } } }',
+      '-f', `id=${issueNodeId}`, '-f', `typeId=${issueType.id}`,
+    ]);
+    return true;
+  } catch (e) {
+    warn(`could not set issue Type ${issueType.name} (fail-soft): ${e.message}`);
+    return false;
+  }
 }
 
 // Merge the `gh issue list --search` results for each query, excluding the
@@ -572,26 +685,34 @@ function main() {
     process.exit(1);
   }
 
+  const typeContext = fetchIssueTypeContext(repo, issueNumber);
   const plan = planActions({
     response,
     currentLabels,
     candidateNumbers: candidates.map((c) => c.number),
+    currentIssueType: typeContext.currentIssueType,
+    issueTypes: typeContext.issueTypes,
   });
-  const comment = buildSummaryComment(plan);
 
   console.log(`labels to add: [${plan.addLabels.join(', ') || 'none'}]`);
+  console.log(
+    `issue Type: ${typeContext.currentIssueType || 'none'}` +
+      (plan.issueType ? ` → set ${plan.issueType.name}` : ' (unchanged)')
+  );
   console.log(`remove ${NEEDS_TRIAGE_LABEL}: ${plan.removeNeedsTriage}`);
   if (dryRun) {
     console.log(`--- would comment on ${repo}#${issueNumber}: ---`);
-    console.log(comment);
+    console.log(buildSummaryComment(plan));
     console.log('dry-run: nothing written');
     return;
   }
 
-  // Order matters for partial-failure recovery: labels, then the summary
-  // comment (the audit record + idempotency marker), and only then retire
-  // needs-triage — a failure before that point leaves the issue in the
-  // triage queue for a re-run or a human.
+  // Order matters for partial-failure recovery: labels, then the Type,
+  // then the summary comment (the audit record + idempotency marker), and
+  // only then retire needs-triage — a failure before that point leaves the
+  // issue in the triage queue for a re-run or a human. The comment is built
+  // after the Type write so a fail-soft Type failure is not reported as
+  // applied.
   if (plan.addLabels.length > 0) {
     gh([
       'issue', 'edit', String(issueNumber), '--repo', repo,
@@ -599,6 +720,14 @@ function main() {
     ]);
     console.log(`added labels: ${plan.addLabels.join(', ')}`);
   }
+  if (plan.issueType) {
+    if (setIssueType(typeContext.issueNodeId, plan.issueType)) {
+      console.log(`set issue Type: ${plan.issueType.name}`);
+    } else {
+      plan.issueType = null;
+    }
+  }
+  const comment = buildSummaryComment(plan);
   gh(
     ['issue', 'comment', String(issueNumber), '--repo', repo, '--body-file', '-'],
     { input: comment }

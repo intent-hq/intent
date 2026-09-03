@@ -32,10 +32,19 @@ name: Issue triage
 # pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates,
 # component/type labels when pass 1 derived none, and a priority; it posts
 # one marker-idempotent summary comment and retires `needs-triage`.
-# Fail-soft: continue-on-error, and skipped with a warning when the
-# AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it only
-# adds labels/comments, never closes or edits anything. Logic + local
-# dry-run CLI: .github/scripts/issue-triage/agentic-triage.js.
+# It also fills the issue Type field (Bug / Feature / Task) when the issue
+# has none — from the effective type label (bug -> Bug, enhancement ->
+# Feature, question -> Task), Type IDs resolved at runtime from
+# `repository.issueTypes`. Template-filed issues already carry a Type
+# (`type:` in .github/ISSUE_TEMPLATE/*.yml), so this mostly covers blank
+# issues; an existing Type is never overwritten. The Type write uses the
+# job's `github.token` (`issues: write`) via GraphQL `updateIssue` and is
+# guarded: a failure only logs a warning and the rest of the pass
+# completes. Fail-soft: continue-on-error, and skipped with a warning when
+# the AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it
+# only adds labels/comments and fills an empty Type, never closes or edits
+# anything. Logic + local dry-run CLI:
+# .github/scripts/issue-triage/agentic-triage.js.
 
 on:
   issues:
@@ -52,7 +61,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: Print intended label operations without applying them
+        description: Print intended label/Type operations without applying them
         type: boolean
         default: true
       apply_needs_triage:
@@ -323,9 +332,13 @@ jobs:
   # end to end: the whole job is continue-on-error (an LLM hiccup never
   # marks the run failed), and a missing AUGMENT_SESSION_AUTH secret skips
   # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
-  # SUBMODULE_BUMP_TOKEN elsewhere). The issue number is the only event
-  # data that reaches the shell — the script fetches title/body itself and
-  # passes them around as argv/stdin data, never shell-interpolated.
+  # SUBMODULE_BUMP_TOKEN elsewhere). The issue Type write (GraphQL
+  # `updateIssue` with `issueTypeId`, repository-scoped `issueTypes`
+  # lookup) needs only the job's `issues: write` on `github.token`; the
+  # script guards both the lookup and the write so a permission error
+  # degrades to a warning. The issue number is the only event data that
+  # reaches the shell — the script fetches title/body itself and passes
+  # them around as argv/stdin data, never shell-interpolated.
   agentic-triage:
     needs: triage
     if: >-

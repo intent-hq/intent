@@ -1,6 +1,7 @@
 name: Bug report
 description: Report a bug in intentd, cloudlands-fe, ios, or docs/tooling
 labels: ["bug"]
+type: Bug
 body:
   - type: textarea
     id: description

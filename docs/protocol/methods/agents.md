@@ -56,8 +56,9 @@ suppressed, so restart recovery does not duplicate a final wake.
 An `after_all` aggregate uses the stable `completion-group-wake:<groupId>` identity. The daemon
 durably queues that wake before it atomically deletes the group and retires its watches; a
 failed settlement leaves the complete group restart-recoverable. Immediate progress,
-attention, and grouped-failure notifications can also carry `watchStillArmed: true`; they never
-claim terminal retirement.
+attention, grouped-failure, and monitoring-idle advisory notifications (the advisory leaves the
+watch armed on both the ungrouped and grouped shapes — see agent-aux.md → Completion-watch
+persistence) can also carry `watchStillArmed: true`; they never claim terminal retirement.
 
 **Creation-time default-model resolution (daemon-owned, [intent-hq/intentd#852](https://github.com/intent-hq/intentd/pull/852)).**
 Every creation path — `agent.create`, `agent.delegate`, `agent.wakeOrCreate`, and
