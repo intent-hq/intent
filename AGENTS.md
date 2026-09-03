@@ -23,7 +23,7 @@ The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architectur
 Each Intent workspace is a git worktree on the daemon host. The desktop client runs the
 embedded Chromium tabs and tunnels ports that listen on the daemon's loopback interface.
 Always give the embedded browser `http://daemon.localhost:<port>` URLs; do not substitute
-the host's address or a client-local forwarded port.
+the host's address or a browser-rewritten loopback URL.
 
 From the monorepo root, prepare the host and inspect this worktree's derived ports:
 
@@ -268,10 +268,9 @@ for all components.
 
 ## Terminology
 
-Do **not** use "wave" / "Wave N" terminology in committed documentation. It is
-coordinator-internal vocabulary specific to a single agent's delegation flow and must not
-leak into the repo. Describe progress as capabilities/milestones instead (e.g. "Repo & CI
-bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
+Do **not** leak coordinator-internal sequencing labels from a single agent's delegation
+flow into committed documentation. Describe progress as capabilities or milestones instead
+(e.g. "Repo & CI bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 
 ## Local Setup
 
