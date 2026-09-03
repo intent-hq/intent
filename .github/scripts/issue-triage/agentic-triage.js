@@ -471,9 +471,25 @@ function fetchIssueTypeContext(repo, issueNumber) {
 
 // Set the Type via `updateIssue(issueTypeId)`. Returns true on success;
 // a failure (e.g. a token that cannot set Types) is a warning, not an
-// abort — the rest of the pass still completes.
+// abort — the rest of the pass still completes. The planning read is a
+// point-in-time snapshot and `updateIssue` replaces unconditionally, so
+// the Type is re-read immediately before the write: a Type set by a human
+// in the meantime (or during the label write) is left alone.
 function setIssueType(issueNodeId, issueType) {
   try {
+    const fresh = ghJson([
+      'api', 'graphql',
+      '-f', 'query=query($id: ID!) { node(id: $id) { ... on Issue { issueType { name } } } }',
+      '-f', `id=${issueNodeId}`,
+    ]);
+    const node = fresh && fresh.data && fresh.data.node;
+    if (!node) throw new Error('empty node in pre-write re-read');
+    if (node.issueType && node.issueType.name) {
+      console.log(
+        `issue Type is now ${node.issueType.name} (set since the plan was made); leaving it unchanged.`
+      );
+      return false;
+    }
     gh([
       'api', 'graphql',
       '-f', 'query=mutation($id: ID!, $typeId: ID!) {'
