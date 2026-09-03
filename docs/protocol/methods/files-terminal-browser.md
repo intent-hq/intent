@@ -342,10 +342,13 @@
 > **800**. `listTabs` reports `mode: "emulated"` plus the effective width/height for
 > emulated tabs (current bounds for visible owned fit tabs, fallback size offscreen,
 > exact dimensions for preset/custom); unowned fit tabs report `mode: "native"`.
-> **`resizeTab { tabId, width, height? }`** changes an owned tab's emulated size
-> (omitted `height` keeps the tab's current emulated height) — owner-only (on a tab
-> the caller does not own it returns the structured `not-owner` error); there is no
-> agent action for unowned (user) tabs; users may still select preset/custom or Fit panel.
+> **`resizeTab { tabId, width, height? }`** switches an owned tab to its persisted
+> per-tab **custom** viewport mode at the requested width and requested height, or at
+> the tab's effective/retained emulated height when `height` is omitted. The user can
+> return the tab to **Fit panel** from the viewport menu. The action is owner-only (on
+> a tab the caller does not own it returns the structured `not-owner` error); there is
+> no agent action for unowned (user) tabs, though users may still select preset/custom
+> or Fit panel.
 >
 > **Ownership lifecycle.** Ownership is **FE-persisted** alongside the tab and survives
 > app restarts — an owned tab never silently reverts to unowned on relaunch. Ownership
