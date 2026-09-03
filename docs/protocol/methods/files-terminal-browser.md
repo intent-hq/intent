@@ -345,8 +345,9 @@
 > **`resizeTab { tabId, width, height? }`** switches an owned tab to its persisted
 > per-tab **custom** viewport mode at the requested width and requested height. When
 > `height` is omitted, the action uses the tab's retained emulated height — the last
-> height explicitly requested by `openTab`, `claimTab`, or `resizeTab`, or the **800**
-> default — never a live Fit-panel measurement, so the resulting custom size remains
+> height explicitly requested by `openTab`, `claimTab`, `resizeTab`, or a user-selected
+> preset/custom viewport, or the **800** default — never a live Fit-panel measurement,
+> so the resulting custom size remains
 > within the validated 320–3840 range. The user can return the tab to **Fit panel**
 > from the viewport menu. The action is owner-only (on
 > a tab the caller does not own it returns the structured `not-owner` error); there is
