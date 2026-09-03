@@ -321,10 +321,13 @@
 > rides `error` and never fails the action, and the field is absent when the
 > workspace is visible.
 >
-> **Viewport sizing invariant.** Unowned (user) tabs are **always native**; agent-owned
-> tabs are **always emulated** — the FE applies the size as CDP device-metrics viewport
-> emulation, so owned tabs render deterministically offscreen without disturbing the
-> user's panel layout. There is no opt-in and no clear/reset op. Everywhere they appear
+> **Viewport sizing invariant.** Every tab has a persisted viewport mode. **Fit panel**
+> is the default: a visible tab follows the panel's webview area with no fixed frame or
+> letterboxing. Agent-owned fit tabs remain CDP-emulated at the reported panel bounds;
+> hidden/offscreen owned fit tabs use their last emulated size or **1280×800** when none
+> was recorded. Unowned fit tabs stay native. Preset/custom modes use exact dimensions
+> with scale-to-fit when the panel is smaller, for both owned and unowned tabs.
+> Everywhere explicit dimensions appear
 > (`claimTab` / `openTab` / `resizeTab`), `width` and `height` are **integers within
 > 320–3840** (CSS px, inclusive), enforced up-front by action-sequence schema
 > validation: fractional, non-finite, or out-of-range values (below 320 — which
@@ -333,14 +336,16 @@
 > (`success: false` + top-level `error`, `Invalid action sequence: …`) that the
 > daemon maps to `-32603` (see above) — an emulated tab can never carry a
 > disabling zero size. Agent-issued
-> `openTab` accepts optional `width` / `height` and the tab is emulated from creation;
-> omitted `width` defaults to **1280** and omitted `height` to **800** (the standard
-> desktop viewport 1280×800 when both are omitted), and `claimTab` with omitted
-> `height` likewise defaults to **800**.
+> `openTab` accepts optional `width` / `height`: omitting both selects Fit panel;
+> specifying either selects custom mode, with the omitted axis defaulting to **1280**
+> (width) or **800** (height). `claimTab` with omitted `height` likewise defaults to
+> **800**. `listTabs` reports `mode: "emulated"` plus the effective width/height for
+> emulated tabs (current bounds for visible owned fit tabs, fallback size offscreen,
+> exact dimensions for preset/custom); unowned fit tabs report `mode: "native"`.
 > **`resizeTab { tabId, width, height? }`** changes an owned tab's emulated size
 > (omitted `height` keeps the tab's current emulated height) — owner-only (on a tab
 > the caller does not own it returns the structured `not-owner` error); there is no
-> size op for unowned (user) tabs and no reset-to-native form.
+> agent action for unowned (user) tabs; users may still select preset/custom or Fit panel.
 >
 > **Ownership lifecycle.** Ownership is **FE-persisted** alongside the tab and survives
 > app restarts — an owned tab never silently reverts to unowned on relaunch. Ownership
