@@ -95,6 +95,8 @@ window.__INTENT_PREVIEW__.current();
 no named preview is ready. Wait for `[data-preview-ready=true]` before inspection or
 capture.
 
+For a cold renderer launch, use the [self-checking readiness hook](../../packages/cloudlands-fe/.agents/skills/electron/SKILL.md#wait-for-renderer-readiness) instead of polling or rescheduling an expired hook.
+
 For an agent, run the long-lived command through a workspace service script. Call
 `ws.browser.listTabs` before opening the URL and reuse a matching tab. A new
 `ws.browser.openTab` tab is hidden by default, but DOM, accessibility, evaluation, and
