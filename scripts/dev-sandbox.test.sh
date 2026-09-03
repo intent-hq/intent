@@ -47,6 +47,7 @@ cat >"$temp_dir/bin/corepack" <<'SH'
 #!/usr/bin/env bash
 exec python3 - "$DEV_PORT" <<'PY'
 import http.server
+import json
 import os
 import sys
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -54,8 +55,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
     def do_GET(self):
-        if os.environ.get("WARM_FAIL") == "1":
-            self.send_error(503)
+        if self.path == "/__sandbox/health":
+            mode = os.environ.get("HEALTH_MODE", "absent")
+            if mode == "absent":
+                self.send_error(404)
+                return
+            payload = json.dumps({"ok": mode == "ok"}).encode()
+            self.send_response(200 if mode == "ok" else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
@@ -228,6 +238,7 @@ PY
 grep -q -- '-p intentd .*--jobs 8' "$cargo_log" || fail "dev build did not honor BUILD_JOBS"
 ! grep -q -- '--release' "$cargo_log" || fail "default build unexpectedly used release profile"
 grep -q "Starting intentd binary: $temp_dir/target/debug/intentd" "$temp_dir/stack.out" || fail "default binary path was not target/debug/intentd"
+grep -q 'Sandbox health endpoint unavailable; using socket/HTTP readiness probes.' "$temp_dir/stack.out" || fail "legacy health fallback was not reported"
 python3 - "$data_dir/intentd.sock" <<'PY' || fail "stack socket was not connectable"
 import socket
 import sys
@@ -266,26 +277,37 @@ port=$(free_port)
 override_log="$temp_dir/override-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/override-data" \
   SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" WARM_FAIL=1 SANDBOX_READY_TIMEOUT=5 \
+  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT=5 \
   bash "$script" stack >"$temp_dir/override.out" 2>&1 &
 sandbox_pid=$!
-wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become ready after failed warm-up"
+wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become healthy"
 [[ ! -e "$override_log" ]] || fail "INTENTD_BIN override did not skip cargo build"
 grep -q "Using INTENTD_BIN override: $temp_dir/fake-intentd" "$temp_dir/override.out" || fail "INTENTD_BIN override was not echoed"
-grep -q 'WARNING: Vite warm-up failed or timed out; continuing.' "$temp_dir/override.out" || fail "failed warm-up was not logged"
-python3 - "$state_dir/stack.json" <<'PY' || fail "failed warm-up state was incorrect"
+grep -q 'Sandbox health is ok; Vite warm-up complete.' "$temp_dir/override.out" || fail "healthy warm-up was not logged"
+python3 - "$state_dir/stack.json" <<'PY' || fail "healthy warm-up state was incorrect"
 import json
 import sys
 state = json.load(open(sys.argv[1], encoding="utf-8"))
 assert state["intentdSource"] == "bin"
-assert state["warm"]["ok"] is False and state["warm"]["ms"] >= 0
+assert state["warm"]["ok"] is True and state["warm"]["ms"] >= 0
 PY
-warm_line=$(grep -n 'WARNING: Vite warm-up failed' "$temp_dir/override.out" | cut -d: -f1)
+warm_line=$(grep -n 'Sandbox health is ok' "$temp_dir/override.out" | cut -d: -f1)
 ready_line=$(grep -n '^Sandbox ready:' "$temp_dir/override.out" | cut -d: -f1)
 [[ "$warm_line" -lt "$ready_line" ]] || fail "readiness was announced before warm-up finished"
 kill -TERM "$sandbox_pid"
 wait "$sandbox_pid" 2>/dev/null || true
 sandbox_pid=""
+
+set +e
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/unhealthy-data" \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" HEALTH_MODE=pending \
+  SANDBOX_READY_TIMEOUT=5 SANDBOX_WARM_TIMEOUT=1 \
+  bash "$script" stack >"$temp_dir/unhealthy.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "unhealthy sandbox returned $status instead of 1"
+grep -q 'sandbox health was not ok within 1s' "$temp_dir/unhealthy.out" || fail "health timeout was not reported"
+! grep -q '^Sandbox ready:' "$temp_dir/unhealthy.out" || fail "readiness was announced while health was not ok"
 
 cat >"$temp_dir/failing-intentd" <<'SH'
 #!/usr/bin/env bash

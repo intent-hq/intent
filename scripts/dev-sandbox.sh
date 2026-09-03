@@ -268,57 +268,69 @@ raise SystemExit(0 if ok else 1)
 PY
 }
 
-warm_vite() {
-  local warm_started warm_finished
-  warm_started=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
-  echo "[dev-sandbox-$mode] Pre-warming the Vite module graph (timeout: ${warm_timeout}s)..."
-  if python3 - "$dev_port" "$warm_timeout" <<'PY'
-from html.parser import HTMLParser
+sandbox_health_state() {
+  python3 - "$dev_port" <<'PY' 2>/dev/null
+import json
 import sys
-import time
-from urllib.parse import urljoin, urlparse
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
-origin = f"http://127.0.0.1:{sys.argv[1]}/"
-deadline = time.monotonic() + int(sys.argv[2])
+try:
+    response = urlopen(f"http://127.0.0.1:{sys.argv[1]}/__sandbox/health", timeout=0.25)
+except HTTPError as error:
+    response = error
+except (OSError, URLError):
+    print("pending")
+    raise SystemExit
 
-def fetch(url):
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("warm-up deadline reached")
-    with urlopen(url, timeout=max(0.1, remaining)) as response:
-        return response.read().decode("utf-8", errors="replace")
+status = response.status
+body = response.read().decode("utf-8", errors="replace")
+try:
+    payload = json.loads(body)
+except json.JSONDecodeError:
+    payload = None
 
-class Entries(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.urls = []
-    def handle_starttag(self, tag, attrs):
-        values = dict(attrs)
-        if tag == "script" and values.get("src"):
-            self.urls.append(values["src"])
-        if tag == "link" and "modulepreload" in values.get("rel", "").split() and values.get("href"):
-            self.urls.append(values["href"])
-
-parser = Entries()
-parser.feed(fetch(origin))
-seen = set()
-for reference in parser.urls[:32]:
-    url = urljoin(origin, reference)
-    parsed = urlparse(url)
-    if parsed.scheme != "http" or parsed.netloc != urlparse(origin).netloc or url in seen:
-        continue
-    seen.add(url)
-    fetch(url)
-print(f"fetched / and {len(seen)} entry module(s)")
+if isinstance(payload, dict) and isinstance(payload.get("ok"), bool):
+    print("ok" if payload["ok"] else "pending")
+elif status in (200, 404):
+    print("absent")
+else:
+    print("pending")
 PY
-  then
-    warm_ok=true
-    echo "[dev-sandbox-$mode] Vite warm-up complete."
-  else
-    warm_ok=false
-    echo "[dev-sandbox-$mode] WARNING: Vite warm-up failed or timed out; continuing." >&2
-  fi
+}
+
+warm_vite() {
+  local warm_started warm_finished health_state deadline
+  warm_started=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
+  deadline=$((SECONDS + warm_timeout))
+  echo "[dev-sandbox-$mode] Waiting for sandbox health and Vite warm-up (timeout: ${warm_timeout}s)..."
+  while true; do
+    child_is_running "$fe_pid" "frontend" || return "$child_exit_status"
+    if [[ -n "$daemon_pid" ]]; then
+      child_is_running "$daemon_pid" "intentd" || return "$child_exit_status"
+    fi
+    health_state=$(sandbox_health_state)
+    case "$health_state" in
+      ok)
+        warm_ok=true
+        echo "[dev-sandbox-$mode] Sandbox health is ok; Vite warm-up complete."
+        break
+        ;;
+      absent)
+        warm_ok=true
+        echo "[dev-sandbox-$mode] Sandbox health endpoint unavailable; using socket/HTTP readiness probes."
+        break
+        ;;
+    esac
+    if (( SECONDS >= deadline )); then
+      warm_ok=false
+      warm_finished=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
+      warm_ms=$((warm_finished - warm_started))
+      echo "[dev-sandbox-$mode] ERROR: sandbox health was not ok within ${warm_timeout}s." >&2
+      return 1
+    fi
+    sleep 0.1
+  done
   warm_finished=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
   warm_ms=$((warm_finished - warm_started))
 }
@@ -445,7 +457,7 @@ while true; do
 done
 
 if [[ "$mode" != ui ]]; then
-  warm_vite
+  warm_vite || exit $?
   child_is_running "$fe_pid" "frontend" || exit "$child_exit_status"
   if [[ -n "$daemon_pid" ]]; then
     child_is_running "$daemon_pid" "intentd" || exit "$child_exit_status"
