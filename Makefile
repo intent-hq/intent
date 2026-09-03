@@ -87,9 +87,13 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports docs-check
+.PHONY: ports status docs-check
 ports: ## Print this worktree's resolved development ports
 	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
+
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
+		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 
 docs-check: ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh

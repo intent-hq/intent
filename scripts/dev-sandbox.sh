@@ -55,15 +55,16 @@ signal_tree() {
 }
 
 status_sandboxes() {
-  mkdir -p "$state_dir"
-  python3 - "$state_dir" "${SANDBOX_JSON:-0}" <<'PY'
+  local read_only=${SANDBOX_STATUS_READ_ONLY:-0}
+  [[ "$read_only" == 1 ]] || mkdir -p "$state_dir"
+  python3 - "$state_dir" "${SANDBOX_JSON:-0}" "$read_only" <<'PY'
 import errno
 import glob
 import json
 import os
 import sys
 
-state_dir, json_output = sys.argv[1], sys.argv[2] == "1"
+state_dir, json_output, read_only = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
 live = []
 for path in sorted(glob.glob(os.path.join(state_dir, "*.json"))):
     try:
@@ -77,10 +78,11 @@ for path in sorted(glob.glob(os.path.join(state_dir, "*.json"))):
                 raise
     except Exception as error:
         print(f"Stale sandbox state: {path} ({error})", file=sys.stderr)
-        try:
-            os.unlink(path)
-        except FileNotFoundError:
-            pass
+        if not read_only:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
         continue
     live.append(state)
 
