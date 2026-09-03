@@ -151,12 +151,14 @@ with no rollback.
   report within the timeout is treated as failed), which `ws.pr.snapshot` /
   `ws.pr.monitor` surface as `mergeQueueEjection`. An ejected PR is not re-queued on its own: fix the cause and
   re-enqueue by re-running `gh pr merge --squash --auto`. The queue's squash uses the
-  same title rules as a direct squash merge: the commit title defaults to the commit
-  message (or PR title as fallback), and the commit message includes all commit
-  messages from the PR. On single-commit PRs, ensure the branch commit message is
-  itself a valid conventional commit (amend auto-commits like "Coordinator" before
-  pushing) to prevent non-conventional commits from landing on main (e.g., PR #102
-  incident).
+  same title rules as a direct squash merge: on a single-commit PR the commit title
+  defaults to that commit's message headline; on a multi-commit PR it defaults to the
+  PR title. The commit message includes all commit messages from the PR either way.
+  On single-commit PRs, ensure the branch commit message is itself a valid
+  conventional commit (amend auto-commits like "Coordinator" before pushing) to
+  prevent non-conventional commits from landing on main (e.g., PR #102 incident); on
+  multi-commit PRs, ensure the PR title is a valid conventional commit, since it is
+  what lands as the squash title.
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: run the package gates before opening a PR — `make check` / `make test`
   from the monorepo root; see `packages/intentd/AGENTS.md` → Gates. Coverage runs
