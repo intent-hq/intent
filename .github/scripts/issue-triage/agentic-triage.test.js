@@ -1,5 +1,6 @@
 // Fixture-driven tests for the pass-2 agentic triage logic: model-output
-// parsing, the label allowlist, action gating, and comment building.
+// parsing, the label allowlist, action gating, issue Type gating, and
+// comment building.
 // Run locally with:  node --test .github/scripts/issue-triage/agentic-triage.test.js
 
 'use strict';
@@ -11,17 +12,26 @@ const path = require('node:path');
 
 const {
   AGENTIC_MARKER,
+  ISSUE_TYPE_BY_LABEL,
   POSSIBLE_DUPLICATE_LABEL,
   buildPrompt,
   buildSummaryComment,
   extractSearchQueries,
   parseTriageResponse,
   planActions,
+  planIssueType,
   sanitizeText,
 } = require('./agentic-triage.js');
 
 const fixture = (name) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
+
+// Shape of `repository.issueTypes.nodes` as resolved at runtime.
+const ISSUE_TYPES = [
+  { id: 'IT_task', name: 'Task', isEnabled: true },
+  { id: 'IT_bug', name: 'Bug', isEnabled: true },
+  { id: 'IT_feature', name: 'Feature', isEnabled: true },
+];
 
 test('parse: fenced JSON with surrounding prose parses fully', () => {
   const r = parseTriageResponse(fixture('agentic-response-clean.txt'));
@@ -124,6 +134,94 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
   assert.deepStrictEqual(gated.addLabels, []);
   assert.deepStrictEqual(gated.duplicates, []);
   assert.strictEqual(gated.removeNeedsTriage, false);
+  // Without a resolved Type list nothing is set.
+  assert.strictEqual(plan.issueType, null);
+  assert.strictEqual(gated.issueType, null);
+});
+
+test('type: untyped issue gets the Type from the model inference; IDs come from the runtime list', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const plan = planActions({
+    response,
+    currentLabels: ['needs-triage'],
+    candidateNumbers: [],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.deepStrictEqual(plan.issueType, {
+    id: 'IT_bug',
+    name: 'Bug',
+    reason: 'Reports a panic, clearly a defect',
+  });
+});
+
+test('type: existing type label wins over the model; question maps to Task', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const fromLabel = planIssueType({
+    response,
+    currentLabels: ['enhancement'],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(fromLabel.name, 'Feature');
+  assert.strictEqual(fromLabel.id, 'IT_feature');
+  assert.ok(fromLabel.reason.includes('`enhancement` label'));
+
+  response.type = 'question';
+  const question = planIssueType({
+    response,
+    currentLabels: [],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(question.name, 'Task');
+  assert.strictEqual(question.id, 'IT_task');
+  assert.deepStrictEqual(ISSUE_TYPE_BY_LABEL, {
+    bug: 'Bug', enhancement: 'Feature', question: 'Task',
+  });
+});
+
+test('type: an existing Type is never overwritten', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const plan = planActions({
+    response,
+    currentLabels: ['enhancement'],
+    candidateNumbers: [],
+    currentIssueType: 'Task',
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(plan.issueType, null);
+});
+
+test('type: nothing is set without a signal, a matching enabled Type, or a resolved list', () => {
+  const noSignal = parseTriageResponse('{"security": false}');
+  assert.strictEqual(
+    planIssueType({ response: noSignal, currentLabels: [], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    null
+  );
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  assert.strictEqual(
+    planIssueType({ response, currentLabels: [], currentIssueType: null, issueTypes: [] }),
+    null
+  );
+  assert.strictEqual(
+    planIssueType({
+      response,
+      currentLabels: [],
+      currentIssueType: null,
+      issueTypes: [{ id: 'IT_bug', name: 'Bug', isEnabled: false }],
+    }),
+    null
+  );
+  assert.strictEqual(
+    planIssueType({
+      response,
+      currentLabels: [],
+      currentIssueType: null,
+      issueTypes: [{ id: 'IT_task', name: 'Task', isEnabled: true }],
+    }),
+    null
+  );
 });
 
 test('plan: needs-info keeps needs-triage in place', () => {
@@ -173,7 +271,19 @@ test('comment: lists labels, candidates, and security redirect; always carries t
   assert.ok(comment.includes('`component:intentd`'));
   assert.ok(comment.includes('#101'));
   assert.ok(comment.includes('security/advisories'));
+  assert.ok(!comment.includes('Type set:'));
   assert.ok(comment.endsWith(AGENTIC_MARKER));
+
+  const typed = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: ['needs-triage'],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    })
+  );
+  assert.ok(typed.includes('Type set: **Bug** — Reports a panic, clearly a defect'));
 
   const empty = buildSummaryComment(
     planActions({
