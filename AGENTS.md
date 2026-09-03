@@ -213,6 +213,8 @@ bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 
 ```bash
 git submodule update --init --recursive   # skips the private packages/ios (update = none)
+command -v cargo-sweep >/dev/null 2>&1 || cargo install cargo-sweep --locked
+command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked
 make check
 make test
 ```

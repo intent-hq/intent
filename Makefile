@@ -79,7 +79,7 @@ BRIDGE_PLATFORM ?= $(shell uname -s)
 # days in this worktree's intentd, and `sweep-all` does the same across every
 # sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
 # live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
-# (`cargo install cargo-sweep`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
+# (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
 # or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
@@ -305,7 +305,7 @@ clean-dev: ## Wipe the dev-seat state dir (.dev/)
 # would be overkill, so it short-circuits with a friendly no-op instead.
 sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
 	@if [ -d "$(INTENTD_DIR)/target" ]; then \
@@ -316,7 +316,7 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
 	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR) $(WORKSPACES_DIR)/*/intent/$(INTENTD_DIR); do \

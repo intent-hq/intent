@@ -1,5 +1,5 @@
 {
-  "setupScript": "#!/bin/bash\n# Generic setup script\n# Available variables: $MAIN_CHECKOUT, $WORKTREE_PATH, $BRANCH_NAME, $SOURCE_BRANCH\n\n# Copy environment and config files\nfor file in .env .env.local .envrc .tool-versions; do\n  if [ -f \"$MAIN_CHECKOUT/$file\" ]; then\n    cp \"$MAIN_CHECKOUT/$file\" \"./$file\"\n    echo \"Copied $file\"\n  fi\ndone\n\necho \"Config files copied\"\n\n# Initialize required submodules (idempotent; Rust-workflow only)\nmake ensure-submodules",
+  "setupScript": "#!/bin/bash\n# Generic setup script\n# Available variables: $MAIN_CHECKOUT, $WORKTREE_PATH, $BRANCH_NAME, $SOURCE_BRANCH\n\n# Copy environment and config files\nfor file in .env .env.local .envrc .tool-versions; do\n  if [ -f \"$MAIN_CHECKOUT/$file\" ]; then\n    cp \"$MAIN_CHECKOUT/$file\" \"./$file\"\n    echo \"Copied $file\"\n  fi\ndone\n\necho \"Config files copied\"\n\n# Initialize required submodules (idempotent; Rust-workflow only)\nmake ensure-submodules\n\n# Install Rust workflow tools when missing\ncommand -v cargo-sweep >/dev/null 2>&1 || cargo install cargo-sweep --locked\ncommand -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked",
   "scripts": [
     {
       "name": "build-intentd",
