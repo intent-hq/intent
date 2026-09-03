@@ -218,6 +218,7 @@ cleanup() {
   local pid
   [[ "$cleaning" -eq 0 ]] || return
   cleaning=1
+  remove_state_file
   for pid in "$fe_pid" "$daemon_pid"; do
     [[ -n "$pid" ]] && signal_tree TERM "$pid"
   done
@@ -237,7 +238,6 @@ cleanup() {
       wait "$pid" 2>/dev/null || true
     fi
   done
-  remove_state_file
 }
 
 trap cleanup EXIT

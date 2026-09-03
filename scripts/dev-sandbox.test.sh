@@ -170,6 +170,40 @@ assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
 s.close()
 PY
 
+cat >"$temp_dir/supervised.mk" <<'MAKE'
+supervised-ui:
+	@exec bash "$(SCRIPT)" ui
+MAKE
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 SCRIPT="$script" \
+  setsid make -f "$temp_dir/supervised.mk" supervised-ui >"$temp_dir/supervised.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did not become ready"
+state_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$state_dir/ui.json")
+state_ppid=$(ps -o ppid= -p "$state_pid" | tr -d ' ')
+[[ "$state_ppid" == "$sandbox_pid" ]] || fail "recipe shell did not exec the sandbox script"
+kill -TERM -- "-$sandbox_pid"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+[[ "$status" -ne 0 ]] || fail "supervised recipe unexpectedly exited successfully after TERM"
+for _ in {1..50}; do
+  [[ ! -e "$state_dir/ui.json" ]] && break
+  sleep 0.02
+done
+[[ ! -e "$state_dir/ui.json" ]] || fail "state remained after external TERM of the recipe process tree"
+python3 - "$port" <<'PY' || fail "supervised recipe listener remained after TERM"
+import socket
+import sys
+s = socket.socket()
+s.settimeout(0.2)
+assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
+s.close()
+PY
+
 cat >"$state_dir/stale.json" <<'JSON'
 {"mode":"ui","pid":99999999}
 JSON
