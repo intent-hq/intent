@@ -7,6 +7,67 @@ The `system.status` result keeps its required `version` field and can also carry
 built. It is omitted, never `null`, when that identity is unavailable. Clients must detect it
 by field presence and must continue to use `version` as the release version.
 
+### 5.7 Exact-version daemon updates — `system.requestUpdateVersion` *(v9.5)*
+
+This additive fast-path method is available over authenticated UDS and WSS. It is
+**distinct from** parameterless `system.requestUpdate`, whose historical handlers ignore
+params and ask for the moving channel tip. Never send a version to that older method.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| system.requestUpdateVersion | `{ version: string }` (required, no extra fields) | `{ ok: true, accepted: true, version: string }` |
+
+`version` must be canonical SemVer: `X.Y.Z` optionally followed by a valid prerelease
+suffix, such as `1.2.3-beta.1`. Published prerelease pins are preserved verbatim for the
+immutable `v<version>` release tag. Core numbers are unsigned 64-bit decimal components
+without leading zeroes (except `0`); prerelease identifiers follow SemVer, including its
+no-leading-zero rule for numeric identifiers. Leading `v`, whitespace, ranges, URLs/paths,
+malformed identifiers and build metadata are rejected. Numeric releases distributed on
+alpha are also supported. Invalid params return `-32602` before sitter handoff.
+
+`system.status` adds **`exactVersionUpdateSupported: boolean`**, always present on capable
+daemons and absent on older daemons. A client must require `=== true`; `updateSupported`
+alone is insufficient. It is true only on Unix when the verified live sitter parent set
+the v1 capability marker and its private control socket exists. A new daemon under an
+old sitter reports false. This read-time hint is not a handoff guarantee: the sitter can
+exit between status and the request. The method checks again and requires the sitter's
+exact-version acknowledgement. Unsupported installations/platforms, refusal to downgrade,
+another active update, and failed/invalid/timed-out handoffs return `-32603`. Old daemons
+return `-32601` for the unknown method. **None of these errors permits a latest fallback.**
+
+Success means **accepted, not installed or running**. The sitter resolves only
+`v<version>/intentd-<target>.tar.xz` and its `.sha256` sidecar from the trusted release
+repositories (the public distribution repository first, then the original source release
+repository). It does not read a channel manifest. Missing/unavailable/invalid artifacts,
+checksum or extraction failures leave the installed daemon unchanged. Existing checksum
+verification and atomic binary/state installation apply. Neither the running daemon nor
+the installed state may be newer than the requested version; unknown installed version
+identity is refused rather than allowing a downgrade. Channel configuration is unchanged.
+
+The sitter reserves a cross-process update lock **before acceptance**. Concurrent periodic,
+SIGUSR1 and CLI installs are rejected/coalesced, not queued to install a channel tip later.
+The reservation spans the download and supervised child restart, then a **60-second
+stabilization window** after child spawn. Failure also retains a 60-second window so
+coalesced checks cannot act as a latest fallback. SIGHUP child restarts during that window
+keep the selected version. After the window, normal newer-only channel checks resume on
+their usual schedule: this is not a permanent pin. The reservation is process-scoped;
+explicitly stopping/restarting the sitter ends it and restores normal startup checking.
+
+Clients must reconnect to the **same remote** and compare `system.status.version` with
+the accepted target before claiming completion. A timeout, unchanged version, different
+version or disconnect is not success; explain that installation may have failed and offer
+a deliberate retry. Do not automatically downgrade an already-newer remote.
+
+**Legacy installations:** upgrading only the managed daemon cannot upgrade its sitter.
+The user must explicitly upgrade/reinstall the packaged sitter using the
+[installation guide](../../../packages/intentd/README.md#install) for their installer or
+package manager, restart the sitter service, then reconnect and check the new capability. This is a separate manual maintenance action: warn that the legacy startup
+workflow follows its configured channel. Do not silently perform that channel update as
+part of an exact-version request, and do not offer database-unsafe binary downgrades as a
+workaround. If maintenance advances the remote beyond the app pin, update the app instead
+of downgrading the remote. No new contract can make an already-installed old sitter honor
+an exact target.
+
 ### 5.37 Managed Unsloth server — `unsloth.status` / `unsloth.stop` *(v2.5)*
 
 The daemon owns a **singleton managed Unsloth server** (the `unsloth` CLI process plus the
