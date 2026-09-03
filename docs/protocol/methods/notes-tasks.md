@@ -8,12 +8,12 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | --- | --- | --- |
 | note.list | workspaceId (req), projection?: "slim" \| "full" *(v8.1)* | { notes: NoteSummary[] } — **Projection (`projection`, additive within v8.1 — [intent-hq/intentd#1508](https://github.com/intent-hq/intentd/pull/1508), monorepo#3573):** absent / `null` / `"full"` keep the full rows byte-identical to before — **full stays the default**, unlike the v8.0 conversation surfaces, because existing consumers (the iOS client) still read `content` off list rows; `"slim"` serves bounded listing rows with `content` omitted, replaced by `contentPreview` (the first 500 chars, char-boundary safe by construction) plus `contentLength` (total chars — Unicode scalar values, the same unit as the note.listVersions summaries' `contentLength` for the NUL-free content the daemon writes — note.listVersions uses SQL `LENGTH`, which stops at the first U+0000), every other Note field serializing exactly as the full row does — full responses scale with total workspace note content, so note-heavy workspaces tripped the transport's 1 MiB outbound frame warning; any other value is `-32602` (`projection must be "slim" or "full"`), never coerced. Serve-time only — stored rows are untouched. Older-daemon interop: pre-8.1 daemons read only `workspaceId` off `note.list` params and ignore unknown members, so sending `projection: "slim"` to a pre-8.1 daemon is silently ignored and serves full rows (never an error) — clients that need slim rows must gate on `protocolVersion` ≥ 8.1 (or detect `contentPreview` presence on the rows they get back). The note subscription channel gained the same projection in v8.2 — see the `note.subscribe` row in §6.9. -32602 with `error.data.code: "not-found"` when the workspace does not exist (deleted, or never created; monorepo#3404 — previously a best-effort empty list). Task-note rows with `dependsOn` edges carry the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty — see §5.4 task.setRelations). The field is guaranteed only on read/push shapes (`note.get`/`note.list` and the subscription snapshots/deltas they serve); notes embedded in mutation *responses* (e.g. `task.updateNoteStatus`'s `note`, `note.update`'s `note`) may omit it — clients should not patch caches from mutation responses expecting the projection |
 | note.get | noteId (req) | { note: Note } — -32602 with `error.data.code: "not-found"` if not found. A task note with `dependsOn` edges carries the computed `metadata.task.unmetDependsOn` (within v6.8, monorepo#1979; presence-detected, omitted when empty; read/push shapes only — see the note.list row) |
-| note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome |
-| note.update | noteId (req); content? or title?/tags? | { note } — content present → full setContent; else metadata update |
-| note.add | noteId (req), content (req), heading?, position?: "end" | "start" |
-| note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement |
-| note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive) |
-| note.setContent | noteId (req), content (req), confirmReplacement?: boolean | { ok, ... } (full replace) |
+| note.create | title (req), content?, tags?: string[], parentId?, idempotencyKey? | { note, convertedCount, createdTaskNoteIds, createdTasks, warnings } — within v6.14 ([intent-hq/intentd#1162](https://github.com/intent-hq/intentd/pull/1162), monorepo#2129) the result carries the `@@@task` auto-conversion outcome for the initial content, **additive** over the old `{ note }` shape (clients reading `.note` are unaffected): same shapes and warning contract as the four content-write ops (see "`@@@task` auto-conversion on note writes" below and the `task.convertBlocks` row, §5.4), with all four fields always present (`convertedCount: 0` plus empty arrays when the content converts nothing). `note` is the refetched post-conversion row, so its `rev`/`updatedAt` reflect the conversion write. An `idempotencyKey` replay returns the stored result without re-executing; a replayed key recorded before the conversion fields existed decodes the stored bare note as a zeroed conversion outcome. `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.update | noteId (req); content? or title?/tags? | { note } — content present → full setContent; else metadata update. `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes" below) |
+| note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement. `-32602` when `new` is the line-numbered `note.read` display (see below) |
+| note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive). `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean | { ok, ... } (full replace). `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.updateMetadata | noteId (req), title?, tags?: string | string[] |
 | note.delete | noteId (req) | { ok, noteId, deleted } — emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations) |
@@ -58,6 +58,43 @@ surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVers
 straight to storage and invalidate the cached session so the next full-content
 write reseeds from the fresh persisted content; `note.delete` drops the
 session. The wire shapes on §5.2 are unchanged.
+
+**Numbered `note.read` display rejected on content writes** (behavior only, no
+shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
+monorepo#4208). The agent-facing `ws.note.read` binding returns two content fields:
+`content`, a **display rendering** with every line prefixed by a 4-wide right-aligned
+line number (`   1 | text`) so agents can cite lines for `editLines`, and `rawContent`,
+the actual Markdown. Writing `content` back verbatim used to persist the prefixes as
+literal text (headings, checkboxes and `@@@task` fences all stop parsing), so every
+content-accepting write now rejects that shape with **`-32602` InvalidParams** and the
+message:
+
+```
+Content looks like the line-numbered display returned by note.read (lines prefixed
+with `   N | `). Writing it back would corrupt the note's Markdown, so it was rejected
+and the note is unchanged. Use the `rawContent` field from note.read (or remove the
+`   N | ` prefixes) and retry; wrap intentionally numbered text in a code fence.
+```
+
+Guarded params: `note.create` `content`, the content arm of `note.update`,
+`note.add` `content`, `note.edit` `new`, `note.editLines` `content`, and
+`note.setContent` `content`. The check runs in the service layer before the note is
+fetched and before the CRDT merge, so a rejected write touches neither the store nor
+the `yrs` document (the note is unchanged, no version is appended, no event is
+emitted) and applies on every transport, including the FE editor's `note.setContent`
+save path. The detector anchors on the **leading run**: the content must open with at
+least two consecutive lines of the exact binding shape — a number column that is
+exactly 4 wide (leading spaces + digits, unpadded once the number outgrows 4 digits)
+followed by `" | "` (or a bare `" |"` for a blank line), with consecutive numbers. Whatever
+follows is irrelevant, so `read.content + "\n- [ ] new item"` is still caught; a task
+note's read that is only the `--- Task Metadata ---` trailer (empty body) also
+counts. A single `N | text` line, ordered lists (`1. first`), GFM table rows
+(`1 | Alice`, `| 1 | a |`), 4-space-indented code blocks (`    1 | listing`), `N|x`
+without spaces, prose before a numbered run, and numbered listings inside a code fence
+do not match. Rejecting (rather than silently stripping prefixes) is deliberate: a
+false positive can never destroy legitimate content, and the message names the fix.
+Clients that do read-modify-write must use `rawContent` (or `note.get`'s `note.content`,
+which is never numbered); intentionally numbered text belongs in a code fence.
 
 **`@@@task` auto-conversion on note writes.** Every content-mutating note write
 (`note.add`, `note.edit`, `note.editLines`, `note.setContent`, the content arm of
