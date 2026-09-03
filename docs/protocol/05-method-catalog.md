@@ -270,7 +270,7 @@ Resolves the daemon-managed GitHub credential for the `intentd git-credential` h
 
 #### `system.requestUpdateVersion` / `exactVersionUpdateSupported` (v9.5)
 
-See [§5.7 exact-version daemon updates](methods/system-observability.md#57-exact-version-daemon-updates--systemrequestupdateversion-v94)
+See [§5.7 exact-version daemon updates](methods/system-observability.md#57-exact-version-daemon-updates--systemrequestupdateversion-v95)
 for the canonical request, acceptance-only response, sitter capability negotiation,
 concurrency protection and legacy migration contract. App-triggered exact updates must use
 this method, not `system.requestUpdate`. Missing capability or exact artifacts never permit
