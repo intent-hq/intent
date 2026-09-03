@@ -22,65 +22,74 @@ The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architectur
 
 Each Intent workspace is a git worktree on the daemon host. The desktop client runs the
 embedded Chromium tabs and tunnels ports that listen on the daemon's loopback interface.
-Always give the embedded browser `http://daemon.localhost:<port>` URLs; do not substitute
-the host's address or a browser-rewritten loopback URL.
+Always use `http://daemon.localhost:<port>` in the embedded browser.
 
-From the monorepo root, prepare the host and inspect this worktree's derived ports:
+### Situate
 
-```bash
-make doctor
-make bootstrap-dev-host
-make ports
+Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
+and health, both component branches, and branch PR checks when `gh` is authenticated.
+Use `make status` for the human-readable form. If `host.doctorOk` is false, run
+`make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
+system packages may require privilege. Do not discover prerequisites during a build.
+
+### Act
+
+Start the smallest long-running target as a workspace service:
+
+- `make dev-sandbox-ui` — named component previews only.
+- `make dev-sandbox-app` — complete web renderer against the installed daemon or
+  `INTENTD_SOCKET`.
+- `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
+  `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
+
+Each ready sandbox records `.dev/sandbox/<mode>.json`. Inspect it with
+`make sandbox-status`. Use `make sandbox-stop` only for an unmanaged or orphaned sandbox;
+stop a workspace service with `ws.script.stop(id)` so its supervisor does not restart it.
+
+### Observe
+
+For app or stack readiness, schedule this one canonical health wait after replacing the
+port. It polls on the daemon host and retires when `/__sandbox/health` returns `ok: true`:
+
+```javascript
+await ws.hook.schedule({
+  name: "Wait for sandbox health",
+  delayMs: 10_000,
+  ttlMs: 600_000,
+  code: `const probe = await ws.host.exec({
+  command: "curl",
+  args: ["--silent", "--max-time", "2", "http://127.0.0.1:<DEV_PORT>/__sandbox/health"],
+});
+if (probe.exitCode !== 0) return { dispatch: false };
+try { if (JSON.parse(probe.stdout).ok === true) return { dispatch: true, message: "Sandbox health is ok." }; } catch {}
+return { dispatch: false };`,
+});
 ```
 
-`make doctor` reports required intentd and frontend tooling without changing the host.
-`make bootstrap-dev-host` installs missing prerequisites after confirmation; automation
-can opt into non-interactive installation with `BOOTSTRAP_YES=1`. The checks include
-`pkg-config` and OpenSSL development headers, which a from-source intentd build requires
-(`libssl-dev` plus `pkg-config` on Debian/Ubuntu). Re-run `make doctor` afterward and fix
-every required gap. `make ports` prints stable per-worktree values for `DEV_PORT`,
-`DEV_TCP_PORT`, `BRIDGE_PORT`, and `CDP_PORT`; explicit environment or command-line
-overrides still win.
+Call `ws.browser.listTabs` and reuse a matching tab; otherwise open
+`http://daemon.localhost:<DEV_PORT>/`. A first tunneled open of a fresh, pre-warmed app
+takes roughly one to three minutes to hydrate depending on host load. Keep waiting if the
+splash remains; do not restart. Keep the tab open for HMR.
 
-Choose the smallest long-running workspace service that covers the behavior under test:
+### Prove
 
-- `make dev-sandbox-ui` — named component previews; no daemon or application sagas.
-- `make dev-sandbox-app` — the complete web renderer against the installed Intent daemon,
-  or against the socket supplied through `INTENTD_SOCKET`.
-- `make dev-sandbox-stack` — an isolated intentd plus the complete web renderer. It builds
-  intentd with the development profile by default; use `INTENTD_PROFILE=release` to opt
-  into a release build, or `INTENTD_BIN=/path/to/intentd` to skip the build and run a
-  prebuilt binary. Its data stays under this worktree's `.dev/intentd` directory.
+Capture with `ws.browser.screenshot`, reveal with `ws.browser.showTab`, and append evidence
+to the task note rather than relying on prose alone:
 
-Run the selected target as a workspace service and wait for this final line (app and
-stack pre-warm Vite's module graph before printing it):
+| Claim | Command | Result | Artifact |
+|---|---|---|---|
+| What behavior was verified | Exact command or tool call | Pass/fail plus key observation | Asset, commit, PR, or log |
 
-```text
-Sandbox ready: http://127.0.0.1:<port>/  (open as http://daemon.localhost:<port>/ from the client)
-```
+### Hand off
 
-Call `ws.browser.listTabs` first and reuse a matching tab; otherwise open
-`http://daemon.localhost:<port>/` with `ws.browser.openTab`. A first tunneled open of a
-fresh, pre-warmed app takes roughly one to three minutes to hydrate depending on host load
-(fastest observed: about 45 seconds). Poll for the expected DOM or accessibility content;
-if the splash is still visible, keep waiting instead of restarting the service. Subsequent
-loads are fast; before module-graph pre-warming, a cold tunneled load took about 10 minutes.
-Keep the tab open for HMR, capture it with `ws.browser.screenshot`, and reveal it for human
-review with `ws.browser.showTab`.
+Stop what you started, then rerun `STATUS_JSON=1 make status` to confirm no listener or
+state remains. Keep app and stack on loopback: their Vite origin exposes the full
+unauthenticated daemon API and is safe only through the client's authenticated tunnel.
 
-Remote browser sandboxes cannot exercise the Electron shell (Loop B), main/preload or
-native-dialog behavior. `playwright-cli` is unavailable unless separately installed and
-is not needed for the normal embedded-browser flow. Tunneled Chromium treats
-`daemon.localhost` as a remote origin, so `workspace-file://` media do not load there;
-they do load in Electron and must be verified in an Electron build. See the
-[frontend Loop A recipe](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
-and [preview workflow](docs/fe/DEVELOPER_GUIDE.md#fast-ui-preview-workflow) for
-component-specific details rather than duplicating them here.
-
-**Security:** `dev-sandbox-app` and `dev-sandbox-stack` expose the full unauthenticated
-daemon API on the Vite origin. Keep the server on loopback and access it only through the
-Intent client's authenticated tunnel. Never bind a sandbox to `0.0.0.0` or expose its
-origin directly to a network.
+Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
+management, or `workspace-file://` media; verify those in an Electron build. See the
+[frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for detail.
 
 ## Commit & PR Workflow
 

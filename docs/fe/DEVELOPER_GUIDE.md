@@ -13,9 +13,13 @@ This guide reflects the current Intent repository layout and APIs as of package 
 
 ### Install and Run
 
-From the monorepo root, inspect the worktree's derived ports and start the fast
-component-preview sandbox. The target installs locked frontend dependencies when
-`node_modules` is missing.
+Agents on a remote daemon host should follow the root
+[situate → act → observe → prove → hand-off loop](../../AGENTS.md#developing-on-a-remote-host).
+The root section is the canonical operational recipe and health-hook source. This guide
+documents frontend-specific behavior and implementation detail.
+
+From the monorepo root, inspect the worktree's derived ports and start the fast component
+preview. The target installs locked frontend dependencies when `node_modules` is missing.
 
 ```bash
 make ports
@@ -62,12 +66,58 @@ corepack pnpm run test:unit     # Vitest suite
 corepack pnpm run test:playwright
 ```
 
-For Loop A work against the installed daemon, run `make dev-sandbox-app` from the
-monorepo root as a workspace service script. Use `make dev-sandbox-stack` for an
-isolated from-source intentd plus renderer. Expect the first tunneled hydration of a
-fresh, pre-warmed app to take roughly one to three minutes depending on host load (fastest
-observed: about 45 seconds). Keep polling if the splash is visible instead of restarting;
-subsequent loads are fast.
+For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
+`make dev-sandbox-stack` for an isolated intentd plus renderer. The first tunneled
+hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
+load. Follow the root health wait and keep waiting if the splash remains.
+
+### Remote Sandbox Internals
+
+`scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
+blocks beginning at 5200. The block assigns `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` in order. If any derived port is busy, it selects the next completely free
+block and prints the replacement; explicit overrides are validated and never remapped.
+
+On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with this schema:
+
+| Field | Meaning |
+|---|---|
+| `mode`, `pid` | `ui`, `app`, or `stack`, and the owning sandbox process |
+| `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
+| `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
+| `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
+| `startedAt`, `readyAt` | UTC lifecycle timestamps |
+| `warm` | `{ok, ms}` readiness-gate result and duration |
+| `supervisor` | Supervisor metadata when available; currently `null` |
+
+`make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
+nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
+removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
+uses TERM followed by KILL escalation. For a workspace service, use `ws.script.stop(id)`;
+otherwise the external supervisor may restart the process.
+
+App and stack enable the dev-only same-origin bridge. `GET /__sandbox/health` accepts only
+loopback, same-origin requests and returns 200 only when `ok` is true, otherwise 503:
+
+| Object | Fields |
+|---|---|
+| root | `ok` |
+| `vite` | `ready` |
+| `daemon` | `socket`, `reachable`, and optional `error` |
+| `warm` | `moduleGraph`, `entriesWarm` |
+| `git` | `sha`, `branch` |
+
+The endpoint makes a bounded UDS connection. Before answering, it waits for Vite's active
+warm-up requests to become idle and verifies the configured entries are in the client
+module graph: the root layout, app page, and named-preview page. This endpoint is installed
+only by the dev-server plugin, not production builds. The sandbox prints its single ready
+line and writes state only after this gate succeeds; older frontend branches fall back to
+socket and HTTP readiness probes.
+
+`STATUS_JSON=1 make status` consumes these files and health responses into
+`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+ahead/behind state, and optional PR/check summaries when GitHub authentication is
+available. The report is read-only, including stale sandbox state.
 
 ## Fast UI Preview Workflow
 
