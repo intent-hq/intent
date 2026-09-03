@@ -1116,10 +1116,11 @@ same `workspace.list` / `workspace.get` emit path — and the lite `workspace.su
 snapshot (§6.9, intentd#743) — enriches each `Workspace` with a BE-owned
 "current cycle" status rollup over the active/latest PR and `taskStats` — derived fresh on emit,
 **never persisted**. Wire values are the snake_case strings
-`"failed" | "blocked" | "needs_attention" | "in_progress" | "not_started" | "idle" | "complete" | "pr_ready" | "pr_open" | "pr_merged"`
+`"failed" | "blocked" | "needs_attention" | "in_progress" | "not_started" | "idle" | "complete" | "pr_queued" | "pr_ready" | "pr_open" | "pr_merged"`
 (`"idle"` new in intentd#793, `"needs_attention"` new in intentd; `"failed"` / `"blocked"`
 new in intentd#945 — added without a protocol bump per the same precedent, since
-clients degrade unrecognized values neutrally, see below; the intentd#945 `"unread"`
+clients degrade unrecognized values neutrally, see below; `"pr_queued"` — the PR sits
+in the forge's merge queue — added the same way; the intentd#945 `"unread"`
 value is **removed** — the `unread` attention flag is no longer a displayStatus axis, so
 the value simply never reaches the wire, which is client-compatible per the same
 precedent — the flag itself, its turn-end raise, and `workspace.markSeen` are the unread
@@ -1200,11 +1201,15 @@ attention is never fabricated.
    here, but it can read as `pr_open`/`pr_ready` there.
 4. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
-      recently updated open/draft entry in `pullRequests` — yields `pr_ready`
-      (`mergeable == true` and not draft) or `pr_open`. An **ACTIVE PR monitor**
+      recently updated open/draft entry in `pullRequests` — yields `pr_queued`
+      (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
+      not draft), else `pr_ready` (`mergeable == true` and not draft) or `pr_open`.
+      An **ACTIVE PR monitor**
       (§5.42) whose persisted last snapshot shows the PR open/draft is the same rung
       ([intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329)):
-      `pr_ready` when the snapshot says mergeable and not draft, else `pr_open` — so
+      `pr_queued` when the snapshot's `requirements.isInMergeQueue` is `true` and the
+      PR is not draft, `pr_ready` when the snapshot says mergeable and not draft, else
+      `pr_open` — so
       a workspace watching an open PR via `ws.pr.monitor` (including a cross-repo PR
       that never enters the workspace's own PR linkage) never falls through to
       `complete`/`idle`. A linked open PR wins the shared rung first (richer data);
@@ -1261,7 +1266,7 @@ site runs **both** transition-only recomputes (`workspace:displayStatus-changed`
 normally a silent no-op at the hook and completion-watch sites while the waiting half
 emits; the PR-monitor sites are the exception since intentd#1329 — the monitored PR's
 state feeds the step-4 PR rungs, so those same choke points are where the rung
-transitions actually emit: a register on an open PR can emit `pr_open`/`pr_ready`, the
+transitions actually emit: a register on an open PR can emit `pr_open`/`pr_ready`/`pr_queued`, the
 poll loop's terminal completion on a merge emits `pr_merged`, and a cancel lapses the
 monitor's signal back to the base rollup (the idempotent re-arm still recomputes and
 stays a silent no-op). A mid-watch snapshot change (e.g. checks turning the PR
