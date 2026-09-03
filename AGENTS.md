@@ -34,6 +34,11 @@ system packages may require privilege. Do not discover prerequisites during a bu
 
 ### Act
 
+Run `make sandbox-status` before starting anything. State is keyed only by mode, so one
+worktree can track at most one `ui`, one `app`, and one `stack` sandbox; different ports
+do not isolate a second sandbox of the same mode. Coordinate with its owner or use another
+worktree instead.
+
 Start the smallest long-running target as a workspace service:
 
 - `make dev-sandbox-ui` — named component previews only.
@@ -42,8 +47,8 @@ Start the smallest long-running target as a workspace service:
 - `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
   `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
 
-Each ready sandbox records `.dev/sandbox/<mode>.json`. Inspect it with
-`make sandbox-status`. Use `make sandbox-stop` only for an unmanaged or orphaned sandbox;
+Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
+an unmanaged or orphaned sandbox;
 stop a workspace service with `ws.script.stop(id)` so its supervisor does not restart it.
 
 ### Observe

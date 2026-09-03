@@ -90,6 +90,11 @@ On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with th
 | `warm` | `{ok, ms}` readiness-gate result and duration |
 | `supervisor` | Supervisor metadata when available; currently `null` |
 
+The filename is keyed only by mode, not port or agent. A worktree can therefore track one
+sandbox of each mode; starting a second same-mode sandbox overwrites that mode's identity.
+Run `make sandbox-status` first and coordinate with the recorded owner, or use a separate
+worktree.
+
 `make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
 nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
 removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
