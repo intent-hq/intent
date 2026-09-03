@@ -1203,12 +1203,23 @@ attention is never fabricated.
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
       recently updated open/draft entry in `pullRequests` — yields `pr_queued`
       (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
-      not draft), else `pr_ready` (`mergeable == true` and not draft) or `pr_open`.
+      not draft); else `pr_ready` only when the PR is **truly mergeable** — not draft,
+      `mergeable == true` AND `mergeable_state == "clean"`
+      ([intent-hq/intentd#1402](https://github.com/intent-hq/intentd/pull/1402);
+      GitHub's `mergeable` flag alone only rules out conflicts, so a `blocked` /
+      `behind` / `dirty` / `unstable` / `unknown` / absent `mergeable_state` never
+      promotes); otherwise `pr_open`.
       An **ACTIVE PR monitor**
       (§5.42) whose persisted last snapshot shows the PR open/draft is the same rung
       ([intent-hq/intentd#1329](https://github.com/intent-hq/intentd/pull/1329)):
       `pr_queued` when the snapshot's `requirements.isInMergeQueue` is `true` and the
-      PR is not draft, `pr_ready` when the snapshot says mergeable and not draft, else
+      PR is not draft, `pr_ready` when the snapshot's full `requirements`
+      merge-requirements checklist is clear (intentd#1402 — not draft, `mergeable`,
+      no conflicts, not behind, no `mergeBlockedReason`, no failing/pending required
+      checks, no `changes_requested` / `review_required` approvals decision nor a
+      `none` decision while the branch rules still demand approvals the PR lacks, no
+      unresolved threads when resolution is required, no `BLOCKED` / `BEHIND` /
+      `DIRTY` / `UNKNOWN` `mergeStateStatus`, and not in the merge queue), else
       `pr_open` — so
       a workspace watching an open PR via `ws.pr.monitor` (including a cross-repo PR
       that never enters the workspace's own PR linkage) never falls through to
