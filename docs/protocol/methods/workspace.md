@@ -983,7 +983,7 @@ omitted** (see its bullet below):
   `total`, `complete` counts as `completed`, and `in_progress` + `review_required` count as
   `inProgress`. The renderer-only per-task `tasks` array is omitted.
 - `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
-  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding, parentAgentId? }`.
+  `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding, parentAgentId?, isBackground? }`.
   This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
   `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
   the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
@@ -993,7 +993,13 @@ omitted** (see its bullet below):
   `AgentLite` decision); `lastActivity` is the session `updatedAt`; `parentAgentId` (v2.9, additive)
   is the delegating/spawning agent's id — the same session value surfaced as
   `metadata.createdByAgentId` on `agent.get`/`agent.list` loads (§5.5) — **omitted** for root
-  agents, so clients can rebuild the delegation tree from the summary alone. Since
+  agents, so clients can rebuild the delegation tree from the summary alone; `isBackground`
+  (additive, presence-detected — [intent-hq/intentd#1700](https://github.com/intent-hq/intentd/pull/1700),
+  [intent-hq/intent#3789](https://github.com/intent-hq/intent/issues/3789)) is the session's
+  persisted background flag — the same value surfaced as `metadata.isBackground` on
+  `agent.get`/`agent.list` loads (§5.5) — **omitted** when `false` (never `false` on the wire), so
+  clients can gate background agents from the summary alone without waiting for the full
+  session hydration. Since
   [intent-hq/intentd#1359](https://github.com/intent-hq/intentd/pull/1359)
   ([monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)), **archived**
   `workspace.list` rows omit `agentSummary` entirely — the archived tail dominated the
