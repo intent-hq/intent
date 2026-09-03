@@ -61,11 +61,12 @@ Sandbox ready: http://127.0.0.1:<port>/  (open as http://daemon.localhost:<port>
 
 Call `ws.browser.listTabs` first and reuse a matching tab; otherwise open
 `http://daemon.localhost:<port>/` with `ws.browser.openTab`. A first tunneled open of a
-fresh, pre-warmed app normally takes about 45–60 seconds to hydrate. Poll for the expected
-DOM or accessibility content; if the splash is still visible, keep waiting instead of
-restarting the service. Before module-graph pre-warming, a cold tunneled load took about
-10 minutes. Keep the tab open for HMR, capture it with `ws.browser.screenshot`, and reveal
-it for human review with `ws.browser.showTab`.
+fresh, pre-warmed app takes roughly one to three minutes to hydrate depending on host load
+(fastest observed: about 45 seconds). Poll for the expected DOM or accessibility content;
+if the splash is still visible, keep waiting instead of restarting the service. Subsequent
+loads are fast; before module-graph pre-warming, a cold tunneled load took about 10 minutes.
+Keep the tab open for HMR, capture it with `ws.browser.screenshot`, and reveal it for human
+review with `ws.browser.showTab`.
 
 Remote browser sandboxes cannot exercise the Electron shell (Loop B), main/preload or
 native-dialog behavior. `playwright-cli` is unavailable unless separately installed and

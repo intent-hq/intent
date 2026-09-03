@@ -64,7 +64,10 @@ corepack pnpm run test:playwright
 
 For Loop A work against the installed daemon, run `make dev-sandbox-app` from the
 monorepo root as a workspace service script. Use `make dev-sandbox-stack` for an
-isolated from-source intentd plus renderer.
+isolated from-source intentd plus renderer. Expect the first tunneled hydration of a
+fresh, pre-warmed app to take roughly one to three minutes depending on host load (fastest
+observed: about 45 seconds). Keep polling if the splash is visible instead of restarting;
+subsequent loads are fast.
 
 ## Fast UI Preview Workflow
 
