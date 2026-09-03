@@ -12,8 +12,13 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 fe_dir=${FE_DIR:-"$repo_root/packages/cloudlands-fe"}
 dev_port=${DEV_PORT:-5190}
 ready_timeout=${SANDBOX_READY_TIMEOUT:-60}
+warm_timeout=${SANDBOX_WARM_TIMEOUT:-60}
 dev_data_dir=${DEV_DATA_DIR:-"$repo_root/.dev/intentd"}
-intentd_bin=${INTENTD_BIN:-"$repo_root/packages/intentd/target/release/intentd"}
+intentd_dir=${INTENTD_DIR:-"$repo_root/packages/intentd"}
+intentd_target_dir=${INTENTD_TARGET_DIR:-"$intentd_dir/target"}
+intentd_profile=${INTENTD_PROFILE:-dev}
+intentd_bin=${INTENTD_BIN:-}
+build_jobs=${BUILD_JOBS:--2}
 socket_path=${INTENTD_SOCKET:-}
 fe_pid=""
 daemon_pid=""
@@ -22,6 +27,7 @@ child_exit_status=0
 
 [[ "$dev_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_PORT must be numeric." >&2; exit 2; }
 [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
+[[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
 
 children_of() {
   pgrep -P "$1" 2>/dev/null || true
@@ -86,6 +92,55 @@ raise SystemExit(0 if ok else 1)
 PY
 }
 
+warm_vite() {
+  echo "[dev-sandbox-$mode] Pre-warming the Vite module graph (timeout: ${warm_timeout}s)..."
+  if python3 - "$dev_port" "$warm_timeout" <<'PY'
+from html.parser import HTMLParser
+import sys
+import time
+from urllib.parse import urljoin, urlparse
+from urllib.request import urlopen
+
+origin = f"http://127.0.0.1:{sys.argv[1]}/"
+deadline = time.monotonic() + int(sys.argv[2])
+
+def fetch(url):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("warm-up deadline reached")
+    with urlopen(url, timeout=max(0.1, remaining)) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+class Entries(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.urls = []
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "script" and values.get("src"):
+            self.urls.append(values["src"])
+        if tag == "link" and "modulepreload" in values.get("rel", "").split() and values.get("href"):
+            self.urls.append(values["href"])
+
+parser = Entries()
+parser.feed(fetch(origin))
+seen = set()
+for reference in parser.urls[:32]:
+    url = urljoin(origin, reference)
+    parsed = urlparse(url)
+    if parsed.scheme != "http" or parsed.netloc != urlparse(origin).netloc or url in seen:
+        continue
+    seen.add(url)
+    fetch(url)
+print(f"fetched / and {len(seen)} entry module(s)")
+PY
+  then
+    echo "[dev-sandbox-$mode] Vite warm-up complete."
+  else
+    echo "[dev-sandbox-$mode] WARNING: Vite warm-up failed or timed out; continuing." >&2
+  fi
+}
+
 child_is_running() {
   local pid=$1 label=$2 status
   if ! kill -0 "$pid" 2>/dev/null; then
@@ -112,6 +167,24 @@ if [[ "$mode" == app ]]; then
     exit 1
   fi
 elif [[ "$mode" == stack ]]; then
+  case "$intentd_profile" in
+    dev) profile_dir=debug; profile_args=() ;;
+    release) profile_dir=release; profile_args=(--release) ;;
+    *) echo "[dev-sandbox-stack] ERROR: INTENTD_PROFILE must be 'dev' or 'release'." >&2; exit 2 ;;
+  esac
+  if [[ -n "$intentd_bin" ]]; then
+    echo "[dev-sandbox-stack] Using INTENTD_BIN override: $intentd_bin (skipping build)"
+  else
+    command -v cargo >/dev/null 2>&1 || { echo "[dev-sandbox-stack] ERROR: cargo is required; run 'make bootstrap-dev-host'." >&2; exit 1; }
+    if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists openssl; then
+      echo "[dev-sandbox-stack] ERROR: pkg-config and OpenSSL development headers are required; run 'make bootstrap-dev-host'." >&2
+      exit 1
+    fi
+    intentd_bin="$intentd_target_dir/$profile_dir/intentd"
+    echo "[dev-sandbox-stack] Building intentd ($intentd_profile profile, BUILD_JOBS=$build_jobs)..."
+    cargo build "${profile_args[@]}" -p intentd --manifest-path "$intentd_dir/Cargo.toml" --jobs "$build_jobs" || exit $?
+  fi
+  echo "[dev-sandbox-stack] Starting intentd binary: $intentd_bin"
   socket_path="$dev_data_dir/intentd.sock"
   mkdir -p "$dev_data_dir"
   daemon_args=(serve)
@@ -154,6 +227,14 @@ while true; do
   fi
   sleep 0.1
 done
+
+if [[ "$mode" != ui ]]; then
+  warm_vite
+  child_is_running "$fe_pid" "frontend" || exit "$child_exit_status"
+  if [[ -n "$daemon_pid" ]]; then
+    child_is_running "$daemon_pid" "intentd" || exit "$child_exit_status"
+  fi
+fi
 
 echo "Sandbox ready: http://127.0.0.1:${dev_port}/  (open as http://daemon.localhost:${dev_port}/ from the client)"
 

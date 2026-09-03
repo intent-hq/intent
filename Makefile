@@ -67,6 +67,8 @@ dev_port_value = $(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
 DEV_PORT ?= $(call dev_port_value,DEV_PORT)
 DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
 SANDBOX_READY_TIMEOUT ?= 60
+SANDBOX_WARM_TIMEOUT ?= 60
+INTENTD_PROFILE ?= dev
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 DEV_PROD_PLATFORM ?= $(shell uname -s)
@@ -437,16 +439,16 @@ dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's der
 dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-app] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" scripts/dev-sandbox.sh app
 
-dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## From-source intentd + web renderer sandbox on isolated data
-	@command -v cargo >/dev/null 2>&1 || { echo "[dev-sandbox-stack] ERROR: cargo is required; run 'make bootstrap-dev-host'."; exit 1; }
+dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-stack] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
-	@echo "[dev-sandbox-stack] Building intentd release binary (no-op if already fresh)..."
-	@cargo build --release -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
 		SANDBOX_TCP="$(SANDBOX_TCP)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
-		FE_DIR="$(CURDIR)/$(FE_DIR)" INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" BUILD_JOBS="$(BUILD_JOBS)" \
+		INTENTD_PROFILE="$(INTENTD_PROFILE)" INTENTD_BIN="$(INTENTD_BIN)" \
+		INTENTD_DIR="$(CURDIR)/$(INTENTD_DIR)" FE_DIR="$(CURDIR)/$(FE_DIR)" \
 		scripts/dev-sandbox.sh stack
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)

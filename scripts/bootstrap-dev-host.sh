@@ -103,11 +103,16 @@ pnpm_ready() {
   [[ "$actual" == "$PNPM_VERSION" ]]
 }
 
+openssl_dev_ready() {
+  command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openssl
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
   command -v rustup >/dev/null 2>&1 || return 0
   command -v cargo >/dev/null 2>&1 || return 0
+  openssl_dev_ready || return 0
   rust_toolchain_ready || return 0
   active_toolchain_ready || return 0
   cargo nextest --version >/dev/null 2>&1 || return 0
@@ -148,6 +153,12 @@ check_all() {
     ok "cargo: $(cargo --version 2>/dev/null)"
   else
     missing "cargo: installed with rustup"
+  fi
+
+  if openssl_dev_ready; then
+    ok "pkg-config + OpenSSL development headers"
+  else
+    missing "pkg-config + OpenSSL development headers: Debian/Ubuntu run sudo apt-get install -y libssl-dev pkg-config"
   fi
 
   if rust_toolchain_ready; then
@@ -230,9 +241,22 @@ as_root() {
   elif command -v sudo >/dev/null 2>&1; then
     sudo "$@"
   else
-    echo "ERROR: installing Node requires root privileges or Homebrew; sudo is unavailable" >&2
+    echo "ERROR: installing system packages requires root privileges; sudo is unavailable" >&2
     return 1
   fi
+}
+
+install_native_build_dependencies() {
+  if openssl_dev_ready; then
+    echo "[skip] pkg-config and OpenSSL development headers already installed"
+    return
+  fi
+  if [[ $(uname -s) == Linux ]] && command -v apt-get >/dev/null 2>&1; then
+    echo "[install] pkg-config and OpenSSL development headers"
+    as_root apt-get install -y libssl-dev pkg-config || exit 1
+    return
+  fi
+  echo "[manual] install pkg-config and OpenSSL development headers for your platform, then re-run make doctor"
 }
 
 install_submodules() {
@@ -383,6 +407,7 @@ install_submodules
 load_versions
 [[ -n "$TOOLCHAIN" ]] || { echo "ERROR: cannot read Rust toolchain pin" >&2; exit 1; }
 [[ -n "$PNPM_VERSION" ]] || { echo "ERROR: expected a pnpm packageManager entry" >&2; exit 1; }
+install_native_build_dependencies
 install_rust
 install_node
 install_frontend
