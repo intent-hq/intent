@@ -343,9 +343,12 @@
 > emulated tabs (current bounds for visible owned fit tabs, fallback size offscreen,
 > exact dimensions for preset/custom); unowned fit tabs report `mode: "native"`.
 > **`resizeTab { tabId, width, height? }`** switches an owned tab to its persisted
-> per-tab **custom** viewport mode at the requested width and requested height, or at
-> the tab's effective/retained emulated height when `height` is omitted. The user can
-> return the tab to **Fit panel** from the viewport menu. The action is owner-only (on
+> per-tab **custom** viewport mode at the requested width and requested height. When
+> `height` is omitted, the action uses the tab's retained emulated height — the last
+> height explicitly requested by `openTab`, `claimTab`, or `resizeTab`, or the **800**
+> default — never a live Fit-panel measurement, so the resulting custom size remains
+> within the validated 320–3840 range. The user can return the tab to **Fit panel**
+> from the viewport menu. The action is owner-only (on
 > a tab the caller does not own it returns the structured `not-owner` error); there is
 > no agent action for unowned (user) tabs, though users may still select preset/custom
 > or Fit panel.

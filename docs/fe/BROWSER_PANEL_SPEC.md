@@ -226,7 +226,9 @@ Main Content Area
 
 - Implemented: count error-level `console-message` events and surface the count on the overflow
   trigger.
-- Implemented: open Console, Sources, or Elements directly from the overflow menu.
+- Implemented: best-effort opening of Console, Sources, or Elements from the overflow menu runs
+  `DevToolsAPI.showPanel` inside `devToolsWebContents` after opening DevTools and falls back to
+  plain DevTools when panel selection is unavailable.
 - Future: capture and stream full console entries for agents.
 
 ## Phase 3: Agent Integration
