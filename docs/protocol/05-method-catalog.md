@@ -175,6 +175,11 @@ The `system.status` result also includes **additive** routing fields so an authe
   "hostname": "studio.local",               // local OS hostname
   "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
   "tcAddress": "tc7f2a91.tailcat.net",      // tailcat tunnel address — present only while the tunnel sidecar is running
+  "host": {
+    "deviceKind": "macStudio",
+    "hardwareModel": "Mac Studio",
+    // ...existing host fields (os, arch, hasDisplay, locality, ...)
+  },
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
@@ -182,6 +187,7 @@ The `system.status` result also includes **additive** routing fields so an authe
 - `localIps` is **bind-aware** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656)): it names only addresses the running WSS listener actually answers on, not a blanket interface enumeration. A listener bound to specific addresses advertises exactly those — **loopback included** when bound (this is the diagnostic surface; the pairing surfaces below filter loopback out), and since `127.0.0.1` is always bound alongside a specific `server.bindAddress` set ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695); §1.1) it always appears here next to the configured addresses — while an unspecified bind falls back to enumerating the machine's local addresses (virtual/container interfaces skipped): non-loopback IPv4 for `0.0.0.0`, plus non-link-local IPv6 for `::` — link-local (`fe80::/10`) is skipped as unusable without a zone index, while ULA (`fd00::/8`) addresses are advertised (the `::` listener is bound explicitly dual-stack, so the advertised IPv4 routes are reachable on every OS). With **no live TCP listener** (UDS-only daemon, stopped/failed WSS) it is **empty** — every entry would be a dead route — instead of the historical full enumeration. Always an array, never `null`. The interface enumerations come from a background-refreshed cache (~15s TTL) but the bind-set filter runs on the read path, so a runtime `server.bindAddress` change is reflected immediately while a changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
+- `host.deviceKind` / `host.hardwareModel` are optional, additive host-identity fields shared with `host.status` and `server.pairingInfo`. See §5.29 for their values, omission contract, and detection semantics.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12), served alongside `localIps` to local and remote callers alike so a connected client can refresh its stored tunnel route from `system.status` alone. Present only while the tunnel sidecar is actually running; **omitted** — never `null` — when the tunnel is disabled or the sidecar is down (including the restart-backoff window after an unexpected sidecar exit, so the field never advertises a route nothing is serving). Same address as `server.pairingInfo` / `pairing.getInfo`; detect by presence.
 - These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
@@ -330,6 +336,8 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "localIps": ["192.168.1.10", "10.0.0.5"],
   "hostname": "my-mac.local",
   "prettyHostname": "Clement's Mac Studio",
+  "deviceKind": "macStudio",
+  "hardwareModel": "Mac Studio",
   "tcAddress": "tc7f2a91.tailcat.net"
 }
 ```
@@ -338,6 +346,8 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
 - `localIps` is the **loopback-free pairing host set** — while the listener is up, the same set `pairing.getInfo` reports as `hosts` ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656), [intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)): bind-aware (a specific bind advertises exactly its addresses; an unspecified bind enumerates local addresses, with virtual/container interfaces such as `docker*`/`veth*` skipped and non-link-local IPv6 added for `::`) and **never containing loopback**, even when loopback is explicitly bound. **May be empty** (e.g. a loopback-only bind) — with the tunnel up, `tcAddress` then carries the only dialable route. Unlike `pairing.getInfo`, this method still answers with the listener **down**: `port` is `null` and the stopped listener's bind set is no longer known, so `localIps` falls back to the non-loopback IPv4 enumeration — address material nothing is currently serving on; treat `port: null` as the listener-down signal rather than reading `localIps` as proof of a live route. Note the contrast with `system.status` `localIps`, which is the diagnostic surface, keeps bound loopback entries, and empties when the listener is down.
 - `prettyHostname` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name), falling back to `hostname` when no pretty name is available — matching `host.status` / `system.status`; detect by presence.
+- `deviceKind` is an optional detected category: `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`. `hardwareModel` is the optional raw OS product/model name. Both fields are additive and **omitted (never null)** when unknown; clients detect them by presence. The same values appear in the `system.status.host` block and at the `host.status` result root.
+- Detection runs in the daemon's background-refreshed host cache, never on the RPC path. macOS classifies product names (with Intel model-identifier prefixes as fallback). Linux checks VM, cloud, and container signals first, then DMI chassis type, then display presence (`headless` → `server`, otherwise `desktop`). Windows and other unsupported platforms omit the fields when no model/category is known.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12) — the same field `pairing.getInfo` and `system.status` carry, with the same availability semantics: present only while the tunnel sidecar is running, **omitted** — never `null` — when the tunnel is disabled or down; detect by presence.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
 
