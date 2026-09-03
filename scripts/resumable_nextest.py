@@ -18,6 +18,7 @@ import time
 SCHEMA_VERSION = 1
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
+RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -60,6 +61,15 @@ def submodule_heads(repo_root: Path) -> list[dict[str, str]]:
     return sorted(heads, key=lambda item: item["path"])
 
 
+def rust_flags() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name in RUST_FLAG_ENV
+        or (name.startswith("CARGO_TARGET_") and name.endswith("_RUSTFLAGS"))
+    }
+
+
 def tree_key(repo_root: Path, intentd_dir: Path) -> str:
     inputs = {
         "schema": SCHEMA_VERSION,
@@ -72,6 +82,7 @@ def tree_key(repo_root: Path, intentd_dir: Path) -> str:
         "rustc": run(["rustc", "-vV"], intentd_dir),
         "cargo": run(["cargo", "-V"], intentd_dir),
         "nextest": run(["cargo", "nextest", "--version"], intentd_dir),
+        "rustflags": rust_flags(),
     }
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -229,6 +240,8 @@ def run_nextest(args: argparse.Namespace) -> int:
     descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
             passed = parse_passed_event(line, binary_ids)
             if passed is not None:
                 item = json.dumps({"binary_id": passed[0], "test": passed[1]}) + "\n"

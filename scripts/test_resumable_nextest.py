@@ -88,6 +88,20 @@ class ResumableNextestTests(unittest.TestCase):
             )
             self.assertEqual(gate.load_passed(record), {("one", "a"), ("two", "b")})
 
+    def test_rust_flags_include_all_cargo_sources(self):
+        values = {
+            "RUSTFLAGS": "--cfg local",
+            "CARGO_ENCODED_RUSTFLAGS": "--cfg\x1fencoded",
+            "CARGO_BUILD_RUSTFLAGS": "--cfg build",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS": "--cfg target",
+            "UNRELATED": "ignored",
+        }
+        with mock.patch.dict(os.environ, values, clear=True):
+            self.assertEqual(
+                gate.rust_flags(),
+                {name: value for name, value in values.items() if name != "UNRELATED"},
+            )
+
     def test_prune_removes_only_old_key_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary)
