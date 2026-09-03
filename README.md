@@ -104,6 +104,9 @@ make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install
 make build   # cargo build --workspace
 ```
 
+Developing from a remote daemon host? Follow [Developing on a remote host](AGENTS.md#developing-on-a-remote-host)
+for host bootstrap, collision-free ports, one-command browser sandboxes, and tunnel safety.
+
 `packages/ios` is a private submodule and is skipped automatically
 (`update = none` in `.gitmodules`), so the clone succeeds without access to
 [intent-hq/ios](https://github.com/intent-hq/ios) — the directory is simply
