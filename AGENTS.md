@@ -154,6 +154,20 @@ with no rollback.
   reproduced locally with `make coverage-e2e` / `make coverage-all` — `make test`
   deliberately excludes these slow instrumented runs.
 
+### Resuming local Rust gates
+
+- `make gate` runs `make check` and then the full nextest suite. `make test` remains
+  the test-only entry point. Resume records apply only to nextest; `make gate` always
+  reruns fmt and clippy.
+- After a harness or terminal interruption, rerun `make test RESUME=1`. It skips
+  only tests recorded as passed for the identical tracked and untracked worktree,
+  submodule pointers, Rust toolchain, lockfile, and nextest configuration. Records
+  live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
+  `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
+  a matching record and run the complete suite.
+- Run long gates as saved command-mode `ws.script` entries and give `ws.script.run`
+  an explicit `timeoutSeconds`; its default timeout is only 30 seconds.
+
 ## Release Process
 
 The full pipeline detail (workflows, secrets, dispatch types, fail-soft semantics,
