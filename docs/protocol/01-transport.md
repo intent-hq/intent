@@ -4,7 +4,7 @@
 
 ### 1.1 Connection URL
 
-When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note below), the backend runs a dedicated **HTTPS server bound to the address(es) configured by `server.bindAddress`** (default `127.0.0.1`, loopback-only; a single IP or a list of IPs — one listener per entry on the same port, see the `server.bindAddress` entry in [§4 settings](./methods/settings.md); LAN reachability requires configuring a non-loopback address such as a LAN/tailnet IP or `0.0.0.0`) exposing the JSON-RPC WebSocket endpoint:
+When the WS API is enabled (`server.wsApi.enabled` — see the §1.1 UDS note below), the backend runs a dedicated **HTTPS server bound to the address(es) configured by `server.bindAddress`** (default `127.0.0.1`, loopback-only; a single IP or a list of IPs — one listener per entry on the same port, see the `server.bindAddress` entry in [§4 settings](./methods/settings.md); LAN reachability requires configuring a non-loopback address such as a LAN/tailnet IP or `0.0.0.0`) **plus IPv4 loopback, which is always bound** ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695)): `127.0.0.1` is appended to the effective bind set unless the configured set already covers it (a `127.0.0.1` entry, or an unspecified `0.0.0.0` / `::` bind), so clients on the daemon host and the tailcat tunnel sidecar (which forwards to `127.0.0.1:<port>`) always reach the daemon regardless of the configured set; the persisted `server.bindAddress` value itself is left untouched. The listener exposes the JSON-RPC WebSocket endpoint:
 
 ```
 wss://<host>:<port>/ws
