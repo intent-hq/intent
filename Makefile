@@ -102,6 +102,12 @@ SWEEP_DAYS ?= 3
 TEST_THREADS ?= -2
 BUILD_JOBS ?= -2
 
+# Resumable local test runs are opt-in. Records are keyed by the complete
+# monorepo + intentd worktree state and kept outside the checkout.
+RESUME ?= 0
+GATE_FORCE ?= 0
+GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
+
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
 # OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
 # app; default to 16 GB. dist-mac exports this via NODE_OPTIONS so every child
@@ -111,7 +117,7 @@ FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
-	build build-intentd build-sidecar test test-intentd coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
@@ -264,7 +270,10 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite (cargo nextest, CPUs-2 by default; override TEST_THREADS/BUILD_JOBS)
+gate: check ## Run all local Rust gates (fmt, clippy, then nextest)
+	@$(MAKE) --no-print-directory test
+
+test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -278,7 +287,14 @@ test-intentd: ensure-intentd-submodule
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo nextest run --workspace --build-jobs $(BUILD_JOBS) --test-threads $(TEST_THREADS)
+	@python3 scripts/resumable_nextest.py \
+		--repo-root "$(CURDIR)" \
+		--intentd-dir "$(INTENTD_DIR)" \
+		--cache-dir "$(GATE_CACHE_DIR)" \
+		--resume "$(RESUME)" \
+		--force "$(GATE_FORCE)" \
+		--build-jobs "$(BUILD_JOBS)" \
+		--test-threads "$(TEST_THREADS)"
 
 # Local reproduction of the CI coverage jobs (packages/intentd
 # .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
