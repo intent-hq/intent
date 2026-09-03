@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
+# State schema: intentdSource is installed|bin|dev|release|none; UI uses none
+# with a null socket because it does not connect to a daemon.
 
 set -u
 
 mode=${1:-}
 case "$mode" in
-  ui|app|stack) ;;
-  *) echo "Usage: $0 {ui|app|stack}" >&2; exit 2 ;;
+  ui|app|stack|status|stop) ;;
+  *) echo "Usage: $0 {ui|app|stack|status|stop}" >&2; exit 2 ;;
 esac
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+state_dir=${SANDBOX_STATE_DIR:-"$repo_root/.dev/sandbox"}
 fe_dir=${FE_DIR:-"$repo_root/packages/cloudlands-fe"}
 dev_port=${DEV_PORT:-5190}
+dev_tcp_port=${DEV_TCP_PORT:-5181}
 ready_timeout=${SANDBOX_READY_TIMEOUT:-60}
 warm_timeout=${SANDBOX_WARM_TIMEOUT:-60}
 dev_data_dir=${DEV_DATA_DIR:-"$repo_root/.dev/intentd"}
@@ -24,10 +28,19 @@ fe_pid=""
 daemon_pid=""
 cleaning=0
 child_exit_status=0
+state_file="$state_dir/$mode.json"
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+warm_ok=true
+warm_ms=0
+intentd_source=installed
+[[ "$mode" == ui ]] && intentd_source=none
 
-[[ "$dev_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_PORT must be numeric." >&2; exit 2; }
-[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
-[[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
+  [[ "$dev_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_PORT must be numeric." >&2; exit 2; }
+  [[ "$dev_tcp_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_TCP_PORT must be numeric." >&2; exit 2; }
+  [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
+  [[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+fi
 
 children_of() {
   pgrep -P "$1" 2>/dev/null || true
@@ -39,6 +52,164 @@ signal_tree() {
     [[ -n "$child" ]] && signal_tree "$signal" "$child"
   done < <(children_of "$pid")
   kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+status_sandboxes() {
+  mkdir -p "$state_dir"
+  python3 - "$state_dir" "${SANDBOX_JSON:-0}" <<'PY'
+import errno
+import glob
+import json
+import os
+import sys
+
+state_dir, json_output = sys.argv[1], sys.argv[2] == "1"
+live = []
+for path in sorted(glob.glob(os.path.join(state_dir, "*.json"))):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            state = json.load(handle)
+        pid = int(state["pid"])
+        try:
+            os.kill(pid, 0)
+        except OSError as error:
+            if error.errno != errno.EPERM:
+                raise
+    except Exception as error:
+        print(f"Stale sandbox state: {path} ({error})", file=sys.stderr)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        continue
+    live.append(state)
+
+if json_output:
+    json.dump(live, sys.stdout, separators=(",", ":"))
+    print()
+else:
+    for state in live:
+        supervisor = state.get("supervisor")
+        supervisor_hint = ""
+        if isinstance(supervisor, dict):
+            supervisor_hint = f" supervisor={supervisor.get('kind')}:{supervisor.get('id')}"
+        print(
+            f"{state['mode']}: pid={state['pid']} url={state['url']} "
+            f"source={state['intentdSource']} socket={state['socket'] or '-'}"
+            f"{supervisor_hint}"
+        )
+    if not live:
+        print("No running sandboxes.", file=sys.stderr)
+raise SystemExit(0 if live else 1)
+PY
+}
+
+pid_is_alive() {
+  local pid=$1 process_state
+  kill -0 "$pid" 2>/dev/null || return 1
+  process_state=$(ps -o stat= -p "$pid" 2>/dev/null) || return 1
+  [[ -n "$process_state" && "$process_state" != Z* ]]
+}
+
+tcp_accepts_port() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+s = socket.socket()
+s.settimeout(0.05)
+status = s.connect_ex(("127.0.0.1", int(sys.argv[1])))
+s.close()
+raise SystemExit(0 if status == 0 else 1)
+PY
+}
+
+stop_sandboxes() {
+  local requested_mode=${MODE:-} path pid state_mode state_port i
+  local -a paths=()
+  local -a stopped_modes=() stopped_ports=() warned=()
+  case "$requested_mode" in
+    "") ;;
+    ui|app|stack) ;;
+    *) echo "sandbox-stop: MODE must be ui, app, or stack." >&2; return 2 ;;
+  esac
+  mkdir -p "$state_dir"
+  if [[ -n "$requested_mode" ]]; then
+    [[ -e "$state_dir/$requested_mode.json" ]] && paths+=("$state_dir/$requested_mode.json")
+  else
+    shopt -s nullglob
+    paths=("$state_dir"/*.json)
+    shopt -u nullglob
+  fi
+  if [[ ${#paths[@]} -eq 0 ]]; then
+    echo "No running sandboxes."
+    return 0
+  fi
+  for path in "${paths[@]}"; do
+    if ! IFS=$'\t' read -r state_mode pid state_port < <(python3 - "$path" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    state = json.load(handle)
+print(state["mode"], int(state["pid"]), int(state["devPort"]), sep="\t")
+PY
+    ); then
+      echo "Removing invalid sandbox state: $path" >&2
+      rm -f "$path"
+      continue
+    fi
+    if pid_is_alive "$pid"; then
+      echo "Stopping sandbox pid $pid from $path"
+      signal_tree TERM "$pid"
+      for _ in {1..50}; do
+        pid_is_alive "$pid" || break
+        sleep 0.1
+      done
+      if pid_is_alive "$pid"; then
+        signal_tree KILL "$pid"
+      fi
+    else
+      echo "Removing stale sandbox state: $path" >&2
+    fi
+    rm -f "$path"
+    stopped_modes+=("$state_mode")
+    stopped_ports+=("$state_port")
+    warned+=(0)
+  done
+  for _ in {1..50}; do
+    for ((i = 0; i < ${#stopped_modes[@]}; i++)); do
+      [[ ${warned[$i]} -eq 0 ]] || continue
+      if [[ -e "$state_dir/${stopped_modes[$i]}.json" ]] || tcp_accepts_port "${stopped_ports[$i]}"; then
+        echo "sandbox ${stopped_modes[$i]} restarted — it is supervised (workspace service); stop it with ws.script.stop instead" >&2
+        warned[i]=1
+      fi
+    done
+    sleep 0.1
+  done
+}
+
+if [[ "$mode" == status ]]; then
+  status_sandboxes
+  exit $?
+elif [[ "$mode" == stop ]]; then
+  stop_sandboxes
+  exit $?
+fi
+
+remove_state_file() {
+  python3 - "$state_file" "$$" <<'PY'
+import json
+import os
+import sys
+
+path, expected_pid = sys.argv[1], int(sys.argv[2])
+try:
+    with open(path, encoding="utf-8") as handle:
+        state = json.load(handle)
+    if int(state.get("pid", -1)) == expected_pid:
+        os.unlink(path)
+except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
+    pass
+PY
 }
 
 cleanup() {
@@ -60,8 +231,11 @@ cleanup() {
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       signal_tree KILL "$pid"
     fi
-    [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+    if [[ -n "$pid" ]]; then
+      wait "$pid" 2>/dev/null || true
+    fi
   done
+  remove_state_file
 }
 
 trap cleanup EXIT
@@ -93,6 +267,8 @@ PY
 }
 
 warm_vite() {
+  local warm_started warm_finished
+  warm_started=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
   echo "[dev-sandbox-$mode] Pre-warming the Vite module graph (timeout: ${warm_timeout}s)..."
   if python3 - "$dev_port" "$warm_timeout" <<'PY'
 from html.parser import HTMLParser
@@ -135,10 +311,46 @@ for reference in parser.urls[:32]:
 print(f"fetched / and {len(seen)} entry module(s)")
 PY
   then
+    warm_ok=true
     echo "[dev-sandbox-$mode] Vite warm-up complete."
   else
+    warm_ok=false
     echo "[dev-sandbox-$mode] WARNING: Vite warm-up failed or timed out; continuing." >&2
   fi
+  warm_finished=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
+  warm_ms=$((warm_finished - warm_started))
+}
+
+write_state_file() {
+  local ready_at=$1 temp_file="$state_file.tmp.$$"
+  mkdir -p "$state_dir"
+  python3 - "$temp_file" "$state_file" "$mode" "$$" "$dev_port" "$dev_tcp_port" \
+    "$socket_path" "$intentd_source" "$started_at" "$ready_at" "$warm_ok" "$warm_ms" <<'PY'
+import json
+import os
+import sys
+
+(temp_path, state_path, mode, pid, dev_port, tcp_port, socket_path,
+ source, started_at, ready_at, warm_ok, warm_ms) = sys.argv[1:]
+state = {
+    "mode": mode,
+    "pid": int(pid),
+    "devPort": int(dev_port),
+    "tcpPort": int(tcp_port),
+    "url": f"http://127.0.0.1:{dev_port}/",
+    "daemonLocalhostUrl": f"http://daemon.localhost:{dev_port}/",
+    "socket": None if mode == "ui" else socket_path,
+    "intentdSource": source,
+    "startedAt": started_at,
+    "readyAt": ready_at,
+    "warm": {"ok": warm_ok == "true", "ms": int(warm_ms)},
+    "supervisor": None,
+}
+with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, separators=(",", ":"))
+    handle.write("\n")
+os.replace(temp_path, state_path)
+PY
 }
 
 child_is_running() {
@@ -173,8 +385,10 @@ elif [[ "$mode" == stack ]]; then
     *) echo "[dev-sandbox-stack] ERROR: INTENTD_PROFILE must be 'dev' or 'release'." >&2; exit 2 ;;
   esac
   if [[ -n "$intentd_bin" ]]; then
+    intentd_source=bin
     echo "[dev-sandbox-stack] Using INTENTD_BIN override: $intentd_bin (skipping build)"
   else
+    intentd_source=$intentd_profile
     command -v cargo >/dev/null 2>&1 || { echo "[dev-sandbox-stack] ERROR: cargo is required; run 'make bootstrap-dev-host'." >&2; exit 1; }
     if ! command -v pkg-config >/dev/null 2>&1 || ! pkg-config --exists openssl; then
       echo "[dev-sandbox-stack] ERROR: pkg-config and OpenSSL development headers are required; run 'make bootstrap-dev-host'." >&2
@@ -192,7 +406,7 @@ elif [[ "$mode" == stack ]]; then
     daemon_args+=(--insecure)
     echo "[dev-sandbox-stack] WARNING: SANDBOX_TCP=1 enables unauthenticated TCP on 0.0.0.0:${DEV_TCP_PORT:-5181}." >&2
   fi
-  INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="${DEV_TCP_PORT:-5181}" \
+  INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
     INTENTD_LEGACY_IMPORT_ROOTS="" "$intentd_bin" "${daemon_args[@]}" &
   daemon_pid=$!
 fi
@@ -236,6 +450,11 @@ if [[ "$mode" != ui ]]; then
   fi
 fi
 
+ready_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+if ! write_state_file "$ready_at"; then
+  echo "[dev-sandbox-$mode] ERROR: could not write sandbox state at $state_file" >&2
+  exit 1
+fi
 echo "Sandbox ready: http://127.0.0.1:${dev_port}/  (open as http://daemon.localhost:${dev_port}/ from the client)"
 
 if [[ -z "$daemon_pid" ]]; then

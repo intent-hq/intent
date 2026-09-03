@@ -130,6 +130,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
+	sandbox-status sandbox-stop \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
 
 all: build
@@ -436,12 +437,12 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 
 dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
-	@DEV_PORT="$(DEV_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" scripts/dev-sandbox.sh ui
 
 dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-app] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
-	@DEV_PORT="$(DEV_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" scripts/dev-sandbox.sh app
 
@@ -453,6 +454,12 @@ dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile i
 		INTENTD_PROFILE="$(INTENTD_PROFILE)" INTENTD_BIN="$(INTENTD_BIN)" \
 		INTENTD_DIR="$(CURDIR)/$(INTENTD_DIR)" FE_DIR="$(CURDIR)/$(FE_DIR)" \
 		scripts/dev-sandbox.sh stack
+
+sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
+	@SANDBOX_JSON="$(SANDBOX_JSON)" scripts/dev-sandbox.sh status
+
+sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
+	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
 
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
