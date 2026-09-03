@@ -16,7 +16,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.setContent | noteId (req), content (req), confirmReplacement?: boolean | { ok, ... } (full replace). `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.updateMetadata | noteId (req), title?, tags?: string | string[] |
 | note.delete | noteId (req) | { ok, noteId, deleted } — emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
-| note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations) |
+| note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
 | note.readAsset | asset (req) — asset id or workspace-asset:// URL | { assetId, mimeType, data, sizeKb } (image assets returned as data) |
 | note.saveAsset | data (req, base64 — a `data:<mime>;base64,` URL prefix is accepted and stripped), mimeType (req), originalName? | { assetId, path, url } — **additive asset write** (no `noteId`; ports the legacy `assets:save` IPC behind note image paste/upload). Writes the decoded bytes under the workspace assets root plus an `<assetId>.meta.json` sidecar (`{ id, originalName, mimeType, size, createdAt }`); `assetId` is `<timestamp36>-<hash8><ext>` with `<ext>` derived from `mimeType` (default `.png`), `url` is `workspace-asset://<workspaceId>/<assetId>` and round-trips through `note.readAsset`. `-32602` on missing params; `-32603` on invalid base64 or when asset storage is not configured |
 | note.listVersions | noteId (req) | bare array of `{ type:"snapshot", v, date, author:{id,name,type}, title, contentLength }` ascending by `v` |
@@ -279,15 +279,15 @@ non-authoritative.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| task.updateStatus | noteId (req), taskText (req), status (req: done | todo |
-| task.updateNoteStatus | noteId (req), status (req: not_started | waiting |
-| task.update | noteId (req), line (req,int), text?, status?, expected? | { ok, lineNumber, ... } (atomic single-line edit) |
+| task.updateStatus | noteId (req), taskText (req), status (req: `done` \| `todo` \| `in-progress`) | { ok, noteId, taskText, status } — rewrites the checkbox marker of the first checkbox line in `noteId` whose text matches `taskText` (exact match preferred, else the first line containing it) and emits `note:updated` for `noteId`. Any other `status` word → `-32603` (`Status must be 'done', 'todo', or 'in-progress'`); empty `taskText` → `-32603`. **Linked line ([intent-hq/intent#4255](https://github.com/intent-hq/intent/issues/4255)):** when the matched line links a task note (`[label](intent://local/task/{id})`), the write is **redirected to the task note** instead of the checkbox — see "Linked checkboxes are projections of the task note" below. The result echoes the requested `status` word either way |
+| task.updateNoteStatus | noteId (req), status (req: `not_started` \| `waiting` \| `discussion_needed` \| `blocked` \| `in_progress` \| `review_required` \| `complete` \| `cancelled`), expectedVersion? | { ok, noteId, status, note } — writes the task note's metadata status (see the vocabulary below; non-task note → `-32603 "Note is not a task. Use markAsTask() first."`). On an actual transition it emits `task:status-changed` + `task:ready-tasks-changed` (§6.5), re-announces dependents with `note:updated` when the move crosses the `complete` boundary (monorepo#1979), and may emit `workspace:displayStatus-changed`; a same-status write emits none of these. Either way it then **materializes** the status onto every checkbox line in the workspace that links the task (`[x]` / `[/]` / `[ ]`, one `note:updated` per rewritten note) — see "Linked checkboxes are projections of the task note" below. `expectedVersion?` enables optimistic concurrency against the note `rev` |
+| task.update | noteId (req), line (req,int), text?, status? (`todo` \| `in-progress` \| `done`), expected? | { ok, noteId, lineNumber, previousText, newText, status } (atomic single-line edit; at least one of `text` / `status` required; `expected` mismatch → `-32603 Conflict detected …` before anything is written). **Linked line (intent-hq/intent#4255):** when line `line` links a task note, a `status` write is redirected to the task note and the line's marker follows via materialization; a `text` edit on the same call lands in ONE parent write together with the materialized marker. The linked task is resolved from the **post-edit** line (the line after `text` is applied): a `text` that retargets the link from task A to task B sends the `status` write to **B** (A is untouched — it is no longer linked here) and renders B's marker, a `text`-only edit that changes the link renders the new target's **current** status marker in the same parent write, and a post-edit line with no link keeps the raw checkbox write — see "Linked checkboxes are projections of the task note" below |
 | task.getMyTask | taskNoteId (req) | task note w/ metadata, dependencies, acceptance criteria. `taskMetadata` carries the stored `dependsOn?` / `conflictsWith?` relation lists and the result carries the computed `unmetDependsOn?` (v6.8; all presence-detected, omitted when empty) — see task.setRelations |
-| task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort?, dependsOn?, conflictsWith? | { ok, ... } — always emits `note:updated` (the task-ness/metadata flip; without it a mark was invisible to note-driven refetches until the next unrelated note write). On a note that was **not** already a task it additionally emits `task:created` (§6.5). Re-marking an **existing** task is a status move instead: a real status change emits `task:status-changed` + `task:ready-tasks-changed` (the same pair `task.updateNoteStatus` publishes) and **no** `task:created`; re-marking at the same status emits neither — unless the re-mark's `dependsOn?` param actually changes the list, which recomputes + emits `task:ready-tasks-changed` with the `relations-changed` trigger (monorepo#1981), same as `task.setRelations`. `dependsOn?` / `conflictsWith?` (v6.8) seed/replace the task's relation lists under the same validation and cycle check as `task.setRelations`; omitted params leave an existing task's relations untouched |
+| task.markAsTask | noteId (req), status (req), acceptanceCriteria?, effort?, dependsOn?, conflictsWith? | { ok, ... } — always emits `note:updated` (the task-ness/metadata flip; without it a mark was invisible to note-driven refetches until the next unrelated note write). On a note that was **not** already a task it additionally emits `task:created` (§6.5). Re-marking an **existing** task is a status move instead: a real status change emits `task:status-changed` + `task:ready-tasks-changed` (the same pair `task.updateNoteStatus` publishes) and **no** `task:created`; re-marking at the same status emits neither — unless the re-mark's `dependsOn?` param actually changes the list, which recomputes + emits `task:ready-tasks-changed` with the `relations-changed` trigger (monorepo#1981), same as `task.setRelations`. `dependsOn?` / `conflictsWith?` (v6.8) seed/replace the task's relation lists under the same validation and cycle check as `task.setRelations`; omitted params leave an existing task's relations untouched. Every mark also **materializes** `status` onto the checkbox lines linking the note (one `note:updated` per rewritten parent, emitted after the task's own `note:updated` and before `task:created` / `task:status-changed`) — see "Linked checkboxes are projections of the task note" below |
 | task.setRelations | noteId (req), dependsOn?, conflictsWith? | { ok, noteId, dependsOn, conflictsWith } *(v6.8)* — replaces the task's relation lists on `TaskMetadata` and echoes them normalized (deduped, first-seen order). An omitted param keeps the existing list; `[]` clears it. Validation (`-32603`, detail in `error.data`): every id must name a **task note in the same workspace** (missing notes and non-task notes rejected), self-edges rejected; a `dependsOn` write that would close a dependency cycle is rejected with the cycle path named (`"dependsOn would create a cycle: a -> b -> a"`); a `dependsOn` id that is a **tree ancestor or descendant** of the task (via `parent_id` chains, which may cross non-task notes) is rejected with the offending relationship named (`"dependsOn cannot reference a tree ancestor: a is an ancestor of b"` / `"… tree descendant: c is a descendant of b"`) — such an edge would permanently block readiness for both tasks (the parent waits on the child via the tree rule, the child on the parent via the edge; behavior applies to both `task.setRelations` and `task.markAsTask`, monorepo#1982). `conflictsWith` is advisory (symmetric by convention, stored one-sided) — no cycle check. Emits `note:updated` (metadata refetch, §6.5). Non-task note → `-32603 "Note is not a task"`. Readers project the relations plus the computed `unmetDependsOn` — the `dependsOn` ids whose task note is not `complete` (missing and cancelled deps count as unmet) — on `task.getMyTask`, `task.list` / `task.get` rows, and `note.listTasks` rows with a linked task note (all additive, omitted when empty). `dependsOn` also **gates readiness** (behavior only within v6.8, no event-shape change; monorepo#1974): the ready-task recomputation behind `task:ready-tasks-changed` (§6.5) generalizes the tree rule — a task is ready iff all its task children are `complete` AND its `dependsOn` list is fully satisfied (same rule as `unmetDependsOn`: missing and cancelled deps do NOT satisfy an edge), so cross-subtree ordering edges keep a task out of `readyTaskIds` until every dep completes. A write that actually **changes** `dependsOn` additionally recomputes + emits `task:ready-tasks-changed` after the `note:updated`, with the additive trigger `triggeredBy: { noteId, reason: "relations-changed" }` (monorepo#1981; §6.5) — a no-op write or a conflictsWith-only change emits no recompute |
 | task.convertBlocks | noteId (req) | { ok, convertedCount, createdNoteIds, createdTasks, warnings } — each converted `@@@task` block becomes a child task note emitting `note:created` + `task:created` (§6.5). The fence line takes optional **header attributes** (v6.11, intentd#1128/#1130/#1133): `@@@task key=<token> dependsOn=<a,b> conflictsWith=<c> effort=<token>` — whitespace-separated `name=value` pairs after the keyword, bare tokens (no quoting), `dependsOn`/`conflictsWith` comma-separated and whitespace-tolerant around commas. Each `dependsOn`/`conflictsWith` reference resolves in order: sibling block `key=`s in the same conversion → exact sibling block titles → existing task-note ids in the workspace; resolved edges are written through the same validator as `task.setRelations` (cycle + tree ancestor/descendant checks), and `effort` seeds the task's `estimatedEffort`. **Convert-with-warnings:** conversion never fails on bad attributes — every block still converts, and each header parse issue, unknown/duplicate/empty attribute, unresolvable or ambiguous reference, or validator-rejected edge is skipped with one entry in `warnings` naming the block and the problem. `createdTasks` is `[{ key?, title, noteId }]` in block order, parallel to `createdNoteIds` (`key` present only when authored; idempotently reused existing children are not listed — a reused block's `effort` is dropped with a warning). `createdTasks` / `warnings` are always present (empty arrays when nothing applies) |
 | task.createPrerequisite | dependentNoteId (req), title (req), content?, status? | { ok, ... } — the prerequisite note is born a task, emitting `note:created` + `task:created` (§6.5). `-32602` when `content` is the line-numbered `note.read` display (see "Numbered `note.read` display rejected on content writes", §5.2); nothing is created |
-| task.assignAgent | noteId (req), agentId (req), force?: bool | { ok, noteId, agentId } — **Occupancy guard (intentd#774):** assigning a NEW agent to a task that already has a live assigned agent — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.delegate`'s pre-gate, §5.5) — while the task status is not `complete`/`cancelled` is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally assign a second agent. Re-assigning an already-assigned agent stays idempotent-ok (no `force` needed); `force: true` bypasses the guard |
+| task.assignAgent | noteId (req), agentId (req), force?: bool | { ok, noteId, agentId } — **Occupancy guard (intentd#774):** assigning a NEW agent to a task that already has a live assigned agent — loadable, not Deleted, not poisoned (the same live/resumable predicate as `agent.delegate`'s pre-gate, §5.5) — while the task status is not `complete`/`cancelled` is rejected with `-32602` (InvalidParams); the error message names the existing agent's id and name and suggests `agent.sendToTask` / `agent.wakeOrCreate` to reach it, or `force: true` to intentionally assign a second agent. Re-assigning an already-assigned agent stays idempotent-ok (no `force` needed); `force: true` bypasses the guard. Emits `note:updated` for the task note, then **materializes** the task's resulting status onto the checkbox lines linking it (one `note:updated` per rewritten parent — a `not_started → in_progress` move flips `[ ]` → `[/]`), then the `task:status-changed` + `task:ready-tasks-changed` pair when the assignment moved the status — see "Linked checkboxes are projections of the task note" below |
 
 ```json
 // → request
@@ -296,6 +296,88 @@ non-authoritative.
 // ← response
 { "jsonrpc":"2.0","id":11,"result":{ "ok": true, "lineNumber": 3, "status": "done" } }
 ```
+
+**Linked checkboxes are projections of the task note** *(behavior only within 9.4, no
+method-catalog or wire-shape change; [intent-hq/intent#4255](https://github.com/intent-hq/intent/issues/4255))*.
+A checkbox line whose text carries a task link — `- [ ] [label](intent://local/task/{id})`,
+the shape `task.convertBlocks` writes for every `@@@task` block — is a **projection of that
+task note's metadata status**: the task note is the source of truth and the checkbox
+marker is derived from it. Only the line's **first** task link counts; the marker
+mapping is `complete` → `[x]`, `in_progress` → `[/]`, every other status
+(`not_started`, `waiting`, `discussion_needed`, `blocked`, `review_required`,
+`cancelled`) → `[ ]`. The contract has two halves:
+
+- **Materialization (task → checkbox).** Every daemon-side task-note status write —
+  `task.updateNoteStatus`, `task.markAsTask` (fresh mark and re-mark alike), and
+  `task.assignAgent` (with the task's resulting status, whether or not the assignment
+  moved it `not_started → in_progress`) — rewrites the marker of
+  every checkbox line **in the workspace** whose first task link names the task, across
+  every note that links it (a task linked from two notes, or twice in one note, is
+  rewritten everywhere). The set of writers is closed: every other path that moves a
+  task's status is a caller of one of these three — the MCP attention bindings
+  `ws.agent.reportToParent` (→ `review_required`), `ws.agent.requestDiscussion`
+  (→ `discussion_needed`) and `ws.agent.reportBlocker` (→ `blocked`) drive the caller's
+  linked task through the `task.updateNoteStatus` writer (§5.5; skipped when the task is
+  already `complete`/`cancelled` or already at the target), and `agent.delegate` /
+  `agent.wakeOrCreate` assign the spawned agent through `task.assignAgent` — so, for
+  example, `reportToParent` on an `in_progress` task flips its `[/]` lines to `[ ]`.
+  Since the task note is **itself** a candidate parent, a task note containing a
+  checkbox whose first task link names that same task has that line rewritten too, on
+  the same terms as any other parent. The marker written is derived from the task note's status
+  **re-read at materialization time**, not the status the caller observed, so the last
+  writer always projects the task's latest status. Each rewritten note is persisted through the normal update path
+  (its `rev` bumps) and takes its own `note:updated`; a note whose linked lines already
+  carry the marker is **left untouched** — no write, no event, no `rev` bump (so
+  `not_started → blocked`, both `[ ]`, rewrites nothing). Unlinked checkbox lines and
+  lines linking other tasks are byte-for-byte unchanged. Materialization is best-effort:
+  a store failure on a linked note is logged and never fails the status write that
+  already succeeded.
+- **Redirection (checkbox → task).** `task.updateStatus` and `task.update` on a linked
+  line do **not** write the marker directly: the status word maps onto the task note —
+  `done` → `complete`, `in-progress` → `in_progress`, and `todo` **reopens** a task whose
+  status is `complete` or `in_progress` to `not_started` while leaving every detailed
+  status that already renders as `[ ]` (`blocked`, `waiting`, `discussion_needed`,
+  `review_required`, `cancelled`) **untouched** — the write goes through the same path
+  as `task.updateNoteStatus` (`task:status-changed` + `task:ready-tasks-changed`,
+  dependent re-announce, `displayStatus` probe), and the marker follows via
+  materialization. A word the task already projects (`done` on a `complete` task,
+  `todo` on a `blocked` task) writes nothing to the task and emits no `task:*` event; if
+  the line's marker had **drifted** from the task's status, materialization still heals
+  it in one parent write (`note:updated`), and when the marker already matches, no
+  parent write happens at all. `task.update` with both `text` and `status` on a linked
+  line lands the text edit and the projected marker in ONE parent write (`rev + 1`,
+  one `note:updated`), then performs the task write; its `expected` check still
+  conflicts before anything is written. `task.update` resolves the linked task from the
+  **post-edit** line — the line after `text` is applied. If the edit retargets the link
+  from task A to task B, the `status` write goes to **B** (A is untouched — it is no
+  longer linked here) and the line renders B's marker; a `text`-only edit that changes
+  the link likewise renders the new target's **current** status marker in the same
+  parent write (no `status` word needed); a post-edit line with no link keeps the raw
+  checkbox write. The RPC results are unchanged in shape:
+  `task.updateStatus` / `task.update` echo the requested word and `noteId` of the
+  **parent**, never the task note. **Dangling links keep the raw checkbox write:** a
+  link whose id names no note in the workspace, or a note that is not a task, is not a
+  projection — the marker is rewritten in place exactly as on an unlinked line
+  (`note:updated` only, no `task:*` event, no task metadata created).
+
+Read-side consequence: a `note.listTasks` row with a `taskNoteId` reports the
+materialized line's `status` word (`done` / `in-progress` / `todo`), so it agrees with
+the linked task's `task.get` status modulo the many-to-one `[ ]` mapping.
+
+Event ordering per path (all after the persisted writes, before the RPC response):
+
+- `task.updateNoteStatus` and the redirected `task.updateStatus` / `task.update`
+  (transition case): `task:status-changed` → `task:ready-tasks-changed` → dependents'
+  `note:updated` (complete-boundary crossing only) → `workspace:displayStatus-changed`
+  (only when the rollup moved) → one `note:updated` per rewritten parent note. The
+  metadata write to the task note itself emits no `note:updated` on this path — the task
+  note takes one only when it is also a rewritten parent (it contains a line whose first
+  task link names itself and that line's marker changed), in which case it is the
+  ordinary per-parent `note:updated` at the end of the sequence; the no-transition case
+  emits only the parent `note:updated` (when a marker changed).
+- `task.markAsTask` and `task.assignAgent`: the task note's own `note:updated` →
+  one `note:updated` per rewritten parent note → `task:created` /
+  `task:status-changed` + `task:ready-tasks-changed` as documented on their rows.
 
 **Task-note status vocabulary.** `task.updateNoteStatus` (and the task-note `status` served
 by every task projection) accepts `not_started | waiting | discussion_needed | blocked |
