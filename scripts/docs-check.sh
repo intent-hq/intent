@@ -7,7 +7,11 @@ cd "$repo_root"
 
 docs=(AGENTS.md README.md docs/fe/DEVELOPER_GUIDE.md)
 fe_agents=packages/cloudlands-fe/AGENTS.md
-[[ -f "$fe_agents" ]] && docs+=("$fe_agents")
+if [[ -f "$fe_agents" ]]; then
+  docs+=("$fe_agents")
+else
+  printf 'skipped: %s (submodule not initialized)\n' "$fe_agents"
+fi
 
 failures=0
 fail() {

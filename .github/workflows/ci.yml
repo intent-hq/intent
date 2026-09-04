@@ -64,14 +64,29 @@ jobs:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
 
-  # Documentation invariants are shell-only and do not need submodule builds.
+  # Documentation invariants include the public frontend agent guide. Initialize
+  # only that submodule; packages/ios is private and intentionally untouched.
   docs-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - run: git submodule update --init --depth=1 packages/cloudlands-fe
       - run: make docs-check
+
+  # Hermetic shell suites stub daemon, cargo, and pnpm behavior where needed.
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: |
+          echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
+          bash scripts/dev-ports.test.sh
+          bash scripts/dev-sandbox.test.sh
+          bash scripts/dev-status.test.sh
 
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
