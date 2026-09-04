@@ -105,7 +105,7 @@ jobs:
           submodules: false
 
       - name: Derive and apply labels and Priority from template fields
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           DRY_RUN: ${{ inputs.dry_run == true }}
@@ -208,7 +208,7 @@ jobs:
             }
 
       - name: Needs-info completeness check
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
           DRY_RUN: ${{ inputs.dry_run == true }}
@@ -324,7 +324,7 @@ jobs:
           submodules: false
 
       - name: Clear needs-info on author reply and re-run pass 1
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const path = require('path');
