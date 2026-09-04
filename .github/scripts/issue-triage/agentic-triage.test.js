@@ -1,6 +1,6 @@
 // Fixture-driven tests for the pass-2 agentic triage logic: model-output
-// parsing, the label allowlist, action gating, issue Type gating, and
-// comment building.
+// parsing, the label allowlist, action gating, issue Type gating, issue
+// field (Priority / Effort) gating, and comment building.
 // Run locally with:  node --test .github/scripts/issue-triage/agentic-triage.test.js
 
 'use strict';
@@ -19,6 +19,7 @@ const {
   extractSearchQueries,
   parseTriageResponse,
   planActions,
+  planIssueFields,
   planIssueType,
   sanitizeText,
 } = require('./agentic-triage.js');
@@ -31,6 +32,30 @@ const ISSUE_TYPES = [
   { id: 'IT_task', name: 'Task', isEnabled: true },
   { id: 'IT_bug', name: 'Bug', isEnabled: true },
   { id: 'IT_feature', name: 'Feature', isEnabled: true },
+];
+
+// Shape of the single-select `repository.issueFields.nodes` as resolved at
+// runtime (non-single-select nodes are filtered out before planning).
+const ISSUE_FIELDS = [
+  {
+    id: 'IFSS_priority',
+    name: 'Priority',
+    options: [
+      { id: 'IFSSO_urgent', name: 'Urgent' },
+      { id: 'IFSSO_high', name: 'High' },
+      { id: 'IFSSO_medium', name: 'Medium' },
+      { id: 'IFSSO_low', name: 'Low' },
+    ],
+  },
+  {
+    id: 'IFSS_effort',
+    name: 'Effort',
+    options: [
+      { id: 'IFSSO_e_high', name: 'High' },
+      { id: 'IFSSO_e_medium', name: 'Medium' },
+      { id: 'IFSSO_e_low', name: 'Low' },
+    ],
+  },
 ];
 
 test('parse: fenced JSON with surrounding prose parses fully', () => {
@@ -221,6 +246,133 @@ test('type: nothing is set without a signal, a matching enabled Type, or a resol
       issueTypes: [{ id: 'IT_task', name: 'Task', isEnabled: true }],
     }),
     null
+  );
+});
+
+test('fields: empty Priority and Effort are filled from the model; IDs come from the runtime list', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.effort = 'Medium';
+  response.reasons.effort = 'Touches one crate and needs a regression test';
+  const plan = planIssueFields({
+    response,
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.deepStrictEqual(plan, {
+    priority: {
+      fieldId: 'IFSS_priority',
+      optionId: 'IFSSO_high',
+      name: 'High',
+      reason: 'Daemon crash on startup but a restart recovers',
+    },
+    effort: {
+      fieldId: 'IFSS_effort',
+      optionId: 'IFSSO_e_medium',
+      name: 'Medium',
+      reason: 'Touches one crate and needs a regression test',
+    },
+  });
+
+  // The P0–P3 map covers every label; the field vocabulary is accepted as-is.
+  for (const [label, name] of Object.entries({ P0: 'Urgent', P1: 'High', P2: 'Medium', P3: 'Low' })) {
+    response.priority = label;
+    assert.strictEqual(
+      planIssueFields({ response, currentFieldValues: {}, issueFields: ISSUE_FIELDS }).priority.name,
+      name
+    );
+    response.priority = name;
+    assert.strictEqual(
+      planIssueFields({ response, currentFieldValues: {}, issueFields: ISSUE_FIELDS }).priority.name,
+      name
+    );
+  }
+});
+
+test('fields: an existing value is never overwritten', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.effort = 'Low';
+  const priorityKept = planIssueFields({
+    response,
+    currentFieldValues: { Priority: 'Low' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(priorityKept.priority, undefined);
+  assert.strictEqual(priorityKept.effort.name, 'Low');
+
+  const bothKept = planIssueFields({
+    response,
+    currentFieldValues: { Priority: 'Medium', Effort: 'High' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.deepStrictEqual(bothKept, {});
+
+  // Security escalation does not override a human-set Priority either.
+  response.security = true;
+  assert.strictEqual(
+    planIssueFields({ response, currentFieldValues: { Priority: 'Low' }, issueFields: ISSUE_FIELDS })
+      .priority,
+    undefined
+  );
+});
+
+test('fields: unknown options, no signal, or an unresolved field list plan nothing', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.effort = 'Huge';
+  const unknownEffort = planIssueFields({
+    response,
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(unknownEffort.effort, undefined);
+  assert.strictEqual(unknownEffort.priority.name, 'High');
+
+  response.effort = 'Medium';
+  // Option renamed / missing at runtime: the field is skipped, not guessed.
+  const noHigh = planIssueFields({
+    response,
+    currentFieldValues: {},
+    issueFields: [
+      { id: 'IFSS_priority', name: 'Priority', options: [{ id: 'IFSSO_low', name: 'Low' }] },
+      ISSUE_FIELDS[1],
+    ],
+  });
+  assert.strictEqual(noHigh.priority, undefined);
+  assert.strictEqual(noHigh.effort.name, 'Medium');
+
+  // Lookup failed / fields unavailable.
+  assert.deepStrictEqual(
+    planIssueFields({ response, currentFieldValues: {}, issueFields: [] }),
+    {}
+  );
+  assert.deepStrictEqual(
+    planIssueFields({ response, currentFieldValues: {}, issueFields: undefined }),
+    {}
+  );
+
+  // No priority/effort signal at all.
+  assert.deepStrictEqual(
+    planIssueFields({
+      response: parseTriageResponse('{"security": false}'),
+      currentFieldValues: {},
+      issueFields: ISSUE_FIELDS,
+    }),
+    {}
+  );
+});
+
+test('fields: security escalates Priority to Urgent regardless of the model pick', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.security = true;
+  response.priority = 'P3';
+  const plan = planIssueFields({ response, currentFieldValues: {}, issueFields: ISSUE_FIELDS });
+  assert.strictEqual(plan.priority.name, 'Urgent');
+  assert.strictEqual(plan.priority.optionId, 'IFSSO_urgent');
+  assert.strictEqual(plan.priority.reason, 'suspected security impact escalates to Urgent');
+
+  response.priority = null;
+  assert.strictEqual(
+    planIssueFields({ response, currentFieldValues: {}, issueFields: ISSUE_FIELDS }).priority.name,
+    'Urgent'
   );
 });
 

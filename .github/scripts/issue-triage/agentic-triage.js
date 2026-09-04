@@ -53,6 +53,18 @@ const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 // resolved at runtime from `repository.issueTypes`, never hardcoded.
 const ISSUE_TYPE_BY_LABEL = { bug: 'Bug', enhancement: 'Feature', question: 'Task' };
 
+// Org-level single-select issue fields (the sidebar "Fields" section, not a
+// Projects v2 board). Field and option IDs are resolved at runtime from
+// `repository.issueFields` by name, never hardcoded. A P0–P3 priority from
+// the model maps onto the Priority field vocabulary; the field option
+// names themselves are also accepted so the response schema can switch
+// vocabularies without touching the planner.
+const PRIORITY_FIELD = 'Priority';
+const EFFORT_FIELD = 'Effort';
+const PRIORITY_OPTION_BY_LABEL = { P0: 'Urgent', P1: 'High', P2: 'Medium', P3: 'Low' };
+const PRIORITY_OPTIONS = ['Urgent', 'High', 'Medium', 'Low'];
+const EFFORT_OPTIONS = ['Low', 'Medium', 'High'];
+
 const MAX_ISSUE_BODY_CHARS = 4000;
 const MAX_CANDIDATE_BODY_CHARS = 400;
 const MAX_CANDIDATES = 12;
@@ -353,6 +365,66 @@ function planIssueType({ response, currentLabels, currentIssueType, issueTypes }
   };
 }
 
+// Resolve a single-select option by field name + option name against the
+// runtime `repository.issueFields` list. Null when the field or option is
+// unknown (fields disabled, lookup failed, option renamed) — never a guess.
+function resolveIssueFieldOption(issueFields, fieldName, optionName) {
+  if (!optionName) return null;
+  const field = (issueFields || []).find(
+    (f) => f && f.name === fieldName && f.id && Array.isArray(f.options)
+  );
+  if (!field) return null;
+  const option = field.options.find((o) => o && o.name === optionName && o.id);
+  return option ? { fieldId: field.id, optionId: option.id, name: option.name } : null;
+}
+
+// Decide the Priority / Effort field values to set. Pure, so the gating is
+// unit-testable; the result carries only the fields to write:
+//   - an existing field value always wins (never overwritten,
+//     suggest-don't-destroy) — `currentFieldValues` is field name → option
+//     name as read from `issue.issueFieldValues`,
+//   - Priority comes from the model's pick (P0–P3 mapped, or a field option
+//     name); a suspected security issue escalates to Urgent regardless,
+//   - Effort comes from `response.effort` (Low / Medium / High) when present,
+//   - both must resolve to a runtime field option by name — an empty list
+//     (lookup failed, fields unavailable) plans nothing.
+function planIssueFields({ response, currentFieldValues, issueFields }) {
+  const current = currentFieldValues || {};
+  const plan = {};
+  const r = response || {};
+  const reasons = r.reasons || {};
+
+  let priorityName = null;
+  if (r.security) {
+    priorityName = 'Urgent';
+  } else if (PRIORITY_OPTION_BY_LABEL[r.priority]) {
+    priorityName = PRIORITY_OPTION_BY_LABEL[r.priority];
+  } else if (PRIORITY_OPTIONS.includes(r.priority)) {
+    priorityName = r.priority;
+  }
+  if (!current[PRIORITY_FIELD]) {
+    const priority = resolveIssueFieldOption(issueFields, PRIORITY_FIELD, priorityName);
+    if (priority) {
+      plan.priority = {
+        ...priority,
+        reason: r.security
+          ? 'suspected security impact escalates to Urgent'
+          : reasons.priority || 'inferred from the issue text',
+      };
+    }
+  }
+
+  const effortName = EFFORT_OPTIONS.includes(r.effort) ? r.effort : null;
+  if (!current[EFFORT_FIELD]) {
+    const effort = resolveIssueFieldOption(issueFields, EFFORT_FIELD, effortName);
+    if (effort) {
+      plan.effort = { ...effort, reason: reasons.effort || 'inferred from the issue text' };
+    }
+  }
+
+  return plan;
+}
+
 // The one auditable, marker-idempotent summary comment.
 function buildSummaryComment(plan) {
   const lines = ['### Automated triage', ''];
@@ -411,6 +483,7 @@ module.exports = {
   extractSearchQueries,
   parseTriageResponse,
   planActions,
+  planIssueFields,
   planIssueType,
   sanitizeText,
 };
@@ -439,13 +512,25 @@ function ghJson(args) {
   return JSON.parse(gh(args));
 }
 
-// One repository-scoped GraphQL read for everything the Type decision
-// needs: the enabled Types (IDs resolved at runtime, never hardcoded), the
-// issue's current Type, and its node id for the mutation. Repository scope
-// (not `organization.issueTypes`) is what the Actions token's
-// `issues: write` can read. Fail-soft: on any error the caller gets an
-// empty Type list, so planIssueType sets nothing and triage continues.
-function fetchIssueTypeContext(repo, issueNumber) {
+// Field name → option name for the single-select values on an issue, from
+// an `issueFieldValues.nodes` list (non-single-select nodes are skipped).
+function singleSelectValuesByField(nodes) {
+  const values = {};
+  for (const v of nodes || []) {
+    if (v && v.field && v.field.name && v.value) values[v.field.name] = v.value;
+  }
+  return values;
+}
+
+// One repository-scoped GraphQL read for everything the Type and field
+// decisions need: the enabled Types and the single-select issue fields
+// (IDs resolved at runtime, never hardcoded), the issue's current Type and
+// field values, and its node id for the mutations. Repository scope (not
+// `organization.issueTypes` / `organization.issueFields`) is what the
+// Actions token's `issues: write` can read. Fail-soft: on any error the
+// caller gets empty Type and field lists, so planIssueType /
+// planIssueFields set nothing and triage continues.
+function fetchIssueContext(repo, issueNumber) {
   const [owner, name] = repo.split('/');
   try {
     const data = ghJson([
@@ -453,19 +538,37 @@ function fetchIssueTypeContext(repo, issueNumber) {
       '-f', 'query=query($owner: String!, $name: String!, $number: Int!) {'
         + ' repository(owner: $owner, name: $name) {'
         + ' issueTypes(first: 50) { nodes { id name isEnabled } }'
-        + ' issue(number: $number) { id issueType { name } } } }',
+        + ' issueFields(first: 50) { nodes {'
+        + ' ... on IssueFieldSingleSelect { id name options { id name } } } }'
+        + ' issue(number: $number) { id issueType { name }'
+        + ' issueFieldValues(first: 50) { nodes {'
+        + ' ... on IssueFieldSingleSelectValue { value optionId'
+        + ' field { ... on IssueFieldSingleSelect { id name } } } } } } } }',
       '-f', `owner=${owner}`, '-f', `name=${name}`, '-F', `number=${issueNumber}`,
     ]);
     const repository = data && data.data && data.data.repository;
     if (!repository || !repository.issue) throw new Error('empty repository/issue in response');
+    const issue = repository.issue;
     return {
-      issueNodeId: repository.issue.id,
-      currentIssueType: repository.issue.issueType ? repository.issue.issueType.name : null,
+      issueNodeId: issue.id,
+      currentIssueType: issue.issueType ? issue.issueType.name : null,
       issueTypes: (repository.issueTypes && repository.issueTypes.nodes) || [],
+      issueFields: ((repository.issueFields && repository.issueFields.nodes) || []).filter(
+        (f) => f && f.id && f.name && Array.isArray(f.options)
+      ),
+      currentFieldValues: singleSelectValuesByField(
+        issue.issueFieldValues && issue.issueFieldValues.nodes
+      ),
     };
   } catch (e) {
-    warn(`could not read issue Types (Type assignment skipped): ${e.message}`);
-    return { issueNodeId: null, currentIssueType: null, issueTypes: [] };
+    warn(`could not read issue Types/fields (Type and field assignment skipped): ${e.message}`);
+    return {
+      issueNodeId: null,
+      currentIssueType: null,
+      issueTypes: [],
+      issueFields: [],
+      currentFieldValues: {},
+    };
   }
 }
 
@@ -500,6 +603,61 @@ function setIssueType(issueNodeId, issueType) {
     return true;
   } catch (e) {
     warn(`could not set issue Type ${issueType.name} (fail-soft): ${e.message}`);
+    return false;
+  }
+}
+
+// Set single-select field values via `setIssueFieldValue` in one mutation.
+// `fields` is the planIssueFields output shape: [{ fieldId, optionId,
+// name }] where `name` is the option name (used for logging). Same
+// contract as setIssueType: the planning read is a snapshot and the
+// mutation replaces unconditionally, so the values are re-read immediately
+// before the write and any field filled by a human in the meantime is
+// dropped from the batch. Returns the entries actually written (possibly
+// empty) on success, or false on a failure (e.g. a token that cannot write
+// ORG_ONLY fields) — a warning, not an abort.
+function setIssueFields(issueNodeId, fields) {
+  const wanted = (fields || []).filter((f) => f && f.fieldId && f.optionId);
+  if (wanted.length === 0) return [];
+  const label = (f) => `${f.fieldId}=${f.name}`;
+  try {
+    const fresh = ghJson([
+      'api', 'graphql',
+      '-f', 'query=query($id: ID!) { node(id: $id) { ... on Issue {'
+        + ' issueFieldValues(first: 50) { nodes {'
+        + ' ... on IssueFieldSingleSelectValue { value'
+        + ' field { ... on IssueFieldSingleSelect { id name } } } } } } } }',
+      '-f', `id=${issueNodeId}`,
+    ]);
+    const node = fresh && fresh.data && fresh.data.node;
+    if (!node) throw new Error('empty node in pre-write re-read');
+    const filled = new Map(
+      ((node.issueFieldValues && node.issueFieldValues.nodes) || [])
+        .filter((v) => v && v.field && v.field.id && v.value)
+        .map((v) => [v.field.id, `${v.field.name} = ${v.value}`])
+    );
+    const toWrite = wanted.filter((f) => {
+      if (!filled.has(f.fieldId)) return true;
+      console.log(
+        `issue field is now ${filled.get(f.fieldId)} (set since the plan was made); leaving it unchanged.`
+      );
+      return false;
+    });
+    if (toWrite.length === 0) return [];
+    gh(['api', 'graphql', '--input', '-'], {
+      input: JSON.stringify({
+        query: 'mutation($id: ID!, $fields: [IssueFieldCreateOrUpdateInput!]!) {'
+          + ' setIssueFieldValue(input: { issueId: $id, issueFields: $fields }) {'
+          + ' issue { id } } }',
+        variables: {
+          id: issueNodeId,
+          fields: toWrite.map((f) => ({ fieldId: f.fieldId, singleSelectOptionId: f.optionId })),
+        },
+      }),
+    });
+    return toWrite;
+  } catch (e) {
+    warn(`could not set issue fields ${wanted.map(label).join(', ')} (fail-soft): ${e.message}`);
     return false;
   }
 }
@@ -685,7 +843,7 @@ function main() {
     process.exit(1);
   }
 
-  const typeContext = fetchIssueTypeContext(repo, issueNumber);
+  const typeContext = fetchIssueContext(repo, issueNumber);
   const plan = planActions({
     response,
     currentLabels,
