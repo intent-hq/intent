@@ -115,7 +115,9 @@ cloudlands-fe).
   untouched (same caveat as intentd: the guard enforces the beta-not-behind
   invariant, not that the promoted version itself ever occupied beta). The optional
   `skip_beta_check` boolean dispatch input (default `false`) bypasses the guard for
-  emergencies, logged as a warning.
+  emergencies, logged as a warning. After the stable feed is verified, propose the
+  website release notes PR on `intent-hq/intentapp.dev` for human review (see
+  [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
 
 ## Release notifier
 
@@ -158,7 +160,10 @@ merge → tag + cargo-dist build → alpha manifest publish →
 (`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
-the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
+the crons (:15 pin bump, :30 cut) keep everything working at cron cadence. A
+cloudlands-fe stable promotion is followed by a website release notes PR on
+`intent-hq/intentapp.dev`, proposed for human review and outside the pipeline (see
+[fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
 
 ## Gotchas
 
