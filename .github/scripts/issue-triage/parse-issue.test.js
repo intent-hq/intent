@@ -115,6 +115,14 @@ test('priorityForIssueBody accepts the legacy P0–P3 tokens from the old templa
   assert.strictEqual(priorityForIssueBody(severity('P3 — papercut')), 'Low');
 });
 
+test('priorityForIssueBody matches the severity token case-insensitively', () => {
+  const severity = (line) => `### Severity\n\n${line}\n`;
+  assert.strictEqual(priorityForIssueBody(severity('urgent — crash, data loss, or corruption')), 'Urgent');
+  assert.strictEqual(priorityForIssueBody(severity('URGENT')), 'Urgent');
+  assert.strictEqual(priorityForIssueBody(severity('p0 — crash, data loss, or corruption')), 'Urgent');
+  assert.strictEqual(priorityForIssueBody(severity('LOW — papercut')), 'Low');
+});
+
 test('priorityForIssueBody reads fixtures on both vocabularies', () => {
   assert.strictEqual(priorityForIssueBody(fixture('bug-full.md')), 'Urgent');
   assert.strictEqual(priorityForIssueBody(fixture('bug-single-component.md')), 'Medium');

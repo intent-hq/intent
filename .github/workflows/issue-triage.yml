@@ -13,6 +13,11 @@ name: Issue triage
 #   - A label the CURRENT body still derives is re-added on the next
 #     `edited` event, so removing such a label by hand does not stick; to
 #     make a correction stick, fix the body's checkbox/dropdown itself.
+#   - Same for the Priority field: the fill is body-derived and fill-only
+#     (an existing value is respected, an EMPTY one is not), so a Priority
+#     cleared by hand is re-filled from the Severity dropdown on the next
+#     `edited` event or author reply; set a different value instead of
+#     clearing it, or change the dropdown.
 #
 # Priority field write: only when the field is EMPTY — an existing value
 # (human-set, or set by an earlier run) is never overwritten, so editing the
@@ -65,7 +70,8 @@ on:
   issue_comment:
     types: [created]
   # Manual runs double as a dry-run mode: they print the intended label
-  # operations without writing unless dry_run is unset.
+  # operations and the Priority field write without applying them unless
+  # dry_run is unset.
   workflow_dispatch:
     inputs:
       issue_number:
@@ -430,9 +436,13 @@ jobs:
   # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
   # SUBMODULE_BUMP_TOKEN elsewhere). The issue Type write (GraphQL
   # `updateIssue` with `issueTypeId`, repository-scoped `issueTypes`
-  # lookup) needs only the job's `issues: write` on `github.token`; the
-  # script guards both the lookup and the write so a permission error
-  # degrades to a warning. The issue number is the only event data that
+  # lookup) and the Priority / Effort field writes (GraphQL
+  # `setIssueFieldValue`, field and option ids from the repository-scoped
+  # `issueFields` lookup) need only the job's `issues: write` on
+  # `github.token`; the script guards every lookup and write so a
+  # permission error degrades to a warning, and the field writes are
+  # fill-only (re-read right before the mutation, an already-filled field
+  # is dropped from the plan). The issue number is the only event data that
   # reaches the shell — the script fetches title/body itself and passes
   # them around as argv/stdin data, never shell-interpolated.
   agentic-triage:
