@@ -19,6 +19,7 @@ SCHEMA_VERSION = 1
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
+RETRY_SUFFIX_RE = re.compile(r"#[0-9]+$")
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -153,6 +154,7 @@ def parse_passed_event(
     suite, separator, test = event.get("name", "").partition("$")
     if not separator or not suite or not test:
         raise RuntimeError(f"unexpected nextest test identifier: {event.get('name')!r}")
+    test = RETRY_SUFFIX_RE.sub("", test)
     binary_id = binary_ids.get((suite, test))
     if binary_id is None:
         raise RuntimeError(f"nextest test identifier was not listed: {event.get('name')!r}")
