@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `9.7`
+**Protocol Version:** `9.8`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -69,6 +69,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` | [methods/voice.md](./methods/voice.md) |
 | §5.42 Centralized PR monitoring — `prMonitor.*` | [methods/pr.md](./methods/pr.md) |
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
+| §5.44 Guided Antigravity setup — `providers.setup.*` | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
 
 ## Compatibility policy (summary)
 
