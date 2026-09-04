@@ -453,7 +453,7 @@ polling. The subsystem lives in `intent-services`
   a `None`-caller cancel wakes the owner with a notice
   ([intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953)).
 - **Owner wakes** go through the automatic-delivery `agent.sendMessage` path
-  — queued behind an in-flight turn, question hold respected — and are
+  — queued behind an in-flight turn, archived-workspace park respected — and are
   best-effort (a delivery failure is logged, never propagated).
 - **Persistence & rehydration.** Schedules persist in the SQLite `hook`
   table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql` +
