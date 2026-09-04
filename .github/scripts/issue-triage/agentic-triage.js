@@ -210,7 +210,11 @@ function buildPrompt(issue, candidates, { fieldsOnly = false } = {}) {
     '  change in one component, about half a day or less; Medium = multi-file',
     '  change, needs tests or a small design decision, about 1-2 days; High =',
     '  cross-component, protocol/schema change, or multi-day / needs design.',
-    '  Use null when the issue gives too little to estimate.',
+    fieldsOnly
+      ? '  Always pick an effort: when the issue gives too little to estimate\n' +
+        '  use Medium; when it needs no code change (informational, already\n' +
+        '  resolved) use Low.'
+      : '  Use null when the issue gives too little to estimate.',
     '- security: true only when the issue plausibly describes a security',
     '  vulnerability. Do not repeat vulnerability details in any reason.',
     '- reasons: one short sentence each; plain text, no markdown, no',

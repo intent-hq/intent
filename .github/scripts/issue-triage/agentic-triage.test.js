@@ -752,8 +752,10 @@ test('prompt: embeds issue and candidates as data with the untrusted-data rule',
   assert.ok(prompt.includes('effort rubric'));
   assert.ok(!/\bP[0-3]\b/.test(prompt), 'no legacy P0–P3 tokens in the prompt');
   assert.ok(prompt.includes('usually take no priority (null)'));
+  assert.ok(prompt.includes('Use null when the issue gives too little to estimate'));
 
-  // The fields-only (backfill) variant asks for a Priority on every issue.
+  // The fields-only (backfill) variant asks for a Priority AND an Effort on
+  // every issue.
   const backfill = buildPrompt(
     { number: 7, title: 'Panel focus lost', body: 'body text', labels: [] },
     [],
@@ -761,6 +763,8 @@ test('prompt: embeds issue and candidates as data with the untrusted-data rule',
   );
   assert.ok(backfill.includes('Always pick a priority'));
   assert.ok(!backfill.includes('usually take no priority (null)'));
+  assert.ok(backfill.includes('Always pick an effort'));
+  assert.ok(!backfill.includes('Use null when the issue gives too little to estimate'));
   assert.ok(backfill.includes('(none found)'));
   assert.ok(!/\bP[0-3]\b/.test(backfill), 'no legacy P0–P3 tokens in the prompt');
 });
