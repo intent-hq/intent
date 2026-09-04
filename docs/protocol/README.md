@@ -69,6 +69,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` | [methods/voice.md](./methods/voice.md) |
 | §5.42 Centralized PR monitoring — `prMonitor.*` | [methods/pr.md](./methods/pr.md) |
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
+| §5.44 Guided Antigravity setup — `providers.setup.*` | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
 
 ## Compatibility policy (summary)
 
@@ -80,5 +81,3 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 - **New §5.x subsections** go into the `methods/` file whose domain they belong to (see the map above), or a new `methods/*.md` file for a genuinely new domain — in either case, add the subsection to this README's map (the single canonical § → file map; [05-method-catalog.md](./05-method-catalog.md)'s index just points here).
 - **Version-history entries** are appended to the narrative in [versioning.md](./versioning.md), and the current-version headers there and in this README are updated together.
 - **New top-level sections** (§11, …) get their own `NN-*.md` file and a row in the map above.
-
-§5.44 [Guided Antigravity setup](./methods/models-providers.md#544-guided-antigravity-setup).
