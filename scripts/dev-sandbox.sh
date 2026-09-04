@@ -13,6 +13,10 @@ esac
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 state_dir=${SANDBOX_STATE_DIR:-"$repo_root/.dev/sandbox"}
 fe_dir=${FE_DIR:-"$repo_root/packages/cloudlands-fe"}
+dev_port_explicit=0
+dev_tcp_port_explicit=0
+[[ ${DEV_PORT+x} == x ]] && dev_port_explicit=1
+[[ ${DEV_TCP_PORT+x} == x ]] && dev_tcp_port_explicit=1
 dev_port=${DEV_PORT:-5190}
 dev_tcp_port=${DEV_TCP_PORT:-5181}
 ready_timeout=${SANDBOX_READY_TIMEOUT:-60}
@@ -35,11 +39,34 @@ warm_ms=0
 intentd_source=installed
 [[ "$mode" == ui ]] && intentd_source=none
 
+port_is_free() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+PY
+}
+
 if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
   [[ "$dev_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_PORT must be numeric." >&2; exit 2; }
   [[ "$dev_tcp_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_TCP_PORT must be numeric." >&2; exit 2; }
   [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
   [[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+  if [[ "$dev_port_explicit" -eq 1 ]] && ! port_is_free "$dev_port"; then
+    echo "[dev-ports] ERROR: explicit DEV_PORT=$dev_port is busy; explicit ports are never remapped." >&2
+    exit 1
+  fi
+  if [[ "$mode" == stack && ${SANDBOX_TCP:-0} == 1 && "$dev_tcp_port_explicit" -eq 1 ]] && ! port_is_free "$dev_tcp_port"; then
+    echo "[dev-ports] ERROR: explicit DEV_TCP_PORT=$dev_tcp_port is busy; explicit ports are never remapped." >&2
+    exit 1
+  fi
 fi
 
 children_of() {
@@ -62,9 +89,29 @@ import errno
 import glob
 import json
 import os
+import subprocess
 import sys
 
 state_dir, json_output, read_only = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
+
+def process_identity(pid):
+    stat_path = f"/proc/{pid}/stat"
+    if os.path.exists(stat_path):
+        with open(stat_path, encoding="utf-8") as handle:
+            fields = handle.read().rsplit(")", 1)[1].split()
+        if fields[0] == "Z":
+            raise ProcessLookupError("process is a zombie")
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            command = handle.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+        return f"proc:{fields[19]}", command
+    output = subprocess.check_output(
+        ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)], text=True
+    ).strip()
+    fields = output.split(None, 5)
+    if len(fields) != 6:
+        raise ProcessLookupError("process identity is unavailable")
+    return f"ps:{' '.join(fields[:5])}", fields[5]
+
 live = []
 for path in sorted(glob.glob(os.path.join(state_dir, "*.json"))):
     try:
@@ -76,6 +123,10 @@ for path in sorted(glob.glob(os.path.join(state_dir, "*.json"))):
         except OSError as error:
             if error.errno != errno.EPERM:
                 raise
+        actual_identity = process_identity(pid)
+        expected_identity = (state["pidStartTime"], state["pidCommandLine"])
+        if actual_identity != expected_identity:
+            raise ProcessLookupError("PID identity does not match recorded sandbox")
     except Exception as error:
         print(f"Stale sandbox state: {path} ({error})", file=sys.stderr)
         if not read_only:
@@ -113,6 +164,34 @@ pid_is_alive() {
   [[ -n "$process_state" && "$process_state" != Z* ]]
 }
 
+pid_identity_matches() {
+  python3 - "$1" "$2" "$3" <<'PY' >/dev/null 2>&1
+import os
+import subprocess
+import sys
+
+pid, expected_start, expected_command = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+stat_path = f"/proc/{pid}/stat"
+if os.path.exists(stat_path):
+    with open(stat_path, encoding="utf-8") as handle:
+        fields = handle.read().rsplit(")", 1)[1].split()
+    if fields[0] == "Z":
+        raise SystemExit(1)
+    with open(f"/proc/{pid}/cmdline", "rb") as handle:
+        command = handle.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+    actual = (f"proc:{fields[19]}", command)
+else:
+    output = subprocess.check_output(
+        ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)], text=True
+    ).strip()
+    fields = output.split(None, 5)
+    if len(fields) != 6:
+        raise SystemExit(1)
+    actual = (f"ps:{' '.join(fields[:5])}", fields[5])
+raise SystemExit(0 if actual == (expected_start, expected_command) else 1)
+PY
+}
+
 tcp_accepts_port() {
   python3 - "$1" <<'PY' >/dev/null 2>&1
 import socket
@@ -126,7 +205,7 @@ PY
 }
 
 stop_sandboxes() {
-  local requested_mode=${MODE:-} path pid state_mode state_port i
+  local requested_mode=${MODE:-} path pid state_mode state_port pid_start_time pid_command_line i
   local -a paths=()
   local -a stopped_modes=() stopped_ports=() warned=()
   case "$requested_mode" in
@@ -147,26 +226,29 @@ stop_sandboxes() {
     return 0
   fi
   for path in "${paths[@]}"; do
-    if ! IFS=$'\t' read -r state_mode pid state_port < <(python3 - "$path" <<'PY'
+    if ! IFS=$'\t' read -r state_mode pid state_port pid_start_time pid_command_line < <(python3 - "$path" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     state = json.load(handle)
-print(state["mode"], int(state["pid"]), int(state["devPort"]), sep="\t")
+print(
+    state["mode"], int(state["pid"]), int(state["devPort"]),
+    state.get("pidStartTime", ""), state.get("pidCommandLine", ""), sep="\t"
+)
 PY
     ); then
       echo "Removing invalid sandbox state: $path" >&2
       rm -f "$path"
       continue
     fi
-    if pid_is_alive "$pid"; then
+    if pid_is_alive "$pid" && pid_identity_matches "$pid" "$pid_start_time" "$pid_command_line"; then
       echo "Stopping sandbox pid $pid from $path"
       signal_tree TERM "$pid"
       for _ in {1..50}; do
         pid_is_alive "$pid" || break
         sleep 0.1
       done
-      if pid_is_alive "$pid"; then
+      if pid_is_alive "$pid" && pid_identity_matches "$pid" "$pid_start_time" "$pid_command_line"; then
         signal_tree KILL "$pid"
       fi
     else
@@ -342,13 +424,33 @@ write_state_file() {
     "$socket_path" "$intentd_source" "$started_at" "$ready_at" "$warm_ok" "$warm_ms" <<'PY'
 import json
 import os
+import subprocess
 import sys
 
 (temp_path, state_path, mode, pid, dev_port, tcp_port, socket_path,
  source, started_at, ready_at, warm_ok, warm_ms) = sys.argv[1:]
+pid = int(pid)
+stat_path = f"/proc/{pid}/stat"
+if os.path.exists(stat_path):
+    with open(stat_path, encoding="utf-8") as handle:
+        fields = handle.read().rsplit(")", 1)[1].split()
+    with open(f"/proc/{pid}/cmdline", "rb") as handle:
+        command = handle.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+    pid_start_time = f"proc:{fields[19]}"
+else:
+    output = subprocess.check_output(
+        ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)], text=True
+    ).strip()
+    fields = output.split(None, 5)
+    if len(fields) != 6:
+        raise ProcessLookupError("sandbox process identity is unavailable")
+    pid_start_time = f"ps:{' '.join(fields[:5])}"
+    command = fields[5]
 state = {
     "mode": mode,
-    "pid": int(pid),
+    "pid": pid,
+    "pidStartTime": pid_start_time,
+    "pidCommandLine": command,
     "devPort": int(dev_port),
     "tcpPort": int(tcp_port),
     "url": f"http://127.0.0.1:{dev_port}/",

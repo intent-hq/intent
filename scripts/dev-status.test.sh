@@ -15,6 +15,41 @@ fail() {
   exit 1
 }
 
+write_live_state() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+path, pid = sys.argv[1], int(sys.argv[2])
+stat_path = f"/proc/{pid}/stat"
+if os.path.exists(stat_path):
+    with open(stat_path, encoding="utf-8") as handle:
+        fields = handle.read().rsplit(")", 1)[1].split()
+    with open(f"/proc/{pid}/cmdline", "rb") as handle:
+        command = handle.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+    start_time = f"proc:{fields[19]}"
+else:
+    output = subprocess.check_output(
+        ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)], text=True
+    ).strip()
+    fields = output.split(None, 5)
+    start_time, command = f"ps:{' '.join(fields[:5])}", fields[5]
+state = {
+    "mode": "ui", "pid": pid, "pidStartTime": start_time, "pidCommandLine": command,
+    "devPort": 6958, "tcpPort": 6959, "url": "http://127.0.0.1:1/",
+    "daemonLocalhostUrl": "http://daemon.localhost:6958/", "socket": None,
+    "intentdSource": "none", "startedAt": "2026-09-03T00:00:00Z",
+    "readyAt": "2026-09-03T00:00:01Z", "warm": {"ok": True, "ms": 10},
+    "supervisor": {"kind": "workspace-service", "id": "fixture"},
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, separators=(",", ":"))
+    handle.write("\n")
+PY
+}
+
 for command in bash cksum date dirname git grep head python3 sed awk; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
@@ -50,9 +85,7 @@ SH
 chmod +x "$bin_dir/gh"
 export GH_TEST_LOG="$temp_dir/gh.log"
 
-cat >"$state_dir/ui.json" <<JSON
-{"mode":"ui","pid":$$,"devPort":6958,"tcpPort":6959,"url":"http://127.0.0.1:1/","daemonLocalhostUrl":"http://daemon.localhost:6958/","socket":null,"intentdSource":"none","startedAt":"2026-09-03T00:00:00Z","readyAt":"2026-09-03T00:00:01Z","warm":{"ok":true,"ms":10},"supervisor":{"kind":"workspace-service","id":"fixture"}}
-JSON
+write_live_state "$state_dir/ui.json" "$$"
 PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
   bash "$script" >"$temp_dir/populated.json"
 python3 - "$temp_dir/populated.json" <<'PY' || fail "populated sandbox report was incorrect"

@@ -6,12 +6,22 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/dev-sandbox.sh"
 temp_dir=$(mktemp -d)
 sandbox_pid=""
+foreign_pid=""
+listener_pid=""
 state_dir="$temp_dir/state"
 
 cleanup() {
   if [[ -n "$sandbox_pid" ]]; then
     kill "$sandbox_pid" 2>/dev/null || true
     wait "$sandbox_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$foreign_pid" ]]; then
+    kill "$foreign_pid" 2>/dev/null || true
+    wait "$foreign_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$listener_pid" ]]; then
+    kill "$listener_pid" 2>/dev/null || true
+    wait "$listener_pid" 2>/dev/null || true
   fi
   rm -rf "$temp_dir"
 }
@@ -29,6 +39,36 @@ s = socket.socket()
 s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])
 s.close()
+PY
+}
+
+write_live_state() {
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+path, mode, pid, port = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+stat_path = f"/proc/{pid}/stat"
+if os.path.exists(stat_path):
+    with open(stat_path, encoding="utf-8") as handle:
+        fields = handle.read().rsplit(")", 1)[1].split()
+    with open(f"/proc/{pid}/cmdline", "rb") as handle:
+        command = handle.read().rstrip(b"\0").replace(b"\0", b" ").decode(errors="replace")
+    start_time = f"proc:{fields[19]}"
+else:
+    output = subprocess.check_output(
+        ["ps", "-o", "lstart=", "-o", "command=", "-p", str(pid)], text=True
+    ).strip()
+    fields = output.split(None, 5)
+    start_time, command = f"ps:{' '.join(fields[:5])}", fields[5]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({
+        "mode": mode, "pid": pid, "devPort": port,
+        "pidStartTime": start_time, "pidCommandLine": command,
+    }, handle)
+    handle.write("\n")
 PY
 }
 
@@ -95,6 +135,36 @@ chmod +x "$INTENTD_TARGET_DIR/$profile/intentd"
 SH
 chmod +x "$temp_dir/bin/cargo"
 
+busy_port=$(free_port)
+busy_ready="$temp_dir/busy-ready"
+python3 - "$busy_port" "$busy_ready" <<'PY' &
+import pathlib
+import socket
+import sys
+import time
+
+sock = socket.socket()
+sock.bind(("127.0.0.1", int(sys.argv[1])))
+sock.listen()
+pathlib.Path(sys.argv[2]).touch()
+time.sleep(30)
+PY
+listener_pid=$!
+for _ in {1..100}; do
+  [[ -e "$busy_ready" ]] && break
+  sleep 0.01
+done
+[[ -e "$busy_ready" ]] || fail "busy-port listener did not start"
+if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$busy_port" \
+  SANDBOX_STATE_DIR="$state_dir" bash "$script" ui >"$temp_dir/busy-port.out" 2>&1; then
+  fail "UI sandbox accepted a busy explicit DEV_PORT"
+fi
+grep -q "explicit DEV_PORT=$busy_port is busy; explicit ports are never remapped" "$temp_dir/busy-port.out" \
+  || fail "busy explicit port error was not actionable"
+kill "$listener_pid"
+wait "$listener_pid" 2>/dev/null || true
+listener_pid=""
+
 cat >"$temp_dir/fake-intentd" <<'SH'
 #!/usr/bin/env bash
 exec python3 - "$INTENTD_DATA_DIR/intentd.sock" <<'PY'
@@ -141,7 +211,7 @@ python3 - "$temp_dir/status.json" "$sandbox_pid" "$port" <<'PY' || fail "sandbox
 import json
 import sys
 states = json.load(open(sys.argv[1], encoding="utf-8"))
-required = {"mode", "pid", "devPort", "tcpPort", "url", "daemonLocalhostUrl", "socket", "intentdSource", "startedAt", "readyAt", "warm", "supervisor"}
+required = {"mode", "pid", "pidStartTime", "pidCommandLine", "devPort", "tcpPort", "url", "daemonLocalhostUrl", "socket", "intentdSource", "startedAt", "readyAt", "warm", "supervisor"}
 assert len(states) == 1 and required <= states[0].keys()
 assert states[0]["pid"] == int(sys.argv[2])
 assert states[0]["devPort"] == int(sys.argv[3]) and states[0]["tcpPort"] == 43210
@@ -214,10 +284,31 @@ fi
 grep -q 'Stale sandbox state:' "$temp_dir/stale.err" || fail "stale state file was not reported"
 
 sleep 30 &
-dummy_pid=$!
-cat >"$state_dir/ui.json" <<JSON
-{"mode":"ui","pid":$dummy_pid,"devPort":$(free_port)}
+foreign_pid=$!
+foreign_port=$(free_port)
+cat >"$state_dir/foreign.json" <<JSON
+{"mode":"ui","pid":$foreign_pid,"devPort":$foreign_port,"pidStartTime":"proc:not-this-process","pidCommandLine":"dev-sandbox.sh ui"}
 JSON
+if SANDBOX_STATE_DIR="$state_dir" bash "$script" status >"$temp_dir/foreign-status.out" 2>"$temp_dir/foreign-status.err"; then
+  fail "sandbox status accepted a foreign live PID"
+fi
+grep -q 'PID identity does not match recorded sandbox' "$temp_dir/foreign-status.err" \
+  || fail "foreign live PID was not reported as stale"
+kill -0 "$foreign_pid" 2>/dev/null || fail "sandbox status signalled a foreign live PID"
+cat >"$state_dir/ui.json" <<JSON
+{"mode":"ui","pid":$foreign_pid,"devPort":$foreign_port,"pidStartTime":"proc:not-this-process","pidCommandLine":"dev-sandbox.sh ui"}
+JSON
+MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/foreign-stop.out" 2>"$temp_dir/foreign-stop.err"
+grep -q 'Removing stale sandbox state:' "$temp_dir/foreign-stop.err" \
+  || fail "sandbox-stop did not report the foreign PID state as stale"
+kill -0 "$foreign_pid" 2>/dev/null || fail "sandbox-stop signalled a foreign live PID"
+kill "$foreign_pid"
+wait "$foreign_pid" 2>/dev/null || true
+foreign_pid=""
+
+sleep 30 &
+dummy_pid=$!
+write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
   while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done
   printf '%s\n' '{"mode":"ui","pid":99999999,"devPort":1}' >"$state_dir/ui.json"
@@ -356,4 +447,4 @@ status=$?
 set -e
 [[ "$status" -eq 7 ]] || fail "intentd child status was not propagated (got $status)"
 
-echo "dev-sandbox tests passed"
+echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
