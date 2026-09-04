@@ -556,16 +556,20 @@ retires the pending set, on the daemon and in every FE derivation. This supersed
 plain user messages, the agent's subsequent turns, and daemon restarts, until the tag lands, the
 user dismisses, or a newer question-bearing turn supersedes it.
 
-*Daemon-side question hold (v2.8).* While the questions are pending — the persisted
-`pendingQuestionsMessageId` marker, minus the `agent.dismissQuestions` dismissal marker —
-**automatic** deliveries to the asking
-agent (A2A sends, parent wakes, event batches, `agent.sendToTask`) are parked in its pending queue
-instead of starting a turn, so an internal message cannot bury the Q&A and silently dismiss
-the wizard. User-origin sends bypass the hold but do not release it (only the answer tag does), and
-`agent.dismissQuestions` releases it — since intentd#892 (within v4.3) the dismissal also
-delivers a system-origin notice to the model ("User dismissed your N questions without
-answering...", `questions_dismissed` `messageMetadata`) so the agent learns the questions were
-dismissed and does not re-ask. Full contract in §5.5 ("Question hold").
+*Daemon-side pending-questions marker (v2.8; delivery hold retired in v9.5).* While the questions
+are pending — the persisted `pendingQuestionsMessageId` marker, minus the `agent.dismissQuestions`
+dismissal marker — the daemon surfaces the Q&A as attention (`needs_attention` displayStatus,
+`numQuestionsAsked`, the lifted `metadata.pendingQuestionsMessageId`) but does **not** gate
+delivery: since [intentd#1710](https://github.com/intent-hq/intentd/pull/1710) (v9.5) automatic
+deliveries to the asking agent (A2A sends, parent wakes, event batches, `agent.sendToTask`)
+start turns as usual and the marker survives them — the wizard stays sticky on the marker, not on
+the transcript tail, so a later turn cannot dismiss it. (From v2.8 through v9.4 those deliveries
+parked in the queue with `heldForQuestions: true` instead; that hold and its result field are
+removed from the wire.) Neither a plain user send nor an automatic delivery resolves the marker
+(only the answer tag does), and `agent.dismissQuestions` resolves it — since intentd#892 (within
+v4.3) the dismissal also delivers a system-origin notice to the model ("User dismissed your N
+questions without answering...", `questions_dismissed` `messageMetadata`) so the agent learns
+the questions were dismissed and does not re-ask. Full contract in §5.5 ("Pending questions").
 
 *Rendering surface — wizard only (an FE convention).* Question blocks are surfaced exclusively via
 the composer-area wizard: they are **never** rendered as transcript cards, whether pending or
