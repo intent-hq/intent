@@ -149,13 +149,13 @@ After verifying a beta release, promote it to the stable channel using the **Rel
 
    Once the stable feed is verified, update the Updates section of the website docs at `src/pages/docs.astro` in [intent-hq/intentapp.dev](https://github.com/intent-hq/intentapp.dev). The section is made of `<section id="latest-release">` (Latest Release) and `<section id="release-history">` (Release History). Work on a feature branch and open a PR for review; do not merge it (a human merges it).
 
-   1. **Gather inputs.** You need the previous stable version and the newly promoted version. The aggregated notes on the rolling `stable` release of `intent-hq/cloudlands-releases` already span `(prevStable, VERSION]`, including the intentd delta:
+   1. **Gather inputs.** You need the previous stable version, the newly promoted version, and the aggregated notes body. The notes on the rolling `stable` release of `intent-hq/cloudlands-releases` already span `(prevStable, VERSION]`, including the intentd delta:
 
       ```bash
-      gh release view stable --repo intent-hq/cloudlands-releases
+      gh release view stable --repo intent-hq/cloudlands-releases --json body --jq .body
       ```
 
-   2. **Generate the copy** with this prompt:
+   2. **Generate the copy.** The prompt below carries no release context on its own and is not sufficient by itself: supply it together with the inputs from the previous step (the previous stable version, the promoted version, and the aggregated notes body). The copy must be grounded in those notes only; anything not in them is out of scope. Use this prompt:
 
       ```text
       What major updates went out from the last stable release to this current one?
@@ -173,15 +173,17 @@ After verifying a beta release, promote it to the stable channel using the **Rel
       Move the previous Latest release notes into the archive with the release version and date as a subhead.
       ```
 
-   3. **Apply the edit.** Replace the body of the Latest Release section with the new copy, keeping the existing HTML structure: a leading `<p><strong>vX.Y.Z.</strong> ...</p>`, `<p class="body-subheadline">` subheads, and `<ul>` lists. Move the previous Latest Release body into the Release History section, directly below its intro paragraph and above any older entries, under a subhead `<p class="body-subheadline">vA.B.C (YYYY-MM-DD)</p>`. The date is the publish date of that version's release on `intent-hq/cloudlands-releases`:
+   3. **Apply the edit.** Replace the body of the Latest Release section with the new copy, keeping the existing HTML structure: a leading `<p><strong>vX.Y.Z.</strong> ...</p>`, `<p class="body-subheadline">` subheads, and `<ul>` lists. Move the previous Latest Release body into the Release History section, directly below its intro paragraph and above any older entries, under a subhead `<p class="body-subheadline">vA.B.C (YYYY-MM-DD)</p>`. The date is the day that version's `vA.B.C` release was published on `intent-hq/cloudlands-releases`, which is its alpha release date, since a promotion does not create a new release. This prints it as `YYYY-MM-DD` directly:
 
       ```bash
-      gh release view vA.B.C --repo intent-hq/cloudlands-releases --json publishedAt
+      gh release view vA.B.C --repo intent-hq/cloudlands-releases --json publishedAt --jq '.publishedAt[0:10]'
       ```
 
       Release History keeps the newest entry first.
 
    4. **Open the PR** with a conventional-commit title (e.g. `docs: release notes for vX.Y.Z`), request review, and leave the merge to a human.
+
+   Keep at most one open site release-notes PR at a time, and always branch from the current `main` of `intent-hq/intentapp.dev`. Before opening a new one, check for an open release-notes PR on that repo (`gh pr list --repo intent-hq/intentapp.dev --search "release notes"`). If one exists, either update it instead of opening a second (rebase it on `main`, make the newest stable the Latest Release, and archive every intermediate stable in Release History, newest first) or close it as superseded and open a fresh PR from `main`. The site must never end up showing an older release as Latest.
 
    The site PR is review-only and independent of the release pipeline: a delayed or missing site PR never blocks or reverts a promotion.
 
@@ -293,6 +295,8 @@ If the automated **Release Stable** workflow fails and cannot be fixed by re-run
    ```bash
    gh release edit stable --repo intent-hq/cloudlands-releases --notes-file aggregated-notes.md
    ```
+
+After a manual promotion, step 4 of [Promoting to Stable](#promoting-to-stable) (the website release notes PR) still applies.
 
 ## Channel Switching in the App
 
