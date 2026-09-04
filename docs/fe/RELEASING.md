@@ -83,9 +83,9 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    ```
 
 4. **Verify the rolling beta channel**
-   
+
    The workflow also updates the rolling `beta` release tag:
-   
+
    ```bash
    # Check the beta feeds (latest-mac.yml shown; repeat for latest.yml,
    # latest-linux.yml, latest-linux-arm64.yml)
@@ -144,6 +144,46 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
    ```
+
+4. **Propose the website release notes PR**
+
+   Once the stable feed is verified, update the Updates section of the website docs at `src/pages/docs.astro` in [intent-hq/intentapp.dev](https://github.com/intent-hq/intentapp.dev). The section is made of `<section id="latest-release">` (Latest Release) and `<section id="release-history">` (Release History). Work on a feature branch and open a PR for review; do not merge it (a human merges it).
+
+   1. **Gather inputs.** You need the previous stable version and the newly promoted version. The aggregated notes on the rolling `stable` release of `intent-hq/cloudlands-releases` already span `(prevStable, VERSION]`, including the intentd delta:
+
+      ```bash
+      gh release view stable --repo intent-hq/cloudlands-releases
+      ```
+
+   2. **Generate the copy** with this prompt:
+
+      ```text
+      What major updates went out from the last stable release to this current one?
+
+      Respond with accessible, concise, and clear copy for the latest release section of the Intent Website docs.
+
+      1. Match the writing style and formatting of the rest of the Intent docs
+      2. Don't include emojis
+      3. Don't ever use em-dashes
+      4. Don't use staccato pairs (short clipped two-part rhythms like "Not bigger. Better." or "It's fast. It's simple.")
+      5. Don't use antithesis reframe / negative parallelism ("It's not about X, it's about Y" or "This isn't a bug, it's a feature")
+      6. Don't use isocolon metaphor-pairs (two parallel-structured metaphor clauses like "Data is the new oil, and attention is the new currency")
+
+      Replace the latest release section of the Intent docs on the Website with this one.
+      Move the previous Latest release notes into the archive with the release version and date as a subhead.
+      ```
+
+   3. **Apply the edit.** Replace the body of the Latest Release section with the new copy, keeping the existing HTML structure: a leading `<p><strong>vX.Y.Z.</strong> ...</p>`, `<p class="body-subheadline">` subheads, and `<ul>` lists. Move the previous Latest Release body into the Release History section, directly below its intro paragraph and above any older entries, under a subhead `<p class="body-subheadline">vA.B.C (YYYY-MM-DD)</p>`. The date is the publish date of that version's release on `intent-hq/cloudlands-releases`:
+
+      ```bash
+      gh release view vA.B.C --repo intent-hq/cloudlands-releases --json publishedAt
+      ```
+
+      Release History keeps the newest entry first.
+
+   4. **Open the PR** with a conventional-commit title (e.g. `docs: release notes for vX.Y.Z`), request review, and leave the merge to a human.
+
+   The site PR is review-only and independent of the release pipeline: a delayed or missing site PR never blocks or reverts a promotion.
 
 ## Troubleshooting
 

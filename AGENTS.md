@@ -209,6 +209,12 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   block a turn polling.
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
+- **Website release notes after a stable promotion**: a cloudlands-fe stable promotion
+  is followed by a PR on `intent-hq/intentapp.dev` updating the docs Updates section
+  (Latest Release + Release History in `src/pages/docs.astro`). Agents propose that PR
+  for review and never merge it (the never-merge-without-permission rule above
+  applies); the procedure and copy prompt are in
+  [docs/fe/RELEASING.md § Promoting to Stable](./docs/fe/RELEASING.md#promoting-to-stable).
 
 ## Filing Issues
 
