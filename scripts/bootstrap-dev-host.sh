@@ -209,10 +209,10 @@ check_all() {
     if gh auth status >/dev/null 2>&1; then
       ok "GitHub CLI: present and authenticated"
     else
-      missing "GitHub CLI: present but not authenticated; run gh auth login"
+      optional "GitHub CLI: present but not authenticated; PR reporting is disabled until gh auth login"
     fi
   else
-    missing "GitHub CLI: gh is required (bootstrap does not install or authenticate it)"
+    optional "GitHub CLI: not installed (PR reporting only; bootstrap does not install it)"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
