@@ -1413,8 +1413,8 @@ lastScanAt: string | null }`, where
 `{ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, thoughtTokens?,
 cost?: { amount: number, currency: string } }`. `byAgentId` keys are
 `agent-{uuid}`; `byModel` keys are the effective model name (`"unknown"` fallback); `lastScanAt` is
-the RFC-3339 timestamp of the last materialization — a usage or transcript mutation, or a
-reconciliation pass (`null` before the first). Updated values are pushed via
+the RFC-3339 timestamp of the last committed materialization by end-of-turn usage accounting or
+the reconciliation pass (`null` before the first). Updated values are pushed via
 `workspace:tokenUsage-changed` (§6.5).
 
 **Additive cross-filter rows.** `byAgentModel` is the sparse, materialized agent × model
@@ -1432,8 +1432,14 @@ field means that the persisted snapshot predates this projection; it does not me
 authoritative empty projection. Old clients ignore the field. A new client that receives an
 absent field must keep its legacy, non-cross-filter view and must not invent cells or message
 counts from `byAgentId` and `byModel`. Loading an old persisted snapshot does not backfill it on
-the read path. The next daemon-owned usage or message mutation, or the reconciliation pass,
-materializes the field.
+the read path. The next end-of-turn usage accounting update that commits a changed snapshot, or
+the next reconciliation pass that commits one, materializes the field. A transcript write alone
+does not materialize the field or publish `workspace:tokenUsage-changed`.
+
+**Safe rollout order.** [intent-hq/intentd#1719](https://github.com/intent-hq/intentd/pull/1719)
+must land first. The repository-owned `auto-bump-submodules` workflow then advances the
+`packages/intentd` gitlink. That pin advance must be present before, or in the same repository
+state as, canonical availability of this additive contract. Do not advance the gitlink manually.
 
 **Projection invariants and scopes.** The existing `totals`, `byAgentId`, and `byModel` fields
 stay required and unchanged. For a snapshot that has `byAgentModel`, the daemon derives all four
@@ -1479,16 +1485,18 @@ materialization time. A missing or empty model is normalized to the literal `"un
 sentinel used by `byModel`; an empty-string model is never sent. A model change can therefore
 produce more than one row for one agent. ACP session recreation preserves existing cells and
 counts; it does not count a message again. Transcript append, queue drain, agent-to-agent
-delivery, replace, delete, and agent/session delete operations update the counts so that the next
-snapshot describes only the rows that still exist.
+delivery, replace, delete, and agent/session delete operations change the source rows. The next
+end-of-turn usage accounting materialization or reconciliation pass makes the snapshot describe
+only the rows that still exist.
 
 **Performance contract.** `byAgentModel` and both message counts use the derived-field write
-rung: the daemon materializes them on daemon-owned transcript/usage writes and on the existing
-off-read-path reconciliation pass. `workspace.getTokenUsage` reads the durable workspace snapshot
-only, and `workspace:tokenUsage-changed` carries that same snapshot. Neither path may hydrate a
-transcript, read message bodies, scan a full transcript, or issue one query per agent or row. A
-reconciliation implementation may use one bounded indexed projection, but it runs outside the
-RPC read path.
+rung: the daemon materializes them during end-of-turn usage accounting and the existing
+off-read-path reconciliation pass. Transcript writes only change the source rows; they do not
+publish an immediate usage snapshot. `workspace.getTokenUsage` reads the durable workspace
+snapshot only, and `workspace:tokenUsage-changed` carries that same snapshot. Neither path may
+hydrate a transcript, read message bodies, scan a full transcript, or issue one query per agent
+or row. A reconciliation implementation may use one bounded indexed projection, but it runs
+outside the RPC read path.
 
 **Cost** is sourced from the ACP `usage_update` session notification's `cost` object
 (`{ amount, currency }`, `currency` an ISO 4217 code) and is therefore present **only for
