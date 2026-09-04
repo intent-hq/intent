@@ -20,7 +20,7 @@ Expected: daemon starts with defaults. Actual: panic and exit.
 
 ### Severity
 
-P0 — crash, data loss, or corruption; blocks shipping to external users
+Urgent — crash, data loss, or corruption; blocks shipping to external users
 
 ### Agent-filed
 
