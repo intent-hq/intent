@@ -432,7 +432,10 @@ daemon minimally creates the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
 delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
 An omitted `initialAgent.model` resolves through the same daemon-side creation-time
-default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution").
+default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution");
+a supplied one must be a **bare** model id — a compound `provider:model` value is rejected
+with `-32602` naming `initialAgent.model`, before any provisioning side effect
+([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
@@ -500,7 +503,7 @@ any of it — unlike the delete cascade below, nothing is deleted:
   workspace whose queue holds parked ready-to-send entries (hook / PR-monitor
   archive-cancellation wakes, parked automatic sends) no longer runs a DIRECT turn
   past them — the send converts to a user-origin enqueue + immediate drain kick
-  (modeled on the monorepo#1791 question-hold conversion, §5.5), returning the
+  (modeled on the former monorepo#1791 question-hold conversion, which v9.5 retired along with the hold — §5.5 "Pending questions"), returning the
   ordinary queued result `{ success: true, queued: true, queuedMessage, turnId }`,
   and the batch flush delivers every parked ready entry FIFO in the SAME combined
   turn as the user message, with the one-shot unarchive prompt notice trailing —
@@ -1096,7 +1099,7 @@ onward — while the raising turn runs the derivation proceeds without it (typic
 reading `in_progress` via step 3, absent other signals), and the flush's recompute folds
 it in under the ordinary precedence (a terminal-failure flush's `error` park still reads
 `failed`, step 0). Best-effort: a store read failure fails open to `false`
-(the question-hold derivation fails open itself), so list/get emission is never wedged and
+(the pending-questions derivation fails open itself), so list/get emission is never wedged and
 attention is never fabricated.
 
 0. **Failed** *(new in intentd#945)* — a top-level foreground agent is parked in `error`
@@ -1111,13 +1114,13 @@ attention is never fabricated.
    the user → `needs_attention`. A session counts when it either (a) carries a pending
    non-blocker **attention request** (`attentionRequestKind = "discussion"`, raised via
    `ws.agent.requestDiscussion`, §5.5) or (b) has **pending structured questions** — the
-   same question-hold derivation as §5.5 (the persisted `pendingQuestionsMessageId` marker
+   same pending-questions derivation as §5.5 (the persisted `pendingQuestionsMessageId` marker
    is set and differs from the `dismissedQuestionsMessageId` marker; within v6.0 this is a
    metadata read, not a transcript tail walk — modulo the one-time pre-upgrade fallback,
    §5.5 — and pendingness survives later user messages
    and agent turns) — or (c, new in intentd#945) the workspace
    `attention` flag reads `review_required`. The cheap session-metadata check (attention
-   requests) runs over every candidate first; question-hold probes only
+   requests) runs over every candidate first; pending-questions probes only
    happen when no session already flagged.
 3. **Agent running** —
    any agent running in
@@ -1239,8 +1242,8 @@ their own recompute-and-compare points: an attention **raise** (`ws.agent.reques
 / `ws.agent.reportBlocker` — a child/background raise stays silent, since the derivation
 ignores those sessions and the transition-only emission suppresses the no-op) and its
 **retire** (the turn-begin clear on a qualifying delivery, §5.5); a **question-asking turn
-end** (the turn-end `pendingQuestionsMessageId` marker write arms the question-hold
-derivation) and each question-hold **release** — within v6.0 only a `question_answers`-tagged
+end** (the turn-end `pendingQuestionsMessageId` marker write arms the pending-questions
+derivation) and each pending-questions **resolution** — within v6.0 only a `question_answers`-tagged
 user row naming the marked message, `agent.dismissQuestions`, or a NEWER question-bearing
 assistant turn releases it (§5.5). The recompute-and-compare still runs after every
 user-row persist (`agent.sendMessage` direct send, `agent.sendQueuedMessageNow`,

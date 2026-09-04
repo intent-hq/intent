@@ -20,7 +20,7 @@ Expected: smooth transition. Actual: visible flicker.
 
 ### Severity
 
-P2 — degraded behavior; should be fixed, but impact is limited
+Medium — degraded behavior; should be fixed, but impact is limited
 
 ### Agent-filed
 

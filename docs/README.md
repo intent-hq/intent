@@ -92,11 +92,12 @@ removed. Bugs are now filed directly as GitHub issues on `intent-hq/intent`.
 
 Durable conventions carried forward from that phase:
 
-- **Severity taxonomy** for triage (maps 1:1 onto the `priority:P0`–`priority:P3` labels):
-  - **P0** — crash, data loss, or corruption; blocks shipping to external users
-  - **P1** — broken feature; app still usable but with significant workaround required
-  - **P2** — degraded behavior; should be fixed, but impact is limited
-  - **P3** — papercut; annoying but does not block workflows
+- **Severity taxonomy** for triage (maps 1:1 onto the issue **Priority** field —
+  Urgent / High / Medium / Low, formerly P0–P3):
+  - **Urgent** — crash, data loss, or corruption; blocks shipping to external users
+  - **High** — broken feature; app still usable but with significant workaround required
+  - **Medium** — degraded behavior; should be fixed, but impact is limited
+  - **Low** — papercut; annoying but does not block workflows
 - **Regression coverage** expected with each fix:
   - **intentd**: `make check` + `make test` green
   - **cloudlands-fe**: `pnpm run check` + `pnpm vitest run` green

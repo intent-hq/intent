@@ -1,6 +1,7 @@
 name: Bug report
 description: Report a bug in intentd, cloudlands-fe, ios, or docs/tooling
 labels: ["bug"]
+type: Bug
 body:
   - type: textarea
     id: description
@@ -38,24 +39,25 @@ body:
         - label: cloudlands-fe (Electron + SvelteKit desktop frontend)
         - label: ios (SwiftUI companion app)
         - label: docs / tooling
-  # Severity → label mapping (each option maps 1:1 onto a priority:* label,
-  # keyed on the leading "Pn" token):
-  #   P0 — … → priority:P0
-  #   P1 — … → priority:P1
-  #   P2 — … → priority:P2
-  #   P3 — … → priority:P3
+  # Severity → Priority field mapping (each option maps 1:1 onto a Priority
+  # field option, keyed on the leading token; the parser also still accepts
+  # the former P0–P3 tokens: P0 → Urgent, P1 → High, P2 → Medium, P3 → Low):
+  #   Urgent — … → Priority: Urgent
+  #   High — …   → Priority: High
+  #   Medium — … → Priority: Medium
+  #   Low — …    → Priority: Low
   - type: dropdown
     id: severity
     attributes:
       label: Severity
       description: >
-        The matching `priority:*` label is applied automatically from your
-        selection.
+        Your selection sets the issue's Priority field automatically (only
+        when the field is still empty).
       options:
-        - P0 — crash, data loss, or corruption; blocks shipping to external users
-        - P1 — broken feature; app still usable but with significant workaround required
-        - P2 — degraded behavior; should be fixed, but impact is limited
-        - P3 — papercut; annoying but does not block workflows
+        - Urgent — crash, data loss, or corruption; blocks shipping to external users
+        - High — broken feature; app still usable but with significant workaround required
+        - Medium — degraded behavior; should be fixed, but impact is limited
+        - Low — papercut; annoying but does not block workflows
     validations:
       required: true
   - type: checkboxes

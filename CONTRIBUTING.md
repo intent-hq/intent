@@ -90,8 +90,9 @@ Keep the relevant checks green before opening a PR:
   (bug report / feature request) and pick the affected component(s).
 - **Search first** — check existing open *and* closed issues and comment on or
   link an existing issue instead of filing a duplicate.
-- Issues are triaged with `component:*` labels and a severity taxonomy
-  (P0 crash/data-loss, P1 broken feature, P2 papercut) described in
+- Issues are triaged with `component:*` labels and a severity taxonomy that
+  maps onto the issue **Priority** field (Urgent crash/data-loss, High broken
+  feature, Medium degraded behavior, Low papercut) described in
   [docs/README.md](docs/README.md).
 
 ## Local setup

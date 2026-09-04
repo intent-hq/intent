@@ -1,19 +1,35 @@
 // Deterministic issue-form parser for the triage workflow (pass 1).
 //
 // Reads the rendered markdown body of an issue filed through the
-// .github/ISSUE_TEMPLATE forms and derives the labels that the template
-// fields map onto:
+// .github/ISSUE_TEMPLATE forms and derives what the template fields map
+// onto:
 //   - "Component" checkboxes -> component:intentd / component:fe /
-//     component:ios / docs
-//   - "Severity" dropdown    -> priority:P0..P3 (keyed on the leading
-//     "Pn" token, per the mapping comment in bug_report.yml)
-//   - "Agent-filed" checkbox -> agent-filed
+//     component:ios / docs labels
+//   - "Agent-filed" checkbox -> agent-filed label
+//   - "Severity" dropdown    -> the issue's Priority FIELD value
+//     (Urgent / High / Medium / Low), keyed on the leading token of the
+//     selected option per the mapping comment in bug_report.yml
 //
 // Pure and dependency-free so it can be unit-tested with `node --test`
 // and required from actions/github-script. It only ever *derives* labels
-// to add; the workflow never removes labels based on its output.
+// to add and a Priority to fill; the workflow never removes labels or
+// overwrites an existing Priority based on its output.
 
 'use strict';
+
+// Severity option leading token -> Priority field option name. The legacy
+// `P0`–`P3` tokens (pre-rename template) stay accepted so issues filed from
+// the old template still parse.
+const SEVERITY_PRIORITIES = {
+  urgent: 'Urgent',
+  high: 'High',
+  medium: 'Medium',
+  low: 'Low',
+  p0: 'Urgent',
+  p1: 'High',
+  p2: 'Medium',
+  p3: 'Low',
+};
 
 // Checkbox option text -> label, matched on the option's leading token so
 // wording tweaks after the token don't break extraction.
@@ -96,12 +112,6 @@ function labelsForIssueBody(body) {
     }
   }
 
-  if (sections['Severity']) {
-    const selection = firstContentLine(sections['Severity']);
-    const m = selection.match(/^P([0-3])\b/);
-    if (m) labels.push(`priority:P${m[1]}`);
-  }
-
   if (sections['Agent-filed'] && checkedItems(sections['Agent-filed']).length > 0) {
     labels.push('agent-filed');
   }
@@ -109,4 +119,17 @@ function labelsForIssueBody(body) {
   return [...new Set(labels)];
 }
 
-module.exports = { labelsForIssueBody, splitSections };
+// Derive the Priority field value the Severity dropdown maps onto:
+// 'Urgent' | 'High' | 'Medium' | 'Low', or null when the section is
+// missing, unanswered ("_No response_"), or free-form text.
+function priorityForIssueBody(body) {
+  if (!body || typeof body !== 'string') return null;
+  const sections = splitSections(body);
+  if (!sections['Severity']) return null;
+  const selection = firstContentLine(sections['Severity']);
+  const m = selection.match(/^([A-Za-z][A-Za-z0-9]*)\b/);
+  if (!m) return null;
+  return SEVERITY_PRIORITIES[m[1].toLowerCase()] || null;
+}
+
+module.exports = { labelsForIssueBody, priorityForIssueBody, splitSections };

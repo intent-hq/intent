@@ -1,17 +1,31 @@
 name: Issue triage
 
 # Pass 1 of the triage pipeline: deterministic normalization. Template
-# fields become labels (component checkboxes, severity dropdown, agent-filed
-# checkbox) and `needs-triage` marks the untriaged queue on open. The parser
-# only ever ADDS labels — it never removes any — so re-runs are idempotent
-# and this job never fights pass 2 or human re-classification.
+# fields become labels (component checkboxes, agent-filed checkbox), the
+# severity dropdown fills the issue's Priority FIELD (Urgent / High /
+# Medium / Low — formerly the P0–P3 priority labels; the parser still
+# accepts the old P0–P3 option tokens), and `needs-triage` marks the
+# untriaged queue on open. The parser only ever ADDS labels — it never
+# removes any — so re-runs are idempotent and this job never fights pass 2
+# or human re-classification.
 #
 # Add-only tradeoffs (accepted for pass 1):
 #   - A label the CURRENT body still derives is re-added on the next
 #     `edited` event, so removing such a label by hand does not stick; to
 #     make a correction stick, fix the body's checkbox/dropdown itself.
-#   - Editing the severity dropdown accumulates priority labels (P2 -> P0
-#     leaves both); the stale one is retired by pass 2 or a human.
+#   - Same for the Priority field: the fill is body-derived and fill-only
+#     (an existing value is respected, an EMPTY one is not), so a Priority
+#     cleared by hand is re-filled from the Severity dropdown on the next
+#     `edited` event or author reply; set a different value instead of
+#     clearing it, or change the dropdown.
+#
+# Priority field write: only when the field is EMPTY — an existing value
+# (human-set, or set by an earlier run) is never overwritten, so editing the
+# severity dropdown later does not move the field. Field and option ids are
+# resolved at runtime from `repository.issueFields` (same convention as
+# issue Types, never hardcoded) and written via GraphQL
+# `setIssueFieldValue` with the job's `github.token`. Fail-soft: any
+# lookup/write error is a warning and the job stays green.
 #
 # `needs-triage` is added only on `opened` (or an explicit
 # `apply_needs_triage` dispatch), never re-added on `edited`/`reopened`
@@ -29,13 +43,25 @@ name: Issue triage
 # issue removes the label too (only when the marker shows we applied it).
 #
 # Pass 2 — agentic triage (`agentic-triage` job): on `opened` only, after
-# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates,
-# component/type labels when pass 1 derived none, and a priority; it posts
-# one marker-idempotent summary comment and retires `needs-triage`.
-# Fail-soft: continue-on-error, and skipped with a warning when the
+# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates and
+# component/type labels when pass 1 derived none, and fills the Priority
+# (Urgent / High / Medium / Low, security escalates to Urgent) and Effort
+# (Low / Medium / High) issue FIELDS when they are empty; it posts one
+# marker-idempotent summary comment and retires `needs-triage`.
+# It also fills the issue Type field (Bug / Feature / Task) when the issue
+# has none — from the effective type label (bug -> Bug, enhancement ->
+# Feature, question -> Task), Type IDs resolved at runtime from
+# `repository.issueTypes`. Template-filed issues already carry a Type
+# (`type:` in .github/ISSUE_TEMPLATE/*.yml), so this mostly covers blank
+# issues; an existing Type or field value is never overwritten. The Type
+# and field writes use the job's `github.token` (`issues: write`) via
+# GraphQL `updateIssue` / `setIssueFieldValue` and are guarded: a failure
+# only logs a warning and the rest of the pass completes. Fail-soft:
+# continue-on-error, and skipped with a warning when the
 # AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it only
-# adds labels/comments, never closes or edits anything. Logic + local
-# dry-run CLI: .github/scripts/issue-triage/agentic-triage.js.
+# adds labels/comments and fills an empty Type / Priority / Effort, never
+# closes or edits anything. Logic + local dry-run CLI:
+# .github/scripts/issue-triage/agentic-triage.js.
 
 on:
   issues:
@@ -44,7 +70,8 @@ on:
   issue_comment:
     types: [created]
   # Manual runs double as a dry-run mode: they print the intended label
-  # operations without writing unless dry_run is unset.
+  # operations and the Priority field write without applying them unless
+  # dry_run is unset.
   workflow_dispatch:
     inputs:
       issue_number:
@@ -52,7 +79,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: Print intended label operations without applying them
+        description: Print intended label/field/Type operations without applying them
         type: boolean
         default: true
       apply_needs_triage:
@@ -77,7 +104,7 @@ jobs:
         with:
           submodules: false
 
-      - name: Derive and apply labels from template fields
+      - name: Derive and apply labels and Priority from template fields
         uses: actions/github-script@v7
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
@@ -86,7 +113,7 @@ jobs:
         with:
           script: |
             const path = require('path');
-            const { labelsForIssueBody } = require(
+            const { labelsForIssueBody, priorityForIssueBody } = require(
               path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/issue-triage/parse-issue.js')
             );
 
@@ -111,6 +138,7 @@ jobs:
             if (action === 'opened' || process.env.APPLY_NEEDS_TRIAGE === 'true') {
               derived.push('needs-triage');
             }
+            const priority = priorityForIssueBody(issue.body || '');
 
             const current = new Set(
               issue.labels.map((l) => (typeof l === 'string' ? l : l.name))
@@ -118,24 +146,66 @@ jobs:
             const toAdd = [...new Set(derived)].filter((l) => !current.has(l));
 
             core.info(`issue #${issueNumber} (${action})`);
-            core.info(`derived from body: [${derived.join(', ')}]`);
+            core.info(`derived from body: [${derived.join(', ')}]; Priority field: ${priority || 'none'}`);
             core.info(`already present:   [${[...current].join(', ')}]`);
 
             if (toAdd.length === 0) {
               core.info('No labels to add.');
-              return;
-            }
-            if (dryRun) {
+            } else if (dryRun) {
               core.notice(`[dry-run] Would add labels to #${issueNumber}: ${toAdd.join(', ')}`);
-              return;
+            } else {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: toAdd,
+              });
+              core.info(`Added labels: ${toAdd.join(', ')}`);
             }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              labels: toAdd,
-            });
-            core.info(`Added labels: ${toAdd.join(', ')}`);
+
+            // Priority field: fill only when empty; ids resolved at runtime;
+            // fail-soft (warning) so a token that cannot set fields never
+            // fails pass 1.
+            if (!priority) return;
+            try {
+              const { repository } = await github.graphql(
+                `query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    issueFields(first: 50) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } }
+                    issue(number: $number) {
+                      id
+                      issueFieldValues(first: 50) { nodes { ... on IssueFieldSingleSelectValue { value field { ... on IssueFieldSingleSelect { name } } } } }
+                    }
+                  }
+                }`,
+                { owner: context.repo.owner, name: context.repo.repo, number: issueNumber }
+              );
+              const field = (repository.issueFields.nodes || []).find((f) => f && f.name === 'Priority');
+              if (!field) throw new Error('no single-select "Priority" issue field on the repository');
+              const existing = (repository.issue.issueFieldValues.nodes || [])
+                .find((v) => v && v.field && v.field.name === 'Priority');
+              if (existing && existing.value) {
+                core.info(`Priority already set (${existing.value}); leaving it alone.`);
+                return;
+              }
+              const option = (field.options || []).find((o) => o.name === priority);
+              if (!option) throw new Error(`Priority field has no "${priority}" option`);
+              if (dryRun) {
+                core.notice(`[dry-run] Would set Priority = ${priority} on #${issueNumber}`);
+                return;
+              }
+              await github.graphql(
+                `mutation($issueId: ID!, $fieldId: ID!, $optionId: ID!) {
+                  setIssueFieldValue(input: { issueId: $issueId, issueFields: [{ fieldId: $fieldId, singleSelectOptionId: $optionId }] }) {
+                    clientMutationId
+                  }
+                }`,
+                { issueId: repository.issue.id, fieldId: field.id, optionId: option.id }
+              );
+              core.info(`Set Priority = ${priority}.`);
+            } catch (e) {
+              core.warning(`Could not set Priority field on #${issueNumber} (${e.message}); continuing.`);
+            }
 
       - name: Needs-info completeness check
         uses: actions/github-script@v7
@@ -243,8 +313,8 @@ jobs:
             core.info('Posted the nudge comment.');
 
   # Author reply on a needs-info issue: remove the label and re-run the
-  # pass-1 label derivation on the current body. Non-author comments (and
-  # our own marker-carrying nudge) change nothing.
+  # pass-1 label + Priority derivation on the current body. Non-author
+  # comments (and our own marker-carrying nudge) change nothing.
   needs-info-reply:
     if: github.event_name == 'issue_comment' && !github.event.issue.pull_request
     runs-on: ubuntu-latest
@@ -259,7 +329,7 @@ jobs:
           script: |
             const path = require('path');
             const scriptsDir = path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/issue-triage');
-            const { labelsForIssueBody } = require(path.join(scriptsDir, 'parse-issue.js'));
+            const { labelsForIssueBody, priorityForIssueBody } = require(path.join(scriptsDir, 'parse-issue.js'));
             const needsInfo = require(path.join(scriptsDir, 'needs-info.js'));
 
             const issueNumber = context.payload.issue.number;
@@ -301,19 +371,60 @@ jobs:
             // Re-run the pass-1 parse on the current body (add-only, and
             // never re-adds needs-triage or needs-info).
             const derived = labelsForIssueBody(fresh.body || '');
+            const priority = priorityForIssueBody(fresh.body || '');
             const current = new Set(
               fresh.labels.map((l) => (typeof l === 'string' ? l : l.name))
             );
             const toAdd = [...new Set(derived)].filter((l) => !current.has(l));
-            core.info(`pass-1 re-run derived: [${derived.join(', ')}]; to add: [${toAdd.join(', ')}]`);
-            if (toAdd.length === 0) return;
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              labels: toAdd,
-            });
-            core.info(`Added labels: ${toAdd.join(', ')}`);
+            core.info(`pass-1 re-run derived: [${derived.join(', ')}]; to add: [${toAdd.join(', ')}]; Priority field: ${priority || 'none'}`);
+            if (toAdd.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: toAdd,
+              });
+              core.info(`Added labels: ${toAdd.join(', ')}`);
+            }
+
+            // Priority field re-run: same fill-only-when-empty, runtime-id,
+            // fail-soft contract as the triage job's step.
+            if (!priority) return;
+            try {
+              const { repository } = await github.graphql(
+                `query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    issueFields(first: 50) { nodes { ... on IssueFieldSingleSelect { id name options { id name } } } }
+                    issue(number: $number) {
+                      id
+                      issueFieldValues(first: 50) { nodes { ... on IssueFieldSingleSelectValue { value field { ... on IssueFieldSingleSelect { name } } } } }
+                    }
+                  }
+                }`,
+                { owner: context.repo.owner, name: context.repo.repo, number: issueNumber }
+              );
+              const field = (repository.issueFields.nodes || []).find((f) => f && f.name === 'Priority');
+              if (!field) throw new Error('no single-select "Priority" issue field on the repository');
+              const existing = (repository.issue.issueFieldValues.nodes || [])
+                .find((v) => v && v.field && v.field.name === 'Priority');
+              if (existing && existing.value) {
+                core.info(`Priority already set (${existing.value}); leaving it alone.`);
+                return;
+              }
+              const option = (field.options || []).find((o) => o.name === priority);
+              if (!option) throw new Error(`Priority field has no "${priority}" option`);
+              await github.graphql(
+                `mutation($issueId: ID!, $fieldId: ID!, $optionId: ID!) {
+                  setIssueFieldValue(input: { issueId: $issueId, issueFields: [{ fieldId: $fieldId, singleSelectOptionId: $optionId }] }) {
+                    clientMutationId
+                  }
+                }`,
+                { issueId: repository.issue.id, fieldId: field.id, optionId: option.id }
+              );
+              core.info(`Set Priority = ${priority}.`);
+            } catch (e) {
+              core.warning(`Could not set Priority field on #${issueNumber} (${e.message}); continuing.`);
+            }
 
   # Pass 2 — agentic triage. Runs once per NEW issue, after the
   # deterministic pass so its label gating sees pass-1 output; also on
@@ -323,9 +434,17 @@ jobs:
   # end to end: the whole job is continue-on-error (an LLM hiccup never
   # marks the run failed), and a missing AUGMENT_SESSION_AUTH secret skips
   # it with a warning (same convention as MONOREPO_ISSUES_TOKEN /
-  # SUBMODULE_BUMP_TOKEN elsewhere). The issue number is the only event
-  # data that reaches the shell — the script fetches title/body itself and
-  # passes them around as argv/stdin data, never shell-interpolated.
+  # SUBMODULE_BUMP_TOKEN elsewhere). The issue Type write (GraphQL
+  # `updateIssue` with `issueTypeId`, repository-scoped `issueTypes`
+  # lookup) and the Priority / Effort field writes (GraphQL
+  # `setIssueFieldValue`, field and option ids from the repository-scoped
+  # `issueFields` lookup) need only the job's `issues: write` on
+  # `github.token`; the script guards every lookup and write so a
+  # permission error degrades to a warning, and the field writes are
+  # fill-only (re-read right before the mutation, an already-filled field
+  # is dropped from the plan). The issue number is the only event data that
+  # reaches the shell — the script fetches title/body itself and passes
+  # them around as argv/stdin data, never shell-interpolated.
   agentic-triage:
     needs: triage
     if: >-

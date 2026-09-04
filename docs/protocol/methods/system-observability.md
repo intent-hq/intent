@@ -25,7 +25,8 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
 `running: true` and the other fields are present:
 
 - `repoId` — full HF repo id currently served (or being started), e.g.
-  `"unsloth/gemma-3-27b-it-GGUF"` (the compound model id is `unsloth:<repoId>`, §5.30).
+  `"unsloth/gemma-3-27b-it-GGUF"` (on the wire the pair is provider `unsloth` plus the bare
+  `<repoId>` as the model id, §5.30).
 - `port` — port the managed server listens on (default `8888`); `pid` — OS pid of the server
   child (`null` when unknown).
 - `uptimeSecs` — seconds since the server child was spawned.

@@ -25,6 +25,11 @@ INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
+# cargo install may place subcommands outside PATH when cargo itself comes from
+# a distro package. Make every recipe discover the effective install bin dir.
+CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
+export PATH := $(CARGO_BIN_DIR):$(PATH)
+
 # `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
 # any that are missing. The FE and iOS submodules are heavy and not needed for
 # backend-only workflows, so those workflows use the narrower per-submodule
@@ -103,7 +108,7 @@ docs-check: ## Check documented development targets, knobs, and remote-host guid
 # days in this worktree's intentd, and `sweep-all` does the same across every
 # sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
 # live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
-# (`cargo install cargo-sweep`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
+# (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
 # or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
@@ -121,6 +126,12 @@ SWEEP_DAYS ?= 3
 TEST_THREADS ?= -2
 BUILD_JOBS ?= -2
 
+# Resumable local test runs are opt-in. Records are keyed by the complete
+# monorepo + intentd worktree state and kept outside the checkout.
+RESUME ?= 0
+GATE_FORCE ?= 0
+GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
+
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
 # OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
 # app; default to 16 GB. dist-mac exports this via NODE_OPTIONS so every child
@@ -130,7 +141,7 @@ FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
-	build build-intentd build-sidecar test test-intentd coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -291,7 +302,10 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 
 check: fmt clippy ## fmt + clippy
 
-test: test-intentd ## Run the Rust test suite (cargo nextest, CPUs-2 by default; override TEST_THREADS/BUILD_JOBS)
+gate: check ## Run all local Rust gates (fmt, clippy, then nextest)
+	@$(MAKE) --no-print-directory test
+
+test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -305,7 +319,14 @@ test-intentd: ensure-intentd-submodule
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo nextest run --workspace --build-jobs $(BUILD_JOBS) --test-threads $(TEST_THREADS)
+	@python3 scripts/resumable_nextest.py \
+		--repo-root "$(CURDIR)" \
+		--intentd-dir "$(INTENTD_DIR)" \
+		--cache-dir "$(GATE_CACHE_DIR)" \
+		--resume "$(RESUME)" \
+		--force "$(GATE_FORCE)" \
+		--build-jobs "$(BUILD_JOBS)" \
+		--test-threads "$(TEST_THREADS)"
 
 # Local reproduction of the CI coverage jobs (packages/intentd
 # .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
@@ -337,7 +358,7 @@ clean-dev: ## Wipe the dev-seat state dir (.dev/)
 # would be overkill, so it short-circuits with a friendly no-op instead.
 sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
 	@if [ -d "$(INTENTD_DIR)/target" ]; then \
@@ -348,7 +369,7 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
 	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR) $(WORKSPACES_DIR)/*/intent/$(INTENTD_DIR); do \
