@@ -718,7 +718,8 @@ are persisted.
   parent's cross-workspace delegates count too. Other fields are `numQuestionsAsked`
   (structured questions still pending presentation/answer, §5.5 "Pending questions"),
   `prMonitors` (the caller's active PR monitors as labels — see below),
-  `prs` (the workspace's tracked open PRs grouped by state — see below), and
+  `prs` (the workspace's tracked open PRs grouped by state — see below),
+  `tasks` (the workspace's task-note counts per non-terminal status — see below), and
   `pendingAttention`
   (`"blocker"` / `"discussion"` when the caller has an unresolved attention request, §5.5
   attention-request flow). Every field except `time` is **omitted when zero/absent** (never
@@ -750,6 +751,20 @@ are persisted.
   Empty groups are omitted, and the whole field is omitted when no open PR survives — so a
   non-empty `prs` alone makes an otherwise-trivial snapshot non-trivial and forces the
   per-turn injection line below.
+- **`tasks` — workspace task-note counts per status** — `tasks?: { [status]: count }`, an
+  object keyed by the wire `snake_case` task status string (`not_started`, `waiting`,
+  `discussion_needed`, `blocked`, `in_progress`, `review_required`) mapping to the number of
+  task notes in that status, e.g. `{"in_progress":2,"review_required":1}`. Scope is
+  **every task note in the caller's workspace** (any parent, archived included — the same
+  workspace-wide population as `task.list`'s `tasks` membership, NOT the spec-linked set
+  behind the §5.1 `taskStats` card aggregate), not only the caller's own or spec-linked
+  tasks. The terminal statuses `complete` and `cancelled` are **never listed**,
+  statuses with a zero count are never listed, and the whole field is omitted when nothing
+  qualifies — so a non-empty `tasks` alone makes an otherwise-trivial snapshot non-trivial
+  and forces the per-turn injection line below. Backed by exactly one aggregate statement
+  over the task-status column (no note bodies are read — RPC cost contract) and
+  best-effort: a store failure reads as empty (field omitted) rather than failing the
+  snapshot build.
 - **Per-turn injection** — when not skipped, `build_turn_prompt` prefixes the outbound prompt
   with the single line `current ws.agent.snapshot() => {json}` (the same JSON object,
   serialized on one line), followed by a blank line. It is the outermost **recurring** per-turn
@@ -758,12 +773,14 @@ are persisted.
   (specialist and non-specialist, unlike the role reminder), and is **never persisted**: the
   transcript's user row keeps the undecorated content.
 - **Skipped when trivial** — when every field other than `time` would be omitted (all counts
-  zero, no active PR monitors, no tracked open PRs, no pending attention) the whole line is
-  dropped, so `time` alone never forces an injection and an idle agent's prompt stays
-  byte-identical to pre-feature output. Building the snapshot **fails open**: a store error
-  yields no line rather than failing the turn (and `prMonitors` / `prs` are themselves
-  best-effort — a monitor store read failure reads `prMonitors` as empty, and a workspace or
-  git-root lookup failure skips that `prs` pool, rather than failing the build).
+  zero, no active PR monitors, no tracked open PRs, no non-terminal task notes, no pending
+  attention) the whole line is dropped, so `time` alone never forces an injection and an
+  idle agent's prompt stays byte-identical to pre-feature output. Building the snapshot
+  **fails open**: a store error yields no line rather than failing the turn (and
+  `prMonitors` / `prs` / `tasks` are themselves best-effort — a monitor store read failure
+  reads `prMonitors` as empty, a workspace or git-root lookup failure skips that `prs`
+  pool, and a task-count aggregate failure reads `tasks` as empty, rather than failing the
+  build).
 - **Toggle** — the injection (and only the injection) is gated by
   `agentFeatures.stateSnapshot` (§5.12), resolved from the session's **captured harness
   feature snapshot** like every other toggle
