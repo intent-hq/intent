@@ -8,12 +8,14 @@ I analyzed the issue against the candidates. Here is my triage assessment:
   ],
   "component": "intentd",
   "type": "bug",
-  "priority": "P1",
+  "priority": "High",
+  "effort": "Medium",
   "security": false,
   "reasons": {
     "component": "The stack trace is in intentd Rust code",
     "type": "Reports a panic, clearly a defect",
-    "priority": "Daemon crash on startup but a restart recovers"
+    "priority": "Daemon crash on startup but a restart recovers",
+    "effort": "Touches one crate and needs a regression test"
   }
 }
 ```
