@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `9.7`
+**Protocol Version:** `9.8`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -25,6 +25,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | Subsection | File |
 |------------|------|
 | §5.1 `workspace.*` | [methods/workspace.md](./methods/workspace.md) |
+| §5.1.1 `workspaceDraft.*` | [methods/workspace.md](./methods/workspace.md) |
 | §5.2 `note.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.2.1 `note.lineAttribution.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.3 `comment.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |

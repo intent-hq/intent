@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.1 `workspace.*` · §5.23 Usage metrics · §5.25 Worktree setup scripts.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.1 `workspace.*` · §5.1.1 `workspaceDraft.*` · §5.23 Usage metrics · §5.25 Worktree setup scripts.
 
 ### 5.1 `workspace.*`
 
@@ -29,6 +29,37 @@
 | workspace.export.read *(v6.11)* | exportId (req), seq (req, u64) — no workspaceId (the export session, addressed by `exportId`, already binds the workspace) | { exportId, seq, totalChunks, data } — serves one seq-numbered chunk of the sealed archive as base64. **Idempotent**: any seq may be re-requested in any order (same seq, same bytes). -32602 while the session is still building (wait for `workspace:transfer:ready`), on an out-of-range seq (the error names the chunk count), or on an unknown exportId |
 | workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
 | workspace.export.abort *(v6.11)* | exportId (req) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
+
+### 5.1.1 `workspaceDraft.*` *(v9.8)*
+
+Daemon-owned workspace drafts preserve new-workspace form state across client and daemon
+restarts. Draft methods are daemon-global: they take no `workspaceId`, and draft events
+use the empty workspace-id sentinel (§6.5).
+
+| Method | Params | Result |
+| --- | --- | --- |
+| workspaceDraft.create | ownerClientId?, title?, intentText?, source?, contextLinks?, attachments?, config? | `WorkspaceDraft` — server assigns `id`, `operationKey`, timestamps, revision `0`, and phase `editing`; omitted collection/object fields default empty |
+| workspaceDraft.get | id (req) | `WorkspaceDraft` — `-32602` when absent |
+| workspaceDraft.list | none | `WorkspaceDraft[]` — every non-promoted draft, oldest first; includes `editing`, `promoting`, and `failed` rows |
+| workspaceDraft.update | id (req), expectedRevision (req, u64), patch (req, object) | updated `WorkspaceDraft`; patch accepts `title`, `intentText`, `source`, `contextLinks`, `attachments`, and `config` only. `title`/`source` accept explicit `null` to clear; omitted fields are untouched. A stale revision returns `-32009` with `error.data.current` containing the authoritative draft |
+| workspaceDraft.promote | id (req), expectedRevision (req, u64), initialAgent? | `{ draft, workspace, initialAgent? }` — promotes through the ordinary idempotent `workspace.create` pipeline; `initialAgent.agentId` is forbidden because IDs are server-assigned. Replays return the original workspace/agent rather than creating duplicates |
+| workspaceDraft.markDelivery | id (req), delivery (req): `{ state, messageId?, error? }` | updated `WorkspaceDraft` — replaces the durable initial-message reconciliation state and increments the revision |
+| workspaceDraft.delete | id (req) | `{ deleted: boolean }` — idempotent; `false` when no row existed |
+
+`WorkspaceDraft` is `{ id, ownerClientId, revision, phase, title?, intentText, source?,
+contextLinks, attachments, config, operationKey, promotedWorkspaceId?, initialAgentId?,
+delivery, lastError?, createdAt, updatedAt }`. `phase` is `editing | promoting | promoted |
+failed`. `delivery.state` is `none | pending | sent | unknown`.
+
+`source` is one of `{ kind: "local", path, branch?, isolation }` (where `isolation` is
+`worktree | in-place`), `{ kind: "github", url, owner, name, branch? }`, or
+`{ kind: "newFolder", parentPath, name }`. During promotion these map respectively to an
+existing local checkout, GitHub-backed creation, or an initialized in-place folder.
+`config.setupScript`, `config.isRemote`, and `config.model` map to the corresponding
+`workspace.create` inputs; `contextLinks` are carried through. A promotion failure retains
+the draft as `failed`, stores `lastError`, and permits retry. Promotion marks the draft
+`promoting` before creation and uses the immutable `operationKey` as the create idempotency
+key, making retry/restart recovery exactly-once from the client's perspective.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
@@ -428,10 +459,22 @@ remaining churn. A `workspace.open` during the setup window likewise supersedes 
 deferral and starts the watchers immediately (the user is in the workspace), so a
 still-running script's remaining churn surfaces from that point on.
 
+The optional persisted `Workspace.setupResult` field *(v9.8)* reconciles setup after a
+reconnect or daemon restart. Its shape is `{ state, exitCode?, startedAt?, finishedAt?,
+error? }`, where `state` is `none | running | succeeded | failed | unknown`. It is written
+as `running` immediately before the setup spawn attempt and replaced with `succeeded` or
+`failed` on the terminal path; a non-zero exit stores both `exitCode` and a synthesized
+`error`, while pre-spawn failures store `error` without an exit code. The field is omitted
+when no setup result has been recorded, preserving older workspace rows and no-script
+creates byte-for-byte. Reads are O(1): the value is stored with the workspace row rather
+than reconstructed from terminals or events.
+
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon minimally creates the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
-delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+delivers the resolved `prompt`. A blank/whitespace-only or omitted prompt still creates
+and returns the idle initial-agent session; it starts no provider turn and persists no
+initial message. The first later send starts that session normally.
 An omitted `initialAgent.model` resolves through the same daemon-side creation-time
 default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution");
 a supplied one must be a **bare** model id — a compound `provider:model` value is rejected
