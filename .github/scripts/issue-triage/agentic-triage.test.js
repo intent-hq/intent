@@ -1,6 +1,7 @@
 // Fixture-driven tests for the pass-2 agentic triage logic: model-output
 // parsing, the label allowlist, action gating, issue Type gating, issue
-// field (Priority / Effort) gating, and comment building.
+// field (Priority / Effort) gating, the fields-only backfill planning, and
+// comment building.
 // Run locally with:  node --test .github/scripts/issue-triage/agentic-triage.test.js
 
 'use strict';
@@ -17,10 +18,13 @@ const {
   buildPrompt,
   buildSummaryComment,
   extractSearchQueries,
+  fieldsOnlyNeedsModel,
   parseTriageResponse,
   planActions,
+  planFieldsOnly,
   planIssueFields,
   planIssueType,
+  priorityFromLabels,
   sanitizeText,
 } = require('./agentic-triage.js');
 
@@ -84,7 +88,7 @@ test('parse: invented labels and malformed fields are dropped, never passed thro
   assert.deepStrictEqual(r.duplicates, []);
   assert.strictEqual(r.component, null);
   assert.strictEqual(r.type, null);
-  // Legacy P0–P3 tokens are not in the prompt vocabulary any more.
+  // "P5" is neither a field option nor a legacy P0–P3 token.
   assert.strictEqual(r.priority, null);
   assert.strictEqual(r.effort, null);
   assert.strictEqual(r.security, false);
@@ -100,7 +104,11 @@ test('parse: priority and effort are clamped to the field vocabularies', () => {
   for (const e of ['Low', 'Medium', 'High']) {
     assert.strictEqual(parseTriageResponse(`{"effort":"${e}"}`).effort, e);
   }
-  for (const bad of ['P0', 'P1', 'urgent', 'high', 'Critical', 'Huge', '', 1, null]) {
+  // Legacy P0–P3 tokens (any case) map onto the field vocabulary.
+  for (const [token, name] of [['P0', 'Urgent'], ['P1', 'High'], ['p2', 'Medium'], ['P3', 'Low']]) {
+    assert.strictEqual(parseTriageResponse(`{"priority":"${token}"}`).priority, name);
+  }
+  for (const bad of ['P4', 'P10', 'urgent', 'high', 'Critical', 'Huge', '', 1, null]) {
     const r = parseTriageResponse(JSON.stringify({ priority: bad, effort: bad }));
     assert.strictEqual(r.priority, null, `priority ${JSON.stringify(bad)}`);
     assert.strictEqual(r.effort, null, `effort ${JSON.stringify(bad)}`);
@@ -454,6 +462,154 @@ test('fields: security escalates Priority to Urgent regardless of the model pick
   );
 });
 
+test('fields-only: a priority label decides Priority deterministically; Effort comes from the model', () => {
+  assert.deepStrictEqual(priorityFromLabels(['bug', 'priority:P2']), {
+    label: 'priority:P2',
+    name: 'Medium',
+  });
+  assert.strictEqual(priorityFromLabels(['bug', 'priority:P9']), null);
+  assert.strictEqual(priorityFromLabels([]), null);
+  assert.strictEqual(priorityFromLabels(undefined), null);
+
+  // The model says High (and flags security); the label still wins.
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  response.security = true;
+  const plan = planFieldsOnly({
+    response,
+    currentLabels: ['needs-triage', 'bug', 'priority:P3'],
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.deepStrictEqual(plan, {
+    issueFields: {
+      priority: {
+        fieldId: 'IFSS_priority',
+        optionId: 'IFSSO_low',
+        name: 'Low',
+        reason: 'from the `priority:P3` label',
+      },
+      effort: {
+        fieldId: 'IFSS_effort',
+        optionId: 'IFSSO_e_medium',
+        name: 'Medium',
+        reason: 'Touches one crate and needs a regression test',
+      },
+    },
+    prioritySource: 'label',
+  });
+  for (const [label, name] of Object.entries({ P0: 'Urgent', P1: 'High', P2: 'Medium', P3: 'Low' })) {
+    assert.strictEqual(
+      planFieldsOnly({
+        response,
+        currentLabels: [`priority:${label}`],
+        currentFieldValues: {},
+        issueFields: ISSUE_FIELDS,
+      }).issueFields.priority.name,
+      name
+    );
+  }
+
+  // Labeled issue, Effort already set: no model needed, the label alone
+  // plans Priority (response null).
+  assert.strictEqual(
+    fieldsOnlyNeedsModel({ currentLabels: ['priority:P2'], currentFieldValues: { Effort: 'Low' } }),
+    false
+  );
+  assert.deepStrictEqual(
+    planFieldsOnly({
+      response: null,
+      currentLabels: ['priority:P2'],
+      currentFieldValues: { Effort: 'Low' },
+      issueFields: ISSUE_FIELDS,
+    }),
+    {
+      issueFields: {
+        priority: {
+          fieldId: 'IFSS_priority',
+          optionId: 'IFSSO_medium',
+          name: 'Medium',
+          reason: 'from the `priority:P2` label',
+        },
+      },
+      prioritySource: 'label',
+    }
+  );
+});
+
+test('fields-only: an unlabeled issue takes the model estimate for both fields', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  assert.strictEqual(
+    fieldsOnlyNeedsModel({ currentLabels: ['bug'], currentFieldValues: {} }),
+    true
+  );
+  const plan = planFieldsOnly({
+    response,
+    currentLabels: ['bug', 'component:intentd'],
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(plan.prioritySource, 'model');
+  assert.strictEqual(plan.issueFields.priority.name, 'High');
+  assert.strictEqual(plan.issueFields.effort.name, 'Medium');
+  // Security escalation still applies when no label decides Priority.
+  response.security = true;
+  assert.strictEqual(
+    planFieldsOnly({ response, currentLabels: [], currentFieldValues: {}, issueFields: ISSUE_FIELDS })
+      .issueFields.priority.name,
+    'Urgent'
+  );
+  // The plan carries fields only: no labels, no comment, no needs-triage change.
+  assert.deepStrictEqual(Object.keys(plan).sort(), ['issueFields', 'prioritySource']);
+});
+
+test('fields-only: existing values are never overwritten and skip the model when both are set', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  // Both set (labeled or not): nothing planned, no model call.
+  for (const labels of [[], ['priority:P0']]) {
+    assert.strictEqual(
+      fieldsOnlyNeedsModel({
+        currentLabels: labels,
+        currentFieldValues: { Priority: 'Low', Effort: 'High' },
+      }),
+      false
+    );
+    assert.deepStrictEqual(
+      planFieldsOnly({
+        response: null,
+        currentLabels: labels,
+        currentFieldValues: { Priority: 'Low', Effort: 'High' },
+        issueFields: ISSUE_FIELDS,
+      }),
+      { issueFields: {}, prioritySource: null }
+    );
+  }
+  // Priority set (the field disagrees with a stale label): the field wins,
+  // only Effort is planned — and the model is needed for it.
+  assert.strictEqual(
+    fieldsOnlyNeedsModel({ currentLabels: ['priority:P3'], currentFieldValues: { Priority: 'High' } }),
+    true
+  );
+  const plan = planFieldsOnly({
+    response,
+    currentLabels: ['priority:P3'],
+    currentFieldValues: { Priority: 'High' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(plan.issueFields.priority, undefined);
+  assert.strictEqual(plan.issueFields.effort.name, 'Medium');
+  assert.strictEqual(plan.prioritySource, null);
+  // Model could not estimate Effort: nothing planned for it.
+  assert.deepStrictEqual(
+    planFieldsOnly({
+      response: parseTriageResponse('{"priority": "Low", "effort": null}'),
+      currentLabels: [],
+      currentFieldValues: { Priority: 'High' },
+      issueFields: ISSUE_FIELDS,
+    }),
+    { issueFields: {}, prioritySource: null }
+  );
+});
+
 test('plan: needs-info keeps needs-triage in place', () => {
   const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
   const plan = planActions({
@@ -595,4 +751,16 @@ test('prompt: embeds issue and candidates as data with the untrusted-data rule',
   assert.ok(prompt.includes('"effort": "<short>"'));
   assert.ok(prompt.includes('effort rubric'));
   assert.ok(!/\bP[0-3]\b/.test(prompt), 'no legacy P0–P3 tokens in the prompt');
+  assert.ok(prompt.includes('usually take no priority (null)'));
+
+  // The fields-only (backfill) variant asks for a Priority on every issue.
+  const backfill = buildPrompt(
+    { number: 7, title: 'Panel focus lost', body: 'body text', labels: [] },
+    [],
+    { fieldsOnly: true }
+  );
+  assert.ok(backfill.includes('Always pick a priority'));
+  assert.ok(!backfill.includes('usually take no priority (null)'));
+  assert.ok(backfill.includes('(none found)'));
+  assert.ok(!/\bP[0-3]\b/.test(backfill), 'no legacy P0–P3 tokens in the prompt');
 });

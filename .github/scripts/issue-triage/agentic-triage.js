@@ -24,9 +24,16 @@
 // inside it, and everything the model returns is clamped to the fixed
 // label / field vocabulary and sanitized before it reaches a public comment.
 //
-// Usage: agentic-triage.js [--dry-run] <issue-number>
+// Usage: agentic-triage.js [--dry-run] [--fields-only] <issue-number>
 //   --dry-run prints the full plan (labels + Type + Priority/Effort fields
 //   + comment) without writing.
+//   --fields-only is the backfill mode: it ONLY fills an empty Priority /
+//   Effort field — no labels, no comment, no needs-triage change, no
+//   duplicate search. Priority comes from an existing `priority:P0–P3`
+//   label when present (deterministic, no model call), else from the
+//   model; Effort always from the model. An issue whose both fields are
+//   already set is skipped without calling the model, so re-runs are
+//   idempotent. It prints one `fields-only result:` line per issue.
 // Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh; auggie
 // auth via AUGMENT_SESSION_AUTH (CI) or an interactive login (local).
 //
@@ -60,8 +67,9 @@ const ISSUE_TYPE_BY_LABEL = { bug: 'Bug', enhancement: 'Feature', question: 'Tas
 // Org-level single-select issue fields (the sidebar "Fields" section, not a
 // Projects v2 board). Field and option IDs are resolved at runtime from
 // `repository.issueFields` by name, never hardcoded. The model emits the
-// Priority field vocabulary directly; the planner also maps the legacy
-// P0–P3 tokens so either response vocabulary plans the same field write.
+// Priority field vocabulary directly; parseTriageResponse also maps the
+// legacy P0–P3 tokens onto it (and priorityFromLabels maps the
+// `priority:P0–P3` labels) so either vocabulary plans the same field write.
 const PRIORITY_FIELD = 'Priority';
 const EFFORT_FIELD = 'Effort';
 const PRIORITY_OPTION_BY_LABEL = { P0: 'Urgent', P1: 'High', P2: 'Medium', P3: 'Low' };
@@ -149,8 +157,11 @@ function sanitizeText(text, max = 240) {
 }
 
 // The instruction handed to `auggie --print -i`. The issue and candidate
-// text is embedded as clearly delimited untrusted data.
-function buildPrompt(issue, candidates) {
+// text is embedded as clearly delimited untrusted data. In fields-only
+// (backfill) mode the priority rule asks for a value on every issue —
+// feature requests included — because the whole point of that pass is to
+// leave no empty Priority behind.
+function buildPrompt(issue, candidates, { fieldsOnly = false } = {}) {
   const candidateBlock =
     candidates.length > 0
       ? candidates
@@ -190,7 +201,10 @@ function buildPrompt(issue, candidates) {
     '- priority rubric: Urgent = crash, data loss/corruption, or a suspected',
     '  security vulnerability; High = major functionality broken with no',
     '  workaround; Medium = default for ordinary bugs; Low = cosmetic/papercut.',
-    '  Feature requests and questions usually take no priority (null).',
+    fieldsOnly
+      ? '  Always pick a priority: for feature requests and questions use Medium\n' +
+        '  when the request is clearly useful to most users, else Low.'
+      : '  Feature requests and questions usually take no priority (null).',
     '- effort rubric (estimated implementation effort): Low = contained',
     '  change in one component, about half a day or less; Medium = multi-file',
     '  change, needs tests or a small design decision, about 1-2 days; High =',
@@ -257,11 +271,17 @@ function parseTriageResponse(text) {
       });
     }
   }
+  // Legacy P0–P3 tokens (case-insensitive) map onto the field vocabulary
+  // before the clamp, so either response vocabulary yields the same option.
+  const legacy =
+    typeof json.priority === 'string' && /^p[0-3]$/i.test(json.priority)
+      ? PRIORITY_OPTION_BY_LABEL[json.priority.toUpperCase()]
+      : json.priority;
   return {
     duplicates,
     component: COMPONENTS.includes(json.component) ? json.component : null,
     type: TYPES.includes(json.type) ? json.type : null,
-    priority: PRIORITY_OPTIONS.includes(json.priority) ? json.priority : null,
+    priority: PRIORITY_OPTIONS.includes(legacy) ? legacy : null,
     effort: EFFORT_OPTIONS.includes(json.effort) ? json.effort : null,
     security: json.security === true,
     reasons: {
@@ -427,6 +447,57 @@ function planIssueFields({ response, currentFieldValues, issueFields }) {
   return plan;
 }
 
+// The Priority option named by a legacy `priority:P0–P3` label on the
+// issue (P0 → Urgent … P3 → Low) as `{ label, name }`, or null when none is
+// present.
+function priorityFromLabels(labels) {
+  for (const l of labels || []) {
+    const m = /^priority:(P[0-3])$/.exec(l);
+    if (m) return { label: l, name: PRIORITY_OPTION_BY_LABEL[m[1]] };
+  }
+  return null;
+}
+
+// Whether a fields-only (backfill) run has to call the model at all: not
+// when both fields are already set, and not when Effort is set and Priority
+// is either set or decided by a priority label. Everything else needs a
+// model estimate for at least one field.
+function fieldsOnlyNeedsModel({ currentLabels, currentFieldValues }) {
+  const current = currentFieldValues || {};
+  if (!current[EFFORT_FIELD]) return true;
+  return !current[PRIORITY_FIELD] && !priorityFromLabels(currentLabels);
+}
+
+// The fields-only (backfill) plan: ONLY the Priority / Effort fields to
+// fill, nothing else — no labels, no comment, no needs-triage change. Pure,
+// so the gating is unit-testable:
+//   - an existing field value always wins (planIssueFields),
+//   - Priority source order: an existing `priority:*` label (deterministic
+//     — a human or pass 1 chose it, so it also overrides the model's
+//     security escalation) > the model estimate,
+//   - Effort: the model estimate,
+//   - `response` may be null when the model was not called (see
+//     fieldsOnlyNeedsModel) — the label still plans Priority.
+// `prioritySource` reports where a planned Priority came from
+// ('label' | 'model' | null when none is planned) for the run report.
+function planFieldsOnly({ response, currentLabels, currentFieldValues, issueFields }) {
+  const labelPriority = priorityFromLabels(currentLabels);
+  const r = response || {};
+  const effective = labelPriority
+    ? {
+        ...r,
+        security: false,
+        priority: labelPriority.name,
+        reasons: { ...(r.reasons || {}), priority: `from the \`${labelPriority.label}\` label` },
+      }
+    : r;
+  const fields = planIssueFields({ response: effective, currentFieldValues, issueFields });
+  return {
+    issueFields: fields,
+    prioritySource: fields.priority ? (labelPriority ? 'label' : 'model') : null,
+  };
+}
+
 // The one auditable, marker-idempotent summary comment.
 function buildSummaryComment(plan) {
   const lines = ['### Automated triage', ''];
@@ -490,10 +561,13 @@ module.exports = {
   buildPrompt,
   buildSummaryComment,
   extractSearchQueries,
+  fieldsOnlyNeedsModel,
   parseTriageResponse,
   planActions,
+  planFieldsOnly,
   planIssueFields,
   planIssueType,
+  priorityFromLabels,
   sanitizeText,
 };
 
@@ -740,16 +814,101 @@ function runAuggie(instruction) {
   );
 }
 
+// The fields-only (backfill) pass over one issue. Minimal API footprint —
+// no comment read, no duplicate search: one issue read, one context read,
+// at most one model call, and the field write (which re-reads before
+// writing). Exits non-zero when the field list could not be resolved or
+// the model gave no usable answer, so a batch driver can retry the issue;
+// the final `fields-only result:` line is the machine-readable outcome
+// (`existing` = field already set, `label` / `model` = the source of a
+// value written now, `none` = nothing could be planned).
+function runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun }) {
+  const context = fetchIssueContext(repo, issueNumber);
+  if (!context.issueNodeId || context.issueFields.length === 0) {
+    warn(`fields-only: issue fields unavailable for #${issueNumber}; aborting this issue`);
+    process.exit(1);
+  }
+  const current = context.currentFieldValues;
+  console.log(`issue #${issueNumber} labels: [${currentLabels.join(', ')}]`);
+  console.log(
+    `${PRIORITY_FIELD} field: ${current[PRIORITY_FIELD] || 'none'}; ${EFFORT_FIELD} field: ${current[EFFORT_FIELD] || 'none'}`
+  );
+
+  const result = (plan, written) => {
+    const src = (key) => {
+      const fieldName = key === 'priority' ? PRIORITY_FIELD : EFFORT_FIELD;
+      if (current[fieldName]) return `${current[fieldName]} (existing)`;
+      const planned = plan.issueFields[key];
+      if (!planned || !written.has(planned.fieldId)) return 'none';
+      return `${planned.name} (${key === 'priority' ? plan.prioritySource : 'model'})`;
+    };
+    return `fields-only result: #${issueNumber} ${PRIORITY_FIELD}=${src('priority')} ${EFFORT_FIELD}=${src('effort')}`;
+  };
+
+  let response = null;
+  if (fieldsOnlyNeedsModel({ currentLabels, currentFieldValues: current })) {
+    const prompt = buildPrompt(
+      { number: issueNumber, title: issue.title, body: issue.body, labels: currentLabels },
+      [],
+      { fieldsOnly: true }
+    );
+    let output;
+    try {
+      output = runAuggie(prompt);
+    } catch (e) {
+      warn(`auggie invocation failed: ${e.message}`);
+      process.exit(1);
+    }
+    response = parseTriageResponse(output);
+    if (!response) {
+      warn('model output contained no valid JSON triage response');
+      console.error('--- model output ---');
+      console.error(output);
+      process.exit(1);
+    }
+  } else {
+    console.log('no model call needed (fields set or decided by a priority label).');
+  }
+
+  const plan = planFieldsOnly({
+    response,
+    currentLabels,
+    currentFieldValues: current,
+    issueFields: context.issueFields,
+  });
+  for (const [key, fieldName] of [['priority', PRIORITY_FIELD], ['effort', EFFORT_FIELD]]) {
+    const planned = plan.issueFields[key];
+    console.log(
+      `${fieldName} field: ${current[fieldName] || 'none'}` +
+        (planned ? ` → set ${planned.name} — ${planned.reason}` : ' (unchanged)')
+    );
+  }
+  const plannedFields = ['priority', 'effort'].filter((k) => plan.issueFields[k]);
+  if (dryRun) {
+    console.log(result(plan, new Set(plannedFields.map((k) => plan.issueFields[k].fieldId))));
+    console.log('dry-run: nothing written');
+    return;
+  }
+  let written = [];
+  if (plannedFields.length > 0) {
+    written = setIssueFields(context.issueNodeId, plannedFields.map((k) => plan.issueFields[k]));
+    if (written === false) process.exit(1);
+  }
+  console.log(result(plan, new Set(written.map((f) => f.fieldId))));
+}
+
 function main() {
   const args = process.argv.slice(2);
   let dryRun = false;
-  if (args[0] === '--dry-run') {
-    dryRun = true;
+  let fieldsOnly = false;
+  while (args[0] === '--dry-run' || args[0] === '--fields-only') {
+    if (args[0] === '--dry-run') dryRun = true;
+    else fieldsOnly = true;
     args.shift();
   }
   const issueNumber = Number(args[0]);
   if (args.length !== 1 || !Number.isInteger(issueNumber) || issueNumber <= 0) {
-    console.error('usage: agentic-triage.js [--dry-run] <issue-number>');
+    console.error('usage: agentic-triage.js [--dry-run] [--fields-only] <issue-number>');
     process.exit(2);
   }
   const repo = process.env.TRIAGE_REPO || 'intent-hq/intent';
@@ -766,6 +925,11 @@ function main() {
     warn(`issue #${issueNumber} is ${issue.state}; continuing (dry-run only)`);
   }
   const currentLabels = (issue.labels || []).map((l) => l.name);
+
+  if (fieldsOnly) {
+    runFieldsOnly({ repo, issueNumber, issue, currentLabels, dryRun });
+    return;
+  }
 
   // Pass 1 flagged the report as incomplete: skip entirely. An LLM pass
   // over a placeholder body is low-signal, and running it would retire
