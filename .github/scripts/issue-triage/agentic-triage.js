@@ -27,11 +27,12 @@
 // Usage: agentic-triage.js [--dry-run] [--fields-only] <issue-number>
 //   --dry-run prints the full plan (labels + Type + Priority/Effort fields
 //   + comment) without writing.
-//   --fields-only is the backfill mode: it ONLY fills an empty Priority /
-//   Effort field — no labels, no comment, no needs-triage change, no
-//   duplicate search. Priority comes from an existing `priority:P0–P3`
-//   label when present (deterministic, no model call), else from the
-//   model; Effort always from the model. An issue whose both fields are
+//   --fields-only is the backfill mode that migrates issues onto the
+//   Priority / Effort fields: it ONLY fills an empty field — no labels, no
+//   comment, no needs-triage change, no duplicate search. The Priority
+//   field is derived from the retired legacy priority label when the issue
+//   still carries one (deterministic, no model call), else from the model;
+//   the Effort field always from the model. An issue whose both fields are
 //   already set is skipped without calling the model, so re-runs are
 //   idempotent. It prints one `fields-only result:` line per issue.
 // Env: TRIAGE_REPO (default intent-hq/intent); GH_TOKEN for gh; auggie
