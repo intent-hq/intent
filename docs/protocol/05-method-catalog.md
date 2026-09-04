@@ -212,6 +212,23 @@ The `system.status` result additionally reports the daemon's live **file-watch c
 - `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
 - All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
 
+#### `system.status` — file-descriptor fields (additive)
+
+The `system.status` result additionally reports the daemon's own **open file descriptor count** next to the **soft `RLIMIT_NOFILE`** it runs under, so descriptor exhaustion (`EMFILE` on `accept`, SQLite `code: 14` "unable to open database file") is attributable from a debug bundle rather than inferred from its symptoms ([intent-hq/intent#4390](https://github.com/intent-hq/intent/issues/4390)):
+
+```jsonc
+{
+  "fdCount": 312,   // open file descriptors held by the daemon process
+  "fdLimit": 10240  // soft RLIMIT_NOFILE in effect (after the startup raise)
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fdCount` is the size of the daemon's own descriptor table (`/proc/self/fd` on Linux, `/dev/fd` on macOS), sampled by the same ~1s own-process background sampler that serves `cpuPercent` / `memoryBytes` — the status read path never touches the OS. The first sample is taken synchronously before the listeners bind, so a running daemon reports it from the first `system.status` call. It excludes the transient handle the sampler itself holds while reading the table.
+- `fdLimit` is the soft `RLIMIT_NOFILE` the daemon actually runs under: `intentd serve` raises its soft limit to the hard limit at startup (capped at `OPEN_MAX` = 10240 on macOS) and records the value the kernel applied, so this is the ceiling `fdCount` is measured against. It is sampled once at startup and does not change over the daemon's lifetime.
+- The daemon also logs one WARN (`fd_count`, `fd_limit`) when `fdCount` reaches **80 %** of `fdLimit` — repeated at most once a minute while it stays there — and one INFO when it recovers below **60 %**; the band in between is hysteresis. The wire fields carry no threshold state; clients that want a warning compute `fdCount / fdLimit` themselves.
+- Both fields follow the **presence-detection convention** and are **independent**: `fdCount` is **absent** — never `null` or `0` — on platforms without a readable per-process descriptor table (anything other than Linux/macOS), and `fdLimit` is absent where `getrlimit` is unavailable (non-Unix) or failed at startup. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
+
 #### `system.status` — `updateSupported` (additive, v8.7)
 
 The `system.status` result additionally reports whether the daemon can act on `system.requestUpdate` (v8.6, below) — i.e. whether it is **sitter-supervised** — so a client can proactively hide an Update affordance for daemons that cannot self-update instead of failing reactively ([intent-hq/intent#3875](https://github.com/intent-hq/intent/issues/3875), [intent-hq/intentd#1582](https://github.com/intent-hq/intentd/pull/1582)):
