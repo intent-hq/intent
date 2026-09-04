@@ -38,21 +38,24 @@ name: Issue triage
 # issue removes the label too (only when the marker shows we applied it).
 #
 # Pass 2 — agentic triage (`agentic-triage` job): on `opened` only, after
-# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates,
-# component/type labels when pass 1 derived none, and a priority; it posts
-# one marker-idempotent summary comment and retires `needs-triage`.
+# pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates and
+# component/type labels when pass 1 derived none, and fills the Priority
+# (Urgent / High / Medium / Low, security escalates to Urgent) and Effort
+# (Low / Medium / High) issue FIELDS when they are empty; it posts one
+# marker-idempotent summary comment and retires `needs-triage`.
 # It also fills the issue Type field (Bug / Feature / Task) when the issue
 # has none — from the effective type label (bug -> Bug, enhancement ->
 # Feature, question -> Task), Type IDs resolved at runtime from
 # `repository.issueTypes`. Template-filed issues already carry a Type
 # (`type:` in .github/ISSUE_TEMPLATE/*.yml), so this mostly covers blank
-# issues; an existing Type is never overwritten. The Type write uses the
-# job's `github.token` (`issues: write`) via GraphQL `updateIssue` and is
-# guarded: a failure only logs a warning and the rest of the pass
-# completes. Fail-soft: continue-on-error, and skipped with a warning when
-# the AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it
-# only adds labels/comments and fills an empty Type, never closes or edits
-# anything. Logic + local dry-run CLI:
+# issues; an existing Type or field value is never overwritten. The Type
+# and field writes use the job's `github.token` (`issues: write`) via
+# GraphQL `updateIssue` / `setIssueFieldValue` and are guarded: a failure
+# only logs a warning and the rest of the pass completes. Fail-soft:
+# continue-on-error, and skipped with a warning when the
+# AUGMENT_SESSION_AUTH secret is absent. Suggest-don't-destroy — it only
+# adds labels/comments and fills an empty Type / Priority / Effort, never
+# closes or edits anything. Logic + local dry-run CLI:
 # .github/scripts/issue-triage/agentic-triage.js.
 
 on:

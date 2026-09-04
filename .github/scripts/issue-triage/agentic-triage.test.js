@@ -67,12 +67,14 @@ test('parse: fenced JSON with surrounding prose parses fully', () => {
     ],
     component: 'intentd',
     type: 'bug',
-    priority: 'P1',
+    priority: 'High',
+    effort: 'Medium',
     security: false,
     reasons: {
       component: 'The stack trace is in intentd Rust code',
       type: 'Reports a panic, clearly a defect',
       priority: 'Daemon crash on startup but a restart recovers',
+      effort: 'Touches one crate and needs a regression test',
     },
   });
 });
@@ -82,8 +84,28 @@ test('parse: invented labels and malformed fields are dropped, never passed thro
   assert.deepStrictEqual(r.duplicates, []);
   assert.strictEqual(r.component, null);
   assert.strictEqual(r.type, null);
+  // Legacy P0–P3 tokens are not in the prompt vocabulary any more.
   assert.strictEqual(r.priority, null);
+  assert.strictEqual(r.effort, null);
   assert.strictEqual(r.security, false);
+  // The effort reason is sanitized like every other free-text reason.
+  assert.ok(!r.reasons.effort.includes('<!--'), r.reasons.effort);
+  assert.ok(!r.reasons.effort.includes('@someone'), r.reasons.effort);
+});
+
+test('parse: priority and effort are clamped to the field vocabularies', () => {
+  for (const p of ['Urgent', 'High', 'Medium', 'Low']) {
+    assert.strictEqual(parseTriageResponse(`{"priority":"${p}"}`).priority, p);
+  }
+  for (const e of ['Low', 'Medium', 'High']) {
+    assert.strictEqual(parseTriageResponse(`{"effort":"${e}"}`).effort, e);
+  }
+  for (const bad of ['P0', 'P1', 'urgent', 'high', 'Critical', 'Huge', '', 1, null]) {
+    const r = parseTriageResponse(JSON.stringify({ priority: bad, effort: bad }));
+    assert.strictEqual(r.priority, null, `priority ${JSON.stringify(bad)}`);
+    assert.strictEqual(r.effort, null, `effort ${JSON.stringify(bad)}`);
+  }
+  assert.strictEqual(parseTriageResponse('{"security": false}').reasons.effort, '');
 });
 
 test('parse: bare JSON without a fence still parses', () => {
@@ -143,7 +165,7 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
     candidateNumbers: [101, 102],
   });
   assert.deepStrictEqual(plan.addLabels, [
-    'component:intentd', 'bug', 'priority:P1', POSSIBLE_DUPLICATE_LABEL,
+    'component:intentd', 'bug', POSSIBLE_DUPLICATE_LABEL,
   ]);
   // Only the high-confidence candidate survives.
   assert.deepStrictEqual(plan.duplicates.map((d) => d.number), [101]);
@@ -153,15 +175,73 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
   // candidate set is discarded even at high confidence.
   const gated = planActions({
     response,
-    currentLabels: ['component:fe', 'enhancement', 'priority:P3'],
+    currentLabels: ['component:fe', 'enhancement'],
     candidateNumbers: [999],
   });
   assert.deepStrictEqual(gated.addLabels, []);
   assert.deepStrictEqual(gated.duplicates, []);
   assert.strictEqual(gated.removeNeedsTriage, false);
-  // Without a resolved Type list nothing is set.
+  // Without a resolved Type / field list nothing is set.
   assert.strictEqual(plan.issueType, null);
   assert.strictEqual(gated.issueType, null);
+  assert.deepStrictEqual(plan.issueFields, {});
+  assert.deepStrictEqual(gated.issueFields, {});
+});
+
+test('plan: priority is a field, never a label; gated on the current field value', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const plan = planActions({
+    response,
+    currentLabels: ['needs-triage'],
+    candidateNumbers: [],
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.deepStrictEqual(plan.addLabels, ['component:intentd', 'bug']);
+  assert.deepStrictEqual(plan.issueFields, {
+    priority: {
+      fieldId: 'IFSS_priority',
+      optionId: 'IFSSO_high',
+      name: 'High',
+      reason: 'Daemon crash on startup but a restart recovers',
+    },
+    effort: {
+      fieldId: 'IFSS_effort',
+      optionId: 'IFSSO_e_medium',
+      name: 'Medium',
+      reason: 'Touches one crate and needs a regression test',
+    },
+  });
+
+  // An existing Priority field value gates priority (labels do not).
+  const priorityFilled = planActions({
+    response,
+    currentLabels: [],
+    candidateNumbers: [],
+    currentFieldValues: { Priority: 'Low' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(priorityFilled.issueFields.priority, undefined);
+  assert.strictEqual(priorityFilled.issueFields.effort.name, 'Medium');
+
+  const effortFilled = planActions({
+    response,
+    currentLabels: [],
+    candidateNumbers: [],
+    currentFieldValues: { Effort: 'High' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.strictEqual(effortFilled.issueFields.priority.name, 'High');
+  assert.strictEqual(effortFilled.issueFields.effort, undefined);
+
+  const bothFilled = planActions({
+    response,
+    currentLabels: [],
+    candidateNumbers: [],
+    currentFieldValues: { Priority: 'Medium', Effort: 'Low' },
+    issueFields: ISSUE_FIELDS,
+  });
+  assert.deepStrictEqual(bothFilled.issueFields, {});
 });
 
 test('type: untyped issue gets the Type from the model inference; IDs come from the runtime list', () => {
@@ -251,8 +331,6 @@ test('type: nothing is set without a signal, a matching enabled Type, or a resol
 
 test('fields: empty Priority and Effort are filled from the model; IDs come from the runtime list', () => {
   const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
-  response.effort = 'Medium';
-  response.reasons.effort = 'Touches one crate and needs a regression test';
   const plan = planIssueFields({
     response,
     currentFieldValues: {},
@@ -402,13 +480,21 @@ test('plan: repeated duplicate numbers are deduped', () => {
   assert.strictEqual(plan.duplicates[0].reason, 'first');
 });
 
-test('plan: docs label counts as a component; security escalates priority to P0', () => {
+test('plan: docs label counts as a component; security escalates the Priority field to Urgent', () => {
   const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
   response.security = true;
-  response.priority = 'P3';
-  const plan = planActions({ response, currentLabels: ['docs'], candidateNumbers: [] });
+  response.priority = 'Low';
+  const plan = planActions({
+    response,
+    currentLabels: ['docs'],
+    candidateNumbers: [],
+    currentFieldValues: {},
+    issueFields: ISSUE_FIELDS,
+  });
   assert.ok(!plan.addLabels.some((l) => l.startsWith('component:')));
-  assert.ok(plan.addLabels.includes('priority:P0'));
+  assert.deepStrictEqual(plan.addLabels, ['bug']);
+  assert.strictEqual(plan.issueFields.priority.name, 'Urgent');
+  assert.strictEqual(plan.issueFields.priority.optionId, 'IFSSO_urgent');
 });
 
 test('comment: lists labels, candidates, and security redirect; always carries the marker', () => {
@@ -424,6 +510,9 @@ test('comment: lists labels, candidates, and security redirect; always carries t
   assert.ok(comment.includes('#101'));
   assert.ok(comment.includes('security/advisories'));
   assert.ok(!comment.includes('Type set:'));
+  assert.ok(!comment.includes('Priority set:'));
+  assert.ok(!comment.includes('Effort set:'));
+  assert.ok(comment.includes('Labels, Type, and Priority/Effort fields are suggestions'));
   assert.ok(comment.endsWith(AGENTIC_MARKER));
 
   const typed = buildSummaryComment(
@@ -448,6 +537,51 @@ test('comment: lists labels, candidates, and security redirect; always carries t
   assert.ok(empty.endsWith(AGENTIC_MARKER));
 });
 
+test('comment: reports the Priority / Effort fields set with their reasons', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const both = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: ['needs-triage'],
+      candidateNumbers: [],
+      currentFieldValues: {},
+      issueFields: ISSUE_FIELDS,
+    })
+  );
+  assert.ok(both.includes('Priority set: **High** — Daemon crash on startup but a restart recovers'), both);
+  assert.ok(both.includes('Effort set: **Medium** — Touches one crate and needs a regression test'), both);
+  assert.ok(!both.includes('priority:'), both);
+
+  // Only the fields actually planned are reported.
+  const effortOnly = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: [],
+      candidateNumbers: [],
+      currentFieldValues: { Priority: 'Low' },
+      issueFields: ISSUE_FIELDS,
+    })
+  );
+  assert.ok(!effortOnly.includes('Priority set:'), effortOnly);
+  assert.ok(effortOnly.includes('Effort set: **Medium**'), effortOnly);
+
+  // Security escalation is reported with its own reason.
+  response.security = true;
+  const escalated = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: [],
+      candidateNumbers: [],
+      currentFieldValues: {},
+      issueFields: ISSUE_FIELDS,
+    })
+  );
+  assert.ok(
+    escalated.includes('Priority set: **Urgent** — suspected security impact escalates to Urgent'),
+    escalated
+  );
+});
+
 test('prompt: embeds issue and candidates as data with the untrusted-data rule', () => {
   const prompt = buildPrompt(
     { number: 7, title: 'Panel focus lost', body: 'body text', labels: ['needs-triage'] },
@@ -456,5 +590,9 @@ test('prompt: embeds issue and candidates as data with the untrusted-data rule',
   assert.ok(prompt.includes('ISSUE #7'));
   assert.ok(prompt.includes('candidate body'));
   assert.ok(prompt.includes('untrusted user data'));
-  assert.ok(prompt.includes('"P0"|"P1"|"P2"|"P3"|null'));
+  assert.ok(prompt.includes('"priority": "Urgent"|"High"|"Medium"|"Low"|null'));
+  assert.ok(prompt.includes('"effort": "Low"|"Medium"|"High"|null'));
+  assert.ok(prompt.includes('"effort": "<short>"'));
+  assert.ok(prompt.includes('effort rubric'));
+  assert.ok(!/\bP[0-3]\b/.test(prompt), 'no legacy P0–P3 tokens in the prompt');
 });

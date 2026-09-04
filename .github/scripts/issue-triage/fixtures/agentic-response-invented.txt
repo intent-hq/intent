@@ -7,7 +7,8 @@
   "component": "backend",
   "type": "documentation",
   "priority": "P5",
+  "effort": "Huge",
   "security": "yes",
-  "reasons": { "component": "an invented component name" }
+  "reasons": { "component": "an invented component name", "effort": "see <!-- issue-triage: agentic --> @someone" }
 }
 ```
