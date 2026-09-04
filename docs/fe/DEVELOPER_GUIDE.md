@@ -18,17 +18,20 @@ Agents on a remote daemon host should follow the root
 The root section is the canonical operational recipe and health-hook source. This guide
 documents frontend-specific behavior and implementation detail.
 
-From the monorepo root, inspect the worktree's derived ports and start the fast component
-preview. The target installs locked frontend dependencies when `node_modules` is missing.
+From the monorepo root, inspect the free port block the next sandbox start will use, then
+start the fast component preview. The target installs locked frontend dependencies when
+`node_modules` is missing.
 
 ```bash
 make ports
 make dev-sandbox-ui
 ```
 
-`make ports` prints the stable per-worktree `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`,
-and `CDP_PORT`. The sandbox passes the derived `DEV_PORT` to Vite, avoiding collisions
-between concurrent workspaces. An explicit override remains available when needed:
+`make ports` prints the free per-worktree `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` block for the next start. Once a sandbox is running, its listener can move the
+next free block; read the running port from `make sandbox-status` or
+`.dev/sandbox/<mode>.json`. The sandbox passes the derived `DEV_PORT` to Vite, avoiding
+collisions between concurrent workspaces. An explicit override remains available when needed:
 
 ```bash
 make dev-sandbox-ui DEV_PORT=5291
@@ -83,6 +86,7 @@ On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with th
 | Field | Meaning |
 |---|---|
 | `mode`, `pid` | `ui`, `app`, or `stack`, and the owning sandbox process |
+| `pidStartTime`, `pidCommandLine` | Process identity used to reject stale files after PID reuse |
 | `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
 | `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
 | `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
@@ -126,9 +130,10 @@ available. The report is read-only, including stale sandbox state.
 
 ## Fast UI Preview Workflow
 
-After `make dev-sandbox-ui` prints `Sandbox ready:`, read the `DEV_PORT` from
-`make ports` and open a named preview. The examples below use `<DEV_PORT>` as that
-value:
+After `make dev-sandbox-ui` prints `Sandbox ready:`, read its `devPort` from
+`make sandbox-status` or `.dev/sandbox/ui.json` and open a named preview. `make ports`
+shows the block the next start will use and may differ while this sandbox is running.
+The examples below use `<DEV_PORT>` as the recorded running value:
 
 ```text
 http://127.0.0.1:<DEV_PORT>/sandbox/button?state=default&theme=system&width=420&motion=full

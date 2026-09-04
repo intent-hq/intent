@@ -94,6 +94,9 @@ BRIDGE_PLATFORM ?= $(shell uname -s)
 
 .PHONY: ports status docs-check
 ports: ## Print this worktree's resolved development ports
+	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
+		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
+	fi
 	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
 
 status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON)
