@@ -58,3 +58,11 @@ bookkeeping and never crosses the wire.
 re-sending `client.hello` on the same connection updates `name` / `capabilities` and re-returns
 the same `server` block.
 
+
+
+**Antigravity setup capability (9.8).** The server advertises
+`capabilities.antigravitySetup: 1`. A dedicated local app connection requests
+this capability in its hello before using the connection-owned setup methods.
+See [§5.44](./models-providers.md#544-guided-antigravity-setup). A new hello
+revokes the preceding setup operation on that connection. WSS cannot gain
+setup access by advertising the capability.

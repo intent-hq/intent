@@ -170,3 +170,94 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: `model.defaultProvider` when it names a registered provider (§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)), else it is unset — there is no positional fallback to the first registered provider ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044)) — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
 Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "antigravity-acp"`, and `canBeDisabled: true`. Discovery does not enable it or change the active provider. Initial verification covers macOS Apple Silicon with personal Google OAuth. Other platforms and authentication methods are not certified by this integration.
+
+
+### 5.44 Guided Antigravity setup
+
+Protocol 9.8 adds four local-app fast-path methods. These methods are not part
+of `WorkspaceApi` or the agent tool surface.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| providers.setup.status | providerId: "antigravity" | SetupStatus |
+| providers.setup.start | providerId: "antigravity" | SetupStatus |
+| providers.setup.login | providerId: "antigravity", operationId: string | SetupStatus |
+| providers.setup.cancel | providerId: "antigravity", operationId: string | SetupStatus |
+
+`SetupStatus` contains `operationId: string | null`, `supported: boolean`,
+`cliDetected: boolean`, `runtimeInstalled: boolean`, and `phase`.
+`cliDetected` reports the `agy` executable, not ACP readiness or authentication.
+`runtimeInstalled` reports an executable bridge, not a successful login.
+
+| Phase | Additional fields | Meaning |
+| --- | --- | --- |
+| idle | none | No operation on this connection |
+| checking | none | Guarded saved-session or model check |
+| downloading | received: number, total: number | Download bytes received and pinned archive size |
+| verifying | none | Bundle integrity and publisher signature checks |
+| signInRequired | none | Explicit personal Google sign-in is needed |
+| signingIn | none | Explicit sign-in is running |
+| connected | modelCount: positive integer | Fresh guarded session and nonempty models verified |
+| cancelled | none | The user cancelled the operation |
+| failed | code: string | Safe failure code; no raw subprocess output |
+
+Failure codes are `unsupportedHost`, `downloadFailed`, `invalidArchive`,
+`integrityFailed`, `signatureFailed`, `diskError`, `cancelled`, `timedOut`,
+`invalidCustomPath`, `authenticationCheckFailed`, `signInFailed`,
+`browserUnavailable`, and `modelsUnavailable`.
+
+**Authorization and ownership.** Only UDS connections can use these methods.
+The connection must first complete `client.hello` with
+`capabilities: { antigravitySetup: 1 }`. The server advertises
+`server.capabilities.antigravitySetup: 1`. This is capability negotiation inside
+the existing same-user UDS trust boundary, not cryptographic app attestation.
+An agent's ordinary workspace API cannot call this surface. The desktop app
+uses a dedicated connection for the initiating settings window and accepts
+setup actions only from that window's main frame.
+
+All WSS requests and connections without that handshake receive `-32001`:
+`Antigravity setup requires an authorized local app connection`.
+This check uses the actual transport, never a configured locality override.
+Notifications never start work. Invalid providers or foreign operation IDs
+receive `-32602` with `error.data.code: "invalid-params"`.
+A second connection cannot sign in or cancel another connection's operation.
+A new hello revokes the previous operation; disconnect cancels it.
+
+**Consent.** `status` performs bounded metadata discovery only. It never
+installs software, reads credentials, or opens a browser. A deliberate Connect
+click calls `start`; repeated calls join pending work. Setup reuses a configured
+executable without changing its path. A broken explicit path reports
+`invalidCustomPath`; it does not authorize a replacement. Otherwise, setup can
+acquire the pinned official Google bridge for Apple Silicon macOS. Downloads
+are HTTPS-only, size-limited, hash-checked, and staged privately. Both required
+executables must pass integrity and Google Apple-signature checks before atomic
+activation. Concurrent downloads are serialized with validated cache reuse.
+No provider defaults or workspace model selections change.
+
+**Sign-in.** The first session check suppresses browser launch. Only a deliberate
+Sign in with Google click calls `login` in `signInRequired`. Google owns its
+credential store; Intent does not copy tokens. The login service verifies a new
+noninteractive session before reporting success, then checks the models again.
+Download/setup and login have bounded deadlines. Cancellation reaches child
+processes and temporary profiles.
+
+The daemon sends at most one `providers.setup.openLogin` reverse request per
+explicit login, only on the initiating connection:
+
+```json
+{"jsonrpc":"2.0","id":"rev-1","method":"providers.setup.openLogin","params":{"operationId":"operation-id","url":"https://accounts.google.com/o/oauth2/v2/auth?..."}}
+```
+
+The client accepts only the current explicit login operation. It validates
+HTTPS, the exact `accounts.google.com` host, port 443, no user information or
+fragment, and `/o/oauth2/auth` or `/o/oauth2/v2/auth`. It opens the system browser
+and returns `{ "opened": true }`; rejection returns `{ "opened": false }`.
+The reverse response deadline is 30 seconds. The URL must never enter shared
+events, renderer state, persistent storage, diagnostics, or telemetry.
+
+**Client compatibility.** Detect the capability, not a package version.
+When the capability is absent, show an Intent update requirement. Unsupported
+platforms and remote backends show a limitation without an install button.
+After connected, refresh models and provider readiness before enabling
+Antigravity. Never change the default provider or an existing workspace model.
+The advanced custom-path control and terminal login command remain available.

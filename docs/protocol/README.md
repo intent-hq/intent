@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `9.7`
+**Protocol Version:** `9.8`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -80,3 +80,5 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 - **New §5.x subsections** go into the `methods/` file whose domain they belong to (see the map above), or a new `methods/*.md` file for a genuinely new domain — in either case, add the subsection to this README's map (the single canonical § → file map; [05-method-catalog.md](./05-method-catalog.md)'s index just points here).
 - **Version-history entries** are appended to the narrative in [versioning.md](./versioning.md), and the current-version headers there and in this README are updated together.
 - **New top-level sections** (§11, …) get their own `NN-*.md` file and a row in the map above.
+
+§5.44 [Guided Antigravity setup](./methods/models-providers.md#544-guided-antigravity-setup).
