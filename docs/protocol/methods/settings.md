@@ -32,6 +32,26 @@ interface SettingDefinition {
 
 `changes` entries use the `AppSettingChange` shape `{ path, value, reason? }` (`reason` is an optional free-text audit note). `settings.update` **validates** each change against its definition (type / enum / min / max) and **persists** atomically; an unknown `path` or a value failing validation yields `-32602` and the whole batch is rejected (nothing applied). On success it emits a `settings:changed` notification (§6.5) carrying the applied `{ path, value, origin? }` pairs (sensitive values redacted).
 
+**Placeholder-preserve on write** ([intent-hq/intentd#1738](https://github.com/intent-hq/intentd/pull/1738),
+fixes [intent-hq/intent#4383](https://github.com/intent-hq/intent/issues/4383)) — because
+`settings.list` / `settings.get` redact every `sensitive` setting that has a stored value to
+the `********` placeholder, a client that submits its whole settings form back through
+`settings.update` echoes that placeholder for every secret it did not touch. For a
+`sensitive` path, `settings.update` therefore resolves the value **per change**: the
+placeholder with a **stored secret** is a no-op for that path — the secret is left as is
+(no store write), but the entry is still echoed (redacted) in `applied` and in the
+`settings:changed` notification, so unlike a literal that already matches the stored value
+it is **not** dropped as unchanged (a placeholder-only batch still advances the revision
+and emits the event); the placeholder with **no stored secret** is `-32602` (the message
+names the offending path) and the whole batch is rejected atomically — a sibling
+non-sensitive change in the same batch is not applied and the placeholder is never stored;
+any other literal **sets/replaces** the secret as before. The presence check runs in the
+validation pass, before the atomic apply, so a rejected batch leaves config.toml, the DB,
+and the secret store untouched. Non-sensitive paths are unaffected. Responses stay redacted;
+no wire-shape change. Mirrors the `mcp.servers.update` rule (§5.22). Secrets that were
+already overwritten by an earlier placeholder echo hold the literal `********`; the daemon
+cannot recover them — they must be re-entered once.
+
 Provider/model default selection is one logical mutation. When a selection changes the
 provider, clients MUST send `model.defaultProvider` ([intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648); the retired
 `providers.active` key is migrated out of `config.toml` at boot, [intent-hq/intentd#1658](https://github.com/intent-hq/intentd/pull/1658))
