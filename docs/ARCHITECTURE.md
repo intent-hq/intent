@@ -343,7 +343,7 @@ credential injection (§5.6). One token, three consumption paths, one trust
 boundary:
 
 - **One stored token.** The GitHub token lands in the file-backed secrets
-  store (`~/intent/secrets.json`, `0600`) under account
+  store (`~/intent/.secrets.json`, `0600`) under account
   `sourceControl.github.token`, written by the daemon-owned OAuth device flow
   (`github.connect`) and deleted by `github.revoke`. Every consumer resolves
   it through one chain (`intent_sourcecontrol::token::resolve`, per
