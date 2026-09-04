@@ -8,24 +8,22 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { labelsForIssueBody } = require('./parse-issue.js');
+const { labelsForIssueBody, priorityForIssueBody } = require('./parse-issue.js');
 
 const fixture = (name) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
-test('template bug: components, severity, and agent-filed all map to labels', () => {
+test('template bug: components and agent-filed map to labels; severity does not', () => {
   assert.deepStrictEqual(labelsForIssueBody(fixture('bug-full.md')), [
     'component:intentd',
     'docs',
-    'priority:P0',
     'agent-filed',
   ]);
 });
 
-test('template bug: single component + severity, agent-filed unchecked', () => {
+test('template bug: single component, agent-filed unchecked', () => {
   assert.deepStrictEqual(labelsForIssueBody(fixture('bug-single-component.md')), [
     'component:fe',
-    'priority:P2',
   ]);
 });
 
@@ -52,15 +50,13 @@ test('empty and non-string bodies yield no labels', () => {
 test('uppercase [X] checkboxes and CRLF line endings are accepted', () => {
   const body =
     '### Component\r\n\r\n- [X] intentd (Rust backend daemon)\r\n\r\n' +
-    '### Severity\r\n\r\nP3 — papercut; annoying but does not block workflows\r\n';
-  assert.deepStrictEqual(labelsForIssueBody(body), [
-    'component:intentd',
-    'priority:P3',
-  ]);
+    '### Severity\r\n\r\nLow — papercut; annoying but does not block workflows\r\n';
+  assert.deepStrictEqual(labelsForIssueBody(body), ['component:intentd']);
+  assert.strictEqual(priorityForIssueBody(body), 'Low');
 });
 
-test('severity not starting with a Pn token yields no priority label', () => {
-  const body = '### Severity\n\nsomething custom the user typed\n';
+test('severity dropdown never produces a priority label', () => {
+  const body = '### Severity\n\nUrgent — crash, data loss, or corruption\n';
   assert.deepStrictEqual(labelsForIssueBody(body), []);
 });
 
@@ -79,15 +75,65 @@ test('duplicate sections do not produce duplicate labels', () => {
 test('template markdown pasted inside a code fence is ignored', () => {
   assert.deepStrictEqual(labelsForIssueBody(fixture('fenced-template.md')), [
     'component:fe',
-    'priority:P2',
   ]);
+  assert.strictEqual(priorityForIssueBody(fixture('fenced-template.md')), 'Medium');
 });
 
-test('body that is only a fenced template copy yields no labels', () => {
+test('body that is only a fenced template copy yields no labels and no priority', () => {
   const body =
     'log dump:\n\n```\n### Component\n\n- [x] intentd (Rust backend daemon)\n\n' +
-    '### Severity\n\nP0 — crash\n```\n';
+    '### Severity\n\nUrgent — crash\n```\n';
   assert.deepStrictEqual(labelsForIssueBody(body), []);
+  assert.strictEqual(priorityForIssueBody(body), null);
+});
+
+test('priorityForIssueBody maps each current Severity option to the Priority field value', () => {
+  const severity = (line) => `### Description\n\nx\n\n### Severity\n\n${line}\n`;
+  assert.strictEqual(
+    priorityForIssueBody(severity('Urgent — crash, data loss, or corruption; blocks shipping to external users')),
+    'Urgent',
+  );
+  assert.strictEqual(
+    priorityForIssueBody(severity('High — broken feature; app still usable but with significant workaround required')),
+    'High',
+  );
+  assert.strictEqual(
+    priorityForIssueBody(severity('Medium — degraded behavior; should be fixed, but impact is limited')),
+    'Medium',
+  );
+  assert.strictEqual(
+    priorityForIssueBody(severity('Low — papercut; annoying but does not block workflows')),
+    'Low',
+  );
+});
+
+test('priorityForIssueBody accepts the legacy P0–P3 tokens from the old template', () => {
+  const severity = (line) => `### Severity\n\n${line}\n`;
+  assert.strictEqual(priorityForIssueBody(severity('P0 — crash, data loss, or corruption')), 'Urgent');
+  assert.strictEqual(priorityForIssueBody(severity('P1 — broken feature')), 'High');
+  assert.strictEqual(priorityForIssueBody(severity('P2 — degraded behavior')), 'Medium');
+  assert.strictEqual(priorityForIssueBody(severity('P3 — papercut')), 'Low');
+});
+
+test('priorityForIssueBody reads fixtures on both vocabularies', () => {
+  assert.strictEqual(priorityForIssueBody(fixture('bug-full.md')), 'Urgent');
+  assert.strictEqual(priorityForIssueBody(fixture('bug-single-component.md')), 'Medium');
+});
+
+test('priorityForIssueBody is null without a Severity section', () => {
+  assert.strictEqual(priorityForIssueBody(fixture('feature-request.md')), null);
+  assert.strictEqual(priorityForIssueBody(fixture('blank-issue.md')), null);
+  assert.strictEqual(priorityForIssueBody(''), null);
+  assert.strictEqual(priorityForIssueBody(null), null);
+  assert.strictEqual(priorityForIssueBody(undefined), null);
+});
+
+test('priorityForIssueBody is null for _No response_ and free-form text', () => {
+  assert.strictEqual(priorityForIssueBody(fixture('no-selections.md')), null);
+  assert.strictEqual(priorityForIssueBody('### Severity\n\n_No response_\n'), null);
+  assert.strictEqual(priorityForIssueBody('### Severity\n\nsomething custom the user typed\n'), null);
+  assert.strictEqual(priorityForIssueBody('### Severity\n\nHighly unusual\n'), null);
+  assert.strictEqual(priorityForIssueBody('### Severity\n\nP4 — not a real level\n'), null);
 });
 
 test('tilde fences are skipped and sections after a fence still parse', () => {
