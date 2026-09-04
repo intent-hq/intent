@@ -19,6 +19,7 @@
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
+| workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
 | workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (currently 1; the import side refuses archives whose format version it does not understand), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
 | workspace.import.begin *(v6.9)* | manifest (req, object), archiveSizeBytes (req, u64), archiveSha256 (req) — no workspaceId (the target id lives inside the manifest) | { importId, maxChunkBytes } — opens a staged workspace import of a transfer zip archive ([intent-hq/intentd#1101](https://github.com/intent-hq/intentd/pull/1101); the target-side counterpart of `workspace.transfer.plan`). Validates the manifest header BEFORE any bytes are staged: `formatVersion` must be understood, `creatingIntentdVersion` must match this daemon's `CARGO_PKG_VERSION` **exactly** (the error names both versions), the virtual Chief workspace is rejected, and the manifest's workspace id must not collide with an existing row OR another pending import. Staging lives under `<workspaces_root>/.import-staging/<importId>/`; `maxChunkBytes` is the per-chunk decoded cap (16 MiB, under the 40 MiB frame cap) |
 | workspace.import.chunk *(v6.9)* | importId (req), seq (req, u64), data (req, base64) | { importId, seq, receivedBytes } — stages one seq-numbered slice of the archive as a per-seq file. Chunks may arrive in any order; retrying a seq is **idempotent** (per-seq overwrite, no double-count); the declared `archiveSizeBytes` guards against over-staging |
@@ -1058,6 +1059,57 @@ Payload and cache semantics:
   full-tree walks only create disk contention). The first-ever poll finds no entry — the
   field is **omitted**, `refreshing: true` is reported, and the computed value backfills
   for the next poll. A failed walk keeps the last-good value (retried on the next poll).
+
+**Workspace local changes (`workspace.localChanges`, on-demand since v9.7).** The local git
+work that archiving or deleting a workspace would lose or orphan — unpushed commits and
+uncommitted changes — across the primary worktree and every registered secondary git root,
+computed on demand in one round-trip so the single-workspace archive/delete warning can list
+it (the FE only renders; bulk flows never call it). The result is
+`{ roots: [...], hasUnpushedCommits, hasUncommittedChanges }`: the two booleans are ORs over
+the rows (`unpushedCount > 0` / `uncommittedCount > 0` on any row). Nothing is cached or
+persisted — every call reads the repositories fresh on the blocking pool. An unknown
+`workspaceId` is `-32602` (NotFound, as `workspace.diskUsage`); a per-root failure never
+fails the call. Row shape and evaluation rules:
+
+- **Row shape.** Each `roots[]` entry is
+  `{ kind, gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`
+  — `kind` is `"primary"` or `"secondary"`; `gitRootId` is present on secondary rows only
+  (the `gitRoot.list` id); `path` is the absolute repository path; `branch` is the
+  checked-out branch, **omitted** (absent, never `null`) on a detached or unborn `HEAD`;
+  `hasRemoteRefs` reports whether the repository has at least one `refs/remotes/*` ref.
+- **Unpushed is remote-ref-relative: HEAD minus every remote-tracking ref.** `unpushedCount`
+  counts the commits reachable from `HEAD` but from **no** `refs/remotes/*` ref (a libgit2
+  revwalk from `HEAD` hiding every remote-tracking ref), saturating at **1000**. Unlike the
+  upstream-relative `git.status` fields (§5.6 — `ahead` is `0` and `unpushedCount` is
+  omitted without a configured upstream), this is exact for a never-pushed branch and counts
+  commits that no remote-tracking ref of any remote reaches. Two consequences of the
+  definition: after a **squash-merge whose remote branch was pruned**, the local commits are
+  no longer reachable from any remote-tracking ref and still count as unpushed even though
+  their content landed — clients may cross-check merged PR status before wording the
+  warning; and a repository with **no remote refs at all** reports its whole history (capped
+  at 1000) with `hasRemoteRefs: false`, so clients can word that case differently
+  ("never pushed" rather than "N unpushed commits").
+- **Uncommitted = distinct changed paths.** `uncommittedCount` counts the distinct paths
+  with staged, unstaged, or untracked status — the same entry set `git.status.files` (§5.6)
+  reports, counted once per path.
+- **Root order and which roots are evaluated.** Root 0 is the primary worktree, followed by
+  every registered secondary root in `gitRoot.list` order. The primary row is **skipped (not
+  emitted)** when the workspace has no daemon-owned checkout — a remote workspace
+  (`isRemote: true`, no daemon-provisioned checkout) or a skip-worktree workspace
+  (`skipWorktree: true`, where the "primary" would be the user's own main checkout, which
+  archive/delete never removes) — and when its worktree is not a git repository (no `.git`
+  entry). Registered secondary roots are **always** evaluated regardless of `isRemote` /
+  `skipWorktree`: `ws.git.registerRoot` only accepts paths that exist on the daemon host with
+  a `.git` entry, so they are host-local by construction (the same premise as
+  `gitRoot.list`'s live branch read). A workspace with nothing evaluable answers
+  `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`.
+- **Per-root fail-soft `error`.** A root that cannot be read (path deleted, corrupt
+  repository, libgit2 failure) still yields its row, with `error` carrying the message,
+  `branch` omitted, `hasRemoteRefs: false`, and both counts `0` — so one unreadable root
+  never hides the others. This applies to the primary row too: a primary worktree whose
+  `.git` entry exists but cannot be read yields an `error` row rather than being skipped
+  (only the no-checkout / no-`.git` cases above skip it). `error` is **omitted** on healthy
+  rows (absent, never `null`).
 
 **Derived display status (`displayStatus`, new in intentd).** Alongside the card aggregates, the
 same `workspace.list` / `workspace.get` emit path — and the lite `workspace.subscribe` seq-0
