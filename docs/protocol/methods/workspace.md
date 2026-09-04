@@ -55,6 +55,12 @@ failed`. `delivery.state` is `none | pending | sent | unknown`.
 `worktree | in-place`), `{ kind: "github", url, owner, name, branch? }`, or
 `{ kind: "newFolder", parentPath, name }`. During promotion these map respectively to an
 existing local checkout, GitHub-backed creation, or an initialized in-place folder.
+For `newFolder`, promotion joins `parentPath` and `name`, then reuses the existing
+`workspace.create { isNewRepo: true, skipIsolation: true }` path: the daemon creates the
+directory, initializes a repository whose initial branch is `main`, and creates the
+workspace in place. If the target directory already exists and is non-empty, promotion
+fails with `-32602`; the draft moves to `failed`, retains its authored fields, and stores
+`lastError = "invalid params: new project directory already exists and is not empty: <path>"`.
 `config.setupScript`, `config.isRemote`, and `config.model` map to the corresponding
 `workspace.create` inputs; `contextLinks` are carried through. A promotion failure retains
 the draft as `failed`, stores `lastError`, and permits retry. Promotion marks the draft
