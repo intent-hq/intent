@@ -228,6 +228,13 @@ for all components.
   notifier comments on it once a release contains the complete fix (see Release
   Process).
 
+## Working on Issues
+
+- **Assign on start**: when you begin work on an `intent-hq/intent` issue, assign it to
+  the human driving the work before the first commit:
+  `gh issue edit <N> --repo intent-hq/intent --add-assignee @me`.
+- **Already assigned to someone else**: leave it and tell the user.
+
 ## Terminology
 
 Do **not** use "wave" / "Wave N" terminology in committed documentation. It is
