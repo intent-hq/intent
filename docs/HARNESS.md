@@ -38,7 +38,7 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
-  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.0"`). There is no
+  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.3"`). There is no
   upgrade/migration/pinning operation; new sessions always get the latest
   version. The stamp depends only on creation time, never on the creator: a
   delegated child mints the current version regardless of the parent's pin,
