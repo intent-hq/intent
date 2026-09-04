@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **341 dispatchable method names** across the following categories:
+The API exposes **348 dispatchable method names** across the following categories:
 
-- **Router methods:** 300 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 307 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 39 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 341 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 348 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 341 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 348 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
 
-### Router methods by namespace (300 total)
+### Router methods by namespace (307 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -57,6 +57,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
 | workspace | 37 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, transfer.plan, unarchive, update, updateContext, updateUiContext |
+| workspaceDraft | 7 | create, delete, get, list, markDelivery, promote, update |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
