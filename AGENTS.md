@@ -225,8 +225,9 @@ for all components.
 
 - **Type**: classification is the GitHub issue **Type** field — `Bug`, `Feature`,
   or `Task` — not a label. The `bug` and `enhancement` type labels are retired: do
-  not apply them (triage removes them after setting the matching Type; the
-  `question` label stays a regular label). Set the Type when filing:
+  not apply them (triage retires them — on the issue's open / edit / reopen, or as
+  soon as the label is applied — after setting the matching Type; the `question`
+  label stays a regular label). Set the Type when filing:
   `gh issue create --repo intent-hq/intent --type Bug ...` (gh ≥ 2.94.0). On older
   gh, create the issue first, then set the Type via
   `gh api graphql` with the `updateIssue` mutation, passing an `issueTypeId`

@@ -19,12 +19,19 @@ name: Issue triage
 # an existing Type is never overwritten) and THEN removes the label(s). A
 # label is removed only once the issue has a Type — if the Type cannot be
 # set (lookup/write failure, Types disabled) the label stays and a warning
-# is logged (fail-soft). `question` is not legacy: it is never removed.
-# Runs in the `triage` job only (opened / edited / reopened / dispatch);
-# the `needs-info-reply` re-run deliberately skips it — the retirement is
-# not trivial to mirror there, and the next `edited` / `reopened` event
-# retires the label anyway. Pure planner + tests:
-# .github/scripts/issue-triage/parse-issue.js `planLegacyTypeLabels`.
+# is logged (fail-soft). The Type is re-read immediately before the write
+# (the planning read is a snapshot and `updateIssue` replaces
+# unconditionally), so a Type a human sets in the meantime is kept and the
+# label is still retired. `question` is not legacy: it is never removed.
+# Runs in the `triage` job only (opened / edited / reopened / dispatch, and
+# `labeled` when the applied label is `bug` or `enhancement` — a `labeled`
+# run executes ONLY this step, so applying a legacy label from the sidebar
+# retires it right away without re-running the label derivation or the
+# needs-info check); the `needs-info-reply` re-run deliberately skips it —
+# an author reply cannot introduce a type label, so there is nothing new to
+# retire, and the next `edited` / `reopened` / `labeled` run covers it.
+# Pure planner + tests: .github/scripts/issue-triage/parse-issue.js
+# `planLegacyTypeLabels`.
 #
 # Add-only tradeoffs (accepted for pass 1):
 #   - A label the CURRENT body still derives is re-added on the next
@@ -78,9 +85,10 @@ name: Issue triage
 # existing Type or field value is never overwritten. The Type and field
 # writes use the job's `github.token` (`issues: write`) via GraphQL
 # `updateIssue` / `setIssueFieldValue` and are guarded: a failure only
-# logs a warning and the rest of the pass completes (and a failed Type
-# write keeps the legacy label). Fail-soft: continue-on-error, and skipped
-# with a warning when the AUGMENT_SESSION_AUTH secret is absent.
+# logs a warning and the rest of the pass completes (a failed Type write
+# keeps the legacy label; a failed label removal is a warning too).
+# Fail-soft: continue-on-error, and skipped with a warning when the
+# AUGMENT_SESSION_AUTH secret is absent.
 # Suggest-don't-destroy — it only adds labels/comments and fills an empty
 # Type / Priority / Effort, never closes or edits anything; the only
 # removals are `needs-triage` and the legacy type labels. Logic + local
@@ -88,7 +96,9 @@ name: Issue triage
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    # `labeled` runs only the legacy type-label retirement, and only when
+    # the applied label is `bug` / `enhancement` (job-level gate below).
+    types: [opened, edited, reopened, labeled]
   # Needs-info loop: an author reply clears the label and re-triggers pass 1.
   issue_comment:
     types: [created]
@@ -119,8 +129,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A `labeled` event runs this job only for a legacy type label, and then
+  # only the retirement step (the other steps skip `labeled`).
   triage:
-    if: github.event_name != 'issue_comment'
+    if: >-
+      github.event_name != 'issue_comment' &&
+      (github.event.action != 'labeled' ||
+       contains(fromJSON('["bug", "enhancement"]'), github.event.label.name))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -128,6 +143,7 @@ jobs:
           submodules: false
 
       - name: Derive and apply labels and Priority from template fields
+        if: github.event.action != 'labeled'
         uses: actions/github-script@v9
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
@@ -232,8 +248,10 @@ jobs:
 
       # The one pass-1 removal (see header): convert a legacy `bug` /
       # `enhancement` label into the issue Type when empty, then remove it.
-      # Type first, label second, so a failed Type write leaves the label in
-      # place; every lookup/write is fail-soft (warning, job stays green).
+      # Type first (re-read right before the write, never overwritten),
+      # label second, so a failed Type write leaves the label in place;
+      # every lookup/write is fail-soft (warning, job stays green). The only
+      # step that runs on a `labeled` event.
       - name: Retire legacy type labels into the issue Type field
         uses: actions/github-script@v9
         env:
@@ -277,7 +295,7 @@ jobs:
               return;
             }
             const issue = repository.issue;
-            const labels = (issue.labels.nodes || []).map((l) => l && l.name).filter(Boolean);
+            const labels = ((issue.labels && issue.labels.nodes) || []).map((l) => l && l.name).filter(Boolean);
             const currentIssueType = issue.issueType ? issue.issueType.name : null;
             const issueTypes = (repository.issueTypes && repository.issueTypes.nodes) || [];
 
@@ -300,13 +318,26 @@ jobs:
 
             if (plan.setType) {
               try {
-                await github.graphql(
-                  `mutation($id: ID!, $typeId: ID!) {
-                    updateIssue(input: { id: $id, issueTypeId: $typeId }) { issue { issueType { name } } }
-                  }`,
-                  { id: issue.id, typeId: plan.setType.id }
+                // The read above is a snapshot and `updateIssue` replaces
+                // unconditionally: re-read the Type right before the write
+                // so a Type set in the meantime is never overwritten (the
+                // issue has a Type either way, so the removal proceeds).
+                const { node } = await github.graphql(
+                  `query($id: ID!) { node(id: $id) { ... on Issue { issueType { name } } } }`,
+                  { id: issue.id }
                 );
-                core.info(`Set issue Type = ${plan.setType.name}.`);
+                if (!node) throw new Error('empty node in pre-write re-read');
+                if (node.issueType && node.issueType.name) {
+                  core.info(`issue Type is now ${node.issueType.name} (set since the read above); leaving it unchanged.`);
+                } else {
+                  await github.graphql(
+                    `mutation($id: ID!, $typeId: ID!) {
+                      updateIssue(input: { id: $id, issueTypeId: $typeId }) { issue { issueType { name } } }
+                    }`,
+                    { id: issue.id, typeId: plan.setType.id }
+                  );
+                  core.info(`Set issue Type = ${plan.setType.name}.`);
+                }
               } catch (e) {
                 core.warning(`Could not set issue Type ${plan.setType.name} on #${issueNumber} (${e.message}); legacy type labels left in place.`);
                 return;
@@ -329,6 +360,7 @@ jobs:
             }
 
       - name: Needs-info completeness check
+        if: github.event.action != 'labeled'
         uses: actions/github-script@v9
         env:
           ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
@@ -436,8 +468,9 @@ jobs:
   # Author reply on a needs-info issue: remove the label and re-run the
   # pass-1 label + Priority derivation on the current body. Non-author
   # comments (and our own marker-carrying nudge) change nothing. The legacy
-  # type-label retirement is NOT mirrored here (see header); the next
-  # `edited` / `reopened` run of the triage job handles it.
+  # type-label retirement is NOT mirrored here (see header): a reply cannot
+  # introduce a type label, and the next `edited` / `reopened` / `labeled`
+  # run of the triage job handles it.
   needs-info-reply:
     if: github.event_name == 'issue_comment' && !github.event.issue.pull_request
     runs-on: ubuntu-latest

@@ -89,7 +89,7 @@ Keep the relevant checks green before opening a PR:
 - Use the [issue forms](https://github.com/intent-hq/intent/issues/new/choose)
   (bug report / feature request) and pick the affected component(s). The forms
   set the issue **Type** (Bug / Feature / Task) — that field is the
-  classification; there is no `bug` or `enhancement` label to add.
+  classification; do not add a `bug` or `enhancement` label.
 - **Search first** — check existing open *and* closed issues and comment on or
   link an existing issue instead of filing a duplicate.
 - Issues are triaged with `component:*` labels, the issue **Type** field, and a
