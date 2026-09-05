@@ -581,11 +581,12 @@ message ([cloudlands-fe#424](https://github.com/intent-hq/cloudlands-fe/pull/424
 
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
-live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
-`removedIds` for any orphaned live block). The guarantee: **the seq-0 snapshot reduced with every
-delta — honoring `removedIds` — equals a fresh `agent.getConversation` snapshot.**
+live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true` and the row's
+`metadata` when present — next paragraph — plus `removedIds` for any orphaned live block). The
+guarantee: **the seq-0 snapshot reduced with every delta — honoring `removedIds` — equals a fresh
+`agent.getConversation` snapshot.**
 
-**Terminal entities carry the row's `metadata`** ([intent-hq/intent#4409](https://github.com/intent-hq/intent/issues/4409)).
+**Terminal entities carry the row's `metadata`** ([intent-hq/intentd#1746](https://github.com/intent-hq/intentd/pull/1746), fixing [intent-hq/intent#4409](https://github.com/intent-hq/intent/issues/4409)).
 When the re-read assistant row carries `metadata` (e.g. the §7.2 interrupt tag set —
 `interrupted` / `stopReason` / `interruptReason` / `interruptedBy` — or the §7.3 `finishReason`),
 every entity in the terminal frame additionally carries it **verbatim** as `metadata` (the whole
@@ -598,7 +599,8 @@ abnormal-finish state of a row **with content blocks** at the terminal frame exa
 are per persisted content block, so the §7.2 pre-first-token marker row and the §7.3 zero-output
 abnormal row (`contentBlocks: []`) yield a terminal frame with no entities and therefore no lifted
 `metadata`; for those, clients derive the state from the `agent:stream:end` payload
-(`stopReason` / `interruptReason` / `interruptedBy` / `finishReason`) or refetch. The **degraded
+(`stopReason` / `interruptReason` / `interruptedBy` / `finishReason`) or refetch (a block-less
+carrier is tracked in [intent-hq/intent#4417](https://github.com/intent-hq/intent/issues/4417)). The **degraded
 best-effort terminal frame** — emitted when the re-read (and its retry) fails and the channel falls
 back to sealing the live-accumulated blocks in place — has no persisted row to lift from and
 therefore carries **no** `metadata`; a client that needs the row's metadata after a degraded
