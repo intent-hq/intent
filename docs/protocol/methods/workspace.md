@@ -72,11 +72,12 @@ directly **only** when `workspaceDraft.get` returns `phase: "promoted"`; the dae
 phase only after the workspace, requested initial agent and first turn (if any), and create
 idempotency result are durable. For every other phase (`editing`, `promoting`, or `failed`),
 whether or not `promotedWorkspaceId` is populated, clients re-issue `workspaceDraft.promote`
-with the same immutable `operationKey` and adopt from its promoted result. On a non-promoted
+for that draft and adopt from its promoted result. Callers do not supply an operation key;
+the daemon always reuses the immutable `operationKey` persisted on the draft. On a non-promoted
 draft, `promotedWorkspaceId` is informational (for example, a client may show “resuming…”),
 never an adoption trigger. The daemon idempotently reuses the mapped workspace, find-or-creates
 the requested initial agent, and sends the first turn only when no persisted user message
-exists. A differing operation key on a mapped draft returns `-32009`.
+exists.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
