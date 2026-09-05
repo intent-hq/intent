@@ -78,6 +78,28 @@ jobs:
       - run: node --test scripts/check-doc-links.test.mjs
       - run: node scripts/check-doc-links.mjs
 
+  # Guard release footer tokens in PR prose and branch commit messages unless
+  # the release impact is explicitly acknowledged with a label.
+  breaking-token:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-breaking-token.test.mjs
+      - name: Check pull request and commit messages
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "$RUNNER_TEMP/branch-commit-messages"
+          node scripts/check-breaking-token.mjs "$RUNNER_TEMP/branch-commit-messages"
+
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:
