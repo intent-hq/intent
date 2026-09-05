@@ -207,6 +207,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   distribution repo (same tag; cloudlands-fe source-repo releases carry no
   assets). Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never
   block a turn polling.
+  Before the final status, complete the [ergonomics retrospective](#closing-a-workspace--ergonomics-retrospective).
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
 - **Website release notes after a stable promotion**: a cloudlands-fe stable promotion
@@ -215,6 +216,26 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   for review and never merge it (the never-merge-without-permission rule above
   applies); the procedure and copy prompt are in
   [docs/fe/RELEASING.md § Promoting to Stable](./docs/fe/RELEASING.md#promoting-to-stable).
+
+## Closing a workspace — ergonomics retrospective
+
+Once work is merged or shipping, and before the final workspace status message, run the
+[repo-retrospective skill](.agents/skills/repo-retrospective/SKILL.md) for the full prompt.
+
+Land each finding on the strongest available enforcement rung:
+1. Make the mistake impossible with types, goldens, or a protocol contract.
+2. Catch it mechanically before merge with a lint, CI check, or test.
+3. Make the right path discoverable with a "Where to look" row, Makefile target, or script.
+4. Add an AGENTS.md prose rule only as a last resort, citing the linked incident.
+
+**Channel:** Propose one follow-up workspace per coherent improvement; give its prompt the
+goal, evidence, proposed rung, and verification. In Intent use `ws.workspace.proposeSibling`;
+delegated/background agents hand the finding to their parent. Outside Intent, file an
+`intent-hq/intent` issue with `agent-workflow` and `agent-filed`. Never bundle the improvement
+into the feature PR.
+
+**Budget:** AGENTS.md prose must replace or compress existing text or be justified by a linked
+incident. Prefer mechanizing an existing prose rule over adding another.
 
 ## Filing Issues
 
