@@ -13,9 +13,24 @@
 // Pure and dependency-free so it can be unit-tested with `node --test`
 // and required from actions/github-script. It only ever *derives* labels
 // to add and a Priority to fill; the workflow never removes labels or
-// overwrites an existing Priority based on its output.
+// overwrites an existing Priority based on its output — with one
+// exception, the legacy type-label retirement planned by
+// planLegacyTypeLabels below.
 
 'use strict';
+
+// Type label -> GitHub issue Type name. The repo enables exactly Task, Bug,
+// and Feature (no "Question" Type), so questions map to Task. Type IDs are
+// resolved at runtime from `repository.issueTypes`, never hardcoded. Shared
+// with pass 2 (agentic-triage.js).
+const ISSUE_TYPE_BY_LABEL = { bug: 'Bug', enhancement: 'Feature', question: 'Task' };
+
+// Type labels retired in favour of the issue Type field: pass 1 converts
+// them into the Type (when the issue has none) and removes them. `question`
+// is NOT legacy — it stays a regular label and is never removed, though it
+// still maps onto Task above for pass 2's inference. Order matters: when an
+// issue carries several legacy labels, the first one here decides the Type.
+const LEGACY_TYPE_LABELS = ['bug', 'enhancement'];
 
 // Severity option leading token -> Priority field option name. The legacy
 // `P0`–`P3` tokens (pre-rename template) stay accepted so issues filed from
@@ -132,4 +147,35 @@ function priorityForIssueBody(body) {
   return SEVERITY_PRIORITIES[m[1].toLowerCase()] || null;
 }
 
-module.exports = { labelsForIssueBody, priorityForIssueBody, splitSections };
+// Plan the legacy type-label retirement for an issue. Pure, so the gating
+// is unit-testable:
+//   - no legacy label present -> no-op,
+//   - an existing Type is never overwritten (setType stays null),
+//   - with no Type, the first legacy label (LEGACY_TYPE_LABELS order) maps
+//     through ISSUE_TYPE_BY_LABEL and must resolve to an enabled Type in
+//     `issueTypes` (the runtime `repository.issueTypes` list),
+//   - labels are removed only when a Type will be present after the step
+//     (already set, or set by this plan); when none can be set (empty list,
+//     Types disabled, name missing) nothing is removed.
+// Returns { setType: { id, name } | null, removeLabels: string[] }.
+function planLegacyTypeLabels({ labels, currentIssueType, issueTypes }) {
+  const current = new Set(labels || []);
+  const present = LEGACY_TYPE_LABELS.filter((l) => current.has(l));
+  if (present.length === 0) return { setType: null, removeLabels: [] };
+  if (currentIssueType) return { setType: null, removeLabels: present };
+  const name = ISSUE_TYPE_BY_LABEL[present[0]];
+  const match = (issueTypes || []).find(
+    (t) => t && t.name === name && t.isEnabled !== false && t.id
+  );
+  if (!match) return { setType: null, removeLabels: [] };
+  return { setType: { id: match.id, name }, removeLabels: present };
+}
+
+module.exports = {
+  ISSUE_TYPE_BY_LABEL,
+  LEGACY_TYPE_LABELS,
+  labelsForIssueBody,
+  planLegacyTypeLabels,
+  priorityForIssueBody,
+  splitSections,
+};
