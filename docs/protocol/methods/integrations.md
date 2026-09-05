@@ -119,6 +119,7 @@ FE's "bypass the buggy backend" behavior for same-repo branches.
 
 | Method | Params | Result |
 | --- | --- | --- |
+| github.issues.get | owner (req), repo (req), number (req) | { issue: GithubIssue } — `GET /repos/{owner}/{repo}/issues/{number}` (v9.6; the issue counterpart of `github.pulls.get`, backing the FE's GitHub link hover card). Missing `number` → `-32602` per the namespace conventions above |
 | github.issues.list | owner (req), repo (req), state?: "open"\|"closed"\|"all", assignee?, creator?, labels?, sort?: "created"\|"updated"\|"comments", direction?: "asc"\|"desc", limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /repos/{owner}/{repo}/issues` (items carrying `pull_request` are filtered out) |
 | github.issues.search | owner (req), repo (req), filter?: "all"\|"assigned"\|"created"\|"involves", state?: "open"\|"closed", query?, limit?, nextToken? | { issues: GithubIssue[], nextToken? } — `GET /search/issues?q=is:issue repo:{o}/{r} [state:{state}] {query}`; `query` is free text (trimmed; blank == absent; qualifier/boolean tokens are quoted into literals so the `repo:` scope cannot widen); `filter` is validated (invalid → `-32603`) but — unlike `github.pulls.search` — adds **no** `@me` qualifier yet (v1 limitation: the engine cannot express issue involvement), so only a non-blank `query` routes through `GET /search/issues`; without one the method delegates to the repo-issue listing (`GET /repos/{o}/{r}/issues`) filtered by state, regardless of `filter` |
 
@@ -190,12 +191,12 @@ interface GithubIssue {
   body?: string;
   state: "open" | "closed";
   htmlUrl: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string;       // ISO 8601 — populated from the GitHub payload since v9.6 (was "" before)
+  updatedAt: string;       // ISO 8601 — populated since v9.6 (was "" before)
   closedAt?: string;
-  user: GithubUser;
-  labels: string[];
-  comments: number;
+  user: GithubUser;        // `login` populated since v9.6 (was "" before); `avatarUrl` / `htmlUrl` still ""
+  labels: string[];        // shape-preserving default: always [] today
+  comments: number;        // shape-preserving default: always 0 today
   owner?: string;          // repository owner (echoed for convenience)
   repo?: string;           // repository name
 }

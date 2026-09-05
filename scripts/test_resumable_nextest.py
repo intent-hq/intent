@@ -49,6 +49,25 @@ class ResumableNextestTests(unittest.TestCase):
             gate.parse_passed_event('{"type":"test","event":"failed"}', binary_ids)
         )
 
+    def test_pass_event_strips_retry_suffix(self):
+        binary_ids = {("intentd::e2e", "module::passes"): "intentd::e2e"}
+        retried = json.dumps(
+            {"type": "test", "event": "ok", "name": "intentd::e2e$module::passes#2"}
+        )
+        self.assertEqual(
+            gate.parse_passed_event(retried, binary_ids), ("intentd::e2e", "module::passes")
+        )
+        unlisted = json.dumps(
+            {"type": "test", "event": "ok", "name": "intentd::e2e$module::missing#2"}
+        )
+        with self.assertRaisesRegex(RuntimeError, "was not listed"):
+            gate.parse_passed_event(unlisted, binary_ids)
+        not_a_suffix = json.dumps(
+            {"type": "test", "event": "ok", "name": "intentd::e2e$module::passes#2x"}
+        )
+        with self.assertRaisesRegex(RuntimeError, "was not listed"):
+            gate.parse_passed_event(not_a_suffix, binary_ids)
+
     def test_list_metadata_maps_target_kinds_to_canonical_binary_ids(self):
         listing = json.dumps(
             {

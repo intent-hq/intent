@@ -49,6 +49,15 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   their health. Sensitive `env` and
   `headers` values are **redacted** (presence/placeholder only) on `list`/`create`/`update`
   responses, mirroring `settings.*` (§5.12).
+- **Placeholder-preserve on write** ([intent-hq/intentd#1730](https://github.com/intent-hq/intentd/pull/1730),
+  fixes [intent-hq/intent#1181](https://github.com/intent-hq/intent/issues/1181)) — because
+  reads are redacted, the natural `list` → edit → `update` round trip echoes the `********`
+  placeholder back; `mcp.servers.update` therefore merges the incoming `env`/`headers` over
+  the stored config **per key**: a placeholder value **keeps the stored value** (dropped when
+  the stored config has no such key), any other literal **sets/replaces** it, and an absent
+  key **deletes** it. The merged config is what is persisted and what the restart (above)
+  probes with. `mcp.servers.create` **rejects** a placeholder value with `-32602` — there is
+  no stored secret to resolve it against. Responses stay redacted; no wire-shape change.
 - **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"error", pid?,
   toolCount?, lastError?, startedAt? }`. `toolCount` is the number of tools the server advertised
   once connected. `pid` is stdio-only (remote servers have no process). For remote servers,

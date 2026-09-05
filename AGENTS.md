@@ -285,6 +285,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   distribution repo (same tag; cloudlands-fe source-repo releases carry no
   assets). Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never
   block a turn polling.
+  Before the final status, complete the [ergonomics retrospective](#closing-a-workspace--ergonomics-retrospective).
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
 - **Website release notes after a stable promotion**: a cloudlands-fe stable promotion
@@ -294,12 +295,50 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   applies); the procedure and copy prompt are in
   [docs/fe/RELEASING.md § Promoting to Stable](./docs/fe/RELEASING.md#promoting-to-stable).
 
+## Closing a workspace — ergonomics retrospective
+
+Once work is merged or shipping, and before the final workspace status message, run the
+[repo-retrospective skill](.agents/skills/repo-retrospective/SKILL.md) for the full prompt.
+
+Land each finding on the strongest available enforcement rung:
+1. Make the mistake impossible with types, goldens, or a protocol contract.
+2. Catch it mechanically before merge with a lint, CI check, or test.
+3. Make the right path discoverable with a "Where to look" row, Makefile target, or script.
+4. Add an AGENTS.md prose rule only as a last resort, citing the linked incident.
+
+**Channel:** Propose one follow-up workspace per coherent improvement; give its prompt the
+goal, evidence, proposed rung, and verification. In Intent use `ws.workspace.proposeSibling`;
+delegated/background agents hand the finding to their parent. Outside Intent, file an
+`intent-hq/intent` issue with `agent-workflow` and `agent-filed`. Never bundle the improvement
+into the feature PR.
+
+**Budget:** AGENTS.md prose must replace or compress existing text or be justified by a linked
+incident. Prefer mechanizing an existing prose rule over adding another.
+
 ## Filing Issues
 
 When you encounter a bug or limitation while working on the codebase (including while
 dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
 [intent-hq/intent](https://github.com/intent-hq/intent/issues) — the single tracker
 for all components.
+
+- **Type**: classification is the GitHub issue **Type** field — `Bug`, `Feature`,
+  or `Task` — not a label. The `bug` and `enhancement` type labels are retired: do
+  not apply them (triage retires them — on the issue's open / edit / reopen, or as
+  soon as the label is applied — after setting the matching Type; the `question`
+  label stays a regular label). Set the Type when filing:
+  `gh issue create --repo intent-hq/intent --type Bug ...` (gh ≥ 2.94.0). On older
+  gh, create the issue first, then set the Type via
+  `gh api graphql` with the `updateIssue` mutation, passing an `issueTypeId`
+  resolved from the repository's `issueTypes` connection:
+
+  ```bash
+  gh api graphql -f query='query { repository(owner: "intent-hq", name: "intent") {
+    issueTypes(first: 10) { nodes { id name } } } }'
+  gh api graphql -f query='mutation($id: ID!, $type: ID!) {
+    updateIssue(input: { id: $id, issueTypeId: $type }) { issue { number } } }' \
+    -f id="$(gh issue view <N> --repo intent-hq/intent --json id -q .id)" -f type=<issueTypeId>
+  ```
 
 - **Labels**: apply the appropriate `component:*` label (`component:intentd`,
   `component:fe`, `component:ios`) plus `agent-filed`.

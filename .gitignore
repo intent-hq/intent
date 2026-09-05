@@ -6,3 +6,7 @@
 
 # macOS Finder metadata
 .DS_Store
+
+# Root-level scratch files
+/.apply_*.py
+/*.tmp

@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **339 dispatchable method names** across the following categories:
+The API exposes **341 dispatchable method names** across the following categories:
 
-- **Router methods:** 298 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 300 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 39 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 339 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 341 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
 
-**Total:** 339 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 341 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
 
-### Router methods by namespace (298 total)
+### Router methods by namespace (300 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 24 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| github | 25 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 12 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update, testConnection |
@@ -56,7 +56,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 36 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, transfer.plan, unarchive, update, updateContext, updateUiContext |
+| workspace | 37 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, transfer.plan, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
 
@@ -211,6 +211,23 @@ The `system.status` result additionally reports the daemon's live **file-watch c
 - `totalRoots` counts the watch roots currently requested across every stream, whatever their registration state.
 - `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
 - All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
+
+#### `system.status` — file-descriptor fields (additive)
+
+The `system.status` result additionally reports the daemon's own **open file descriptor count** next to the **soft `RLIMIT_NOFILE`** it runs under, so descriptor exhaustion (`EMFILE` on `accept`, SQLite `code: 14` "unable to open database file") is attributable from a debug bundle rather than inferred from its symptoms ([intent-hq/intent#4390](https://github.com/intent-hq/intent/issues/4390)):
+
+```jsonc
+{
+  "fdCount": 312,   // open file descriptors held by the daemon process
+  "fdLimit": 10240  // soft RLIMIT_NOFILE in effect (after the startup raise)
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fdCount` is the size of the daemon's own descriptor table (`/proc/self/fd` on Linux, `/dev/fd` on macOS), sampled by the same ~1s own-process background sampler that serves `cpuPercent` / `memoryBytes` — the status read path never touches the OS. The first sample is taken synchronously before the listeners bind, so a running daemon reports it from the first `system.status` call. It excludes the transient handle the sampler itself holds while reading the table.
+- `fdLimit` is the soft `RLIMIT_NOFILE` the daemon actually runs under: `intentd serve` raises its soft limit to the hard limit at startup (capped at `OPEN_MAX` = 10240 on macOS) and records the value the kernel applied, so this is the ceiling `fdCount` is measured against. It is sampled once at startup and does not change over the daemon's lifetime.
+- The daemon also logs one WARN (`fd_count`, `fd_limit`) when `fdCount` reaches **80 %** of `fdLimit` — repeated at most once a minute while it stays there — and one INFO when it recovers below **60 %**; the band in between is hysteresis. The wire fields carry no threshold state; clients that want a warning compute `fdCount / fdLimit` themselves.
+- Both fields follow the **presence-detection convention** and are **independent**: `fdCount` is **absent** — never `null` or `0` — on platforms without a readable per-process descriptor table (anything other than Linux/macOS), and `fdLimit` is absent where `getrlimit` is unavailable (non-Unix) or failed at startup. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — `updateSupported` (additive, v8.7)
 
