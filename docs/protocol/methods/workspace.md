@@ -65,12 +65,13 @@ fails with `-32602`; the draft moves to `failed`, retains its authored fields, a
 `workspace.create` inputs; `contextLinks` are carried through. A promotion failure retains
 the draft as `failed`, stores `lastError`, and permits retry. Promotion marks the draft
 `promoting` before creation and uses the immutable `operationKey` as the create idempotency
-key. When the workspace row is inserted, the daemon atomically sets `promotedWorkspaceId`
-while the draft remains `promoting`; an interruption may subsequently leave that durable
-mapping on a `promoting` or `failed` draft, with `initialAgentId` still absent. Clients must
-treat a populated `promotedWorkspaceId` as the existing promotion target. Retrying
-`workspaceDraft.promote` recovers that workspace and its initial agent rather than creating
-duplicates, making retry/restart recovery exactly-once from the client's perspective.
+key. The workspace row and `promotedWorkspaceId` mapping commit atomically while the draft
+remains `promoting`; an interruption may subsequently leave that durable mapping on a
+`promoting` or `failed` draft, with `initialAgentId` still absent. Clients must treat a
+populated `promotedWorkspaceId` as the existing promotion target. Retrying
+`workspaceDraft.promote` recovers that workspace and resumes its initial-agent creation and
+first turn rather than creating duplicates, making retry/restart recovery exactly-once from
+the client's perspective.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
