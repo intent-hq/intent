@@ -1,19 +1,18 @@
 #!/usr/bin/env node
 
 // Check agent-facing Markdown for paths that no longer resolve. In addition to
-// explicit ./ and ../ Markdown links, this conservatively checks single-backtick
+// local Markdown links, this conservatively checks single-backtick
 // spans whose entire value starts with docs/, scripts/, or .github/ and contains
 // only path characters. Globs, placeholders, whitespace, and ellipses are ignored.
-// Root guides resolve these from the monorepo root, package guides from that
-// package or the monorepo, and docs/fe from cloudlands-fe; other docs may
-// describe any component.
+// Bare paths resolve against the source directory, monorepo root, and component repositories.
+// References requiring an uninitialized submodule are skipped as unverifiable.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?(?:\.\.?\/)[^\s)>]+>?)/g;
+const MARKDOWN_LINK = /\[[^\]]*\]\(\s*(<?[^\s)>]+>?)/g;
 const REPO_PATH = /`((?:docs|scripts|\.github)\/[A-Za-z0-9._/-]+)`/g;
 
 async function isFile(filePath) {
@@ -82,13 +81,17 @@ async function submodules(root) {
   const paths = [...config.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)].map((match) => path.resolve(root, match[1]));
   const modules = [];
   for (const submodulePath of paths) {
-    modules.push({ path: submodulePath, available: await exists(submodulePath) });
+    modules.push({ path: submodulePath, initialized: await exists(path.join(submodulePath, '.git')) });
   }
   return modules;
 }
 
+function unwrapTarget(raw) {
+  return raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw;
+}
+
 function cleanTarget(raw) {
-  const unwrapped = raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw;
+  const unwrapped = unwrapTarget(raw);
   const end = [unwrapped.indexOf('#'), unwrapped.indexOf('?')]
     .filter((index) => index >= 0)
     .reduce((first, index) => Math.min(first, index), unwrapped.length);
@@ -103,60 +106,94 @@ function lineAt(content, index) {
   return content.slice(0, index).split('\n').length;
 }
 
-export async function checkRepository(root) {
+function isLocalLink(raw) {
+  const target = unwrapTarget(raw);
+  return (
+    !target.startsWith('#') &&
+    !target.startsWith('//') &&
+    !/^[a-z][a-z0-9+.-]*:/i.test(target) &&
+    !/[{}*]/.test(target) &&
+    !target.includes('...')
+  );
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths)];
+}
+
+function isWithin(candidate, directory) {
+  return candidate === directory || candidate.startsWith(`${directory}${path.sep}`);
+}
+
+export async function inspectRepository(root) {
   root = path.resolve(root);
   const [inputs, modules] = await Promise.all([findInputs(root), submodules(root)]);
   const failures = [];
+  let skipped = 0;
 
   for (const source of inputs) {
     const content = await fs.readFile(source, 'utf8');
     const references = [];
     for (const match of content.matchAll(MARKDOWN_LINK)) {
-      references.push({ raw: match[1], target: cleanTarget(match[1]), index: match.index, bases: [path.dirname(source)] });
+      if (!isLocalLink(match[1])) continue;
+      references.push({
+        raw: match[1],
+        target: cleanTarget(match[1]),
+        index: match.index,
+        bases: uniquePaths([path.dirname(source), root]),
+      });
     }
     for (const match of content.matchAll(REPO_PATH)) {
       if (match[1].includes('...')) continue;
-      const relativeSource = path.relative(root, source);
-      let bases = [root];
-      const packageMatch = relativeSource.match(/^packages\/[^/]+/);
-      if (packageMatch) bases = [path.join(root, packageMatch[0]), root];
-      else if (relativeSource.startsWith(`docs${path.sep}fe${path.sep}`)) bases = [path.join(root, 'packages', 'cloudlands-fe')];
-      else if (relativeSource.startsWith(`docs${path.sep}`)) bases = [root, ...modules.map((module) => module.path)];
-      references.push({ raw: match[1], target: cleanTarget(match[1]), index: match.index, bases });
+      references.push({
+        raw: match[1],
+        target: cleanTarget(match[1]),
+        index: match.index,
+        bases: uniquePaths([path.dirname(source), root, ...modules.map((module) => module.path)]),
+      });
     }
 
     for (const reference of references) {
-      const resolved = reference.bases.map((base) => path.resolve(base, reference.target));
-      const insideRoot = resolved.every((candidate) => candidate === root || candidate.startsWith(`${root}${path.sep}`));
-      const found = (await Promise.all(resolved.map((candidate) => exists(candidate)))).some(Boolean);
-      const unverifiable = resolved.some((candidate) =>
-        modules.some(
-          (module) => !module.available && (candidate === module.path || candidate.startsWith(`${module.path}${path.sep}`)),
-        ),
-      );
-      if (!insideRoot || (!found && !unverifiable)) {
-        failures.push({
-          source: path.relative(root, source),
-          line: lineAt(content, reference.index),
-          target: reference.raw,
-          resolved: path.relative(root, resolved[0]),
-        });
+      const resolved = uniquePaths(reference.bases.map((base) => path.resolve(base, reference.target)));
+      const insideRoot = resolved.filter((candidate) => isWithin(candidate, root));
+      const isUnverifiable = (candidate) =>
+        modules.some((module) => !module.initialized && isWithin(candidate, module.path));
+      const verifiable = insideRoot.filter((candidate) => !isUnverifiable(candidate));
+      const found = (await Promise.all(verifiable.map((candidate) => exists(candidate)))).some(Boolean);
+      if (found) continue;
+
+      const unverifiable = insideRoot.some(isUnverifiable);
+      if (unverifiable) {
+        skipped += 1;
+        continue;
       }
+
+      failures.push({
+        source: path.relative(root, source),
+        line: lineAt(content, reference.index),
+        target: reference.raw,
+        resolved: path.relative(root, insideRoot[0] ?? resolved[0]),
+      });
     }
   }
-  return failures;
+  return { failures, skipped };
+}
+
+export async function checkRepository(root) {
+  return (await inspectRepository(root)).failures;
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const failures = await checkRepository(root);
+  const { failures, skipped } = await inspectRepository(root);
   if (failures.length === 0) {
-    console.log('Documentation links resolve.');
+    console.log(`Documentation links resolve; skipped ${skipped} unverifiable reference${skipped === 1 ? '' : 's'}.`);
     return;
   }
   for (const failure of failures) {
     console.error(`${failure.source}:${failure.line}: missing ${failure.target} (${failure.resolved})`);
   }
+  if (skipped > 0) console.log(`Skipped ${skipped} unverifiable reference${skipped === 1 ? '' : 's'}.`);
   process.exitCode = 1;
 }
 

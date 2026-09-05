@@ -7,11 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { checkRepository, findInputs } from './check-doc-links.mjs';
+import { checkRepository, findInputs, inspectRepository } from './check-doc-links.mjs';
 
-async function fixture(t, files) {
+async function fixture(t, files, directories = []) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-doc-links-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  for (const name of directories) await fs.mkdir(path.join(root, name), { recursive: true });
   for (const [name, content] of Object.entries(files)) {
     const filePath = path.join(root, name);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -40,9 +41,9 @@ test('finds only the configured agent-facing Markdown inputs', async (t) => {
   ]);
 });
 
-test('checks relative Markdown links, strips anchors, and ignores web URLs', async (t) => {
+test('checks repo-relative Markdown links and skips URLs and anchors', async (t) => {
   const root = await fixture(t, {
-    'AGENTS.md': '[ok](./docs/guide.md#intro) [web](https://example.com/missing)',
+    'AGENTS.md': '[ok](docs/guide.md?view=full#intro) [web](https://example.com/missing) [anchor](#missing)',
     'docs/guide.md': '[missing](../scripts/missing.mjs#usage)',
   });
   assert.deepEqual(await checkRepository(root), [
@@ -68,11 +69,24 @@ test('skips links into submodules that are absent from the checkout', async (t) 
   assert.deepEqual(await checkRepository(root), []);
 });
 
-test('resolves package documentation paths from the component repository', async (t) => {
+test('skips bare paths requiring an uninitialized submodule directory', async (t) => {
+  const root = await fixture(
+    t,
+    {
+      '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',
+      'docs/guide.md': 'Run `scripts/release.mjs`.',
+    },
+    ['packages/product'],
+  );
+  assert.deepEqual(await inspectRepository(root), { failures: [], skipped: 1 });
+});
+
+test('resolves bare paths found only in an initialized submodule', async (t) => {
   const root = await fixture(t, {
     '.gitmodules': '[submodule "packages/product"]\n\tpath = packages/product\n',
     'docs/guide.md': 'Shared component script: `scripts/release.mjs`',
     'packages/product/AGENTS.md': 'Run `scripts/release.mjs`.',
+    'packages/product/.git': 'gitdir: elsewhere',
     'packages/product/scripts/release.mjs': '',
   });
   assert.deepEqual(await checkRepository(root), []);
