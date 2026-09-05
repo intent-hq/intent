@@ -1,11 +1,13 @@
 # Architecture
 
 > Audience: engineers working on the `intentd` Rust backend
-> (`packages/intentd`). Companion document: [PROTOCOL.md](./PROTOCOL.md) — the
-> wire-protocol reference (transport, JSON-RPC envelope, method catalog,
-> events). This page records the durable architecture and dependency rules;
-> the historical porting spec (IMPLEMENTATION_SPEC.md) has been removed from
-> the tree and remains available in git history.
+> (`packages/intentd`). Companion documents: the canonical
+> [protocol documentation](./protocol/README.md) for transports, JSON-RPC,
+> method catalogs, and events, and [HARNESS.md](./HARNESS.md) for versioned
+> agent doctrine and feature snapshots. [PROTOCOL.md](./PROTOCOL.md) is a
+> compatibility redirect for older section citations. This page records
+> durable architecture and dependency rules; the historical porting spec
+> remains available in git history.
 
 ## System overview
 
@@ -44,23 +46,26 @@ The daemon embeds:
   `GitHubSourceControl` via octocrab) for PR/issue/review/check-run/mergeability.
 - An optional **context engine** abstraction whose only current implementation
   shells out to `auggie`, degrading gracefully when unavailable.
-- A **persistence layer** (SQLite + a file tree) that owns all durable state.
-- An **event bus + append-only event log** delivered to subscribers as
-  JSON-RPC notifications.
+- A **persistence layer** with SQLite read/write pools, embedded schema
+  migrations, workspace files, TOML settings, and a separate file-backed
+  secret store.
+- An **event bus** for durable domain events and transient high-frequency
+  streaming events, plus an append-only log for the events intended to be
+  queryable after delivery.
+- A **voice-transcription engine** that keeps ElevenLabs/OpenAI credentials
+  daemon-side and optionally derives vocabulary from workspace state.
 
 The overriding invariant, carried over from the original Intent Electron app:
-**transports are thin; services are shared.** Every transport (the local
-listener — UDS on Unix, a named pipe on Windows — TCP/TLS, the agent-facing
-MCP server) dispatches into the same service layer. The Windows pipe name is
-derived from the resolved socket path (`\\.\pipe\intentd-<hash16>`, first 16
-hex chars of SHA-256 over the normalized path — `intent-transport`'s
-`pipe_name_for_socket_path`, mirrored byte-for-byte by cloudlands-fe's
-`intentd-pipe-name.ts`; see PROTOCOL.md §1.1); framing and protocol are
-identical on both local transports.
+**transports are thin; services are shared.** The local listener, authenticated
+WebSocket listener, and agent-facing MCP bridge share the same domain service
+implementations through `WorkspaceApi`. Connection lifecycle, authentication,
+subscription management, reverse RPC dispatch, and control fast paths remain
+transport-owned.
 
 ## Crate layout
 
-A single Cargo workspace with one binary crate `intentd` and library crates:
+A single Cargo workspace contains the daemon binary, the separately shipped
+supervisor binary, and shared library crates:
 
 ```text
 packages/intentd/               # cargo workspace root
@@ -82,9 +87,10 @@ packages/intentd/               # cargo workspace root
     │                           #   (QuickJS via rquickjs), async host bindings, timeouts
     ├── intent-linear/          # LinearEngine + DTOs for the linear.* surface
     ├── intent-sentry/          # SentryEngine + DTOs for the sentry.* surface
-    └── intent-transport/       # local (UDS / Windows named pipe) + TCP/TLS
-                                #   listeners, JSON-RPC router, auth,
-                                #   client.hello → clientId mapping
+    ├── intent-voice/           # VoiceEngine + ElevenLabs/OpenAI speech-to-text
+    ├── intent-transport/       # local + WSS listeners, JSON-RPC, auth, pairing,
+    │                           #   subscriptions, reverse RPC, binary tunnels
+    └── intentd-sitter/         # independently released supervisor/updater binary
 ```
 
 Several cross-cutting features are **service modules** rather than crates,
@@ -93,31 +99,196 @@ table), client identity (a transport concern plus a small `client` store
 table), the Code Changes Review domain (`services::file_tracking`,
 `services::diffs`, `services::accept_changes`, `services::metrics`), the
 Agent-Ecosystem modules (`services::rules`, `services::specialists`,
-`services::mcp_servers`, `services::memories`), and the Integrations & Ops
-modules (`services::token_usage`, `services::session_stats`,
-`services::setup_scripts`, `services::repo_config`). They depend only on the
-lower layers (store, git, sourcecontrol, context, providers) and the event
-bus — never on the transport or on each other directly.
+`services::mcp_servers`, `services::skills`, `services::harness`), and the
+Integrations & Ops modules (`services::token_usage`, `services::session_stats`,
+`services::setup_scripts`, `services::repo_config`, `services::voice_ops`).
+These modules can reuse shared helpers and other service modules within the
+same crate, while keeping crate-level dependencies directed toward the lower
+layers and avoiding a dependency on transport.
 
 ## Module responsibilities
 
 | Module / crate | Responsibility | May depend on |
 | --- | --- | --- |
-| intentd (bin) | CLI parsing (serve/call/status/stop/doctor), daemonization, wiring | every crate |
+| intentd (bin) | CLI parsing (`serve`, `call`, `status`, `stop`, `doctor`, `settings`, `pair`, imports, MCP bridge, credential helper), daemon lifecycle, composition root | core, store, services, acp, providers, git, context, transport; optional js |
+| intentd-sitter (bin + lib) | Independently released installed `intentd` shim; channel selection, verified daemon updates, supervision, restart/update commands | no workspace crates |
 | intent-core | WorkspaceId/NoteId/AgentId newtypes, Error/Result, Config, event types, traits | (none — leaf) |
-| intent-store | SQLite pool, migrations, repositories, file layout, locking | core |
-| intent-services | note/task/comment/workspace/agent/git/pr/script/file/event/draft logic plus the Agent-Ecosystem, Code-Changes-Review, and Integrations & Ops service modules | core, store, git, sourcecontrol, acp, context, providers, pty, search, linear, sentry |
-| intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, providers, pty, js; calls back into services via a trait |
+| intent-store | SQLite read/write pools, embedded migrations, repositories, file layout, locking | core |
+| intent-services | Shared domain operations, agent runtime, versioned harness, CRDT note merging, hooks, PR monitoring, workspace transfers, integrations, and voice transcription | core, store, git, sourcecontrol, acp, js, context, providers, pty, search, linear, sentry, voice |
+| intent-acp | spawn providers over stdio, handshake, session new/load/prompt/cancel, streaming, client-served fs/terminal/permission, agent→BE MCP server | core, git, providers, js; calls back into services via a trait |
 | intent-providers | ProviderConfig registry, arg/env builder, capability/quirks (no static model catalogs — model discovery is dynamic via `models.list`, and no provider carries a default designation) | core |
 | intent-sourcecontrol | SourceControl trait + GitHubSourceControl (octocrab): PR/issue/review/check-run/mergeability, retry | core |
 | intent-git | status/stage/commit/branches, worktree create + lock, CoW reflink probe/clone (macOS `clonefile(2)` whole-tree fast path with best-effort walk fallback, Linux `ioctl(FICLONE)`) for CoW workspace checkouts and per-agent sandboxes, hidden repo cache (`repo_cache`) of read-only GitHub clones backing cache-hydrated workspace creation | core |
 | intent-context | ContextEngine trait + AuggieContextEngine + discovery | core |
 | intent-pty | unified portable-pty host for terminals **and** scripts: scrollback ring buffers, multi-client attach, service/command modes, auto-restart, URL/port detection | core |
-| intent-search | BE-owned `search.*`: ripgrep-equivalent content search (grep + ignore + globset), path/glob search, adapters over persisted sessions/events/memories/notes/codebase; per-request cancellation | core, store |
+| intent-search | File/path search, cancellation, and pure search adapters; `intent-services` performs store-backed session/event/note/codebase reads | core |
 | intent-js | QuickJS-based JavaScript engine for agent-supplied code: async host bindings, wall-clock timeouts | (none — leaf) |
 | intent-linear | LinearEngine + DTOs for the `linear.*` surface (typed GraphQL over reqwest) | core |
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
-| intent-transport | local (UDS on Unix, named pipe on Windows) + TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
+| intent-voice | VoiceEngine, ElevenLabs Scribe/OpenAI transcription providers, provider registry, vocabulary/context helpers | core |
+| intent-transport | Local and WSS listeners, TLS, bearer auth, origin allow-list, pairing, JSON-RPC routing, typed subscriptions, reverse RPC, `/tunnel`, heartbeat, `client.hello` | core, services |
+
+## Runtime topology, transports, and client ownership
+
+Wire contract: [transport](./protocol/01-transport.md),
+[authentication](./protocol/02-authentication.md),
+[execution locus](./protocol/methods/execution-locus.md), and
+[client identity](./protocol/methods/client-hello.md).
+
+- **Always-on local transport.** Each daemon serves newline-delimited JSON-RPC
+  over a Unix-domain socket on Unix or a named pipe on Windows. The Windows
+  pipe name is `\\.\pipe\intentd-<hash16>`, derived from the normalized
+  socket path by SHA-256; the daemon and desktop frontend carry matching
+  implementations and test vectors. Local access is the default and remains
+  available when remote networking is disabled or fails to bind.
+- **Optional remote transport.** `server.wsApi.enabled` controls an HTTPS/WSS
+  listener using `server.bindAddress` and `server.wsApi.port` (default `5181`).
+  The default bind address is loopback; LAN or tailnet access requires an
+  explicit reachable bind address. The `/ws` endpoint carries the same domain
+  API as the local transport, with a persisted self-signed TLS certificate,
+  certificate-fingerprint pinning, bearer authentication, Origin checks, and
+  optional negotiated RFC 7692 WebSocket compression. `serve --insecure`
+  explicitly enables plaintext, unauthenticated development transport.
+- **Pairing.** `intentd pair` and local-only `pairing.getInfo` expose the
+  connection URL, bearer token, and certificate fingerprint together. The
+  daemon owns token rotation and listener settings; an iOS or remote desktop
+  client consumes the paired credentials.
+- **Desktop attachment.** The packaged desktop app can adopt an existing
+  daemon or manage a sidecar. Development builds do not spawn a sidecar by
+  default. `INTENTD_SOCKET` is the highest-precedence transport override;
+  `INTENTD_WS_URL` selects a supplied WebSocket endpoint. Explicit transport
+  overrides suppress sidecar spawning. From the monorepo root, `make dev-fe`
+  targets the isolated development daemon, `make dev-prod` attaches to the
+  packaged app's running daemon, and `make run-fe-local` attaches to an
+  installed daemon over its local socket.
+- **Execution locality.** Filesystem operations, git, agent providers, PTYs,
+  scripts, and `host.exec` run on the daemon host. User-interface capabilities
+  such as opening an external URL, presenting an application picker, and
+  embedded-browser automation are served by the connected desktop client
+  through reverse JSON-RPC. Remote `host.openInEditor` is reverse-dispatched;
+  local editor launches can execute directly on the daemon host.
+- **Reverse-request ownership.** Client-triggered operations use their own
+  connection's reverse channel. An agent-initiated `browser.exec` has no
+  ambient client connection, so the shared `PrimaryReverseRegistry` currently
+  targets the first connected live client and fails over in connection order.
+  Reverse requests use the `rev-<n>` identifier namespace and bounded
+  timeouts.
+- **Remote loopback tunneling.** The authenticated `/tunnel` WebSocket shares
+  the remote listener and heartbeat lifecycle, while carrying multiplexed
+  binary TCP streams separately from JSON-RPC. It connects only to ports on
+  the daemon host's IPv4 loopback and lets the desktop client surface a remote
+  development server locally when a direct connection is unavailable.
+
+## Event delivery and live subscriptions
+
+Wire contract: [events and subscriptions](./protocol/06-events.md) and
+[agent streaming](./protocol/07-agent-streaming.md).
+
+`intent-services` publishes domain changes onto the shared event bus. Durable
+events also enter the append-only SQLite event log; high-volume ephemeral
+streaming frames, including chat fragments and `host.execStream` output,
+remain broadcast-only. `events.subscribe` delivers filtered bus events as
+`events.event` JSON-RPC notifications.
+
+For structured state, `intent-transport` owns typed `workspace`, `note`,
+`task`, `comment`, `agent`, and `chat` subscriptions. Each subscription sends
+a sequence-zero snapshot followed by ordered `subscription.push` deltas.
+Workspace snapshots intentionally use inexpensive lite projections, agent
+snapshots use list projections, and chat snapshots read one bounded
+conversation page while incorporating an in-flight turn. Chat supports
+resumption by message ID and optional incremental text fragments; writer
+backpressure conflates compatible deltas without discarding incremental text.
+
+Subscriptions belong to a single connection and are removed on disconnect.
+Clients re-subscribe and refresh canonical daemon state after reconnecting.
+
+## Installed daemon supervision and updates
+
+`intentd-sitter` is an independent workspace crate and release artifact. Its
+installed executable is named `intentd`; it downloads and launches the real
+daemon from the configured `stable`, `beta`, or `alpha` release channel.
+Everything it owns lives under `<data_dir>/sitter/`, including its channel
+configuration, state file, supervisor PID, temporary downloads, and
+`versions/<version>/intentd` installations. The sitter resolves the shared
+data directory independently so locating supervisor state does not initialize
+or parse daemon configuration.
+
+For `serve`, the sitter checks for an update at startup, verifies downloaded
+archives against their SHA-256 digests, installs versions atomically, and
+checks again on a randomized 12–24 hour interval. It forwards daemon
+arguments, supervises unexpected exits with bounded exponential backoff,
+re-checks the release channel during crash loops, and gracefully restarts the
+child after installing an update. Version-changing restarts mark the child
+with `INTENTD_UPDATE_RESTART` so the daemon can resume interrupted agents;
+the daemon removes that marker before spawning its own children.
+
+Ordinary one-shot daemon commands run the installed daemon once without
+triggering update activity. `intentd sitter channel`, `intentd restart`, and
+`intentd update` are intercepted by the supervisor shim. The sitter has no
+dependencies on daemon workspace crates, keeping its update and supervision
+lifecycle independent of daemon releases.
+
+## Durable state, note merging, and workspace transfer
+
+`intent-store` owns SQLite migrations and distinct read/write pools. Domain
+rows and durable events live in SQLite; repository checkouts, assets, and
+registered attachments live under daemon-owned workspace paths. Non-secret
+settings live in `<data_dir>/config.toml`; sensitive integration and provider
+credentials use the separate file-backed secret store.
+
+Full-content note writes pass through a per-note in-memory `yrs` document in
+`services::crdt_notes`. The document starts from persisted content and applies
+UTF-16-aware edits before the merged result is saved to SQLite. Surgical note
+and task mutations invalidate that cache; CRDT documents are transient and
+idle sessions are swept. Note revisions and version history remain durable.
+
+Workspace transfer is coordinated by `services::transfer`,
+`services::transfer_export`, `services::transfer_import`, and the desktop
+main-process relay. The source daemon builds a versioned ZIP containing
+workspace-scoped rows, assets, existing attachment files, and a git bundle;
+event history is excluded. Running agents are captured as interrupted, and
+dirty checkouts or active sandbox branches are preserved through git
+snapshots. The frontend streams bounded chunks directly to a target daemon's
+staged import, or to a downloaded file, without sending archive bytes through
+renderer IPC. Import verifies the archive checksum, transfer format, and exact
+daemon-version compatibility before committing rows and workspace files;
+failed or canceled transfers clean up both sides. See
+[workspace transfer methods](./protocol/methods/workspace.md) for the wire
+contract.
+
+## Versioned agent harness
+
+`intent-services::harness` owns the versioned doctrine behind agent system
+prompts, bundled instructions and specialists, turn-envelope helpers, and
+daemon-authored wake or notice text. Each agent records an immutable
+creation-time `harnessVersion` plus its effective `harnessFeatures`
+snapshot. Existing sessions continue using their captured prompt doctrine and
+feature snapshot after daemon settings change; a delegated child receives the
+version current when that child is created.
+
+The wire protocol, MCP schemas, and runtime implementation continue to follow
+the live daemon. Session-pinned doctrine assembly is implemented today;
+some turn-envelope and wake call sites still resolve the latest harness, as
+documented in [HARNESS.md](./HARNESS.md). Byte-pinned golden tests protect
+existing doctrine versions, and older harness resources remain bundled so
+persisted sessions can resolve their original version.
+
+## Voice transcription
+
+Wire contract: [voice methods](./protocol/methods/voice.md).
+
+`intent-voice` defines the `VoiceEngine` trait, provider registry, context and
+vocabulary helpers, and the ElevenLabs Scribe/OpenAI transcription engines.
+`services::voice_ops` validates and decodes client-recorded audio, resolves
+provider settings and secrets, optionally derives workspace-specific
+vocabulary, and returns the provider's transcript through `voice.transcribe`.
+`voice.getWorkspaceVocabulary` exposes derived terms separately.
+
+Provider credentials remain in the daemon's secret store or environment;
+clients receive transcript results and actionable configuration errors
+without receiving API keys. The crate depends only on `intent-core` among
+workspace crates and follows the same integration-layer pattern as
+`intent-linear` and `intent-sentry`.
 
 ## Workspace checkouts & agent sandboxes (CoW)
 
@@ -1001,46 +1172,50 @@ contract lives in the intentd repo's AGENTS.md.
 ## Dependency-direction rules
 
 ```text
-intent-core  ◄───────────────────────────────────────────────┐
-   ▲ ▲ ▲ ▲ ▲ ▲ ▲ ▲                                            │
-   │ │ │ │ │ │ │ └── intent-providers ◄── intent-acp          │
-   │ │ │ │ │ │ │        (acp also ► pty, js)                  │
-   │ │ │ │ │ │ └──── intent-context                           │
-   │ │ │ │ │ └────── intent-git                               │
-   │ │ │ │ └──────── intent-sourcecontrol                     │
-   │ │ │ └────────── intent-pty                               │
-   │ │ └──────────── intent-linear / intent-sentry            │
-   │ └────────────── intent-store ◄── intent-search           │
-   └── intent-services ──► (store, git, sourcecontrol, acp,   │
-             ▲              context, providers, pty, search,  │
-             │              linear, sentry)                   │
-   intent-transport ──► services        intentd (bin) ──► all
+Leaves:      intent-core, intent-js, intentd-sitter
+
+Foundation:  store, git, sourcecontrol, context, providers, pty,
+             search, linear, sentry, voice ──► core
+
+ACP:         intent-acp ──► core, git, providers, js
+
+Services:    intent-services ──► core, store, git, sourcecontrol,
+             acp, js, context, providers, pty, search, linear,
+             sentry, voice
+
+Transport:   intent-transport ──► core, services
+
+Daemon:      intentd ──► core, store, services, acp, providers,
+             git, context, transport; optional js
 ```
 
-(`intent-js` is a leaf with no workspace dependencies; it is consumed by
-`intent-acp` and the binary.)
+The sitter shares the Cargo workspace but has no dependency edges to daemon
+crates. `intent-js` is consumed directly by both ACP and services; the daemon
+binary's direct dependency is optional and gates its `js-eval` CLI only.
 
 Rules:
 
-1. **`intent-core` is a leaf** — no dependency on any other workspace crate.
-   It defines the domain vocabulary (ids, timestamps, errors, event types) and
-   *traits* (`ContextEngine`, `WorkspaceApi`) that higher layers
-   implement/consume.
+1. **`intent-core`, `intent-js`, and `intentd-sitter` have no workspace
+   dependencies.** Core defines the domain vocabulary (ids, timestamps,
+   errors, event types) and traits (`ContextEngine`, `WorkspaceApi`) consumed
+   by higher layers. JS and the supervisor remain independent leaves.
 2. **`intent-transport` never touches `intent-store` directly.** It only
-   depends on `intent-services`. This guarantees the RPC router and the agent
-   MCP server share one code path.
+   depends on `intent-core` and `intent-services`, so transport handlers and
+   the agent-facing MCP server reach domain state through shared services.
 3. **`intent-acp` calls back into business logic through a trait**
    (`WorkspaceApi`, defined in `intent-core`, implemented in
    `intent-services`) to avoid a dependency cycle `services → acp → services`.
    Concretely: `services` constructs the ACP client and hands it an
    `Arc<dyn WorkspaceApi>` so the agent→BE MCP server reuses the same logic.
-   (`intent-acp` additionally carries a **dev-only**, version-less
-   dev-dependency on `intent-services` so its binding tests can drive the
-   real service implementations — a Cargo-permitted dev-dep cycle; the
-   normal-build dependency direction is unchanged.)
-4. **No cross-imports between sibling "feature" service modules.**
-   `services::notes` and `services::git` communicate through the store/event
-   bus, not by importing each other.
-5. **The binary crate is the only place allowed to wire concrete
-   implementations together** (composition root), keeping every library crate
-   testable in isolation.
+   ACP additionally carries dev-only dependencies on `intent-pty` and a
+   version-less `intent-services` for integration tests; the latter is a
+   Cargo-permitted dev-dependency cycle and does not affect production
+   dependency direction.
+4. **Service-module reuse stays inside `intent-services`.** Related modules
+   may import shared service helpers directly: transfers reuse `git_ops` and
+   `file_ops`, PR monitoring reuses `pr_ops`, and host execution reuses file
+   containment helpers. Such imports must not introduce a dependency on
+   `intent-transport` or bypass the shared service entry points.
+5. **The `intentd` daemon binary owns daemon composition.** It wires concrete
+   store, service, runtime, and transport implementations together; the
+   independent sitter only locates, updates, and supervises that binary.
