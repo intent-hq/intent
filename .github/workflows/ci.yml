@@ -64,9 +64,9 @@ jobs:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
 
-  # Agent-facing documentation links are checked without dependencies or
-  # initialized submodules, so this job also runs directly on GitHub hosting.
-  doc-links:
+  # Agent-facing documentation links and root hygiene are checked without
+  # dependencies or initialized submodules, directly on GitHub hosting.
+  repo-hygiene:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -77,6 +77,8 @@ jobs:
           node-version: 22
       - run: node --test scripts/check-doc-links.test.mjs
       - run: node scripts/check-doc-links.mjs
+      - run: node --test scripts/check-root-hygiene.test.mjs
+      - run: node scripts/check-root-hygiene.mjs
 
   # Guard release footer tokens in PR prose and branch commit messages unless
   # the release impact is explicitly acknowledged with a label.
