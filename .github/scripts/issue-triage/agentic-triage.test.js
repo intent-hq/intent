@@ -17,6 +17,7 @@ const {
   ISSUE_TYPE_BY_LABEL,
   LEGACY_TYPE_LABELS,
   POSSIBLE_DUPLICATE_LABEL,
+  applyTypeWriteOutcome,
   buildPrompt,
   buildSummaryComment,
   extractSearchQueries,
@@ -296,6 +297,34 @@ test('plan: legacy type labels are removed only once the issue has a Type', () =
   });
   assert.strictEqual(none.issueType.name, 'Bug');
   assert.deepStrictEqual(none.removeLabels, []);
+});
+
+test('plan: Type write outcome gates the legacy label removal', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const fresh = () =>
+    planActions({
+      response,
+      currentLabels: ['needs-triage', 'bug'],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    });
+
+  // Written by this run: the plan stands.
+  const written = applyTypeWriteOutcome(fresh(), true);
+  assert.strictEqual(written.issueType.name, 'Bug');
+  assert.deepStrictEqual(written.removeLabels, ['bug']);
+
+  // A human set the Type between plan and write: nothing to report as
+  // set, but the issue has a Type, so the legacy label is still retired.
+  const existing = applyTypeWriteOutcome(fresh(), 'existing');
+  assert.strictEqual(existing.issueType, null);
+  assert.deepStrictEqual(existing.removeLabels, ['bug']);
+
+  // The write failed: no Type on the issue, so the legacy label stays.
+  const failed = applyTypeWriteOutcome(fresh(), false);
+  assert.strictEqual(failed.issueType, null);
+  assert.deepStrictEqual(failed.removeLabels, []);
 });
 
 test('plan: priority is a field, never a label; gated on the current field value', () => {

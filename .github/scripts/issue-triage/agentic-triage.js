@@ -417,6 +417,22 @@ function planIssueType({ response, currentLabels, currentIssueType, issueTypes }
   };
 }
 
+// Reconcile the plan with the outcome of the Type write (setIssueType):
+//   - `true`: written by this run — the plan stands,
+//   - `'existing'`: a human set a Type between plan and write — nothing
+//     to report as set, but the issue HAS a Type, so the legacy type
+//     labels are still retired,
+//   - `false`: the write failed — no Type on the issue, so the legacy
+//     label stays (the issue remains classified; pass 1 retires it once a
+//     Type is present).
+// Pure, so the gating is unit-testable; returns the (mutated) plan.
+function applyTypeWriteOutcome(plan, outcome) {
+  if (outcome === true) return plan;
+  plan.issueType = null;
+  if (outcome !== 'existing') plan.removeLabels = [];
+  return plan;
+}
+
 // Resolve a single-select option by field name + option name against the
 // runtime `repository.issueFields` list. Null when the field or option is
 // unknown (fields disabled, lookup failed, option renamed) — never a guess.
@@ -598,6 +614,7 @@ module.exports = {
   NEEDS_INFO_LABEL,
   NEEDS_TRIAGE_LABEL,
   POSSIBLE_DUPLICATE_LABEL,
+  applyTypeWriteOutcome,
   buildPrompt,
   buildSummaryComment,
   extractSearchQueries,
@@ -695,12 +712,15 @@ function fetchIssueContext(repo, issueNumber) {
   }
 }
 
-// Set the Type via `updateIssue(issueTypeId)`. Returns true on success;
-// a failure (e.g. a token that cannot set Types) is a warning, not an
+// Set the Type via `updateIssue(issueTypeId)`. Returns true on success,
+// `'existing'` when the issue already has a Type, false on failure — a
+// failure (e.g. a token that cannot set Types) is a warning, not an
 // abort — the rest of the pass still completes. The planning read is a
 // point-in-time snapshot and `updateIssue` replaces unconditionally, so
 // the Type is re-read immediately before the write: a Type set by a human
-// in the meantime (or during the label write) is left alone.
+// in the meantime (or during the label write) is left alone (`'existing'`,
+// distinct from a failed write so the caller can still retire the legacy
+// label — see applyTypeWriteOutcome).
 function setIssueType(issueNodeId, issueType) {
   try {
     const fresh = ghJson([
@@ -714,7 +734,7 @@ function setIssueType(issueNodeId, issueType) {
       console.log(
         `issue Type is now ${node.issueType.name} (set since the plan was made); leaving it unchanged.`
       );
-      return false;
+      return 'existing';
     }
     gh([
       'api', 'graphql',
@@ -1089,14 +1109,15 @@ function main() {
   }
 
   // Order matters for partial-failure recovery: labels, then the Type,
-  // then the legacy type-label removal (only once the Type write
-  // succeeded, or the issue already had a Type), then the Priority /
-  // Effort fields, then the summary comment (the audit record +
-  // idempotency marker), and only then retire needs-triage — a failure
-  // before that point leaves the issue in the triage queue for a re-run or
-  // a human. The comment is built after the Type, label-removal and field
-  // writes so a fail-soft failure (or a value filled by a human in the
-  // meantime) is not reported as applied.
+  // then the legacy type-label removal (only once the issue has a Type —
+  // written by this run, pre-existing, or set by a human in the meantime;
+  // fail-soft, a failed removal is a warning and the label is retried by
+  // pass 1's next run), then the Priority / Effort fields, then the
+  // summary comment (the audit record + idempotency marker), and only then
+  // retire needs-triage — a failure before that point leaves the issue in
+  // the triage queue for a re-run or a human. The comment is built after
+  // the Type, label-removal and field writes so a fail-soft failure (or a
+  // value filled by a human in the meantime) is not reported as applied.
   if (plan.addLabels.length > 0) {
     gh([
       'issue', 'edit', String(issueNumber), '--repo', repo,
@@ -1105,27 +1126,27 @@ function main() {
     console.log(`added labels: ${plan.addLabels.join(', ')}`);
   }
   if (plan.issueType) {
-    if (setIssueType(context.issueNodeId, plan.issueType)) {
+    const outcome = setIssueType(context.issueNodeId, plan.issueType);
+    if (outcome === true) {
       console.log(`set issue Type: ${plan.issueType.name}`);
-    } else {
-      // No Type was written by this run: keep the legacy label so the
-      // issue stays classified (pass 1 retires it on the next edit once a
-      // Type is present).
-      plan.issueType = null;
-      if (plan.removeLabels.length > 0) {
-        console.log(
-          `issue Type not set by this run; keeping legacy label(s): ${plan.removeLabels.join(', ')}`
-        );
-        plan.removeLabels = [];
-      }
+    } else if (outcome === false && plan.removeLabels.length > 0) {
+      console.log(
+        `issue Type not set; keeping legacy label(s): ${plan.removeLabels.join(', ')}`
+      );
     }
+    applyTypeWriteOutcome(plan, outcome);
   }
   if (plan.removeLabels.length > 0) {
-    gh([
-      'issue', 'edit', String(issueNumber), '--repo', repo,
-      ...plan.removeLabels.flatMap((l) => ['--remove-label', l]),
-    ]);
-    console.log(`removed legacy type labels: ${plan.removeLabels.join(', ')}`);
+    try {
+      gh([
+        'issue', 'edit', String(issueNumber), '--repo', repo,
+        ...plan.removeLabels.flatMap((l) => ['--remove-label', l]),
+      ]);
+      console.log(`removed legacy type labels: ${plan.removeLabels.join(', ')}`);
+    } catch (e) {
+      warn(`could not remove legacy type labels ${plan.removeLabels.join(', ')} (fail-soft): ${e.message}`);
+      plan.removeLabels = [];
+    }
   }
   const plannedFields = ['priority', 'effort'].filter((k) => plan.issueFields[k]);
   if (plannedFields.length > 0) {
