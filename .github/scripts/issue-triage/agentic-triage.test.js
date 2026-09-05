@@ -1,7 +1,8 @@
 // Fixture-driven tests for the pass-2 agentic triage logic: model-output
-// parsing, the label allowlist, action gating, issue Type gating, issue
-// field (Priority / Effort) gating, the fields-only backfill planning, and
-// comment building.
+// parsing, the label allowlist, action gating, issue Type gating (Type-
+// native: the inference never becomes a bug/enhancement label), legacy
+// type-label removal gating, issue field (Priority / Effort) gating, the
+// fields-only backfill planning, and comment building.
 // Run locally with:  node --test .github/scripts/issue-triage/agentic-triage.test.js
 
 'use strict';
@@ -14,6 +15,7 @@ const path = require('node:path');
 const {
   AGENTIC_MARKER,
   ISSUE_TYPE_BY_LABEL,
+  LEGACY_TYPE_LABELS,
   POSSIBLE_DUPLICATE_LABEL,
   buildPrompt,
   buildSummaryComment,
@@ -172,9 +174,8 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
     currentLabels: ['needs-triage'],
     candidateNumbers: [101, 102],
   });
-  assert.deepStrictEqual(plan.addLabels, [
-    'component:intentd', 'bug', POSSIBLE_DUPLICATE_LABEL,
-  ]);
+  // The inferred `bug` type is NOT a label: it feeds the Type field only.
+  assert.deepStrictEqual(plan.addLabels, ['component:intentd', POSSIBLE_DUPLICATE_LABEL]);
   // Only the high-confidence candidate survives.
   assert.deepStrictEqual(plan.duplicates.map((d) => d.number), [101]);
   assert.strictEqual(plan.removeNeedsTriage, true);
@@ -189,11 +190,112 @@ test('plan: existing labels gate inference; needs-triage retired; dup allowlist 
   assert.deepStrictEqual(gated.addLabels, []);
   assert.deepStrictEqual(gated.duplicates, []);
   assert.strictEqual(gated.removeNeedsTriage, false);
-  // Without a resolved Type / field list nothing is set.
+  // Without a resolved Type / field list nothing is set — and the legacy
+  // label stays because no Type is present.
   assert.strictEqual(plan.issueType, null);
   assert.strictEqual(gated.issueType, null);
+  assert.deepStrictEqual(plan.removeLabels, []);
+  assert.deepStrictEqual(gated.removeLabels, []);
   assert.deepStrictEqual(plan.issueFields, {});
   assert.deepStrictEqual(gated.issueFields, {});
+});
+
+test('plan: no code path adds a bug or enhancement label; question is still a label', () => {
+  for (const type of ['bug', 'enhancement']) {
+    const response = parseTriageResponse(JSON.stringify({ type, reasons: { type: 'r' } }));
+    const plan = planActions({
+      response,
+      currentLabels: [],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    });
+    assert.deepStrictEqual(plan.addLabels, [], type);
+    assert.deepStrictEqual(plan.labelReasons, [], type);
+    assert.strictEqual(plan.issueType.name, ISSUE_TYPE_BY_LABEL[type]);
+  }
+
+  // `question` is a regular label (not retired): it is still applied, and
+  // also sets Type Task.
+  const question = parseTriageResponse('{"type":"question","reasons":{"type":"Asks how to"}}');
+  const asked = planActions({
+    response: question,
+    currentLabels: ['needs-triage'],
+    candidateNumbers: [],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.deepStrictEqual(asked.addLabels, ['question']);
+  assert.deepStrictEqual(asked.labelReasons, [{ label: 'question', reason: 'Asks how to' }]);
+  assert.strictEqual(asked.issueType.name, 'Task');
+  // ...but not when a type label already exists (unchanged gating).
+  for (const existing of ['bug', 'enhancement', 'question']) {
+    const gated = planActions({
+      response: question,
+      currentLabels: [existing],
+      candidateNumbers: [],
+    });
+    assert.deepStrictEqual(gated.addLabels, [], existing);
+  }
+});
+
+test('plan: legacy type labels are removed only once the issue has a Type', () => {
+  assert.deepStrictEqual(LEGACY_TYPE_LABELS, ['bug', 'enhancement']);
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+
+  // Type planned by this run (from the legacy label): the label is retired.
+  const planned = planActions({
+    response,
+    currentLabels: ['needs-triage', 'enhancement'],
+    candidateNumbers: [],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(planned.issueType.name, 'Feature');
+  assert.deepStrictEqual(planned.removeLabels, ['enhancement']);
+
+  // Existing Type: the label is retired without planning a Type write.
+  const existing = planActions({
+    response,
+    currentLabels: ['bug', 'enhancement', 'component:fe'],
+    candidateNumbers: [],
+    currentIssueType: 'Task',
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(existing.issueType, null);
+  assert.deepStrictEqual(existing.removeLabels, ['bug', 'enhancement']);
+
+  // No Type can be set (list unresolved / Type disabled): nothing removed.
+  for (const issueTypes of [[], [{ id: 'IT_bug', name: 'Bug', isEnabled: false }]]) {
+    const kept = planActions({
+      response,
+      currentLabels: ['bug'],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes,
+    });
+    assert.strictEqual(kept.issueType, null);
+    assert.deepStrictEqual(kept.removeLabels, []);
+  }
+
+  // `question` is never removed, and only labels actually present are listed.
+  const question = planActions({
+    response,
+    currentLabels: ['question'],
+    candidateNumbers: [],
+    currentIssueType: 'Task',
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.deepStrictEqual(question.removeLabels, []);
+  const none = planActions({
+    response,
+    currentLabels: [],
+    candidateNumbers: [],
+    currentIssueType: null,
+    issueTypes: ISSUE_TYPES,
+  });
+  assert.strictEqual(none.issueType.name, 'Bug');
+  assert.deepStrictEqual(none.removeLabels, []);
 });
 
 test('plan: priority is a field, never a label; gated on the current field value', () => {
@@ -205,7 +307,7 @@ test('plan: priority is a field, never a label; gated on the current field value
     currentFieldValues: {},
     issueFields: ISSUE_FIELDS,
   });
-  assert.deepStrictEqual(plan.addLabels, ['component:intentd', 'bug']);
+  assert.deepStrictEqual(plan.addLabels, ['component:intentd']);
   assert.deepStrictEqual(plan.issueFields, {
     priority: {
       fieldId: 'IFSS_priority',
@@ -648,7 +750,7 @@ test('plan: docs label counts as a component; security escalates the Priority fi
     issueFields: ISSUE_FIELDS,
   });
   assert.ok(!plan.addLabels.some((l) => l.startsWith('component:')));
-  assert.deepStrictEqual(plan.addLabels, ['bug']);
+  assert.deepStrictEqual(plan.addLabels, []);
   assert.strictEqual(plan.issueFields.priority.name, 'Urgent');
   assert.strictEqual(plan.issueFields.priority.optionId, 'IFSSO_urgent');
 });
@@ -663,9 +765,12 @@ test('comment: lists labels, candidates, and security redirect; always carries t
   });
   const comment = buildSummaryComment(plan);
   assert.ok(comment.includes('`component:intentd`'));
+  // The inferred type is never reported as a label applied.
+  assert.ok(!comment.includes('`bug`'), comment);
   assert.ok(comment.includes('#101'));
   assert.ok(comment.includes('security/advisories'));
   assert.ok(!comment.includes('Type set:'));
+  assert.ok(!comment.includes('Retired label'));
   assert.ok(!comment.includes('Priority set:'));
   assert.ok(!comment.includes('Effort set:'));
   assert.ok(comment.includes('Labels, Type, and Priority/Effort fields are suggestions'));
@@ -681,6 +786,7 @@ test('comment: lists labels, candidates, and security redirect; always carries t
     })
   );
   assert.ok(typed.includes('Type set: **Bug** — Reports a panic, clearly a defect'));
+  assert.ok(!typed.includes('Retired label'), typed);
 
   const empty = buildSummaryComment(
     planActions({
@@ -691,6 +797,52 @@ test('comment: lists labels, candidates, and security redirect; always carries t
   );
   assert.ok(empty.includes('No additional labels suggested.'));
   assert.ok(empty.endsWith(AGENTIC_MARKER));
+});
+
+test('comment: reports the Type set from a legacy label and the retired label(s)', () => {
+  const response = parseTriageResponse(fixture('agentic-response-clean.txt'));
+  const one = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: ['needs-triage', 'enhancement'],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    })
+  );
+  assert.ok(one.includes('Type set: **Feature** — from the `enhancement` label'), one);
+  assert.ok(
+    one.includes('Retired label removed: `enhancement` — issues are classified by the Type field.'),
+    one
+  );
+  assert.ok(!one.includes('Labels applied:\n- `enhancement`'), one);
+
+  // Existing Type: no Type line, both legacy labels reported as retired.
+  const two = buildSummaryComment(
+    planActions({
+      response,
+      currentLabels: ['bug', 'enhancement'],
+      candidateNumbers: [],
+      currentIssueType: 'Task',
+      issueTypes: ISSUE_TYPES,
+    })
+  );
+  assert.ok(!two.includes('Type set:'), two);
+  assert.ok(two.includes('Retired labels removed: `bug`, `enhancement`'), two);
+
+  // The question label is reported as applied (it is not retired).
+  const question = buildSummaryComment(
+    planActions({
+      response: parseTriageResponse('{"type":"question","reasons":{"type":"Asks how to"}}'),
+      currentLabels: [],
+      candidateNumbers: [],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    })
+  );
+  assert.ok(question.includes('Type set: **Task** — Asks how to'), question);
+  assert.ok(question.includes('Labels applied:\n- `question` — Asks how to'), question);
+  assert.ok(!question.includes('Retired label'), question);
 });
 
 test('comment: reports the Priority / Effort fields set with their reasons', () => {
@@ -753,6 +905,14 @@ test('prompt: embeds issue and candidates as data with the untrusted-data rule',
   assert.ok(!/\bP[0-3]\b/.test(prompt), 'no legacy P0–P3 tokens in the prompt');
   assert.ok(prompt.includes('usually take no priority (null)'));
   assert.ok(prompt.includes('Use null when the issue gives too little to estimate'));
+  // The type rule chooses the issue Type, not a label.
+  assert.ok(prompt.includes('"type": "bug"|"enhancement"|"question"|null'));
+  assert.ok(prompt.includes('choosing the issue TYPE field, not a label'), prompt);
+  assert.ok(prompt.includes('"bug" sets'), prompt);
+  assert.ok(prompt.includes('Type Bug'), prompt);
+  assert.ok(prompt.includes('Type Feature'), prompt);
+  assert.ok(prompt.includes('Type Task'), prompt);
+  assert.ok(!prompt.includes('component/type'), prompt);
 
   // The fields-only (backfill) variant asks for a Priority AND an Effort on
   // every issue.
