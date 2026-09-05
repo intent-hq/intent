@@ -10,7 +10,7 @@ A comprehensive guide to implementing a powerful, intuitive panel and tab manage
 - **Panels**: Containers that hold one or more tabs
 - **Tabs**: Individual content views within a panel
 - **Splits**: Horizontal divisions between panels — the layout is a single row of 1–4 side-by-side columns; there are no vertical (top/bottom) splits
-- **Layout Tree**: A single horizontal root split whose children are panels (one per column)
+- **Layout Tree**: With one column the root is the panel itself; with 2–4 columns the root is a single horizontal split whose children are panels (one per column)
 
 ---
 
@@ -69,7 +69,7 @@ When dragging a tab near a panel edge, show the relevant drop zone:
 - **Visual feedback**: Highlight the target zone with overlay. animate the overlay between states.
 
 #### Via Panel Menu
-- "Split Right" → Horizontal split, empty panel on right (no-op at the 4-column limit)
+- "Split Right" → Horizontal split, empty panel on right (disabled in the menu once 4 columns exist)
 - "Duplicate Tab in Split" → Split + clone current tab
 
 #### Via Keyboard
@@ -268,7 +268,7 @@ Like tmux's `Ctrl+B`, entering the leader key activates "panel mode" for the nex
 | `Cmd+; %` | Split right | tmux `Ctrl+B %` |
 | `Cmd+; !` | Move current tab to new panel | tmux `Ctrl+B !` (pane→window) |
 
-The layout is horizontal-only (1–4 columns); there is no "split down" chord.
+The layout is horizontal-only (1–4 columns). The former `Cmd+; "` "split down" chord requested a vertical split the reducer rejects, so it is removed in [cloudlands-fe#2202](https://github.com/intent-hq/cloudlands-fe/pull/2202).
 
 ### Panel Resizing
 
