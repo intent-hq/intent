@@ -586,18 +586,23 @@ live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:tru
 delta — honoring `removedIds` — equals a fresh `agent.getConversation` snapshot.**
 
 **Terminal entities carry the row's `metadata`** ([intent-hq/intent#4409](https://github.com/intent-hq/intent/issues/4409)).
-When the re-read assistant row carries `metadata` (the §7.2 interrupt tag set —
+When the re-read assistant row carries `metadata` (e.g. the §7.2 interrupt tag set —
 `interrupted` / `stopReason` / `interruptReason` / `interruptedBy` — or the §7.3 `finishReason`),
-every entity in the terminal frame additionally carries it **verbatim** as `metadata`, under the
-same rule as the non-assistant row deltas above: present only when the persisted row has a
-non-null metadata map, omitted entirely otherwise, **never** `null` (additive, presence-detected —
-rows without metadata keep the lean entity shape). So a `chat.subscribe`-only client renders the
-interrupted / "Stopped" / abnormal-finish state at the terminal frame exactly as an
-`agent.getConversation` reader would, with no refetch. The **degraded best-effort terminal frame**
-— emitted when the re-read fails and the channel falls back to sealing the live-accumulated blocks
-in place — has no persisted row to lift from and therefore carries **no** `metadata`; a client that
-needs the row's metadata after a degraded terminal must refetch. Live (pre-terminal) chunk deltas
-never carry `metadata`.
+every entity in the terminal frame additionally carries it **verbatim** as `metadata` (the whole
+persisted map, including keys this document does not enumerate), under the same rule as the
+non-assistant row deltas above: present only when the persisted row has a non-null metadata map,
+omitted entirely otherwise, **never** `null` (additive, presence-detected — rows without metadata
+keep the lean entity shape). So a `chat.subscribe`-only client renders the interrupted / "Stopped" /
+abnormal-finish state of a row **with content blocks** at the terminal frame exactly as an
+`agent.getConversation` reader would, with no refetch. **Zero-block rows have no carrier:** entities
+are per persisted content block, so the §7.2 pre-first-token marker row and the §7.3 zero-output
+abnormal row (`contentBlocks: []`) yield a terminal frame with no entities and therefore no lifted
+`metadata`; for those, clients derive the state from the `agent:stream:end` payload
+(`stopReason` / `interruptReason` / `interruptedBy` / `finishReason`) or refetch. The **degraded
+best-effort terminal frame** — emitted when the re-read (and its retry) fails and the channel falls
+back to sealing the live-accumulated blocks in place — has no persisted row to lift from and
+therefore carries **no** `metadata`; a client that needs the row's metadata after a degraded
+terminal must refetch. Live (pre-terminal) chunk deltas never carry `metadata`.
 
 #### seq-0 snapshot (`subscription.push`, messages page)
 
@@ -638,9 +643,9 @@ arrives as an `added` `tool_use` block, then a `tool_result`
 block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
 with `streamingComplete:true` and any orphan ids in `removedIds` — full `text` in both encodings —
 plus the row's `metadata` when present (e.g. an interrupted turn's terminal entity:
-`{ "agentId":"agent-123","messageId":"0190a200-asst","role":"assistant","messageSeq":8,
+`{ "agentId":"agent-123","messageId":"0190a200-asst","role":"assistant","messageSeq":1,
 "timestamp":"2026-06-27T01:00:09.000Z","streamingComplete":true,
-"metadata":{ "interrupted":true,"stopReason":"interrupted","interruptReason":"user_stop" },
+"metadata":{ "interrupted":true,"stopReason":"interrupted","status":"interrupted","interruptReason":"user_stop" },
 "block":{ … } }`).
 A persisted non-assistant row
 (direct send, queue drain — the non-assistant row deltas above) arrives as `added` entities with no
