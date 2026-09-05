@@ -18,6 +18,84 @@ on demand with `make ensure-ios-submodule`.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/protocol/` (canonical wire contract); see `docs/README.md` for the docs index.
 
+## Developing on a remote host
+
+Each Intent workspace is a git worktree on the daemon host. The desktop client runs the
+embedded Chromium tabs and tunnels ports that listen on the daemon's loopback interface.
+Always use `http://daemon.localhost:<port>` in the embedded browser.
+
+### Situate
+
+Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
+and health, both component branches, and branch PR checks when `gh` is authenticated.
+Use `make status` for the human-readable form. If `host.doctorOk` is false, run
+`make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
+system packages may require privilege. Do not discover prerequisites during a build.
+
+### Act
+
+Run `make sandbox-status` before starting anything. State is keyed only by mode, so one
+worktree can track at most one `ui`, one `app`, and one `stack` sandbox; different ports
+do not isolate a second sandbox of the same mode. Coordinate with its owner or use another
+worktree instead.
+
+Start the smallest long-running target as a workspace service:
+
+- `make dev-sandbox-ui` — named component previews only.
+- `make dev-sandbox-app` — complete web renderer against the installed daemon or
+  `INTENTD_SOCKET`.
+- `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
+  `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
+
+Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
+an unmanaged or orphaned sandbox;
+stop a workspace service with `ws.script.stop(id)` so its supervisor does not restart it.
+
+### Observe
+
+For app or stack readiness, schedule this one canonical health wait after replacing the
+port. It polls on the daemon host and retires when `/__sandbox/health` returns `ok: true`:
+
+```javascript
+await ws.hook.schedule({
+  name: "Wait for sandbox health",
+  delayMs: 10_000,
+  ttlMs: 600_000,
+  code: `const probe = await ws.host.exec({
+  command: "curl",
+  args: ["--silent", "--max-time", "2", "http://127.0.0.1:<DEV_PORT>/__sandbox/health"],
+});
+if (probe.exitCode !== 0) return { dispatch: false };
+try { if (JSON.parse(probe.stdout).ok === true) return { dispatch: true, message: "Sandbox health is ok." }; } catch {}
+return { dispatch: false };`,
+});
+```
+
+Call `ws.browser.listTabs` and reuse a matching tab; otherwise open
+`http://daemon.localhost:<DEV_PORT>/`. A first tunneled open of a fresh, pre-warmed app
+takes roughly one to three minutes to hydrate depending on host load. Keep waiting if the
+splash remains; do not restart. Keep the tab open for HMR.
+
+### Prove
+
+Capture with `ws.browser.screenshot`, reveal with `ws.browser.showTab`, and append evidence
+to the task note rather than relying on prose alone:
+
+| Claim | Command | Result | Artifact |
+|---|---|---|---|
+| What behavior was verified | Exact command or tool call | Pass/fail plus key observation | Asset, commit, PR, or log |
+
+### Hand off
+
+Stop what you started, then rerun `STATUS_JSON=1 make status` to confirm no listener or
+state remains. Keep app and stack on loopback: their Vite origin exposes the full
+unauthenticated daemon API and is safe only through the client's authenticated tunnel.
+
+Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
+management, or `workspace-file://` media; verify those in an Electron build. See the
+[frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for detail.
+
 ## Commit & PR Workflow
 
 When changes span a submodule and the monorepo, land the submodule PR (Phase 1); the
@@ -282,15 +360,15 @@ for all components.
 
 ## Terminology
 
-Do **not** use "wave" / "Wave N" terminology in committed documentation. It is
-coordinator-internal vocabulary specific to a single agent's delegation flow and must not
-leak into the repo. Describe progress as capabilities/milestones instead (e.g. "Repo & CI
-bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
+Do **not** leak coordinator-internal sequencing labels from a single agent's delegation
+flow into committed documentation. Describe progress as capabilities or milestones instead
+(e.g. "Repo & CI bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 
 ## Local Setup
 
 ```bash
 git submodule update --init --recursive   # skips the private packages/ios (update = none)
+make doctor   # report gaps; BOOTSTRAP_YES=1 make bootstrap-dev-host installs missing prerequisites
 export PATH="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin:$PATH"
 command -v cargo-sweep >/dev/null 2>&1 || cargo install cargo-sweep --locked
 command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked

@@ -98,10 +98,17 @@ Releases. Until then, you can [build it from source](#build-from-source).
 git clone --recurse-submodules https://github.com/intent-hq/intent.git
 cd intent
 
+make doctor  # report missing development prerequisites; use BOOTSTRAP_YES=1 make bootstrap-dev-host to install them
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
 ```
+
+Developing from a remote daemon host? Start with the one-screen
+[agent loop](AGENTS.md#developing-on-a-remote-host); use the
+[frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) only when you
+need component or implementation detail.
 
 `packages/ios` is a private submodule and is skipped automatically
 (`update = none` in `.gitmodules`), so the clone succeeds without access to

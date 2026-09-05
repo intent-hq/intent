@@ -9,8 +9,8 @@
 #      state" seat. intentd on the real data dir, UDS-always and no
 #      `--insecure`. No TCP port is bound unless the persisted
 #      `server.wsApi.enabled` setting is true, in which case the secure WSS
-#      listener binds `server.wsApi.port` (default 5181 — the same as
-#      $(DEV_TCP_PORT)); if the dev seat already holds it, the bind failure
+#      listener binds `server.wsApi.port` (default 5181, outside the derived
+#      $(DEV_TCP_PORT) range); if another process holds it, the bind failure
 #      is non-fatal and UDS keeps serving.
 #   3. `make dev-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
@@ -60,8 +60,20 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
-DEV_TCP_PORT ?= 5181
-DEV_PORT ?= 5190
+# Resolve one stable, free port block for this worktree. The `?=` assignments
+# below preserve exact command-line and environment overrides; the resolver's
+# own override validation applies when it is invoked directly. The marker
+# makes a default-resolution error fatal during Make parsing.
+DEV_PORT_VALUES := $(shell DEV_PORT= DEV_TCP_PORT= BRIDGE_PORT= CDP_PORT= scripts/dev-ports.sh || printf '__DEV_PORTS_ERROR__=1\n')
+ifneq ($(filter __DEV_PORTS_ERROR__=1,$(DEV_PORT_VALUES)),)
+$(error Could not resolve development ports; see the dev-ports error above)
+endif
+dev_port_value = $(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
+DEV_PORT ?= $(call dev_port_value,DEV_PORT)
+DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
+SANDBOX_READY_TIMEOUT ?= 60
+SANDBOX_WARM_TIMEOUT ?= 60
+INTENTD_PROFILE ?= dev
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 DEV_PROD_PLATFORM ?= $(shell uname -s)
@@ -71,13 +83,28 @@ export DEV_PORT
 
 # BRIDGE_PORT is the loopback port for `make uds-to-unauthed-wss-bridge` — the
 # source-only dev shim that exposes the installed daemon's UDS socket as an
-# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. 51337 stays clear of 5181
-# (held by the daemon's authed WSS for iOS). Overridable, e.g.
+# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. Its derived default stays
+# clear of 5181 (held by the daemon's authed WSS for iOS). Overridable, e.g.
 # `make uds-to-unauthed-wss-bridge BRIDGE_PORT=5182`.
-BRIDGE_PORT ?= 51337
+BRIDGE_PORT ?= $(call dev_port_value,BRIDGE_PORT)
+CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # Injectable platform seam for the bridge's installed-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
+
+.PHONY: ports status docs-check
+ports: ## Print this worktree's resolved development ports
+	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
+		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
+	fi
+	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
+
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
+		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
+
+docs-check: ## Check documented development targets, knobs, and remote-host guidance
+	@scripts/docs-check.sh
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
@@ -115,17 +142,25 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # make dist-mac FE_BUILD_HEAP_MB=24576.
 FE_BUILD_HEAP_MB ?= 16384
 
-.PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+.PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	update \
 	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
+	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
+	sandbox-status sandbox-stop \
+	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
 
 all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+doctor: ## Report missing intentd + cloudlands-fe development prerequisites
+	@scripts/bootstrap-dev-host.sh --check
+
+bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
+	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
 
 # The iOS submodule is private and marked `update = none` in .gitmodules, so
 # the generic `git submodule update --init` would silently skip it while
@@ -428,6 +463,32 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	fi; \
 	cd $(FE_DIR) && corepack pnpm run "$$script"
 
+dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
+
+dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-app] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
+		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
+
+dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
+	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-stack] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
+		SANDBOX_TCP="$(SANDBOX_TCP)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" BUILD_JOBS="$(BUILD_JOBS)" \
+		INTENTD_PROFILE="$(INTENTD_PROFILE)" INTENTD_BIN="$(INTENTD_BIN)" \
+		INTENTD_DIR="$(CURDIR)/$(INTENTD_DIR)" FE_DIR="$(CURDIR)/$(FE_DIR)" \
+		exec scripts/dev-sandbox.sh stack
+
+sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
+	@SANDBOX_JSON="$(SANDBOX_JSON)" scripts/dev-sandbox.sh status
+
+sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
+	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
+
 dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
 	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
 	# stack (vite + Electron) pinned to the dev seat's isolated daemon via
@@ -541,28 +602,9 @@ uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHEN
 		echo "[uds-to-unauthed-wss-bridge] WARNING: this exposes the FULL UNAUTHENTICATED daemon API as plain ws:// on 127.0.0.1:$(BRIDGE_PORT) — no TLS, no auth. Loopback-only by design; any process on this machine can drive the daemon while the bridge runs."; \
 		INTENTD_SOCKET="$$socket" BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs
 
-dev-web-live: ensure-fe-submodule ## Run the web FE against the installed daemon through the loopback-only UDS bridge
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-web-live] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
-	@bridge_pid=""; \
-		cleanup() { \
-			if [ -n "$$bridge_pid" ] && kill -0 "$$bridge_pid" 2>/dev/null; then kill "$$bridge_pid" 2>/dev/null || true; fi; \
-			if [ -n "$$bridge_pid" ]; then wait "$$bridge_pid" 2>/dev/null || true; fi; \
-		}; \
-		trap 'exit 130' INT; \
-		trap 'exit 143' HUP TERM; \
-		trap cleanup EXIT; \
-		BRIDGE_HOST=127.0.0.1 BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs & \
-		bridge_pid=$$!; \
-		attempt=0; \
-		until node -e 'const net = require("node:net"); const socket = net.connect(Number(process.argv[1]), "127.0.0.1", () => { socket.end(); process.exit(0); }); socket.on("error", () => process.exit(1)); setTimeout(() => process.exit(1), 250).unref();' "$(BRIDGE_PORT)" 2>/dev/null; do \
-			if ! kill -0 "$$bridge_pid" 2>/dev/null; then wait "$$bridge_pid"; exit $$?; fi; \
-			attempt=$$((attempt + 1)); \
-			if [ "$$attempt" -ge 100 ]; then echo "[dev-web-live] ERROR: bridge did not listen on 127.0.0.1:$(BRIDGE_PORT) within 10 seconds."; exit 1; fi; \
-			sleep 0.1; \
-		done; \
-		if ! kill -0 "$$bridge_pid" 2>/dev/null; then wait "$$bridge_pid"; exit $$?; fi; \
-		echo "[dev-web-live] Bridge is ready; starting the web FE with VITE_INTENTD_WS_URL=ws://127.0.0.1:$(BRIDGE_PORT)/ws"; \
-		cd $(FE_DIR) && VITE_INTENTD_WS_URL="ws://127.0.0.1:$(BRIDGE_PORT)/ws" pnpm run dev:web
+dev-web-live: ## DEPRECATED alias for dev-sandbox-app
+	@echo "[dev-web-live] DEPRECATED: use 'make dev-sandbox-app'."
+	@$(MAKE) dev-sandbox-app
 
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
