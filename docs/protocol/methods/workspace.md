@@ -67,11 +67,16 @@ the draft as `failed`, stores `lastError`, and permits retry. Promotion marks th
 `promoting` before creation and uses the immutable `operationKey` as the create idempotency
 key. The workspace row and `promotedWorkspaceId` mapping commit atomically while the draft
 remains `promoting`; an interruption may subsequently leave that durable mapping on a
-`promoting` or `failed` draft, with `initialAgentId` still absent. Clients must treat a
-populated `promotedWorkspaceId` as the existing promotion target. Retrying
-`workspaceDraft.promote` recovers that workspace and resumes its initial-agent creation and
-first turn rather than creating duplicates, making retry/restart recovery exactly-once from
-the client's perspective.
+`promoting` or `failed` draft, with `initialAgentId` still absent. Clients adopt the workspace
+directly **only** when `workspaceDraft.get` returns `phase: "promoted"`; the daemon sets that
+phase only after the workspace, requested initial agent and first turn (if any), and create
+idempotency result are durable. For every other phase (`editing`, `promoting`, or `failed`),
+whether or not `promotedWorkspaceId` is populated, clients re-issue `workspaceDraft.promote`
+with the same immutable `operationKey` and adopt from its promoted result. On a non-promoted
+draft, `promotedWorkspaceId` is informational (for example, a client may show “resuming…”),
+never an adoption trigger. The daemon idempotently reuses the mapped workspace, find-or-creates
+the requested initial agent, and sends the first turn only when no persisted user message
+exists. A differing operation key on a mapped draft returns `-32009`.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
