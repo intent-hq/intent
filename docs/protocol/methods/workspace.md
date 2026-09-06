@@ -156,7 +156,7 @@ Neither the protocol version policy nor the daemon-version policy changes.
 Already-imported workspaces that lost their remotes are not repaired automatically;
 reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
-### 5.1.1 `workspaceDraft.*` *(v9.8)*
+### 5.1.1 `workspaceDraft.*` *(v9.10)*
 
 Daemon-owned workspace drafts preserve new-workspace form state across client and daemon
 restarts. Draft methods are daemon-global: they take no `workspaceId`, and draft events
@@ -603,7 +603,7 @@ remaining churn. A `workspace.open` during the setup window likewise supersedes 
 deferral and starts the watchers immediately (the user is in the workspace), so a
 still-running script's remaining churn surfaces from that point on.
 
-The optional persisted `Workspace.setupResult` field *(v9.8)* reconciles setup after a
+The optional persisted `Workspace.setupResult` field *(v9.10)* reconciles setup after a
 reconnect or daemon restart. Its shape is `{ state, exitCode?, startedAt?, finishedAt?,
 error? }`, where `state` is `none | running | succeeded | failed | unknown`. It is written
 as `running` immediately before the setup spawn attempt and replaced with `succeeded` or
