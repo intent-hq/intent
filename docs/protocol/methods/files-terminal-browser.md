@@ -245,9 +245,11 @@
 >   info, **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
 >   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`** plus
->   **`displayed: boolean`** — true only when the tab is actually painted in the UI:
->   visible AND its panel's active tab; hidden tabs are always `displayed: false`
->   (monorepo#3045, see the hidden-by-default block below).
+>   **`displayed: boolean`** — a **layout contract**, not a paint guarantee: true
+>   when the tab is not hidden AND is its panel's active tab in the workspace's
+>   saved layout; hidden tabs are always `displayed: false`. A `displayed: true`
+>   tab paints only while the workspace is in view and its panel is not hidden
+>   (e.g. by zoom) (monorepo#3045, see the hidden-by-default block below).
 > - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
 >   own — another agent's tab, or an unowned tab the caller has not claimed) and
 >   `already-claimed` (a claim lost to an earlier claim) surface as **action-result
@@ -276,9 +278,10 @@
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
 >   opts into opening directly into the panel layout: the tab is mounted per the
->   usual placement rules **and activated in its panel** (so it paints) **without**
->   moving panel/keyboard focus, and the action's `result` carries **`displayed`**
->   (the same boolean as `listTabs`, read from the layout after the open). Per-agent
+>   usual placement rules **and activated in its panel** (made the panel's active
+>   tab in the saved layout) **without** moving panel/keyboard focus, and the
+>   action's `result` carries **`displayed`** (the same layout boolean as
+>   `listTabs`, read from the layout after the open). Per-agent
 >   dedupe (above) is unaffected by visibility — a same-URL reopen reuses the
 >   agent's tab whether hidden or visible — and a
 >   dedupe hit **never changes the reused tab's visibility**: a hidden tab stays
@@ -303,10 +306,12 @@
 >   **idempotent** on an already-**displayed** tab (visible AND its panel's active
 >   tab): with `focus: false` it is a no-op success; with `focus: true` it still
 >   focuses its panel. `visibility: 'visible'` alone does not mean displayed: a
->   visible tab that is not its panel's active tab is mounted but renders nothing
->   (`visibility: 'visible', displayed: false` — the "sits behind another tab"
->   state), and `showTab` on it (default `focus: false`) brings it to the front
->   without moving focus.
+>   visible tab that is not its panel's active tab is in the layout but sits behind
+>   another tab and does not paint (`visibility: 'visible', displayed: false`), and
+>   `showTab` on it (default `focus: false`) brings it to the front without moving
+>   focus. `displayed: true` is a layout state, not a paint guarantee — the tab
+>   paints only while the workspace is in view and its panel is not hidden (e.g.
+>   by zoom); see the workspace-inactive semantics below.
 >   An unknown `tabId` fails as an **action-result error** (the per-action
 >   `{ action, success: false, error }` envelope naming the unknown id — never a
 >   JSON-RPC-level or FE top-level error), like the structured ownership errors above.
@@ -321,7 +326,9 @@
 > needed. Visibility/activation effects apply to the **persisted layout state**:
 > `showTab` activates the tab in a visible panel of the workspace's layout (and with
 > `focus: true`, also focuses it) so the layout is correct when the user next opens
-> the workspace. When the
+> the workspace, and `displayed` reports that persisted layout state — it can be
+> `true` for a tab in a workspace that is not currently in view (the tab then
+> paints once the workspace is shown). When the
 > workspace is **not** currently visible in the UI, no actual UI focus/activation
 > side effect is attempted: `showTab { focus: true }`, `focusTab`, and
 > `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
