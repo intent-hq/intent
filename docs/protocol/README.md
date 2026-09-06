@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `9.11`
+**Protocol Version:** `9.12`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -71,6 +71,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
 | §5.44 Guided managed-provider setup — `providers.setup.*` *(reserved; per-method contract not yet written up — see the fast-path note in [05-method-catalog.md](./05-method-catalog.md))* | — |
 | §5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
+| §5.46 Semantic codebase map — `map.*` (v9.12) | [methods/semantic-map.md](./methods/semantic-map.md) |
 
 ## Compatibility policy (summary)
 
