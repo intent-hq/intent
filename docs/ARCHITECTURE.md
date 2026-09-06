@@ -1019,9 +1019,13 @@ replay row). The one visible change is `agent.getMessageBlock`: the full
 body no longer exists, so the block is served as the stored slim preview,
 flags intact, plus the additive `inputPruned: true` / `outputPruned: true`.
 Compaction is durable across transcript edits: `agent.editAndRegenerate`
-carries the retained prefix's side rows — full and `*_replay` alike — across
-the message replacement, so a pruned block stays pruned (flags and replay
-preview intact) rather than degrading to the inline head preview. That flag is decided from
+truncates suffix-only (`Store::truncate_agent_messages_from` deletes rows at
+`seq >=` the edited message in one write transaction, cascading only the
+dropped rows' side rows through the 0109 trigger), so the kept prefix keeps
+its ids, `seq` and every side row — full and `*_replay` alike — untouched
+and a pruned block stays pruned (flags and replay preview intact) rather
+than degrading to the inline head preview. The FE-driven
+`agent.replaceMessages` swap still remints the whole transcript. That flag is decided from
 store-side compaction metadata read from the **same snapshot** as the body
 (`Store::get_agent_message_by_id_with_pruned` — a sweep committing between
 two separate reads would otherwise stamp a just-served full body as pruned),
