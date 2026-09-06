@@ -4,7 +4,7 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` field — see the hidden-by-default block below (monorepo#3045) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045) |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
@@ -244,7 +244,12 @@
 >   Every returned tab carries `ownerAgentId` (`null` when unowned) plus owner display
 >   info, **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
->   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`**
+>   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`** plus
+>   **`displayed: boolean`** (unconditional on every listed tab) — a **layout
+>   contract**, not a paint guarantee: true when the tab is not hidden AND is the
+>   active tab of the panel that holds it in the workspace's saved layout; hidden
+>   tabs are always `displayed: false`. A `displayed: true` tab paints only while
+>   the workspace is in view and its panel is not hidden (e.g. by zoom)
 >   (monorepo#3045, see the hidden-by-default block below).
 > - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
 >   own — another agent's tab, or an unowned tab the caller has not claimed) and
@@ -273,15 +278,27 @@
 >   opener, emulated (sizing invariant unchanged), returned by `listTabs` (with
 >   `visibility: 'hidden'`), and its webview renders offscreen — with **no panel
 >   mount and no focus or active-tab change**. `visible: true` on a **fresh** open
->   opts into opening directly into the panel layout as before: the tab is mounted
->   per the usual placement rules with today's activation behavior, exactly as a
->   pre-#3045 agent `openTab`. Per-agent dedupe (above) is unaffected by visibility —
->   a same-URL reopen reuses the agent's tab whether hidden or visible — and a
+>   opts into opening directly into the panel layout: the tab is mounted per the
+>   requested `position` (`adjacent`, `same`, or the new-tab fallback of `replace`)
+>   **and activated in its panel** (made the panel's active tab in the saved
+>   layout) **without** moving panel/keyboard focus on **every** placement, and the
+>   action's `result` carries an **optional `displayed?: boolean`** (the same
+>   layout meaning as `listTabs`, read from the layout after the open): **present
+>   only when the FE confirmed the tab's layout state** from a fresh tab list;
+>   **absent when that state is unknown** (stale or unavailable list, tab not
+>   listed) — absence means *unknown*, never `false`, and the caller re-reads it
+>   with `listTabs`. Default hidden opens (`visible` omitted/`false`) and reuses
+>   without `visible: true` **omit** the field. Per-agent
+>   dedupe (above) is unaffected by visibility — a same-URL reopen reuses the
+>   agent's tab whether hidden or visible — and a
 >   dedupe hit **never changes the reused tab's visibility**: a hidden tab stays
 >   hidden even when the `openTab` carried `visible: true`, and a visible tab stays
->   visible. Revealing an existing tab is **`showTab`-only**.
-> - **`showTab { tabId, focus? }`** — reveals a hidden tab by **activating** it in a
->   visible panel; **owner-only** (on a tab the caller does not own it returns the
+>   visible. A dedupe hit under `visible: true` carries the same optional
+>   `displayed?` for the reused tab (`false` for a hidden tab when confirmed,
+>   absent when unknown). Revealing an existing tab is **`showTab`-only**.
+> - **`showTab { tabId, focus? }`** — **activates** an owned tab in a visible panel:
+>   reveals a hidden tab, or brings a visible-but-inactive tab to the front of its
+>   panel; **owner-only** (on a tab the caller does not own it returns the
 >   structured `not-owner` error, per the ownership rules above). `focus` is optional
 >   and defaults to **`false`**: the tab is activated in a visible panel **without**
 >   moving panel/keyboard focus and **without** displacing the currently-viewed
@@ -293,14 +310,33 @@
 >   focuses — the tab becomes its panel's active tab and the panel takes focus. The
 >   reveal is **persisted**: a revealed tab stays visible across app restarts rather
 >   than reverting to hidden. `showTab` is
->   **idempotent** on an already-visible tab: with `focus: false` it is a no-op
->   success; with `focus: true` it still activates the tab and focuses its panel.
+>   **idempotent** on an already-**displayed** tab (visible AND its panel's active
+>   tab): with `focus: false` it is a no-op success; with `focus: true` it still
+>   focuses its panel. `visibility: 'visible'` alone does not mean displayed: a
+>   visible tab that is not its panel's active tab is in the layout but sits behind
+>   another tab and does not paint (`visibility: 'visible', displayed: false`), and
+>   `showTab` on it (default `focus: false`) brings it to the front without moving
+>   focus. `displayed: true` is a layout state, not a paint guarantee — the tab
+>   paints only while the workspace is in view and its panel is not hidden (e.g.
+>   by zoom); see the workspace-inactive semantics below. `showTab` succeeds only
+>   once a fresh tab list confirms the tab as not hidden **and** its panel's active
+>   tab; otherwise it fails as an action-result error.
 >   An unknown `tabId` fails as an **action-result error** (the per-action
 >   `{ action, success: false, error }` envelope naming the unknown id — never a
 >   JSON-RPC-level or FE top-level error), like the structured ownership errors above.
 > - **`focusTab` is unchanged for visible tabs** (activate + focus the panel). On a
 >   **hidden** tab it fails with an action-result error directing the caller to
 >   `showTab` — there is no focusTab overload that reveals a hidden tab.
+> - **`screenshot` on a non-painting visible tab** — a visible tab paints only while
+>   it is on screen (its panel's active tab, workspace in view, panel not hidden by
+>   zoom); hidden tabs always paint offscreen via emulation. A capture of a visible
+>   tab whose surface has not painted (`displayed: false`, or `displayed: true` in a
+>   workspace not in view) fails as an **action-result error** (the per-action
+>   `{ action, success: false, error }` envelope, never a JSON-RPC-level error)
+>   whose human-readable `error` names the not-painting cause and directs the
+>   caller to `showTab` (activate without moving focus) or `focusTab` (activate and
+>   focus) before capturing again. The error text is FE-served prose, not a
+>   structured code.
 >
 > **Workspace-inactive semantics (monorepo#3045).** Agent tab operations do **not**
 > require the tab's workspace to be currently open/visible in the FE: every action
@@ -309,7 +345,9 @@
 > needed. Visibility/activation effects apply to the **persisted layout state**:
 > `showTab` activates the tab in a visible panel of the workspace's layout (and with
 > `focus: true`, also focuses it) so the layout is correct when the user next opens
-> the workspace. When the
+> the workspace, and `displayed` reports that persisted layout state — it can be
+> `true` for a tab in a workspace that is not currently in view (the tab then
+> paints once the workspace is shown). When the
 > workspace is **not** currently visible in the UI, no actual UI focus/activation
 > side effect is attempted: `showTab { focus: true }`, `focusTab`, and
 > `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI

@@ -30,6 +30,132 @@
 | workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
 | workspace.export.abort *(v6.11)* | exportId (req) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
 
+**Root Git remote state in workspace transfers** (`workspace.export.start` /
+`workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
+[intent-hq/intentd#1749](https://github.com/intent-hq/intentd/pull/1749)). The root
+repository's portable remote configuration and locally known publication state ride
+in `git/refs.json` and `git/repo.bundle`. This is additive archive metadata, not new
+RPC parameters or a copy of `.git/config`; the submodule `originUrl?` handling above
+is separate and unchanged. The added top-level `git/refs.json` fields are:
+
+| Field | Shape and meaning |
+|---|---|
+| `remotes` | `RemoteBundleRef[]`, default `[]` when absent. Only the root repository's transferable remotes are listed; no `origin` is invented. |
+| `workspaceUpstream?` | `{ remote, mergeRef, additionalMergeRefs? }`: the workspace branch's effective last `branch.<branch>.remote` and ordered `branch.<branch>.merge` values. `mergeRef` is the first full `refs/heads/<branch>` ref; `additionalMergeRefs` holds the rest, default `[]`. `remote` must name a carried remote. |
+| `workspacePushRemote?` | String: the effective last configured `branch.<workspaceBranch>.pushRemote` value; must name a carried remote. |
+| `remotePushDefault?` | String: the effective last configured `remote.pushDefault` value; must name a carried remote. |
+| `pushDefault?` | String: the effective last configured `push.default` value, one of `nothing`, `current`, `upstream`, `tracking`, `simple`, `matching`. |
+
+Each `RemoteBundleRef` has the following fields (JSON uses camelCase):
+
+| Field | Shape and meaning |
+|---|---|
+| `name` | Required string: the remote name, restricted to ASCII letters/digits and `.`, `_`, `-`, with no leading `.`/`-`, no `..`, and no case-insensitive `.lock` suffix. |
+| `url` | Required string: the first sanitized `remote.<name>.url` value. |
+| `additionalUrls` | String array, default `[]`: remaining sanitized URL values, in source order. |
+| `pushUrl?` | String: the first sanitized explicit `remote.<name>.pushurl`, if configured. |
+| `additionalPushUrls` | String array, default `[]`: remaining sanitized push URL values, in source order; invalid without `pushUrl`. |
+| `fetchRefspecs?` | String array: all configured `remote.<name>.fetch` values in source order. Current exports always include it, including `[]` for deliberately no fetch mapping. Absent/null means legacy metadata: retain the default `+refs/heads/*:refs/remotes/<name>/*` installed by `git remote add`. |
+| `pushRefspecs` | String array, default `[]`: all configured `remote.<name>.push` values in source order. |
+| `trackingRefs` | Array, default `[]`, of `{ refName, sha, bundleRef? }`: direct commit refs under `refs/remotes/<name>/`, their full hexadecimal commit IDs (`sha`, 40 or 64 characters), and the bundle anchors carrying those exact tips. Symbolic refs such as `refs/remotes/origin/HEAD` are not carried. |
+
+Optional scalar/object fields are omitted when unset; empty `additionalUrls`,
+`additionalPushUrls`, `pushRefspecs`, and `additionalMergeRefs` arrays are omitted
+when serialized. Import restores the ordered multi-value lists rather than keeping
+only one value. In particular, a present `fetchRefspecs: []` removes the default
+fetch mapping; an absent `pushUrl` leaves Git's implicit use of the URL list for
+push intact. Workspace-branch upstream and push selectors are restored as recorded,
+including non-`origin` remotes and a push remote different from the upstream.
+Other branches' upstream/push settings are not part of this metadata.
+
+**Portable forms and explicit failures.** Root remote URLs support validated
+`https://`, `http://`, `ssh://`, `git://`, and scp-like `[user@]host:path` forms.
+HTTP(S) URLs lose their entire userinfo; SSH/Git URLs retain the username but lose
+the password. The target must authenticate using its own setup: credential helpers,
+credentials, hooks, and arbitrary Git configuration are not copied by this metadata.
+Unsafe names/authorities, option-like values, encoded authorities, control characters,
+whitespace, and backslashes are not accepted as portable remote forms.
+
+A remote whose fetch URLs are all unportable (for example local paths, `file://`,
+unknown schemes, or remote-helper `<helper>::...` addresses) is omitted, with a
+warning that identifies the remote by name, not URL. Its tracking refs and upstream
+are not restored. This omission is not allowed to discard explicit push URLs or a
+remote selected by `workspacePushRemote` / `remotePushDefault`: those cases fail
+export. A mixed portable/unportable URL list also fails rather than dropping one
+destination. URLs containing a query or fragment fail export rather than guessing
+whether that portion contains a credential or changing the URL's meaning.
+
+The supported refspec/config subset is deliberately narrow:
+
+- Fetch mappings use full sources under `refs/heads/` or `refs/tags/` and destinations
+  under that remote's own `refs/remotes/<name>/` namespace. Optional leading `+`,
+  matched single-wildcard patterns, and negative `^refs/heads/...` /
+  `^refs/tags/...` exclusions are supported; negative refspecs have no destination.
+- Push mappings use full branch/tag sources and destinations, also allowing `HEAD`
+  as a source, an empty source for deletion, and matching `:`. Optional leading `+`
+  and matched single-wildcard patterns are supported. Revision expressions and
+  arbitrary local namespaces are not supported.
+- Unsupported explicit push URLs (including disabled/local/helper destinations),
+  unsupported refspecs, invalid upstream/push selectors, and applicable
+  `url.*.insteadOf` / `url.*.pushInsteadOf` rewrites fail export. A local upstream
+  (`branch.<branch>.remote = .`) also fails; it is not rewritten as a remote upstream.
+- A carried remote with any configured `mirror`, `receivepack`, `uploadpack`, `vcs`,
+  `proxy`, `tagopt`, `prune`, `prunetags`, `promisor`, `partialclonefilter`,
+  `skipdefaultupdate`, or `skipfetchall` key fails export, even if the value is false.
+  These settings are not silently dropped or copied as executable/configurable behavior.
+
+These unsupported-configuration errors omit the configuration values and ask for
+source-side review; the transfer does not silently substitute a different fetch or
+push policy. This is an allowlist, not a promise to preserve every Git config key.
+
+**Export snapshot and offline restoration.** Export captures the existing direct
+remote-tracking commit IDs, not the remote server's current state, and creates
+dedicated anchors at `refs/intent/transfer/<workspaceId>/remotes/<snapshotUuid>/<index>`.
+The snapshot UUID and nonnegative decimal index use canonical spelling. Each
+`trackingRefs[].bundleRef` names such an anchor, and the self-contained root bundle
+carries its reachable objects, including history not reachable from the workspace
+branch. Moving or deleting the original remote-tracking ref after capture does not
+change the bundled snapshot. Temporary source anchors are cleaned up after the
+bundle build on success or failure; a failed build also unwinds its WIP snapshots.
+
+Import first removes the clone's temporary bundle `origin`. After submodule/base
+materialization, sandbox provisioning, and WIP unwind, it restores root remotes,
+tracking refs, and workspace upstream/push settings. Tracking refs are fetched from
+the **local archive bundle**, never from the configured network URLs; no online
+fetch or credentials are required for this restoration. The root remote settings
+are not copied into the already-provisioned sandboxes, and no staging URL persists.
+Every restored remote field is validated again (including URL sanitization).
+Tracking destinations must stay within their remote namespace, their restored OIDs
+must match `sha`, and a present `bundleRef` must use the importing workspace's
+dedicated remote-snapshot layout above. Base, sandbox, other internal, and
+cross-workspace anchors are not valid publication sources. Tracking refs targeting
+recorded workspace/sandbox WIP commits are rejected. Invalid metadata or a missing
+or mismatched bundle ref fails the import and rolls back the newly materialized
+workspace instead of exposing a partially restored checkout.
+
+This preserves the meaning of `workspace.localChanges`: history reachable from a
+carried remote-tracking ref remains published immediately after offline import.
+A clean workspace whose history is all reachable from those refs reports zero
+unpushed commits; local-only commits still count, and unwound WIP snapshots restore
+dirty changes without treating them as published. The transfer never pushes work
+or synthesizes publication from the workspace/base/sandbox tip. The snapshot may
+already be stale relative to the server, just as the source's local refs were.
+
+**Missing metadata and compatibility.** Legacy archives without remote metadata,
+and remote-less exports with `remotes: []`, retain the previous remote-less behavior:
+import does not guess URLs or publication refs. Selectors naming a missing remote
+are invalid rather than silently ignored. With no restored remote refs,
+`workspace.localChanges` still reports the
+whole reachable history as unpushed, capped at 1000. Missing upstream/push fields
+do not invent settings. For legacy remote metadata without `trackingRefs[].bundleRef`,
+the bundle source is `refName` itself, still namespace-validated and checked against
+`sha`; missing `fetchRefspecs` has the legacy default described above. These field
+defaults do **not** relax the import header gate: `formatVersion` remains 1 and
+`creatingIntentdVersion` must still match the importing daemon's exact version.
+Neither the protocol version policy nor the daemon-version policy changes.
+Already-imported workspaces that lost their remotes are not repaired automatically;
+reconnecting/fetching such a workspace is a separate, explicitly authorized action.
+
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
 baseRef? })`. `title` and `initialPrompt` are required non-empty strings. Unknown fields,
