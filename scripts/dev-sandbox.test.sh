@@ -447,4 +447,33 @@ status=$?
 set -e
 [[ "$status" -eq 7 ]] || fail "intentd child status was not propagated (got $status)"
 
+bootstrap_root="$temp_dir/bootstrap-root"
+bootstrap_bin="$temp_dir/bootstrap-bin"
+corepack_cache="$temp_dir/corepack-cache"
+mkdir -p "$bootstrap_root/scripts" "$bootstrap_root/packages/intentd" \
+  "$bootstrap_root/packages/cloudlands-fe" "$bootstrap_bin" "$corepack_cache"
+cp "$repo_root/scripts/bootstrap-dev-host.sh" "$bootstrap_root/scripts/bootstrap-dev-host.sh"
+touch "$bootstrap_root/packages/intentd/.git" "$bootstrap_root/packages/cloudlands-fe/.git"
+printf 'channel = "1.96.0"\n' >"$bootstrap_root/packages/intentd/rust-toolchain.toml"
+printf '{"packageManager":"pnpm@10.30.3"}\n' >"$bootstrap_root/packages/cloudlands-fe/package.json"
+cat >"$bootstrap_bin/corepack" <<'SH'
+#!/usr/bin/env bash
+printf '0.35.0\n'
+SH
+cat >"$bootstrap_bin/pnpm" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$COREPACK_HOME/v1/pnpm/10.30.3"
+touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
+printf '10.30.3\n'
+SH
+chmod +x "$bootstrap_bin/corepack" "$bootstrap_bin/pnpm"
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of reporting its expected gaps"
+[[ -z $(find "$corepack_cache" -mindepth 1 -print -quit) ]] \
+  || fail "check-only pnpm probe invoked the Corepack shim and populated its cache"
+
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"

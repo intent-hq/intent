@@ -94,10 +94,33 @@ node_ready() {
   [[ "$major" =~ ^[0-9]+$ && "$major" -ge 20 ]]
 }
 
+python_ready() {
+  command -v python3 >/dev/null 2>&1
+}
+
+corepack_home() {
+  if [[ -n ${COREPACK_HOME:-} ]]; then
+    printf '%s\n' "$COREPACK_HOME"
+  elif [[ -n ${XDG_CACHE_HOME:-} ]]; then
+    printf '%s/node/corepack\n' "$XDG_CACHE_HOME"
+  elif [[ -n ${LOCALAPPDATA:-} ]]; then
+    printf '%s/node/corepack\n' "$LOCALAPPDATA"
+  else
+    printf '%s/.cache/node/corepack\n' "$HOME"
+  fi
+}
+
 pnpm_ready() {
   [[ -n "$PNPM_VERSION" ]] || return 1
   command -v corepack >/dev/null 2>&1 || return 1
   command -v pnpm >/dev/null 2>&1 || return 1
+  if [[ "$MODE" == check ]]; then
+    local metadata
+    for metadata in "$(corepack_home)"/v*/pnpm/"$PNPM_VERSION"/.corepack; do
+      [[ -f "$metadata" ]] && return 0
+    done
+    return 1
+  fi
   local actual
   actual=$(cd "$FE_DIR" && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version 2>/dev/null) || return 1
   [[ "$actual" == "$PNPM_VERSION" ]]
@@ -112,6 +135,7 @@ installable_gap_exists() {
   load_versions
   command -v rustup >/dev/null 2>&1 || return 0
   command -v cargo >/dev/null 2>&1 || return 0
+  python_ready || return 0
   openssl_dev_ready || return 0
   rust_toolchain_ready || return 0
   active_toolchain_ready || return 0
@@ -153,6 +177,12 @@ check_all() {
     ok "cargo: $(cargo --version 2>/dev/null)"
   else
     missing "cargo: installed with rustup"
+  fi
+
+  if python_ready; then
+    ok "Python: $(python3 --version 2>&1)"
+  else
+    missing "Python 3: required to preflight development ports"
   fi
 
   if openssl_dev_ready; then
@@ -244,6 +274,35 @@ as_root() {
     echo "ERROR: installing system packages requires root privileges; sudo is unavailable" >&2
     return 1
   fi
+}
+
+install_python() {
+  if python_ready; then
+    echo "[skip] Python 3 already installed"
+    return
+  fi
+
+  echo "[install] Python 3"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install Python on macOS" >&2; exit 1; }
+      brew install python || exit 1
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y python3 || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y python3 || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y python3 || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install Python 3 and re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported" >&2; exit 1 ;;
+  esac
+  hash -r
 }
 
 install_native_build_dependencies() {
@@ -407,6 +466,7 @@ install_submodules
 load_versions
 [[ -n "$TOOLCHAIN" ]] || { echo "ERROR: cannot read Rust toolchain pin" >&2; exit 1; }
 [[ -n "$PNPM_VERSION" ]] || { echo "ERROR: expected a pnpm packageManager entry" >&2; exit 1; }
+install_python
 install_native_build_dependencies
 install_rust
 install_node

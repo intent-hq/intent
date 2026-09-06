@@ -21,6 +21,8 @@ fail() {
   exit 1
 }
 
+make_bin=$(command -v make)
+
 value_of() {
   local output=$1 key=$2 line
   while IFS= read -r line; do
@@ -75,5 +77,43 @@ if (cd "$temp_dir" && DEV_PORT="$busy_port" bash "$script" >"$temp_dir/explicit.
   fail "busy explicit port was remapped instead of rejected"
 fi
 grep -q 'explicit DEV_PORT=.* is busy' "$temp_dir/explicit.stderr" || fail "busy explicit port error was unclear"
+
+default_output=$(cd "$repo_root" && "$make_bin" -n)
+grep -q 'cargo build --workspace' <<<"$default_output" || fail "plain make no longer selects the build target"
+[[ $(head -n 1 <<<"$default_output") != 'set -- .dev/sandbox/'* ]] || fail "plain make still selects the ports target"
+
+mkdir -p "$temp_dir/safe-bin" "$temp_dir/safe-home/.cargo/bin"
+for command in bash cksum awk dirname; do
+  ln -s "$(command -v "$command")" "$temp_dir/safe-bin/$command"
+done
+for target in help check doctor bootstrap-dev-host sandbox-stop; do
+  HOME="$temp_dir/safe-home" PATH="$temp_dir/safe-bin" "$make_bin" -C "$repo_root" -n "$target" >/dev/null \
+    || fail "make -n $target required Python during Makefile parsing"
+done
+
+mkdir -p "$temp_dir/busy-bin" "$temp_dir/busy-home/.cargo/bin"
+for command in bash cksum awk dirname; do
+  ln -s "$(command -v "$command")" "$temp_dir/busy-bin/$command"
+done
+cat >"$temp_dir/busy-bin/python3" <<'SH'
+#!/usr/bin/env bash
+: >"$PORT_PROBE_LOG"
+exit 1
+SH
+chmod +x "$temp_dir/busy-bin/python3"
+for target in help doctor sandbox-stop; do
+  HOME="$temp_dir/busy-home" PATH="$temp_dir/busy-bin" PORT_PROBE_LOG="$temp_dir/port-probe.log" \
+    "$make_bin" -C "$repo_root" -n "$target" >/dev/null \
+    || fail "make -n $target required an available default port range"
+done
+[[ ! -e "$temp_dir/port-probe.log" ]] || fail "a non-listener target probed the default port range"
+
+ports_output=$(cd "$repo_root" && "$make_bin" --no-print-directory ports)
+for name in DEV_PORT DEV_TCP_PORT BRIDGE_PORT CDP_PORT; do
+  grep -Eq "^$name=[0-9]+$" <<<"$ports_output" || fail "make ports did not resolve $name"
+done
+sandbox_dry_run=$(cd "$repo_root" && "$make_bin" --no-print-directory -n dev-sandbox-app)
+grep -Eq 'DEV_PORT="[0-9]+" DEV_TCP_PORT="[0-9]+"' <<<"$sandbox_dry_run" \
+  || fail "make -n dev-sandbox-app did not resolve its listener ports"
 
 echo "dev-ports tests passed"

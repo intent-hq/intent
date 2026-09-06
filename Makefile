@@ -21,6 +21,8 @@
 # `make help` lists every documented target (any recipe whose header ends in
 # `## <description>`).
 
+.DEFAULT_GOAL := all
+
 INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
@@ -60,15 +62,13 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
-# Resolve one stable, free port block for this worktree. The `?=` assignments
-# below preserve exact command-line and environment overrides; the resolver's
-# own override validation applies when it is invoked directly. The marker
-# makes a default-resolution error fatal during Make parsing.
-DEV_PORT_VALUES := $(shell DEV_PORT= DEV_TCP_PORT= BRIDGE_PORT= CDP_PORT= scripts/dev-ports.sh || printf '__DEV_PORTS_ERROR__=1\n')
-ifneq ($(filter __DEV_PORTS_ERROR__=1,$(DEV_PORT_VALUES)),)
-$(error Could not resolve development ports; see the dev-ports error above)
-endif
-dev_port_value = $(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
+# Resolve one stable, free port block for this worktree when a target first
+# expands a port variable. The memoized result keeps non-listener targets such
+# as doctor, bootstrap-dev-host, and sandbox-stop independent of port tooling
+# and availability. The `?=` assignments preserve exact overrides.
+DEV_PORT_VALUES =
+resolve_dev_ports = $(if $(strip $(DEV_PORT_VALUES)),,$(eval DEV_PORT_VALUES := $(shell DEV_PORT= DEV_TCP_PORT= BRIDGE_PORT= CDP_PORT= scripts/dev-ports.sh || printf '__DEV_PORTS_ERROR__=1\n')))$(if $(filter __DEV_PORTS_ERROR__=1,$(DEV_PORT_VALUES)),$(error Could not resolve development ports; see the dev-ports error above))
+dev_port_value = $(call resolve_dev_ports)$(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
 DEV_PORT ?= $(call dev_port_value,DEV_PORT)
 DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
 SANDBOX_READY_TIMEOUT ?= 60
@@ -77,10 +77,6 @@ INTENTD_PROFILE ?= dev
 # Injectable platform seam for dev-prod's packaged-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 DEV_PROD_PLATFORM ?= $(shell uname -s)
-# Export DEV_PORT so `make dev-fe` (and any recipe that shells out to the FE)
-# actually sees the default/override in the child environment.
-export DEV_PORT
-
 # BRIDGE_PORT is the loopback port for `make uds-to-unauthed-wss-bridge` — the
 # source-only dev shim that exposes the installed daemon's UDS socket as an
 # UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. Its derived default stays
@@ -461,7 +457,7 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	else \
 		echo "[dev-ui] dev:ui is unavailable on this frontend pin; falling back to browser-only dev:web"; \
 	fi; \
-	cd $(FE_DIR) && corepack pnpm run "$$script"
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
 
 dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
@@ -520,10 +516,10 @@ dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS soc
 
 # Internal FE-launch helper shared by dev-fe and dev-prod (not listed in
 # `make help`): pnpm-install-if-missing guard + `pnpm run dev`, inheriting the
-# caller's INTENTD_SOCKET (and the exported DEV_PORT) from the environment.
+# caller's INTENTD_SOCKET and resolving DEV_PORT only when the launcher runs.
 fe-launch: ensure-fe-submodule
 	@[ -d $(FE_DIR)/node_modules ] || (echo "[fe-launch] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
-	cd $(FE_DIR) && pnpm run dev
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" pnpm run dev
 
 run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
 	# Like `dev-fe`, but points the FE at the installed Intent daemon's default
@@ -567,7 +563,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 		exit 1; \
 	fi; \
 	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
-	cd $(FE_DIR) && INTENTD_SOCKET="$$sock" pnpm run dev
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SOCKET="$$sock" pnpm run dev
 
 uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1:$(BRIDGE_PORT)
 	# Runs scripts/uds-ws-bridge.mjs (zero-dependency, Node >= 20): each WS
@@ -679,7 +675,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
 	@echo "[dev]   INTENTD_DATA_DIR=$(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock)"
 	@echo "[dev]   INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
-	cd $(FE_DIR) && INTENTD_SIDECAR=1 \
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SIDECAR=1 \
 		INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 		INTENTD_LEGACY_IMPORT_ROOTS="" \
