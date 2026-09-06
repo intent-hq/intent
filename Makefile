@@ -120,7 +120,8 @@ FE_BUILD_HEAP_MB ?= 16384
 	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod ios-open ios-info dist-mac
+	run-intentd dev-ui dev-fe fe-launch run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
+	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
 all: build
 
@@ -667,6 +668,48 @@ ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Inten
 		exit 1; \
 	fi
 	open "$(IOS_DIR)/Intent.xcodeproj"
+
+# Blessed xcodebuild wrappers — every iOS build/test runs through the ios
+# repo's single entry point (scripts/xcodebuild.sh, from intent-hq/ios#219) so
+# destinations, signing flags, and SDK selection cannot diverge. The
+# missing-script guard covers a recorded iOS pin that still predates that PR:
+# `ensure-ios-submodule` only initializes the submodule at the recorded pin,
+# it does not advance it.
+ios-build-ios: ensure-ios-submodule ## Build the iOS app for the iOS Simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-build-ios] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+		echo "[ios-build-ios] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh build-ios
+
+ios-build-visionos: ensure-ios-submodule ## Build the iOS app for the visionOS Simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-build-visionos] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+		echo "[ios-build-visionos] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh build-visionos
+
+ios-test: ensure-ios-submodule ## Run the iOS unit tests on a simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-test] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+		echo "[ios-test] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh test-ios
 
 ios-info: ## Print how to point the iOS app at the local dev daemon
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
