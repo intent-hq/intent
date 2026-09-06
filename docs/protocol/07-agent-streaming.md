@@ -345,17 +345,27 @@ delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
-Derivation: an object `raw_input` carrying a string `code` **and** a string `summary` is the
-daemon's own `workspace_api` tool and derives `workspace_api` **regardless of title**
-(`intent_core::is_workspace_api_input`) — checked before every title rule below, because
-auggie titles the call with its `summary` and carries no tool identifier anywhere in the
-frame, so a summary such as `"Inspect: tool calls"` would otherwise split into a bogus name
-and any other summary would pass through as the recorded name
-([intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491)); the same
-predicate is the second gate on the `AtToolResult` FIFO claim (a completed call whose
-recorded name lacks `workspace_api` but whose input has this shape still claims the oldest
-pending batch when no nonce matches — nonce match keeps priority). Otherwise a title of the
-form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
+Derivation: Codex's and Claude Code's explicitly namespaced MCP title forms (below) are
+evaluated first — they name the server, so a foreign tool whose arguments happen to be
+`{ code, summary }` keeps its own name (`mcp.python.execute` → `python_execute`). Next, an
+object `raw_input` holding exactly a non-empty string `code` plus a string `summary` (a
+daemon-stamped `_acpTitle` echo is tolerated; any other key disqualifies the match) is the
+daemon's own `workspace_api` tool and derives `workspace_api` whatever the title says
+(`intent_core::is_workspace_api_input`, called from `intent-acp::session::derive_tool_name`
+and shared with the FIFO claim gate below). It runs before the `<name>: <description>`
+split because auggie titles the call with the model-authored `summary` (no `name`,
+`kind: other`), so a summary such as `"Inspect: tool calls"` would otherwise split into a
+bogus name and any other summary would pass through as the recorded name
+([intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491),
+[intent-hq/intentd#1762](https://github.com/intent-hq/intentd/pull/1762)). The
+`AtToolResult` FIFO claim passes because that name is now `workspace_api` on every
+provider: after a nonce miss it gates on the completed call's recorded name containing
+`workspace_api` **or** — a second line of defense, consulted only for a call that carried no
+authoritative identifier (no MCP `server`/`tool` metadata, no namespaced title) — on that
+call's input having this same shape; a nonce match keeps priority, and a foreign tool's
+`{ code, summary }` arguments never open the gate
+([intent-hq/intentd#1765](https://github.com/intent-hq/intentd/pull/1765)). Otherwise a
+title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
 identifier followed by `": "` or `":\t"` — is split, taking the prefix. Codex's dot-separated
 MCP title form `mcp.<server>.<tool>` (server segment contains no dots; title carries no
 whitespace, so prose titles containing dots never match) is rewritten to `{server}_{tool}`
