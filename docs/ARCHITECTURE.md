@@ -1013,9 +1013,13 @@ middle-truncated string + original char count in the `*_replay` side row —
 consumed only by the recovery replay, never returned over the wire). Normal
 hydration ignores replay kinds, so a pruned block keeps serving its inline
 slim preview + flags — the `agent.getConversation` page is byte-identical
-before and after the sweep, and so is the recovery replay
-(`splice_replay_preview` emits the same block contract from a full row or a
-replay row). The one visible change is `agent.getMessageBlock`: the full
+before and after the sweep, and so is the recovery replay at the cap in
+effect at compaction (`splice_replay_preview` emits the same block contract
+from a full row or a replay row). That equivalence is cap-relative: a later
+**smaller** cap re-truncates a compacted preview exactly as it would a full
+body, but a later **larger** cap renders a longer preview from a full row
+while a `*_replay` row cannot expand past the characters it kept. The one
+visible change is `agent.getMessageBlock`: the full
 body no longer exists, so the block is served as the stored slim preview,
 flags intact, plus the additive `inputPruned: true` / `outputPruned: true`.
 Compaction is durable across transcript edits: `agent.editAndRegenerate`
