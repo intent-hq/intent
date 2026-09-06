@@ -946,6 +946,77 @@ The same degradation is surfaced on the wire as the `system.status`
 count — `0` while `totalRoots > 0` under creation failure), so coverage loss
 is visible to clients, not just in the daemon log.
 
+## Tool payload storage, replay & retention
+
+Multi-MB `tool_result.output` / `tool_use.input` bodies do not live in the
+`agent_message.content` JSON column. The message write path extracts any
+such body over a 4 KiB inline ceiling into the `agent_message_payload` side
+table (migration 0108, intent-hq/intent#3884; zlib-compressed when that is
+smaller; one row per `(message, block_ordinal, kind)`, `kind` =
+`tool_use_input` / `tool_result_output`) and leaves the slim-projection
+preview plus the `inputTruncated` / `outputTruncated` (+ `*Bytes`) flags in
+the field's position — the same transform the serve-time slim projection
+applies, so a slim page read (`agent.getConversation`) serves straight from
+the content column with **no side-table access**. Full-fidelity reads
+(`agent.getMessageBlock`) splice the original body back before the content
+leaves the store, and legacy rows with inline bodies hydrate as no-ops:
+splicing is driven purely by side-row presence.
+(`intent-store/src/message_payload.rs`.)
+
+Three mechanisms sit on top of that table
+([intent-hq/intentd#1757](https://github.com/intent-hq/intentd/pull/1757)):
+
+**Bounded replay.** When a lost ACP session is rebuilt, the recovery replay
+(`intent-services/src/history_xml.rs`) renders each `tool_use` input and
+`tool_result` output middle-truncated to `agents.historyReplayToolContentChars`
+(default `4000`, `500..=100000`, read live from the settings snapshot at
+replay time — previously a hard-coded constant). The store's replay read
+(`Store::get_agent_messages_for_replay`) never materializes a whole
+transcript's full bodies: side rows are paged by rowid in small batches and
+each full body is decoded → stringified → truncated as soon as it is read,
+then spliced in as the **replay-preview block contract**
+(`intent-core/src/replay_preview.rs`: the heavy field becomes the truncated
+preview string, plus the additive `inputReplayOriginalChars` /
+`outputReplayOriginalChars` count). The formatter renders such a block
+exactly as it would render the full body at the current cap — if the live
+cap is smaller than the stored preview it re-truncates, and it never expands.
+
+**Retention sweep.** `agents.toolPayloadRetentionDays` (default `0` =
+disabled, max `3650`) is enforced by the existing stream-retention loop
+(`spawn_stream_retention_loop` in the `intentd` binary crate — the loop
+keeps ticking, hourly at most, even when the event sweep is disabled). On
+each tick, with the setting non-zero, `Store::compact_tool_payloads_before`
+compacts every **full-body** side row whose owning message `created_at` is
+older than the window into its `*_replay` kind (`tool_use_input_replay` /
+`tool_result_output_replay`) holding exactly the replay-shaped preview at the
+current cap (`{"text": <preview>, "originalChars": N}`), and **deletes the
+full row — irreversibly**. Bodies already under the cap are converted too, so
+every pruned block has one shape. Work is chunked (≤ 500 rows per scan plus
+one write transaction per chunk; the CPU-bound decode/truncate runs on a
+blocking thread before the transaction opens) so the sweep never holds the
+write lock for long; delete + insert in one transaction keep the
+`conversation_bytes` triggers balanced; a re-run finds nothing left to
+convert (idempotent); the join on `agent_message` means 0109 staged rows and
+thumbnails rows are never touched. Both settings are read live from the
+settings snapshot per tick, so a value set from the Settings UI takes effect
+on the next tick without a restart.
+
+**What a pruned block serves.** Normal hydration ignores replay kinds, so a
+pruned block keeps serving its inline slim preview + flags — the
+`agent.getConversation` page is byte-identical before and after the sweep,
+and so is the recovery replay (`splice_replay_preview` emits the same block
+contract from a full row or a replay row). The one visible change is
+`agent.getMessageBlock`: the full body no longer exists, so the block is
+served as the stored slim preview, flags intact, plus the additive
+`inputPruned: true` / `outputPruned: true`. That flag is decided from
+store-side compaction metadata read from the **same snapshot** as the body
+(`Store::get_agent_message_by_id_with_pruned` — a sweep committing between
+two separate reads would otherwise stamp a just-served full body as pruned),
+never inferred from surviving `*Truncated` flags: a retained full row that
+fails to decode, or a body that arrived pre-flagged and was never
+externalized, is served as before and never flagged. With the sweep disabled
+the served block is exactly what it was before the sweep existed.
+
 ## Read-path performance principles
 
 Hot read RPCs — the methods clients poll or fan out on focus (`workspace.list`
