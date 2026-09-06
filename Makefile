@@ -681,8 +681,12 @@ ios-build-ios: ensure-ios-submodule ## Build the iOS app for the iOS Simulator (
 		exit 1; \
 	fi
 	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
-		echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
-		echo "[ios-build-ios] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-build-ios] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
 		exit 1; \
 	fi
 	cd $(IOS_DIR) && scripts/xcodebuild.sh build-ios
@@ -693,8 +697,12 @@ ios-build-visionos: ensure-ios-submodule ## Build the iOS app for the visionOS S
 		exit 1; \
 	fi
 	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
-		echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
-		echo "[ios-build-visionos] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-build-visionos] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
 		exit 1; \
 	fi
 	cd $(IOS_DIR) && scripts/xcodebuild.sh build-visionos
@@ -705,8 +713,12 @@ ios-test: ensure-ios-submodule ## Run the iOS unit tests on a simulator (blessed
 		exit 1; \
 	fi
 	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
-		echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
-		echo "[ios-test] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-test] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
 		exit 1; \
 	fi
 	cd $(IOS_DIR) && scripts/xcodebuild.sh test-ios
