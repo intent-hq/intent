@@ -174,6 +174,33 @@ parentless background agents remain blocked and have no parent-report path. This
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
 
+**Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
+`tool_result` regardless of the script's return value. When the binding runs, the MCP
+dispatch layer mints a `tar-` nonce, stamps it into the proposal's resource item, and
+collects the item for the §7.1 `AtToolResult` turn-attachment registry
+([07-agent-streaming.md](../07-agent-streaming.md)); the collected batch is registered when
+the script finishes — before the result returns to the provider — whether the script
+returned the proposal envelope, returned something else (e.g. `{ ok: true }`), or threw.
+When the provider reports the call completed, the daemon claims the batch either by finding
+a member's nonce in the echoed tool output or, when no nonce matches, by claiming the agent's
+oldest pending `AtToolResult` batch — the FIFO fallback, gated on the completed call's
+recorded tool name containing `workspace_api`. Scripts therefore need not return the
+proposal envelope and may emit several proposals in one call: all resource items of one
+call register as one batch and attach together. The completed `agent:tool:call` event
+carries the claimed batch as `registeredAttachments` and the ids of the standalone blocks
+as `proposalBlockIds`; the transcript gets one standalone
+`application/vnd.intent.proposal+json` resource block per proposal right after the
+`tool_result` (§7.1). The recorded tool name is derived provider-independently: when the
+ACP title carries no tool identifier — auggie titles the call with the model-authored
+`summary`, sends no `name`, and reports `kind: other` — an input holding exactly a
+non-empty string `code` plus a string `summary` (a daemon-stamped `_acpTitle` echo is
+tolerated) identifies `workspace_api` before the `<name>: <description>` title split runs
+(`intent-acp::session::is_workspace_api_input`;
+[intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491),
+[intent-hq/intentd#1762](https://github.com/intent-hq/intentd/pull/1762)). Explicitly
+namespaced MCP titles (`mcp.<server>.<tool>`, `mcp__<server>__<tool>`) stay authoritative,
+so a foreign tool whose arguments happen to be `{ code, summary }` keeps its own name.
+
 ```json
 // → request
 { "jsonrpc": "2.0", "id": 1, "method": "workspace.list", "params": { "includeArchived": false } }
