@@ -10,11 +10,15 @@
 | ---------------- | ----------------------------- | -------------------------------- |
 | `Mod+K`          | Open Command Palette          | Anywhere (not in terminal)       |
 | `Mod+T`          | Open Blank Working Panel      | In workspace                     |
+| `Mod+Alt+A`      | New Agent                     | In workspace                     |
+| `Mod+Alt+N`      | New Note                      | In workspace                     |
+| `Mod+Alt+T`      | New Terminal                  | In workspace                     |
+| `Mod+Alt+B`      | New Browser                   | In workspace with browser panels |
 | `Mod+P`          | Quick Open (file picker)      | Anywhere (not in terminal)       |
 | `Mod+Shift+P`    | Open Command Palette          | Anywhere (not in terminal)       |
 | `Mod+,`          | Open Settings                 | Anywhere                         |
 | `Mod+O`          | Toggle All Spaces             | Anywhere                         |
-| `Mod+N`          | New Agent                     | Anywhere (not in inputs)         |
+| `Mod+N`          | New Workspace                 | Anywhere (not in inputs)         |
 | `Mod+?`          | Toggle Keyboard Shortcuts     | Anywhere                         |
 | `Mod+F`          | Search                        | Focused searchable panel         |
 | `Ctrl+Tab`       | Next Space                    | Anywhere in workspace            |
