@@ -55,10 +55,15 @@ filters are supplied. `limit` defaults to 50 and is clamped to `1..500`. Unknown
 
 ```ts
 interface MapActivity {
+  id: string;
   regionId?: string; agentId?: string; agentName?: string; path?: string;
   kind: MapActivityKind; ts: string;
 }
 ```
+
+`id` is required and opaque to clients. The daemon derives it from the durable source event's
+identity, so it is unique within the workspace activity stream and stable when the same activity
+is replayed by later `map.activity` calls; clients must not derive meaning from its format.
 
 For every returned activity, the daemon also broadcasts one transient `map:activity` event (§6.5)
 whose `data` is that exact `MapActivity`. These events are never persisted and therefore never
