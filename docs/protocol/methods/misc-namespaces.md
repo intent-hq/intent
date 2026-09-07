@@ -4,7 +4,7 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces of the given workspace. Siblings are workspaces with the same GitHub `repositoryOwner`/`repositoryName` (case-insensitive), falling back to an identical source `repositoryPath` when a GitHub identity is unavailable; a caller with neither errors as not associated with a repository |
+| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces of the given workspace. Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
 | crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
