@@ -65,9 +65,11 @@ interface MapActivity {
 identity, so it is unique within the workspace activity stream and stable when the same activity
 is replayed by later `map.activity` calls; clients must not derive meaning from its format.
 
-For every returned activity, the daemon also broadcasts one transient `map:activity` event (§6.5)
-whose `data` is that exact `MapActivity`. These events are never persisted and therefore never
-appear in `event.query`; subscribe through `events.subscribe` with `map:*`.
+At persistence time, the daemon projects each eligible durable source event into one transient
+`map:activity` event (§6.5), whose `data` is that event's `MapActivity`. `map.activity` replays
+projected activities and does not itself emit live events. The same source event has the same
+`MapActivity.id` in its live frame and later replay; clients combining them must deduplicate by
+`MapActivity.id`.
 
 `map.route` reads at most 500 source events. An `agentId` selects that agent; a `taskNoteId` selects
 all agents currently assigned to that task note. No assigned agents yields an empty route. Visits
