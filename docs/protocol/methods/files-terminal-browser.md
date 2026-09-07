@@ -187,11 +187,14 @@
 > [intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760),
 > [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770); supersedes the
 > REV-1 "first-client-sticky" interim).** When `browser.exec` is triggered by an *agent*
-> (via the MCP `ws.browser.exec` binding, §6.8) — or by the tab-addressed
-> `browser.navigateTab` / `browser.closeTab` (§5.45) — there is no ambient reverse
-> channel to reuse: the caller is the daemon-hosted MCP server, not a client-facing
-> socket. The daemon selects the **driving client** of the request's workspace and
-> dispatches the reverse RPC to one of that client's live connections:
+> (via the MCP `ws.browser.exec` binding, §6.8) there is no ambient reverse channel to
+> reuse: the caller is the daemon-hosted MCP server, not a client-facing socket. The
+> daemon selects the **driving client** of the agent's workspace and dispatches the
+> reverse RPC to one of that client's live connections. (The direct, tab-addressed RPCs
+> `browser.navigateTab` / `browser.closeTab` are **not** governed by this paragraph — any
+> connected client may call them with a bare `tabId`, and §5.45 defines their routing: a
+> claimed tab goes to its workspace's driving client per the rules below, an unclaimed tab
+> to its physical host.)
 >
 > 1. **Eligibility gate (v9.9).** Only connections that completed `client.hello` with
 >    `capabilities.browserExec: true` (§5.17) are ever candidates. Un-hello'd sockets and
@@ -520,7 +523,8 @@ JSON-RPC text channel. Clients decode on receipt and encode on send.
 ### 5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab`
 
 The daemon owns a persisted **browser tab registry** (`browser_tab` table; REV-2,
-v9.10–v9.11 — [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770),
+v9.10 registry [intent-hq/intentd#1763](https://github.com/intent-hq/intentd/pull/1763),
+v9.11 routing [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770),
 [intent-hq/intent#461](https://github.com/intent-hq/intent/issues/461)): one row per
 logical embedded-browser tab, keyed by `tabId`, bound to the `workspaceId` that created it
 and to the **host** — the logical client (`clientId`, §5.17) whose webview renders it. The
