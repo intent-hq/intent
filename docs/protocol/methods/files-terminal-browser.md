@@ -4,7 +4,8 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045) |
+| browser.exec | actions (req, non-empty array), tabId?, agentId?, workspaceId? | single action → the action's `{ action, success, result?, error? }` envelope; multi-action → `{ results: [...] }` — **client-callable trigger** whose real work is served by the connected FE via a reverse RPC (`browser.exec`, `id: "rev-<n>"`), see below. Tabs are **agent-scoped**: `claimTab` / `listTabs` scoping / `resizeTab` and the structured ownership errors are FE-enforced — see the tab-ownership block below (monorepo#2857). Agent tabs are **hidden by default**: `openTab` `visible?`, `showTab`, and the `listTabs` `visibility` / `displayed` fields — see the hidden-by-default block below (monorepo#3045). **Agent-initiated** calls (no client connection to answer on) are routed to the workspace's **driving client** under the REV-2 rules — `capabilities.browserExec` gate, `workspace.setBrowserClient` pin, claimed-tab host, first-connected eligible — and `listTabs` is answered by the daemon from the tab registry (§5.45); see the REV-2 block below (v9.9–v9.11) |
+| browser.listTabs *(v9.10)*, browser.upsertTab *(v9.10)*, browser.removeTab *(v9.10)*, browser.syncTabs *(v9.10)*, browser.navigateTab *(v9.11)*, browser.closeTab *(v9.11)* | see §5.45 | the daemon-owned **browser tab registry** — fast-path methods (no `workspaceId` envelope requirement; the host-only reports are keyed by the connection's `client.hello` identity). Documented in §5.45 at the end of this file |
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
@@ -181,20 +182,74 @@
 > The FE-served reverse-RPC pattern keeps the daemon a thin proxy and the
 > CDP surface an FE concern.
 >
-> **Agent-initiated `browser.exec` — first-client-sticky reverse dispatch (REV-1,
-> interim).** When `browser.exec` is triggered by an *agent* (via the MCP
-> `ws.browser.exec` binding, §6.8) rather than by a client connection, there is no
-> ambient reverse channel to reuse: the caller is the daemon-hosted MCP server, not a
-> client-facing socket. The daemon therefore routes the reverse RPC to the
-> **first-connected live client**; if that client disconnects, the next-connected client
-> takes over — failover follows connection arrival order (UDS + WSS clients share the same
-> registry). When no client is connected at all the call fails fast with `-32603` and
-> `browser.exec: no client connected` so the agent surfaces the same class of failure a
-> closed channel already produces. This is a deliberate stopgap ahead of an explicit
-> target-selection surface (§5.17 client identity): "sticky first" needs no wire
-> change and is trivially observable, but it does not distinguish overlapping clients.
-> Client-triggered `browser.exec` is **unchanged**: it still reverse-dispatches on the
-> caller's own connection.
+> **Agent-initiated `browser.exec` — REV-2 target selection (v9.9–v9.11;
+> [intent-hq/intentd#1756](https://github.com/intent-hq/intentd/pull/1756),
+> [intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760),
+> [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770); supersedes the
+> REV-1 "first-client-sticky" interim).** When `browser.exec` is triggered by an *agent*
+> (via the MCP `ws.browser.exec` binding, §6.8) — or by the tab-addressed
+> `browser.navigateTab` / `browser.closeTab` (§5.45) — there is no ambient reverse
+> channel to reuse: the caller is the daemon-hosted MCP server, not a client-facing
+> socket. The daemon selects the **driving client** of the request's workspace and
+> dispatches the reverse RPC to one of that client's live connections:
+>
+> 1. **Eligibility gate (v9.9).** Only connections that completed `client.hello` with
+>    `capabilities.browserExec: true` (§5.17) are ever candidates. Un-hello'd sockets and
+>    hello'd connections without the flag are invisible to every rule below, regardless
+>    of arrival order — an iOS app or a CLI connecting first no longer captures agent
+>    browser traffic.
+> 2. **Workspace pin (v9.9).** If the workspace carries `browserClientId`
+>    (`workspace.setBrowserClient`, §5.1), the target is that logical client: its
+>    **newest** eligible live connection. A pinned client with **no** eligible live
+>    connection is a hard failure — `-32603` `browser.exec: browser client "<name>"
+>    (<clientId>) for this workspace is not connected` (`browser client <clientId> for
+>    this workspace is not connected` when no name is known) — **never** a silent
+>    fallback to another client. The name is the client's last hello `name`, read from
+>    the persisted `client` row when the connection registry no longer knows it.
+> 3. **Claimed-tab host (v9.11).** Unpinned, but the workspace has at least one
+>    **claimed** registry tab (`ownerAgentId` set, §5.45): the target is the host client
+>    of the oldest claimed tab — the workspace's agent tabs all live on one client. Offline
+>    ⇒ the same `… for this workspace is not connected` `-32603`.
+> 4. **Default (v9.9).** Otherwise the **first-connected eligible** connection (registration
+>    order; UDS + WSS share one registry); if it drops, the next eligible connection takes
+>    over. No eligible connection at all ⇒ `-32603` `browser.exec: no client connected` —
+>    the same class of failure a closed channel already produces.
+>
+> `workspace.getBrowserClient` (§5.1) runs the same resolution without dispatching
+> (`resolved: null` for the two offline outcomes). The virtual Chief workspace cannot be
+> pinned and always resolves under rule 4. Client-triggered `browser.exec` is
+> **unchanged**: it still reverse-dispatches on the caller's own connection, whatever
+> the workspace's pin says.
+>
+> **Registry-backed agent actions (v9.11).** Because the daemon owns the tab registry
+> (§5.45), two parts of an agent's batch are handled daemon-side before / after the
+> reverse dispatch — the `actions` vocabulary and the reverse-RPC wire shape are
+> unchanged:
+>
+> - **`tabId` pre-check.** Every `tabId` the batch names (per action or as the
+>   top-level `tabId`) must be an **open registry tab of the request's workspace**;
+>   otherwise `-32602` `browser.exec: tab not found: <tabId>` before anything is
+>   dispatched.
+> - **`listTabs` is answered by the daemon**, never forwarded: the result is every open
+>   registry tab of the workspace **across all hosts**, filtered by `scope`
+>   (`"mine"` / `"unclaimed"` / `"all"`, default `all`; any other value ⇒ `-32602`),
+>   each entry in the FE's field names (`tabId`, `workspaceId`, `url`, `requestedUrl?`,
+>   `title?`, `ownerAgentId` — `null` when unowned —, `ownerAgentName?`,
+>   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`)
+>   **plus** `hostClientId`, `hostName?` (the host's hello `name` while it is live) and
+>   `hostConnected` (whether the host currently has a live hello'd connection). A
+>   `listTabs` batch must contain **only** `listTabs` actions (`-32602` otherwise); its
+>   result envelope shape is unchanged (single action → the action envelope, several →
+>   `{ results }`). `scope: "mine"` without an `agentId` caller is the FE's structured
+>   action error (`success: false`), not a JSON-RPC error.
+> - **`claimTab` re-homes the row.** After the driving client reports a **successful**
+>   `claimTab`, the daemon moves that tab's registry row to the workspace's driving
+>   client **as re-resolved at commit time** (so a claim that overlapped a
+>   `workspace.setBrowserClient` lands on the new pin, not on the client that happened to
+>   execute it) and records the caller as `ownerAgentId`, publishing one
+>   `browser:tab-updated { changes: { hostClientId, ownerAgentId } }` (only
+>   `ownerAgentId` when the host is unchanged; nothing when the row is already in the
+>   target state) — §6.5.
 >
 > **Loopback-hostname interpretation — FE-side, wire shape unchanged (monorepo#2323).**
 > URL hostnames in `navigate` / `openTab` action URLs are interpreted **on the frontend
@@ -460,5 +515,96 @@ JSON-RPC text channel. Clients decode on receipt and encode on send.
   "event":{ "type":"terminal:data","workspaceId":"ws-abc","id":"evt-901",
     "timestamp":"2026-06-17T05:00:00.000Z","actor":{ "type":"system" },
     "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK" } } } }
+```
+
+### 5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab`
+
+The daemon owns a persisted **browser tab registry** (`browser_tab` table; REV-2,
+v9.10–v9.11 — [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770),
+[intent-hq/intent#461](https://github.com/intent-hq/intent/issues/461)): one row per
+logical embedded-browser tab, keyed by `tabId`, bound to the `workspaceId` that created it
+and to the **host** — the logical client (`clientId`, §5.17) whose webview renders it. The
+registry is the shared source of truth every client renders from: a host reports its own
+tabs, any client reads the workspace's tabs across hosts, and navigation / close requests
+about a tab are **routed** by the daemon to the client that must perform them. All six
+methods are **fast-path** (§5 catalog): the host-only reports are keyed by the
+connection's `client.hello` identity, never by a wire parameter.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| browser.listTabs *(v9.10)* | workspaceId (req) | { tabs: (BrowserTab & { hostConnected: boolean, hostName? })[] } — every **open** registry tab of the workspace, oldest first (`createdAt`, then `tabId`), any client may call it. `hostConnected` is whether the tab's host has a live hello'd connection right now; `hostName` is that host's hello `name` (omitted while the host is offline or nameless). Tombstoned rows (see `browser.closeTab`) are excluded. -32602 on a missing/empty `workspaceId`. |
+| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` **overrides** `tab.workspaceId`. Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (`tabId` / `workspaceId` / `url` required). |
+| browser.removeTab *(v9.10)* | tabId (req) | { ok: true } — **host-only** report that the tab is gone. Deletes the row (an open row emits `browser:tab-closed`; a tombstone is purged silently — the host has acknowledged the daemon-side close). Unknown ids are an idempotent no-op. -32602 on an un-hello'd connection or a tab hosted by another client. |
+| browser.syncTabs *(v9.10)* | tabs (req): BrowserTabInput[] | { drop: tabId[] } — **host-only** full-snapshot reconciliation of the host's tab set **across all workspaces** (each entry carries its own `workspaceId`; duplicate ids after the first are ignored), one transaction — nothing is written when any entry is rejected. Per entry: unknown ⇒ created (`browser:tab-opened`); open and hosted by this host ⇒ refreshed (`browser:tab-updated { changes }` when anything differed; another `workspaceId` for a known tab rejects the **whole** snapshot with -32602); tombstoned or hosted **elsewhere** ⇒ untouched and listed in `drop` (a tab has exactly one host; the tombstone is retained, so a repeated stale snapshot keeps answering `drop` instead of reviving the tab). Every row of this host **absent** from the snapshot is deleted — open rows emit `browser:tab-closed`, tombstones are purged silently. Hosts send it on connect / reconnect and after a `client:disconnected`-worthy gap. -32602 on an un-hello'd connection or a non-array `tabs`. |
+| browser.navigateTab *(v9.11)* | tabId (req), url (req) | the routed `navigate` action's `{ action, success, result?, error? }` envelope — any client. The daemon looks the tab up (-32602 `browser.navigateTab: tab not found: <tabId>` for an unknown or tombstoned id) and dispatches a reverse `browser.exec { workspaceId, tabId, actions: [{ action: "navigate", tabId, url }] }` to the tab's **routing target**: a **claimed** tab (`ownerAgentId` set) goes to its workspace's driving client (§5.9 REV-2 rules), an **unclaimed** one to its physical host. The host then reports the resulting navigation via `browser.upsertTab` and every client follows the canonical row. -32603 `browser.navigateTab: browser client "<name>" (<clientId>) for this workspace is not connected` when the target is offline; `browser.navigateTab: no client connected` when no eligible client exists at all. |
+| browser.closeTab *(v9.11)* | tabId (req), force?: boolean | { ok: true } — any client. Without `force`: the close is routed exactly like `browser.navigateTab` (reverse `browser.exec { action: "closeTab" }`, same -32602 / -32603 outcomes) and the host's own `browser.removeTab` deletes the row. With `force: true`: a best-effort routed close is attempted when the target is reachable (its failure is ignored), then the row is **tombstoned daemon-side** regardless — it disappears from every list now, `browser:tab-closed` is published, and the host is told to `drop` the id on its next `browser.syncTabs` (a stale `browser.upsertTab` for it is -32602 until then). -32602 on a non-boolean `force`. |
+
+**`BrowserTab` (wire, camelCase).**
+
+```ts
+interface BrowserTabInput {            // host-reported fields
+  tabId: string;                       // host-minted id, stable for the tab's lifetime
+  workspaceId: string;                 // bound at creation; a later report may not change it
+  url: string;                         // the URL actually loaded
+  requestedUrl?: string;               // the URL as requested (loopback rewrite echo, §5.9)
+  title?: string;
+  ownerAgentId?: string;               // omitted / null = unowned (user tab), §5.9 tab ownership
+  ownerAgentName?: string;
+  visibility?: "visible" | "hidden";   // default "visible"; §5.9 hidden-by-default block
+  emulatedSize?: { width: number, height: number };   // omitted = native viewport
+}
+interface BrowserTab extends BrowserTabInput {
+  hostClientId: string;                // the logical client rendering the tab (§5.17)
+  visibility: "visible" | "hidden";    // always present on read
+  createdAt: string;                   // ISO-8601
+  updatedAt: string;
+}
+```
+
+`BrowserTab` is the `tab` payload of the three `browser:tab-*` events (§6.5) and, decorated
+with `hostConnected` / `hostName?`, the `browser.listTabs` entry. The agent-facing
+`listTabs` action (§5.9) projects the same rows into the FE's field names instead
+(`mode` + `width` / `height` in place of `emulatedSize`, `ownerAgentId: null` when
+unowned) plus `hostClientId` / `hostName?` / `hostConnected`.
+
+**Host vs. driving client.** A tab's **host** is the physical client rendering it — set
+at creation from the reporting connection and only ever changed by the daemon: an agent's
+successful `claimTab` re-homes the row to the workspace's **driving client** (§5.9
+REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
+`workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
+new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
+Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
+another `hostClientId` for one of its tabs stops treating that tab as its own; the new
+host materialises it from the canonical row.
+
+**Events (§6.5).** `browser:tab-opened` / `browser:tab-closed` carry `data: { tab }`;
+`browser:tab-updated` carries `data: { tab, changes }` where `changes` is the
+**field-wise diff** — the host-reported fields that differed (`url`, `requestedUrl`,
+`title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`; a cleared
+optional field appears as an explicit `null`) or, for daemon-side re-homing,
+`hostClientId` / `ownerAgentId`. All three are **workspace-scoped** (the tab's
+`workspaceId`) with actor `{ type: "user", id: <hostClientId> }` — the reporting host —
+and are tailed by an ordinary `events.subscribe` on the workspace. A report that changes
+nothing emits nothing.
+
+```json
+// → host reports a freshly opened agent tab (connection hello'd as clientId "cli-7f3a")
+{ "jsonrpc":"2.0","id":80,"method":"browser.upsertTab",
+  "params":{ "workspaceId":"ws-abc","tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
+    "url":"http://127.0.0.1:5173/","requestedUrl":"http://daemon.localhost:5173/",
+    "title":"Dev server","ownerAgentId":"agent-1","ownerAgentName":"Implementor",
+    "visibility":"hidden","emulatedSize":{ "width":1280,"height":800 } } } }
+// ← { "jsonrpc":"2.0","id":80,"result":{ "tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
+//      "hostClientId":"cli-7f3a","url":"http://127.0.0.1:5173/", ..., "createdAt":"…","updatedAt":"…" } } }
+// ← every workspace subscriber: browser:tab-opened { tab }
+// → an iOS viewer (any client) asks to navigate that tab
+{ "jsonrpc":"2.0","id":81,"method":"browser.navigateTab",
+  "params":{ "tabId":"tab-3","url":"http://127.0.0.1:5173/settings" } }
+// ← the routed navigate action's envelope, from the driving client (the tab is claimed)
+{ "jsonrpc":"2.0","id":81,"result":{ "action":"navigate","success":true,"result":{ "url":"http://127.0.0.1:5173/settings" } } }
+// ← then, from the host's follow-up upsertTab: browser:tab-updated { tab, changes: { url: "…/settings" } }
+// → host reconnects and reconciles its full snapshot
+{ "jsonrpc":"2.0","id":82,"method":"browser.syncTabs","params":{ "tabs":[ { "tabId":"tab-3", ... } ] } }
+// ← { "jsonrpc":"2.0","id":82,"result":{ "drop":[] } }
 ```
 
