@@ -171,8 +171,8 @@ use the empty workspace-id sentinel (§6.5).
 | workspaceDraft.list | none | `WorkspaceDraft[]` — every non-promoted draft, oldest first; includes `editing`, `promoting`, and `failed` rows |
 | workspaceDraft.update | id (req), expectedRevision (req, u64), patch (req, object) | updated `WorkspaceDraft`; patch accepts `title`, `intentText`, `source`, `contextLinks`, `attachments`, and `config` only. `title`/`source` accept explicit `null` to clear; omitted fields are untouched. A stale revision returns `-32009` with `error.data.current` containing the authoritative draft |
 | workspaceDraft.promote | id (req), expectedRevision (req, u64), initialAgent? | `{ draft, workspace, initialAgent? }` — promotes through the ordinary idempotent `workspace.create` pipeline; `initialAgent.agentId` is forbidden because IDs are server-assigned. Replays return the original workspace/agent rather than creating duplicates |
-| workspaceDraft.markDelivery | id (req), delivery (req): `{ state, messageId?, error? }` | updated `WorkspaceDraft` — replaces the durable initial-message reconciliation state and increments the revision |
-| workspaceDraft.delete | id (req) | `{ deleted: boolean }` — idempotent; `false` when no row existed |
+| workspaceDraft.markDelivery | id (req), delivery (req): `{ state, messageId?, error? }` | updated `WorkspaceDraft` — internal reconciliation method that replaces the durable initial-message delivery state and increments the revision |
+| workspaceDraft.delete | id (req) | `{ deleted: boolean }` — unconditional and idempotent; `false` when no row existed |
 
 `WorkspaceDraft` is `{ id, ownerClientId, revision, phase, title?, intentText, source?,
 contextLinks, attachments, config, operationKey, promotedWorkspaceId?, initialAgentId?,
