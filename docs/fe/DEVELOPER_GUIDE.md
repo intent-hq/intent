@@ -13,25 +13,35 @@ This guide reflects the current Intent repository layout and APIs as of package 
 
 ### Install and Run
 
-From the monorepo root, start the fast component preview. The target installs the
-locked frontend dependencies when `node_modules` is missing.
+Agents on a remote daemon host should follow the root
+[situate → act → observe → prove → hand-off loop](../../AGENTS.md#developing-on-a-remote-host).
+The root section is the canonical operational recipe and health-hook source. This guide
+documents frontend-specific behavior and implementation detail.
+
+From the monorepo root, inspect the free port block the next sandbox start will use, then
+start the fast component preview. The target installs locked frontend dependencies when
+`node_modules` is missing.
 
 ```bash
-make dev-ui
+make ports
+make dev-sandbox-ui
 ```
 
-`DEV_PORT` selects the Vite port and stays available to the frontend process. Use a
-different value for each concurrent workspace:
+`make ports` prints the free per-worktree `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` block for the next start. Once a sandbox is running, its listener can move the
+next free block; read the running port from `make sandbox-status` or
+`.dev/sandbox/<mode>.json`. The sandbox passes the derived `DEV_PORT` to Vite, avoiding
+collisions between concurrent workspaces. An explicit override remains available when needed:
 
 ```bash
-make dev-ui DEV_PORT=5290
+make dev-sandbox-ui DEV_PORT=5291
 ```
 
 From `packages/cloudlands-fe`, the equivalent fresh setup is:
 
 ```bash
 corepack pnpm install --frozen-lockfile
-DEV_PORT=5290 corepack pnpm run dev:ui
+DEV_PORT=5291 corepack pnpm run dev:ui
 ```
 
 Choose the smallest launcher that includes the behavior under test:
@@ -59,23 +69,80 @@ corepack pnpm run test:unit     # Vitest suite
 corepack pnpm run test:playwright
 ```
 
-For Loop A work against the installed daemon, run `make dev-web-live` from the
-monorepo root. It starts the loopback-only UDS bridge, waits for it, and starts
-`dev:web`; Ctrl-C stops both processes.
+For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
+`make dev-sandbox-stack` for an isolated intentd plus renderer. The first tunneled
+hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
+load. Follow the root health wait and keep waiting if the splash remains.
+
+### Remote Sandbox Internals
+
+`scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
+blocks beginning at 5200. The block assigns `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` in order. If any derived port is busy, it selects the next completely free
+block and prints the replacement; explicit overrides are validated and never remapped.
+
+On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with this schema:
+
+| Field | Meaning |
+|---|---|
+| `mode`, `pid` | `ui`, `app`, or `stack`, and the owning sandbox process |
+| `pidStartTime`, `pidCommandLine` | Process identity used to reject stale files after PID reuse |
+| `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
+| `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
+| `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
+| `startedAt`, `readyAt` | UTC lifecycle timestamps |
+| `warm` | `{ok, ms}` readiness-gate result and duration |
+| `supervisor` | Supervisor metadata when available; currently `null` |
+
+The filename is keyed only by mode, not port or agent. A worktree can therefore track one
+sandbox of each mode; starting a second same-mode sandbox overwrites that mode's identity.
+Run `make sandbox-status` first and coordinate with the recorded owner, or use a separate
+worktree.
+
+`make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
+nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
+removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
+uses TERM followed by KILL escalation. For a workspace service, use `ws.script.stop(id)`;
+otherwise the external supervisor may restart the process.
+
+App and stack enable the dev-only same-origin bridge. `GET /__sandbox/health` accepts only
+loopback, same-origin requests and returns 200 only when `ok` is true, otherwise 503:
+
+| Object | Fields |
+|---|---|
+| root | `ok` |
+| `vite` | `ready` |
+| `daemon` | `socket`, `reachable`, and optional `error` |
+| `warm` | `moduleGraph`, `entriesWarm` |
+| `git` | `sha`, `branch` |
+
+The endpoint makes a bounded UDS connection. Before answering, it waits for Vite's active
+warm-up requests to become idle and verifies the configured entries are in the client
+module graph: the root layout, app page, and named-preview page. This endpoint is installed
+only by the dev-server plugin, not production builds. The sandbox prints its single ready
+line and writes state only after this gate succeeds; older frontend branches fall back to
+socket and HTTP readiness probes.
+
+`STATUS_JSON=1 make status` consumes these files and health responses into
+`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+ahead/behind state, and optional PR/check summaries when GitHub authentication is
+available. The report is read-only, including stale sandbox state.
 
 ## Fast UI Preview Workflow
 
-Open a named preview after the server prints its URL. These examples use the isolated
-port from the command above:
+After `make dev-sandbox-ui` prints `Sandbox ready:`, read its `devPort` from
+`make sandbox-status` or `.dev/sandbox/ui.json` and open a named preview. `make ports`
+shows the block the next start will use and may differ while this sandbox is running.
+The examples below use `<DEV_PORT>` as the recorded running value:
 
 ```text
-http://127.0.0.1:5290/sandbox/button?state=default&theme=system&width=420&motion=full
-http://127.0.0.1:5290/sandbox/button?state=loading&theme=dark&width=420&motion=reduced
-http://127.0.0.1:5290/sandbox/button?state=disabled&theme=light&width=320&motion=full
-http://127.0.0.1:5290/sandbox/button?state=destructive&theme=dark&width=960&motion=full
-http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=idle&theme=light&width=320&motion=full
-http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=waiting&theme=dark&width=420&motion=reduced
-http://127.0.0.1:5290/sandbox/mention-agent-avatar?state=error&theme=system&width=420&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=default&theme=system&width=420&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=loading&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=disabled&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=destructive&theme=dark&width=960&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=idle&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=waiting&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=error&theme=system&width=420&motion=full
 ```
 
 `theme` accepts `system`, `light`, or `dark`. `width` accepts an integer from 240 to
@@ -100,8 +167,9 @@ For an agent, run the long-lived command through a workspace service script. Cal
 `ws.browser.openTab` tab is hidden by default, but DOM, accessibility, evaluation, and
 screenshot actions still work. Keep that hidden tab open during edits so Vite HMR can
 update it. Call `ws.browser.showTab` only when a person wants to see it; pass
-`focus: true` when it must also receive focus. Use `http://daemon.localhost:5290` in
-`ws.browser` URLs so the browser tool can resolve a local or remote daemon correctly.
+`focus: true` when it must also receive focus. Use
+`http://daemon.localhost:<DEV_PORT>` in `ws.browser` URLs so the browser tool can
+resolve a local or remote daemon correctly.
 
 Run the focused avatar component test from `packages/cloudlands-fe`:
 
@@ -109,8 +177,8 @@ Run the focused avatar component test from `packages/cloudlands-fe`:
 corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
 ```
 
-The component-test harness currently reserves port 3100 and has no port override. If
-that port is occupied, stop the process that owns it before rerunning the command.
+The component-test harness defaults to port 3100; set `CT_PORT` to override it. If the
+chosen port is occupied, stop the process that owns it before rerunning the command.
 
 ## Project Structure
 
@@ -149,14 +217,14 @@ When updating docs or adding features, verify which side of the app owns the beh
 Use `agentFactory.createAgent(...)` for agent creation. The factory is the supported public entry point and normalizes agent config before backend creation.
 
 ```typescript
-import { agentFactory } from '$features/agent/services/agent-factory';
+import { agentFactory } from "$features/agent/services/agent-factory";
 
 const result = await agentFactory.createAgent(workspace, {
-  name: 'Review Changes',
-  agentType: 'task-loop',
-  model: 'haiku4.5',
-  initialMessage: 'Review the current diff and summarize the risks.',
-  source: 'workspace-initializer',
+  name: "Review Changes",
+  agentType: "task-loop",
+  model: "haiku4.5",
+  initialMessage: "Review the current diff and summarize the risks.",
+  source: "workspace-initializer",
 });
 ```
 
