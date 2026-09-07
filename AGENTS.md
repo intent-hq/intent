@@ -276,14 +276,29 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
   then update the final workspace status message with the carrying version (e.g.
-  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
-  too: they ride the chained cloudlands-fe alpha, and the version to report is the
-  cloudlands-fe alpha — verify inclusion via `intentdVersion` in the published
-  release's `release-manifest.json` on the
-  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
-  distribution repo (same tag; cloudlands-fe source-repo releases carry no
-  assets). Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never
-  block a turn polling.
+  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). intentd-only changes ride the chained
+  cloudlands-fe alpha too, so the version to report is always the cloudlands-fe tag.
+  `scripts/shipped-in.sh <intentd|cloudlands-fe> <squash-commit-sha>` (or
+  `make shipped-in COMPONENT=... SHA=...`) is the canonical detector: it prints the
+  first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
+  tag carrying the commit (for intentd, via the `intentdVersion` pin in that tag's
+  `release-manifest.json`) and exits 3 while nothing carries it yet. Never block a
+  turn polling — schedule this hook after replacing the placeholders:
+
+  ```javascript
+  await ws.hook.schedule({
+    name: "Wait for shipped alpha",
+    delayMs: 600_000,
+    ttlMs: 21_600_000,
+    code: `const run = await ws.host.exec({
+    command: "scripts/shipped-in.sh", args: ["<COMPONENT>", "<SHA>"], timeoutMs: 120_000,
+  });
+  if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
+  if (run.exitCode === 3) return { dispatch: false };
+  throw new Error("shipped-in failed (exit " + run.exitCode + "): " + run.stderr.trim());`,
+  });
+  ```
+
   Before the final status, complete the [ergonomics retrospective](#closing-a-workspace--ergonomics-retrospective).
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.

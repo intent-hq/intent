@@ -88,7 +88,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check
+.PHONY: ports status docs-check shipped-in
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -101,6 +101,14 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 
 docs-check: ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
+
+# Release tracking: which cloudlands-releases alpha first carries a merged
+# commit. The script exits 3 for "not shipped yet" (make reports it as
+# `Error 3`); background hooks should invoke scripts/shipped-in.sh directly so
+# they can branch on that code. `LIMIT=N` widens the scan window past the
+# newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit> (script exit 3 = not yet)
+	@scripts/shipped-in.sh "$(COMPONENT)" "$(SHA)" $(if $(LIMIT),--limit "$(LIMIT)",)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
