@@ -45,4 +45,19 @@ fi
 grep -q 'legacy guidance is forbidden (browser-rewritten local port)' <<<"$fail_output" ||
   fail "client-local port failure did not retain its human-readable label"
 
+: >"$temp_dir/README.md"
+printf '%s\n' 'Set SANDBOX_ONLY_KNOB=1 for runner diagnostics.' >>"$temp_dir/packages/cloudlands-fe/AGENTS.md"
+if fail_output=$(cd "$temp_dir" && bash scripts/docs-check.sh 2>&1); then
+  fail "undeclared sandbox knob was accepted"
+fi
+grep -q "sandbox knob 'SANDBOX_ONLY_KNOB' is not present" <<<"$fail_output" ||
+  fail "undeclared sandbox knob failure did not name the knob: $fail_output"
+
+mkdir -p "$temp_dir/packages/cloudlands-fe/scripts/sandbox"
+printf '%s\n' 'const debug = process.env.SANDBOX_ONLY_KNOB === "1";' \
+  >"$temp_dir/packages/cloudlands-fe/scripts/sandbox/runner.mjs"
+if ! pass_output=$(cd "$temp_dir" && bash scripts/docs-check.sh 2>&1); then
+  fail "sandbox knob defined in an fe sandbox source was rejected: $pass_output"
+fi
+
 echo "docs-check tests passed"
