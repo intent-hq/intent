@@ -15,7 +15,7 @@ fail() {
   exit 1
 }
 
-for command in bash cat grep python3; do
+for command in bash cat grep head python3; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 
@@ -78,7 +78,7 @@ echo behind >"$fe_compare/$sha...v2.1.0"
 run_script cloudlands-fe "$sha"
 [[ "$status" -eq 0 ]] || fail "newest-tag hit exited $status: $stderr"
 [[ "$stdout" == "v2.3.0 intentdVersion=0.9.0" ]] || fail "newest-tag hit printed '$stdout'"
-grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 10 ' "$temp_dir/gh.log" || fail "default limit was not 10"
+grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 20 ' "$temp_dir/gh.log" || fail "default limit 10 was not over-fetched as 20"
 
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"
@@ -87,7 +87,18 @@ echo behind >"$fe_compare/$sha...v2.1.0"
 run_script cloudlands-fe "$sha" --limit 3
 [[ "$status" -eq 0 ]] || fail "older-tag hit exited $status: $stderr"
 [[ "$stdout" == "v2.2.0 intentdVersion=0.9.0" ]] || fail "expected the oldest carrying tag, printed '$stdout'"
-grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 3 ' "$temp_dir/gh.log" || fail "--limit was not forwarded"
+grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 13 ' "$temp_dir/gh.log" || fail "--limit 3 was not over-fetched as 13"
+
+reset_stub
+printf '%s\n' stable v2.3.0 alpha v2.2.0 beta v2.1.0 >"$stub_dir/releases"
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo identical >"$fe_compare/$sha...v2.1.0"
+run_script cloudlands-fe "$sha" --limit 2
+[[ "$status" -eq 0 ]] || fail "channel-interleaved hit exited $status: $stderr"
+[[ "$stdout" == "v2.3.0 intentdVersion=0.9.0" ]] || fail "channel-interleaved scan printed '$stdout' (v2.1.0 is outside --limit 2)"
+! grep -q 'v2.1.0' "$temp_dir/gh.log" || fail "channel-interleaved scan inspected v2.1.0 beyond --limit 2"
+! grep -qE 'compare/.*\.\.\.(stable|alpha|beta)$' "$temp_dir/gh.log" || fail "channel releases were compared"
 
 reset_stub
 echo behind >"$fe_compare/$sha...v2.3.0"

@@ -86,11 +86,14 @@ carries() {
   esac
 }
 
+# The distribution repo also carries rolling channel releases (alpha, beta,
+# stable) that can sit anywhere in the listing, so over-fetch and take the
+# newest $limit versioned tags after filtering.
 release_list=$(
-  gh release list --repo "$releases_repo" --limit "$limit" --exclude-drafts \
+  gh release list --repo "$releases_repo" --limit "$((limit + 10))" --exclude-drafts \
     --json tagName --jq '.[].tagName' 2>/dev/null
 ) || fail "gh release list on $releases_repo failed"
-mapfile -t tags < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" || true)
+mapfile -t tags < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" | head -n "$limit" || true)
 ((${#tags[@]} > 0)) || fail "gh release list on $releases_repo returned no vX.Y.Z tags"
 
 declare -A intentd_status=()
