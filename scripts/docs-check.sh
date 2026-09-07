@@ -47,8 +47,16 @@ sandbox_doc_lines() {
 }
 
 knob_sources=(Makefile scripts/dev-*.sh)
-[[ -f packages/cloudlands-fe/scripts/vite-plugin-intentd-bridge.mjs ]] &&
-  knob_sources+=(packages/cloudlands-fe/scripts/vite-plugin-intentd-bridge.mjs)
+fe_knob_sources=(
+  packages/cloudlands-fe/scripts/vite-plugin-intentd-bridge.mjs
+  packages/cloudlands-fe/scripts/sandbox/*.mjs
+  packages/cloudlands-fe/vite.config.mjs
+  packages/cloudlands-fe/package.json
+  packages/cloudlands-fe/src/lib/component-catalog/geometry-snapshot.ts
+)
+for source in "${fe_knob_sources[@]}"; do
+  [[ -f "$source" ]] && knob_sources+=("$source")
+done
 
 while IFS=: read -r file line text; do
   while IFS= read -r knob; do
@@ -56,7 +64,7 @@ while IFS=: read -r file line text; do
       DEVELOPER_GUIDE) continue ;;
     esac
     if ! grep -Fq "$knob" "${knob_sources[@]}"; then
-      fail "$file" "$line" "sandbox knob '$knob' is not present in the Makefile, dev scripts, or bridge plugin"
+      fail "$file" "$line" "sandbox knob '$knob' is not present in the Makefile, dev scripts, or cloudlands-fe sandbox sources"
     fi
   done < <(printf '%s\n' "$text" | tr -cs 'A-Z0-9_' '\n' | grep -E '^[A-Z][A-Z0-9]*(_[A-Z0-9]+)+$' | sort -u || true)
 done < <(sandbox_doc_lines)
