@@ -29,7 +29,9 @@ printf '%s\n' "$*" >>"$GH_TEST_LOG"
 case "$1 $2" in
   "release list")
     [[ "$*" == *"--repo intent-hq/cloudlands-releases"* ]] || exit 1
-    cat "$GH_STUB_DIR/releases" ;;
+    cat "$GH_STUB_DIR/releases"
+    [[ -f "$GH_STUB_DIR/releases.fail" ]] && { echo "stub: release list truncated" >&2; exit 1; }
+    exit 0 ;;
   "api repos/"*)
     path=${2#repos/}; repo=${path%%/compare/*}; range=${path##*/compare/}
     file="$GH_STUB_DIR/compare/${repo/\//__}/$range"
@@ -112,6 +114,15 @@ run_script cloudlands-fe "$sha"
 reset_stub
 GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 [[ "$status" -eq 1 ]] || fail "gh failure exited $status (expected 1, not 3)"
+
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+: >"$stub_dir/releases.fail"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 1 ]] || fail "release list that printed tags then failed exited $status (expected 1)"
+[[ -z "$stdout" ]] || fail "release list that printed tags then failed printed '$stdout'"
 
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"

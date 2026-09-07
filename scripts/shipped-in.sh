@@ -86,12 +86,12 @@ carries() {
   esac
 }
 
-mapfile -t tags < <(
+release_list=$(
   gh release list --repo "$releases_repo" --limit "$limit" --exclude-drafts \
-    --json tagName --jq '.[].tagName' 2>/dev/null |
-    grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' || true
-)
-((${#tags[@]} > 0)) || fail "gh release list on $releases_repo failed or returned no vX.Y.Z tags"
+    --json tagName --jq '.[].tagName' 2>/dev/null
+) || fail "gh release list on $releases_repo failed"
+mapfile -t tags < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" || true)
+((${#tags[@]} > 0)) || fail "gh release list on $releases_repo returned no vX.Y.Z tags"
 
 declare -A intentd_status=()
 first_hit=""
