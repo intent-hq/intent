@@ -209,13 +209,18 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":"rev-4","result":{ "success":true,"results":[
   { "action":"listTabs","success":true,"result":[{"id":"tab-1"}] }
 ] } }
-// AGENT-INITIATED `browser.exec` (REV-1, interim) — the MCP `ws.browser.exec`
-// binding has no ambient client connection, so the daemon routes the reverse
-// RPC to the FIRST-connected live client (across UDS + WSS). When that client
-// disconnects the next-connected one takes over; when no client is connected
-// the call fails fast with `-32603` "browser.exec: no client connected".
-// Wire shape of the reverse RPC and its result is unchanged from the
-// client-triggered case above.
+// AGENT-INITIATED `browser.exec` (REV-2, v9.9–v9.11; §5.9) — the MCP
+// `ws.browser.exec` binding has no ambient client connection, so the daemon
+// routes the reverse RPC to the workspace's DRIVING client: the pinned
+// `browserClientId` (`workspace.setBrowserClient`, §5.1) when set — pinned but
+// offline is `-32603` "browser.exec: browser client \"<name>\" (<clientId>) for
+// this workspace is not connected", never a silent fallback — else the host of
+// the workspace's claimed registry tabs (§5.45), else the FIRST-connected
+// connection whose `client.hello` advertised `capabilities.browserExec` (§5.17;
+// across UDS + WSS). When no eligible client is connected the call fails fast
+// with `-32603` "browser.exec: no client connected". `listTabs` is answered by
+// the daemon from the tab registry and never forwarded. Wire shape of the
+// reverse RPC and its result is unchanged from the client-triggered case above.
 // → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
 { "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
   "command":"echo","args":["hello"],"timeoutMs":5000
