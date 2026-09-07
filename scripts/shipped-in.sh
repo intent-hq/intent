@@ -113,4 +113,5 @@ if [[ -z "$first_hit" ]]; then
   exit 3
 fi
 
-printf '%s intentdVersion=%s\n' "$first_hit" "$(manifest_version "$first_hit")"
+hit_version=$(manifest_version "$first_hit")
+printf '%s intentdVersion=%s\n' "$first_hit" "$hit_version"

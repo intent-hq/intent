@@ -114,6 +114,24 @@ GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 [[ "$status" -eq 1 ]] || fail "gh failure exited $status (expected 1, not 3)"
 
 reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+rm "$manifest_dir/v2.3.0.json"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 1 ]] || fail "fe hit with missing manifest exited $status (expected 1)"
+[[ -z "$stdout" ]] || fail "fe hit with missing manifest printed '$stdout'"
+
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+printf '{"version":"2.3.0"}\n' >"$manifest_dir/v2.3.0.json"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 1 ]] || fail "fe hit with malformed manifest exited $status (expected 1)"
+[[ -z "$stdout" ]] || fail "fe hit with malformed manifest printed '$stdout'"
+
+reset_stub
 printf '{"version":"2.3.0","intentdVersion":"0.9.5"}\n' >"$manifest_dir/v2.3.0.json"
 printf '{"version":"2.2.0","intentdVersion":"0.9.5"}\n' >"$manifest_dir/v2.2.0.json"
 printf '{"version":"2.1.0","intentdVersion":"0.9.4"}\n' >"$manifest_dir/v2.1.0.json"
