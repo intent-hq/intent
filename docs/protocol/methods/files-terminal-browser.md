@@ -537,9 +537,9 @@ connection's `client.hello` identity, never by a wire parameter.
 | Method | Params | Result |
 | --- | --- | --- |
 | browser.listTabs *(v9.10)* | workspaceId (req) | { tabs: (BrowserTab & { hostConnected: boolean, hostName? })[] } — every **open** registry tab of the workspace, oldest first (`createdAt`, then `tabId`), any client may call it. `hostConnected` is whether the tab's host has a live hello'd connection right now; `hostName` is that host's hello `name` (omitted while the host is offline or nameless). Tombstoned rows (see `browser.closeTab`) are excluded. -32602 on a missing/empty `workspaceId`. |
-| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object, or `tabId` / `url` missing or empty; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
+| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object; `tabId` missing, non-string or empty; `url` missing or non-string — an **empty** `url` string is accepted; a wrong-typed optional field; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
 | browser.removeTab *(v9.10)* | tabId (req) | { ok: true } — **host-only** report that the tab is gone. Deletes the row (an open row emits `browser:tab-closed`; a tombstone is purged silently — the host has acknowledged the daemon-side close). Unknown ids are an idempotent no-op. -32602 on an un-hello'd connection or a tab hosted by another client. |
-| browser.syncTabs *(v9.10)* | tabs (req): BrowserTabInput[] | { drop: tabId[] } — **host-only** full-snapshot reconciliation of the host's tab set **across all workspaces** (each entry carries its own `workspaceId`; duplicate ids after the first are ignored), one transaction — nothing is written when any entry is rejected. Per entry: unknown ⇒ created (`browser:tab-opened`); open and hosted by this host ⇒ refreshed (`browser:tab-updated { changes }` when anything differed; another `workspaceId` for a known tab rejects the **whole** snapshot with -32602); tombstoned or hosted **elsewhere** ⇒ untouched and listed in `drop` (a tab has exactly one host; the tombstone is retained, so a repeated stale snapshot keeps answering `drop` instead of reviving the tab). Every row of this host **absent** from the snapshot is deleted — open rows emit `browser:tab-closed`, tombstones are purged silently. Hosts send it on connect / reconnect and after a `client:disconnected`-worthy gap. -32602 on an un-hello'd connection, a non-array `tabs`, or a malformed entry (non-object, or `tabId` / `workspaceId` / `url` missing or empty — here `workspaceId` **is** required per entry, there being no envelope value to inject). |
+| browser.syncTabs *(v9.10)* | tabs (req): BrowserTabInput[] | { drop: tabId[] } — **host-only** full-snapshot reconciliation of the host's tab set **across all workspaces** (each entry carries its own `workspaceId`; duplicate ids after the first are ignored), one transaction — nothing is written when any entry is rejected. Per entry: unknown ⇒ created (`browser:tab-opened`); open and hosted by this host ⇒ refreshed (`browser:tab-updated { changes }` when anything differed; another `workspaceId` for a known tab rejects the **whole** snapshot with -32602); tombstoned or hosted **elsewhere** ⇒ untouched and listed in `drop` (a tab has exactly one host; the tombstone is retained, so a repeated stale snapshot keeps answering `drop` instead of reviving the tab). Every row of this host **absent** from the snapshot is deleted — open rows emit `browser:tab-closed`, tombstones are purged silently. Hosts send it on connect / reconnect and after a `client:disconnected`-worthy gap. -32602 on an un-hello'd connection, a non-array `tabs`, or a malformed entry (non-object; `tabId` / `workspaceId` missing, non-string or empty — here `workspaceId` **is** required per entry, there being no envelope value to inject; `url` missing or non-string, an empty `url` being accepted). |
 | browser.navigateTab *(v9.11)* | tabId (req), url (req) | the routed `navigate` action's `{ action, success, result?, error? }` envelope — any client. The daemon looks the tab up (-32602 `browser.navigateTab: tab not found: <tabId>` for an unknown or tombstoned id) and dispatches a reverse `browser.exec { workspaceId, tabId, actions: [{ action: "navigate", tabId, url }] }` to the tab's **routing target**: a **claimed** tab (`ownerAgentId` set) goes to its workspace's driving client (§5.9 REV-2 rules), an **unclaimed** one to its physical host. The host then reports the resulting navigation via `browser.upsertTab` and every client follows the canonical row. -32603 `browser.navigateTab: browser client "<name>" (<clientId>) for this workspace is not connected` when the target is offline; `browser.navigateTab: no client connected` when no eligible client exists at all. |
 | browser.closeTab *(v9.11)* | tabId (req), force?: boolean | { ok: true } — any client. Without `force`: the close is routed exactly like `browser.navigateTab` (reverse `browser.exec { action: "closeTab" }`, same -32602 / -32603 outcomes) and the host's own `browser.removeTab` deletes the row. With `force: true`: a best-effort routed close is attempted when the target is reachable (its failure is ignored), then the row is **tombstoned daemon-side** regardless — it disappears from every list now, `browser:tab-closed` is published, and the host is told to `drop` the id on its next `browser.syncTabs` (a stale `browser.upsertTab` for it is -32602 until then). -32602 on a non-boolean `force`. |
 
@@ -551,19 +551,30 @@ interface BrowserTabInput {            // host-reported fields
   workspaceId: string;                 // bound at creation; a later report may not change it.
                                        // Required per entry in browser.syncTabs; in browser.upsertTab
                                        // the envelope workspaceId is injected here (may be omitted)
-  url: string;                         // the URL actually loaded
-  requestedUrl?: string;               // the URL as requested (loopback rewrite echo, §5.9)
-  title?: string;
+  url: string;                         // the URL actually loaded (may be "")
+  requestedUrl?: string | null;        // the URL as requested (loopback rewrite echo, §5.9)
+  title?: string | null;
   ownerAgentId?: string | null;        // omitted / null = unowned (user tab), §5.9 tab ownership
-  ownerAgentName?: string | null;      // (every optional field accepts an explicit null on input;
-                                       //  a BrowserTab row omits cleared fields; only the
-                                       //  browser:tab-updated `changes` diff carries explicit null)
-  visibility?: "visible" | "hidden";   // default "visible"; §5.9 hidden-by-default block
-  emulatedSize?: { width: number, height: number };   // omitted = native viewport
+  ownerAgentName?: string | null;
+  visibility?: "visible" | "hidden";   // default "visible" when omitted; null is REJECTED (-32602);
+                                       // §5.9 hidden-by-default block
+  emulatedSize?: { width: number, height: number } | null;   // omitted / null = native viewport
 }
-interface BrowserTab extends BrowserTabInput {
+// Input nullability: the five nullable report fields above accept an explicit null
+// (≡ omitted). The canonical BrowserTab row (below, list results, event `tab`) never
+// carries null — a cleared field is omitted; only the browser:tab-updated `changes`
+// diff uses explicit null to signal a clear.
+interface BrowserTab {                 // canonical row — non-null; cleared fields are omitted
+  tabId: string;
+  workspaceId: string;
   hostClientId: string;                // the logical client rendering the tab (§5.17)
+  url: string;
+  requestedUrl?: string;
+  title?: string;
+  ownerAgentId?: string;               // omitted = unowned
+  ownerAgentName?: string;
   visibility: "visible" | "hidden";    // always present on read
+  emulatedSize?: { width: number, height: number };
   createdAt: string;                   // ISO-8601
   updatedAt: string;
 }
