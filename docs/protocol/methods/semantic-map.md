@@ -50,8 +50,11 @@ secondary root, the daemon rebases `path` beneath that root before applying mani
 
 `map.activity` projects durable `file:changed`, `file:created`, `file:deleted`, `file:renamed`,
 `agent:tool:call`, and `agent:stream:activity` events. `sinceTs` takes precedence when both time
-filters are supplied. `limit` defaults to 50 and is clamped to `1..500`. Unknown `kinds` values are
-`-32602`. Each returned item has this shape:
+filters are supplied. `limit` defaults to 50, is clamped to `1..500`, and bounds the returned
+activities after projection and `kinds` / `agentId` filtering. To collect matches, the daemon scans
+eligible source events in 500-event pages, stopping after at most `max(500, 100 × limit)` source
+events or once it has collected `limit` activities. Unknown `kinds` values are `-32602`. Each
+returned item has this shape:
 
 ```ts
 interface MapActivity {
@@ -71,9 +74,11 @@ projected activities and does not itself emit live events. The same source event
 `MapActivity.id` in its live frame and later replay; clients combining them must deduplicate by
 `MapActivity.id`.
 
-`map.route` reads at most 500 source events. An `agentId` selects that agent; a `taskNoteId` selects
-all agents currently assigned to that task note. No assigned agents yields an empty route. Visits
-contain each encountered region once, in chronological encounter order. A transition is:
+`map.route` selects activity for every requested agent before applying its 500-activity cap: an
+`agentId` selects that agent, while a `taskNoteId` selects all agents currently assigned to that task
+note. The per-agent activity is merged deterministically, newest-first by `(ts, MapActivity.id)`, and
+then truncated to 500. No assigned agents yields an empty route. Visits contain each encountered
+region once, in chronological encounter order. A transition is:
 
 ```ts
 interface RouteTransition {
