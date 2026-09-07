@@ -87,8 +87,10 @@ per-workspace browser-client pin (§5.1 `workspace.setBrowserClient`) — [inten
   connection's `drafts.*` calls, §5.16, key their row by `clientId`); such never-hello'd rows are
   **not** pinnable (`workspace.setBrowserClient` rejects them with `-32602`, §5.1) and cannot
   host tabs (§5.45). Upgrading an existing daemon backfills the provenance stamp only for rows
-  that carry a `name` (a real client hello always does); legacy nameless rows fail closed until
-  the client re-hellos.
+  that carry a `name` — a heuristic proxy, since the anonymous-draft placeholder is always minted
+  nameless while `client.hello` is optional-`name` but in practice always sends one. Legacy
+  nameless rows (draft-only placeholders, or a pre-upgrade hello'd client that omitted `name`)
+  fail closed — not pinnable, cannot host — until their next `client.hello`, which stamps them.
 - **Logical-client transitions.** The daemon publishes the global events `client:connected`
   (a `clientId` gained its **first** live hello'd connection) and `client:disconnected` (it lost
   its **last** — explicit close, re-hello under a different `clientId`, or connection abort

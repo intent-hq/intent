@@ -550,8 +550,10 @@ interface BrowserTabInput {            // host-reported fields
   url: string;                         // the URL actually loaded
   requestedUrl?: string;               // the URL as requested (loopback rewrite echo, §5.9)
   title?: string;
-  ownerAgentId?: string;               // omitted / null = unowned (user tab), §5.9 tab ownership
-  ownerAgentName?: string;
+  ownerAgentId?: string | null;        // omitted / null = unowned (user tab), §5.9 tab ownership
+  ownerAgentName?: string | null;      // (every optional field accepts an explicit null on input;
+                                       //  a BrowserTab row omits cleared fields; only the
+                                       //  browser:tab-updated `changes` diff carries explicit null)
   visibility?: "visible" | "hidden";   // default "visible"; §5.9 hidden-by-default block
   emulatedSize?: { width: number, height: number };   // omitted = native viewport
 }
