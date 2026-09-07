@@ -1,4 +1,4 @@
-# Local dev stack data dir created by `make dev` (intentd socket + SQLite DB)
+# Local dev data, including intentd state and `.dev/sandbox/*.json` identities
 .dev/
 
 # Local scratch dir for worktree commit-message drafts (never committed)

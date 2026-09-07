@@ -18,6 +18,8 @@
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
+| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
+| workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
 | workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (currently 1; the import side refuses archives whose format version it does not understand), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
@@ -156,7 +158,7 @@ Neither the protocol version policy nor the daemon-version policy changes.
 Already-imported workspaces that lost their remotes are not repaired automatically;
 reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
-### 5.1.1 `workspaceDraft.*` *(v9.10)*
+### 5.1.1 `workspaceDraft.*` *(v9.12)*
 
 Daemon-owned workspace drafts preserve new-workspace form state across client and daemon
 restarts. Draft methods are daemon-global: they take no `workspaceId`, and draft events
@@ -187,8 +189,14 @@ directory, initializes a repository whose initial branch is `main`, and creates 
 workspace in place. If the target directory already exists and is non-empty, promotion
 fails with `-32602`; the draft moves to `failed`, retains its authored fields, and stores
 `lastError = "invalid params: new project directory already exists and is not empty: <path>"`.
-`config.setupScript`, `config.isRemote`, and `config.model` map to the corresponding
-`workspace.create` inputs; `contextLinks` are carried through. A promotion failure retains
+`config` is a forward-compatible object: unknown keys survive create, full-object update,
+and daemon restart. The setup panel currently persists `setupPanelExpanded`, the initial-agent
+options (`specialist`, `provider`, `model`, `reasoningEffort`, `isTeamMode`), `setupScript`,
+`isRemote`, and `remoteSetup`; branch and local isolation choices live on `source`, not
+`config`. Of those keys, the daemon maps `setupScript`, `isRemote`, and `model` to the
+corresponding `workspace.create` inputs. The client derives `initialAgent` from the other
+initial-agent options and passes it to `workspaceDraft.promote`; `remoteSetup` remains
+client-owned setup metadata. `contextLinks` are carried through. A promotion failure retains
 the draft as `failed`, stores `lastError`, and permits retry. Promotion marks the draft
 `promoting` before creation and uses the immutable `operationKey` as the create idempotency
 key. The workspace row and `promotedWorkspaceId` mapping commit atomically while the draft
@@ -222,6 +230,33 @@ binding, and raw dispatch rejects it. Agents with a parent report the opportunit
 parentless background agents remain blocked and have no parent-report path. This is an MCP
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
+
+**Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
+`tool_result` regardless of the script's return value. When the binding runs, the MCP
+dispatch layer mints a `tar-` nonce, stamps it into the proposal's resource item, and
+collects the item for the §7.1 `AtToolResult` turn-attachment registry
+([07-agent-streaming.md](../07-agent-streaming.md)); the collected batch is registered when
+the script finishes — before the result returns to the provider — whether the script
+returned the proposal envelope, returned something else (e.g. `{ ok: true }`), or threw.
+When the provider reports the call completed, the daemon claims the batch either by finding
+a member's nonce in the echoed tool output or, when no nonce matches, by claiming the agent's
+oldest pending `AtToolResult` batch — the FIFO fallback, gated on the completed call's
+recorded tool name containing `workspace_api`. Scripts therefore need not return the
+proposal envelope and may emit several proposals in one call: all resource items of one
+call register as one batch and attach together. The completed `agent:tool:call` event
+carries the claimed batch as `registeredAttachments` and the ids of the standalone blocks
+as `proposalBlockIds`; the transcript gets one standalone
+`application/vnd.intent.proposal+json` resource block per proposal right after the
+`tool_result` (§7.1). The recorded tool name is derived provider-independently: when the
+ACP title carries no tool identifier — auggie titles the call with the model-authored
+`summary`, sends no `name`, and reports `kind: other` — an input holding exactly a
+non-empty string `code` plus a string `summary` (a daemon-stamped `_acpTitle` echo is
+tolerated) identifies `workspace_api` before the `<name>: <description>` title split runs
+(`intent-acp::session::is_workspace_api_input`;
+[intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491),
+[intent-hq/intentd#1762](https://github.com/intent-hq/intentd/pull/1762)). Explicitly
+namespaced MCP titles (`mcp.<server>.<tool>`, `mcp__<server>__<tool>`) stay authoritative,
+so a foreign tool whose arguments happen to be `{ code, summary }` keeps its own name.
 
 ```json
 // → request
@@ -603,7 +638,7 @@ remaining churn. A `workspace.open` during the setup window likewise supersedes 
 deferral and starts the watchers immediately (the user is in the workspace), so a
 still-running script's remaining churn surfaces from that point on.
 
-The optional persisted `Workspace.setupResult` field *(v9.10)* reconciles setup after a
+The optional persisted `Workspace.setupResult` field *(v9.12)* reconciles setup after a
 reconnect or daemon restart. Its shape is `{ state, exitCode?, startedAt?, finishedAt?,
 error? }`, where `state` is `none | running | succeeded | failed | unknown`. It is written
 as `running` immediately before the setup spawn attempt and replaced with `succeeded` or
@@ -1058,6 +1093,24 @@ without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
 both **standalone** repositories: `workspace.delete` skips the worktree-registration
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
+
+**`browserClientId` — the per-workspace browser-client pin (REV-2, v9.9;
+[intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760)).** The logical
+`clientId` (§5.17) that agent-initiated `browser.exec` requests for this workspace are routed
+to, written by `workspace.setBrowserClient` and cleared by passing `clientId: null`.
+**Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
+`workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
+is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
+first-connected eligible client). The pin is a persisted row column that only
+`workspace.setBrowserClient` writes: a general `workspace.update` never touches it, and the
+`workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
+committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
+`workspace.duplicate` copy starts unpinned, and although the transfer export carries the
+column, `workspace.import.commit` nulls it — a `clientId` names a client of the source
+daemon (the `client` table never transfers), so an imported workspace starts unpinned too.
+Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
+candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
+pinned (-32602) and never carries the field.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon

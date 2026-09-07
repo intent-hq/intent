@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Protocol Version:** `9.10`
+**Protocol Version:** `9.12`
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -25,7 +25,6 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | Subsection | File |
 |------------|------|
 | §5.1 `workspace.*` | [methods/workspace.md](./methods/workspace.md) |
-| §5.1.1 `workspaceDraft.*` | [methods/workspace.md](./methods/workspace.md) |
 | §5.2 `note.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.2.1 `note.lineAttribution.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.3 `comment.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
@@ -43,7 +42,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.14 Execution locus, locality & remote behavior | [methods/execution-locus.md](./methods/execution-locus.md) |
 | §5.15 `search.*` | [methods/search-drafts.md](./methods/search-drafts.md) |
 | §5.16 `drafts.*` | [methods/search-drafts.md](./methods/search-drafts.md) |
-| §5.17 `client.hello` handshake & stable client identity | [methods/client-hello.md](./methods/client-hello.md) |
+| §5.17 `client.hello` handshake, stable client identity & `client.list` | [methods/client-hello.md](./methods/client-hello.md) |
 | §5.18 `accept-changes.*` | [methods/change-tracking.md](./methods/change-tracking.md) |
 | §5.19 `file-tracking.*` (reads) | [methods/change-tracking.md](./methods/change-tracking.md) |
 | §5.20 Change metrics (reads) | [methods/change-tracking.md](./methods/change-tracking.md) |
@@ -70,6 +69,8 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.41 Voice transcription — `voice.transcribe` / `voice.getWorkspaceVocabulary` | [methods/voice.md](./methods/voice.md) |
 | §5.42 Centralized PR monitoring — `prMonitor.*` | [methods/pr.md](./methods/pr.md) |
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
+| §5.44 Guided managed-provider setup — `providers.setup.*` *(reserved; per-method contract not yet written up — see the fast-path note in [05-method-catalog.md](./05-method-catalog.md))* | — |
+| §5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 
 ## Compatibility policy (summary)
 
