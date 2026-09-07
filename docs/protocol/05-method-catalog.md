@@ -44,7 +44,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
-| sandbox | 2 | discard, merge |
+| sandbox | 2 | cow.discard, cow.merge |
 | script | 9 | create, list, output, remove, restart, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
