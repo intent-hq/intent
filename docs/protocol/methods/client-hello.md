@@ -140,3 +140,9 @@ The workspace-scoped counterpart — which client an agent's `browser.exec` woul
 workspace right now — is `workspace.getBrowserClient` (§5.1); `client.list` is the picker's
 source of candidates for `workspace.setBrowserClient`.
 
+**Antigravity setup capability (9.8).** The server advertises
+`capabilities.antigravitySetup: 1`. A dedicated local app connection requests
+this capability in its hello before using the connection-owned setup methods.
+See [§5.44](./models-providers.md#544-guided-antigravity-setup). A new hello
+revokes the preceding setup operation on that connection. WSS cannot gain
+setup access by advertising the capability.
