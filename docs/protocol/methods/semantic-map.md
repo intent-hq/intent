@@ -48,9 +48,9 @@ counts assignments whose confidence is not `unsorted`.
 Paths without `gitRootId` are workspace-root-relative. When `gitRootId` identifies a registered
 secondary root, the daemon rebases `path` beneath that root before applying manifest patterns.
 
-`map.activity` projects durable `file:changed`, `file:created`, `file:deleted`, `file:renamed`,
-`agent:tool:call`, and `agent:stream:activity` events. `sinceTs` takes precedence when both time
-filters are supplied. `limit` defaults to 50, is clamped to `1..500`, and bounds the returned
+`map.activity` replays only durable `file:changed`, `file:created`, `file:deleted`, `file:renamed`,
+and `agent:tool:call` events. `sinceTs` takes precedence when both time filters are supplied.
+`limit` defaults to 50, is clamped to `1..500`, and bounds the returned
 activities after projection and `kinds` / `agentId` filtering. To collect matches, the daemon scans
 eligible source events in 500-event pages, stopping after at most `max(500, 100 × limit)` source
 events or once it has collected `limit` activities. Unknown `kinds` values are `-32602`. Each
@@ -69,10 +69,12 @@ identity, so it is unique within the workspace activity stream and stable when t
 is replayed by later `map.activity` calls; clients must not derive meaning from its format.
 
 At persistence time, the daemon projects each eligible durable source event into one transient
-`map:activity` event (§6.5), whose `data` is that event's `MapActivity`. `map.activity` replays
-projected activities and does not itself emit live events. The same source event has the same
-`MapActivity.id` in its live frame and later replay; clients combining them must deduplicate by
-`MapActivity.id`.
+`map:activity` event (§6.5), whose `data` is that event's `MapActivity`. The live projection also
+consumes transient `agent:stream:activity` events and emits them with `kind: "thinking"`.
+`map.activity` replays the durable projections and does not itself emit live events. Thinking
+activity is live-only and never appears in `map.activity` results; clients must not expect it on
+reconnect or replay. For the durable kinds, the same source event has the same `MapActivity.id` in
+its live frame and later replay; clients combining them must deduplicate by `MapActivity.id`.
 
 `map.route` selects activity for every requested agent before applying its 500-activity cap: an
 `agentId` selects that agent, while a `taskNoteId` selects all agents currently assigned to that task
