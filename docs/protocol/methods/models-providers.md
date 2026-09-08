@@ -171,7 +171,6 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 
 Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "antigravity-acp"`, and `canBeDisabled: true`. Discovery does not enable it or change the active provider. Initial verification covers macOS Apple Silicon with personal Google OAuth. Other platforms and authentication methods are not certified by this integration.
 
-
 ### 5.44 Guided Antigravity setup
 
 Protocol 9.8 adds four local-app fast-path methods. These methods are not part

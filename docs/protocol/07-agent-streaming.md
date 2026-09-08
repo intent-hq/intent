@@ -345,7 +345,27 @@ delta agree byte-for-byte. ACP providers deliver a human-readable `title` (e.g.
 invoked; the real name is derived at `session/update` mapping time
 (`intent-acp::session::derive_tool_name`), and carried on the event as `data.toolName` with the
 raw title alongside as `data.title` — the factory places `toolName` in `block.name` verbatim.
-Derivation: a title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
+Derivation: Codex's and Claude Code's explicitly namespaced MCP title forms (below) are
+evaluated first — they name the server, so a foreign tool whose arguments happen to be
+`{ code, summary }` keeps its own name (`mcp.python.execute` → `python_execute`). Next, an
+object `raw_input` holding exactly a non-empty string `code` plus a string `summary` (a
+daemon-stamped `_acpTitle` echo is tolerated; any other key disqualifies the match) is the
+daemon's own `workspace_api` tool and derives `workspace_api` whatever the title says
+(`intent_core::is_workspace_api_input`, called from `intent-acp::session::derive_tool_name`
+and shared with the FIFO claim gate below). It runs before the `<name>: <description>`
+split because auggie titles the call with the model-authored `summary` (no `name`,
+`kind: other`), so a summary such as `"Inspect: tool calls"` would otherwise split into a
+bogus name and any other summary would pass through as the recorded name
+([intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491),
+[intent-hq/intentd#1762](https://github.com/intent-hq/intentd/pull/1762)). The
+`AtToolResult` FIFO claim passes because that name is now `workspace_api` on every
+provider: after a nonce miss it gates on the completed call's recorded name containing
+`workspace_api` **or** — a second line of defense, consulted only for a call that carried no
+authoritative identifier (no MCP `server`/`tool` metadata, no namespaced title) — on that
+call's input having this same shape; a nonce match keeps priority, and a foreign tool's
+`{ code, summary }` arguments never open the gate
+([intent-hq/intentd#1765](https://github.com/intent-hq/intentd/pull/1765)). Otherwise a
+title of the form `<name>: <description>` — `<name>` a bare `[A-Za-z0-9_-]+`
 identifier followed by `": "` or `":\t"` — is split, taking the prefix. Codex's dot-separated
 MCP title form `mcp.<server>.<tool>` (server segment contains no dots; title carries no
 whitespace, so prose titles containing dots never match) is rewritten to `{server}_{tool}`
@@ -581,9 +601,30 @@ message ([cloudlands-fe#424](https://github.com/intent-hq/cloudlands-fe/pull/424
 
 **Terminal reconcile (the invariant).** On `agent:stream:end` the channel re-reads the now-persisted
 message and emits a terminal delta (every persisted block as `updated`, or `added` if never seen
-live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true`, plus
-`removedIds` for any orphaned live block). The guarantee: **the seq-0 snapshot reduced with every
-delta — honoring `removedIds` — equals a fresh `agent.getConversation` snapshot.**
+live, carrying the authoritative `messageSeq`/`timestamp`/`streamingComplete:true` and the row's
+`metadata` when present — next paragraph — plus `removedIds` for any orphaned live block). The
+guarantee: **the seq-0 snapshot reduced with every delta — honoring `removedIds` — equals a fresh
+`agent.getConversation` snapshot.**
+
+**Terminal entities carry the row's `metadata`** ([intent-hq/intentd#1746](https://github.com/intent-hq/intentd/pull/1746), fixing [intent-hq/intent#4409](https://github.com/intent-hq/intent/issues/4409)).
+When the re-read assistant row carries `metadata` (e.g. the §7.2 interrupt tag set —
+`interrupted` / `stopReason` / `interruptReason` / `interruptedBy` — or the §7.3 `finishReason`),
+every entity in the terminal frame additionally carries it **verbatim** as `metadata` (the whole
+persisted map, including keys this document does not enumerate), under the same rule as the
+non-assistant row deltas above: present only when the persisted row has a non-null metadata map,
+omitted entirely otherwise, **never** `null` (additive, presence-detected — rows without metadata
+keep the lean entity shape). So a `chat.subscribe`-only client renders the interrupted / "Stopped" /
+abnormal-finish state of a row **with content blocks** at the terminal frame exactly as an
+`agent.getConversation` reader would, with no refetch. **Zero-block rows have no carrier:** entities
+are per persisted content block, so the §7.2 pre-first-token marker row and the §7.3 zero-output
+abnormal row (`contentBlocks: []`) yield a terminal frame with no entities and therefore no lifted
+`metadata`; for those, clients derive the state from the `agent:stream:end` payload
+(`stopReason` / `interruptReason` / `interruptedBy` / `finishReason`) or refetch (a block-less
+carrier is tracked in [intent-hq/intent#4417](https://github.com/intent-hq/intent/issues/4417)). The **degraded
+best-effort terminal frame** — emitted when the re-read (and its retry) fails and the channel falls
+back to sealing the live-accumulated blocks in place — has no persisted row to lift from and
+therefore carries **no** `metadata`; a client that needs the row's metadata after a degraded
+terminal must refetch. Live (pre-terminal) chunk deltas never carry `metadata`.
 
 #### seq-0 snapshot (`subscription.push`, messages page)
 
@@ -622,7 +663,12 @@ A block's first appearance arrives as `added` with the same `block.id`; each gro
 carrying the **full** block (or, incremental mode, the fragment-only `textDelta`). A tool call
 arrives as an `added` `tool_use` block, then a `tool_result`
 block once output lands. The terminal frame (after `agent:stream:end`) carries the persisted blocks
-with `streamingComplete:true` and any orphan ids in `removedIds` — full `text` in both encodings.
+with `streamingComplete:true` and any orphan ids in `removedIds` — full `text` in both encodings —
+plus the row's `metadata` when present (e.g. an interrupted turn's terminal entity:
+`{ "agentId":"agent-123","messageId":"0190a200-asst","role":"assistant","messageSeq":1,
+"timestamp":"2026-06-27T01:00:09.000Z","streamingComplete":true,
+"metadata":{ "interrupted":true,"stopReason":"interrupted","status":"interrupted","interruptReason":"user_stop" },
+"block":{ … } }`).
 A persisted non-assistant row
 (direct send, queue drain — the non-assistant row deltas above) arrives as `added` entities with no
 live-streaming phase: the row's real `role` plus the authoritative `messageSeq`/`timestamp`/
@@ -647,7 +693,7 @@ This is the same convention as the graceful-shutdown flush of an in-flight turn 
 
 **Zero-output combined delivery is preserved.** The always-persist marker row does NOT break the [monorepo#1014](https://github.com/intent-hq/monorepo/issues/1014) combined delivery on interrupt-priority sends: the preemption's "has the turn progressed" check excludes the just-persisted marker row **by id, and only while it is actually empty** — so the preempted zero-output user message still rides the interrupt turn's prompt ahead of the interrupting message (see `agent.sendMessage`, §5.5), while a marker row that caught a first block streaming in the cancel window counts as progress and blocks the re-delivery as before.
 
-**Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row (also visible via `agent.getConversation`) — reason-specific via `metadata.interruptReason` / `metadata.interruptedBy` when present. On an interrupt-priority send, the interrupted partial (or empty marker) row precedes the new user message in the transcript.
+**Consequence for **`chat.subscribe`** (the terminal reconcile of §7.1):** because the partial assistant row is persisted before `agent:stream:end`, the channel's terminal reconcile re-reads a transcript that **contains** the streamed message — the streamed blocks are re-emitted as authoritative `updated` entries and are **not** wiped via `removedIds`. Clients keep the partial output visible and may render an interrupted/"Stopped" indicator from `metadata.interrupted` / `metadata.stopReason` on the persisted row — carried verbatim as `metadata` on the terminal frame's entities (§7.1 "Terminal entities carry the row's `metadata`") and visible via `agent.getConversation` — reason-specific via `metadata.interruptReason` / `metadata.interruptedBy` when present. On an interrupt-priority send, the interrupted partial (or empty marker) row precedes the new user message in the transcript.
 
 Added in [intent-hq/intentd#336](https://github.com/intent-hq/intentd/pull/336); terminal-payload `stopReason`/`messageId` and the pre-first-token empty-row persist added in [intent-hq/intentd#492](https://github.com/intent-hq/intentd/pull/492); `interruptReason`/`interruptedBy` and the always-persist marker-row semantics added in [intent-hq/intentd#919](https://github.com/intent-hq/intentd/pull/919); no method-surface change (additive semantics, within protocol v4.5).
 

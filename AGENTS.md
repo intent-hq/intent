@@ -18,6 +18,84 @@ on demand with `make ensure-ios-submodule`.
 The durable engineering docs live in `docs/ARCHITECTURE.md` (backend architecture) and
 `docs/protocol/` (canonical wire contract); see `docs/README.md` for the docs index.
 
+## Developing on a remote host
+
+Each Intent workspace is a git worktree on the daemon host. The desktop client runs the
+embedded Chromium tabs and tunnels ports that listen on the daemon's loopback interface.
+Always use `http://daemon.localhost:<port>` in the embedded browser.
+
+### Situate
+
+Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
+and health, both component branches, and branch PR checks when `gh` is authenticated.
+Use `make status` for the human-readable form. If `host.doctorOk` is false, run
+`make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
+system packages may require privilege. Do not discover prerequisites during a build.
+
+### Act
+
+Run `make sandbox-status` before starting anything. State is keyed only by mode, so one
+worktree can track at most one `ui`, one `app`, and one `stack` sandbox; different ports
+do not isolate a second sandbox of the same mode. Coordinate with its owner or use another
+worktree instead.
+
+Start the smallest long-running target as a workspace service:
+
+- `make dev-sandbox-ui` — named component previews only.
+- `make dev-sandbox-app` — complete web renderer against the installed daemon or
+  `INTENTD_SOCKET`.
+- `make dev-sandbox-stack` — isolated intentd plus renderer; dev profile by default,
+  `INTENTD_PROFILE=release` opt-in, or `INTENTD_BIN=/path/to/intentd` for a prebuilt binary.
+
+Each ready sandbox records `.dev/sandbox/<mode>.json`. Use `make sandbox-stop` only for
+an unmanaged or orphaned sandbox;
+stop a workspace service with `ws.script.stop(id)` so its supervisor does not restart it.
+
+### Observe
+
+For app or stack readiness, schedule this one canonical health wait after replacing the
+port. It polls on the daemon host and retires when `/__sandbox/health` returns `ok: true`:
+
+```javascript
+await ws.hook.schedule({
+  name: "Wait for sandbox health",
+  delayMs: 10_000,
+  ttlMs: 600_000,
+  code: `const probe = await ws.host.exec({
+  command: "curl",
+  args: ["--silent", "--max-time", "2", "http://127.0.0.1:<DEV_PORT>/__sandbox/health"],
+});
+if (probe.exitCode !== 0) return { dispatch: false };
+try { if (JSON.parse(probe.stdout).ok === true) return { dispatch: true, message: "Sandbox health is ok." }; } catch {}
+return { dispatch: false };`,
+});
+```
+
+Call `ws.browser.listTabs` and reuse a matching tab; otherwise open
+`http://daemon.localhost:<DEV_PORT>/`. A first tunneled open of a fresh, pre-warmed app
+takes roughly one to three minutes to hydrate depending on host load. Keep waiting if the
+splash remains; do not restart. Keep the tab open for HMR.
+
+### Prove
+
+Capture with `ws.browser.screenshot`, reveal with `ws.browser.showTab`, and append evidence
+to the task note rather than relying on prose alone:
+
+| Claim | Command | Result | Artifact |
+|---|---|---|---|
+| What behavior was verified | Exact command or tool call | Pass/fail plus key observation | Asset, commit, PR, or log |
+
+### Hand off
+
+Stop what you started, then rerun `STATUS_JSON=1 make status` to confirm no listener or
+state remains. Keep app and stack on loopback: their Vite origin exposes the full
+unauthenticated daemon API and is safe only through the client's authenticated tunnel.
+
+Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
+management, or `workspace-file://` media; verify those in an Electron build. See the
+[frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for detail.
+
 ## Commit & PR Workflow
 
 When changes span a submodule and the monorepo, land the submodule PR (Phase 1); the
@@ -88,12 +166,12 @@ about submodule PR merges, not monorepo bumps — after both are merged, the
 auto-bump-submodules workflow advances both monorepo pins automatically (a single
 rolling bump PR may cover both submodule refs); do not file a manual bump PR.
 
-### Manual test builds for complex changes
+### Manual test builds (optional, for complex changes)
 
-For **complex features/fixes** (intentd and/or cloudlands-fe), pair the stacked PRs
-with a manual test build **before merging anything**: dispatch cloudlands-fe's
-`manual-signed-build.yml` on the cloudlands-fe PR branch to produce a manual `.dmg`
-carrying the full stack, and hold all merges until that `.dmg` has been tested:
+For **complex features/fixes** (intentd and/or cloudlands-fe), a manual signed test
+build is available to test the full stack from the PR branches: dispatch
+cloudlands-fe's `manual-signed-build.yml` on the cloudlands-fe PR branch to produce a
+manual `.dmg` carrying the full stack:
 
 ```bash
 gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
@@ -103,9 +181,8 @@ gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
 `intentd_ref` accepts any intent-hq/intentd git ref (full 40-char commit SHA, branch,
 or tag) and compiles the intentd sidecar from source in-workflow; see
 [docs/fe/DEPLOYING.md](./docs/fe/DEPLOYING.md#manual-signed-build-pr-test-builds).
-**Complex cloudlands-fe-only changes** use the same route — omit `intentd_ref` to get
-the pinned intentd — so PRs are not merged until the full stack is complete and a
-manual `.dmg` is prepped for testing.
+The same route works for **complex cloudlands-fe-only changes** — omit `intentd_ref`
+to get the pinned intentd.
 
 **Exception — SQLite schema changes:** features/fixes that add or change intent-store
 migrations must **not** be tested via this manual-install route: running the
@@ -199,14 +276,30 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
   done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
   then update the final workspace status message with the carrying version (e.g.
-  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). This applies to intentd-only changes
-  too: they ride the chained cloudlands-fe alpha, and the version to report is the
-  cloudlands-fe alpha — verify inclusion via `intentdVersion` in the published
-  release's `release-manifest.json` on the
-  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
-  distribution repo (same tag; cloudlands-fe source-repo releases carry no
-  assets). Use background monitoring (`ws.pr.monitor` / `ws.hook.*`) — never
-  block a turn polling.
+  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). intentd-only changes ride the chained
+  cloudlands-fe alpha too, so the version to report is always the cloudlands-fe tag.
+  `scripts/shipped-in.sh <intentd|cloudlands-fe> <squash-commit-sha>` (or
+  `make shipped-in COMPONENT=... SHA=...`) is the canonical detector: it prints the
+  first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
+  tag carrying the commit (for intentd, via the `intentdVersion` pin in that tag's
+  `release-manifest.json`) and exits 3 while nothing carries it yet. Never block a
+  turn polling — schedule this hook after replacing the placeholders:
+
+  ```javascript
+  await ws.hook.schedule({
+    name: "Wait for shipped alpha",
+    delayMs: 600_000,
+    ttlMs: 21_600_000,
+    code: `const run = await ws.host.exec({
+    command: "scripts/shipped-in.sh", args: ["<COMPONENT>", "<SHA>"], timeoutMs: 120_000,
+  });
+  if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
+  if (run.exitCode === 3) return { dispatch: false };
+  throw new Error("shipped-in failed (exit " + run.exitCode + "): " + run.stderr.trim());`,
+  });
+  ```
+
+  Before the final status, complete the [ergonomics retrospective](#closing-a-workspace--ergonomics-retrospective).
 - Monorepo-only work (docs, Makefile, CI, scripts) ships nothing to the alpha channel,
   so it needs no release monitoring or shipped-version status message.
 - **Website release notes after a stable promotion**: a cloudlands-fe stable promotion
@@ -216,12 +309,50 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   applies); the procedure and copy prompt are in
   [docs/fe/RELEASING.md § Promoting to Stable](./docs/fe/RELEASING.md#promoting-to-stable).
 
+## Closing a workspace — ergonomics retrospective
+
+Once work is merged or shipping, and before the final workspace status message, run the
+[repo-retrospective skill](.agents/skills/repo-retrospective/SKILL.md) for the full prompt.
+
+Land each finding on the strongest available enforcement rung:
+1. Make the mistake impossible with types, goldens, or a protocol contract.
+2. Catch it mechanically before merge with a lint, CI check, or test.
+3. Make the right path discoverable with a "Where to look" row, Makefile target, or script.
+4. Add an AGENTS.md prose rule only as a last resort, citing the linked incident.
+
+**Channel:** Propose one follow-up workspace per coherent improvement; give its prompt the
+goal, evidence, proposed rung, and verification. In Intent use `ws.workspace.proposeSibling`;
+delegated/background agents hand the finding to their parent. Outside Intent, file an
+`intent-hq/intent` issue with `agent-workflow` and `agent-filed`. Never bundle the improvement
+into the feature PR.
+
+**Budget:** AGENTS.md prose must replace or compress existing text or be justified by a linked
+incident. Prefer mechanizing an existing prose rule over adding another.
+
 ## Filing Issues
 
 When you encounter a bug or limitation while working on the codebase (including while
 dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
 [intent-hq/intent](https://github.com/intent-hq/intent/issues) — the single tracker
 for all components.
+
+- **Type**: classification is the GitHub issue **Type** field — `Bug`, `Feature`,
+  or `Task` — not a label. The `bug` and `enhancement` type labels are retired: do
+  not apply them (triage retires them — on the issue's open / edit / reopen, or as
+  soon as the label is applied — after setting the matching Type; the `question`
+  label stays a regular label). Set the Type when filing:
+  `gh issue create --repo intent-hq/intent --type Bug ...` (gh ≥ 2.94.0). On older
+  gh, create the issue first, then set the Type via
+  `gh api graphql` with the `updateIssue` mutation, passing an `issueTypeId`
+  resolved from the repository's `issueTypes` connection:
+
+  ```bash
+  gh api graphql -f query='query { repository(owner: "intent-hq", name: "intent") {
+    issueTypes(first: 10) { nodes { id name } } } }'
+  gh api graphql -f query='mutation($id: ID!, $type: ID!) {
+    updateIssue(input: { id: $id, issueTypeId: $type }) { issue { number } } }' \
+    -f id="$(gh issue view <N> --repo intent-hq/intent --json id -q .id)" -f type=<issueTypeId>
+  ```
 
 - **Labels**: apply the appropriate `component:*` label (`component:intentd`,
   `component:fe`, `component:ios`) plus `agent-filed`.
@@ -243,15 +374,15 @@ for all components.
 
 ## Terminology
 
-Do **not** use "wave" / "Wave N" terminology in committed documentation. It is
-coordinator-internal vocabulary specific to a single agent's delegation flow and must not
-leak into the repo. Describe progress as capabilities/milestones instead (e.g. "Repo & CI
-bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
+Do **not** leak coordinator-internal sequencing labels from a single agent's delegation
+flow into committed documentation. Describe progress as capabilities or milestones instead
+(e.g. "Repo & CI bootstrap", "Crate skeleton", "Core + SQLite store", "UDS JSON-RPC slice").
 
 ## Local Setup
 
 ```bash
 git submodule update --init --recursive   # skips the private packages/ios (update = none)
+make doctor   # report gaps; BOOTSTRAP_YES=1 make bootstrap-dev-host installs missing prerequisites
 export PATH="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin:$PATH"
 command -v cargo-sweep >/dev/null 2>&1 || cargo install cargo-sweep --locked
 command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked

@@ -18,6 +18,8 @@
 | workspace.updateContext | workspaceId (req), items (req): ContextItem[] | { items: ContextItem[] } — atomic full-list replacement (matches the FE's `hydrate/add/remove/update` collapsed to a single authoritative-list write). Order is preserved. Emits `workspace:context-changed` with the persisted list. -32602 on missing workspace, malformed `items`, or an item with an empty `id`. |
 | workspace.getAutoCommit *(v2.7)* | workspaceId (req) | { autoCommit: { enabled: boolean, source: "workspace" \| "global" } } — the effective per-workspace auto-commit state: the persisted workspace override when set (`source: "workspace"`), else the current global `git.autoCommit` setting (`source: "global"` — pre-migration rows and the virtual Chief workspace). -32602 if the workspace is absent. |
 | workspace.setAutoCommit *(v2.7)* | workspaceId (req), enabled (req): boolean | { autoCommit: { enabled: boolean, source: "workspace" } } — echoes the persisted override (`enabled` is the boolean just written; `source` is always `"workspace"`), persists it across daemon restarts, and emits `workspace:updated` with `changes: { autoCommitEnabled: boolean }` (§6.5). -32602 on missing workspace, missing/non-boolean `enabled`, or the virtual Chief workspace. |
+| workspace.getBrowserClient *(v9.9)* | workspaceId (req) | { browserClient: { clientId?, source: "workspace" \| "default", resolved: { clientId, name? } \| null } } — the workspace's **browser-client pin** and the **driving client** an agent `browser.exec` (§5.9) would reach right now. `source: "workspace"` + `clientId` when a pin is persisted; `source: "default"` (no `clientId`) when unpinned. `resolved` is the live client the REV-2 resolution (§5.9: pin → host of the workspace's claimed tabs → first-connected eligible client) lands on, or **`null`** when that client is offline or no eligible client is connected — so `source: "workspace"` with `resolved: null` reads "pinned but not connected". The virtual Chief workspace has no row and always answers `source: "default"`. -32602 if the workspace is absent. See the browser-client-pin block below. |
+| workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
 | workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (currently 1; the import side refuses archives whose format version it does not understand), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
@@ -29,6 +31,132 @@
 | workspace.export.read *(v6.11)* | exportId (req), seq (req, u64) — no workspaceId (the export session, addressed by `exportId`, already binds the workspace) | { exportId, seq, totalChunks, data } — serves one seq-numbered chunk of the sealed archive as base64. **Idempotent**: any seq may be re-requested in any order (same seq, same bytes). -32602 while the session is still building (wait for `workspace:transfer:ready`), on an out-of-range seq (the error names the chunk count), or on an unknown exportId |
 | workspace.export.finalize *(v6.11)* | exportId (req), archiveSource? (bool, default false), finalStatusMessage? (string) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, finalized: true, workspace } — settles the source after a successful relay: applies the optional final status message, archives the workspace when `archiveSource: true` (otherwise it stays active), then unwinds the WIP snapshot commits and deletes staging. The workspace mutations run BEFORE the session is retired, so a failed mutation leaves the export intact and finalize can be retried. Only valid on a ready session — -32602 while still building or on an unknown exportId |
 | workspace.export.abort *(v6.11)* | exportId (req) — no workspaceId (export-session-scoped, like `workspace.export.read`) | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
+
+**Root Git remote state in workspace transfers** (`workspace.export.start` /
+`workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
+[intent-hq/intentd#1749](https://github.com/intent-hq/intentd/pull/1749)). The root
+repository's portable remote configuration and locally known publication state ride
+in `git/refs.json` and `git/repo.bundle`. This is additive archive metadata, not new
+RPC parameters or a copy of `.git/config`; the submodule `originUrl?` handling above
+is separate and unchanged. The added top-level `git/refs.json` fields are:
+
+| Field | Shape and meaning |
+|---|---|
+| `remotes` | `RemoteBundleRef[]`, default `[]` when absent. Only the root repository's transferable remotes are listed; no `origin` is invented. |
+| `workspaceUpstream?` | `{ remote, mergeRef, additionalMergeRefs? }`: the workspace branch's effective last `branch.<branch>.remote` and ordered `branch.<branch>.merge` values. `mergeRef` is the first full `refs/heads/<branch>` ref; `additionalMergeRefs` holds the rest, default `[]`. `remote` must name a carried remote. |
+| `workspacePushRemote?` | String: the effective last configured `branch.<workspaceBranch>.pushRemote` value; must name a carried remote. |
+| `remotePushDefault?` | String: the effective last configured `remote.pushDefault` value; must name a carried remote. |
+| `pushDefault?` | String: the effective last configured `push.default` value, one of `nothing`, `current`, `upstream`, `tracking`, `simple`, `matching`. |
+
+Each `RemoteBundleRef` has the following fields (JSON uses camelCase):
+
+| Field | Shape and meaning |
+|---|---|
+| `name` | Required string: the remote name, restricted to ASCII letters/digits and `.`, `_`, `-`, with no leading `.`/`-`, no `..`, and no case-insensitive `.lock` suffix. |
+| `url` | Required string: the first sanitized `remote.<name>.url` value. |
+| `additionalUrls` | String array, default `[]`: remaining sanitized URL values, in source order. |
+| `pushUrl?` | String: the first sanitized explicit `remote.<name>.pushurl`, if configured. |
+| `additionalPushUrls` | String array, default `[]`: remaining sanitized push URL values, in source order; invalid without `pushUrl`. |
+| `fetchRefspecs?` | String array: all configured `remote.<name>.fetch` values in source order. Current exports always include it, including `[]` for deliberately no fetch mapping. Absent/null means legacy metadata: retain the default `+refs/heads/*:refs/remotes/<name>/*` installed by `git remote add`. |
+| `pushRefspecs` | String array, default `[]`: all configured `remote.<name>.push` values in source order. |
+| `trackingRefs` | Array, default `[]`, of `{ refName, sha, bundleRef? }`: direct commit refs under `refs/remotes/<name>/`, their full hexadecimal commit IDs (`sha`, 40 or 64 characters), and the bundle anchors carrying those exact tips. Symbolic refs such as `refs/remotes/origin/HEAD` are not carried. |
+
+Optional scalar/object fields are omitted when unset; empty `additionalUrls`,
+`additionalPushUrls`, `pushRefspecs`, and `additionalMergeRefs` arrays are omitted
+when serialized. Import restores the ordered multi-value lists rather than keeping
+only one value. In particular, a present `fetchRefspecs: []` removes the default
+fetch mapping; an absent `pushUrl` leaves Git's implicit use of the URL list for
+push intact. Workspace-branch upstream and push selectors are restored as recorded,
+including non-`origin` remotes and a push remote different from the upstream.
+Other branches' upstream/push settings are not part of this metadata.
+
+**Portable forms and explicit failures.** Root remote URLs support validated
+`https://`, `http://`, `ssh://`, `git://`, and scp-like `[user@]host:path` forms.
+HTTP(S) URLs lose their entire userinfo; SSH/Git URLs retain the username but lose
+the password. The target must authenticate using its own setup: credential helpers,
+credentials, hooks, and arbitrary Git configuration are not copied by this metadata.
+Unsafe names/authorities, option-like values, encoded authorities, control characters,
+whitespace, and backslashes are not accepted as portable remote forms.
+
+A remote whose fetch URLs are all unportable (for example local paths, `file://`,
+unknown schemes, or remote-helper `<helper>::...` addresses) is omitted, with a
+warning that identifies the remote by name, not URL. Its tracking refs and upstream
+are not restored. This omission is not allowed to discard explicit push URLs or a
+remote selected by `workspacePushRemote` / `remotePushDefault`: those cases fail
+export. A mixed portable/unportable URL list also fails rather than dropping one
+destination. URLs containing a query or fragment fail export rather than guessing
+whether that portion contains a credential or changing the URL's meaning.
+
+The supported refspec/config subset is deliberately narrow:
+
+- Fetch mappings use full sources under `refs/heads/` or `refs/tags/` and destinations
+  under that remote's own `refs/remotes/<name>/` namespace. Optional leading `+`,
+  matched single-wildcard patterns, and negative `^refs/heads/...` /
+  `^refs/tags/...` exclusions are supported; negative refspecs have no destination.
+- Push mappings use full branch/tag sources and destinations, also allowing `HEAD`
+  as a source, an empty source for deletion, and matching `:`. Optional leading `+`
+  and matched single-wildcard patterns are supported. Revision expressions and
+  arbitrary local namespaces are not supported.
+- Unsupported explicit push URLs (including disabled/local/helper destinations),
+  unsupported refspecs, invalid upstream/push selectors, and applicable
+  `url.*.insteadOf` / `url.*.pushInsteadOf` rewrites fail export. A local upstream
+  (`branch.<branch>.remote = .`) also fails; it is not rewritten as a remote upstream.
+- A carried remote with any configured `mirror`, `receivepack`, `uploadpack`, `vcs`,
+  `proxy`, `tagopt`, `prune`, `prunetags`, `promisor`, `partialclonefilter`,
+  `skipdefaultupdate`, or `skipfetchall` key fails export, even if the value is false.
+  These settings are not silently dropped or copied as executable/configurable behavior.
+
+These unsupported-configuration errors omit the configuration values and ask for
+source-side review; the transfer does not silently substitute a different fetch or
+push policy. This is an allowlist, not a promise to preserve every Git config key.
+
+**Export snapshot and offline restoration.** Export captures the existing direct
+remote-tracking commit IDs, not the remote server's current state, and creates
+dedicated anchors at `refs/intent/transfer/<workspaceId>/remotes/<snapshotUuid>/<index>`.
+The snapshot UUID and nonnegative decimal index use canonical spelling. Each
+`trackingRefs[].bundleRef` names such an anchor, and the self-contained root bundle
+carries its reachable objects, including history not reachable from the workspace
+branch. Moving or deleting the original remote-tracking ref after capture does not
+change the bundled snapshot. Temporary source anchors are cleaned up after the
+bundle build on success or failure; a failed build also unwinds its WIP snapshots.
+
+Import first removes the clone's temporary bundle `origin`. After submodule/base
+materialization, sandbox provisioning, and WIP unwind, it restores root remotes,
+tracking refs, and workspace upstream/push settings. Tracking refs are fetched from
+the **local archive bundle**, never from the configured network URLs; no online
+fetch or credentials are required for this restoration. The root remote settings
+are not copied into the already-provisioned sandboxes, and no staging URL persists.
+Every restored remote field is validated again (including URL sanitization).
+Tracking destinations must stay within their remote namespace, their restored OIDs
+must match `sha`, and a present `bundleRef` must use the importing workspace's
+dedicated remote-snapshot layout above. Base, sandbox, other internal, and
+cross-workspace anchors are not valid publication sources. Tracking refs targeting
+recorded workspace/sandbox WIP commits are rejected. Invalid metadata or a missing
+or mismatched bundle ref fails the import and rolls back the newly materialized
+workspace instead of exposing a partially restored checkout.
+
+This preserves the meaning of `workspace.localChanges`: history reachable from a
+carried remote-tracking ref remains published immediately after offline import.
+A clean workspace whose history is all reachable from those refs reports zero
+unpushed commits; local-only commits still count, and unwound WIP snapshots restore
+dirty changes without treating them as published. The transfer never pushes work
+or synthesizes publication from the workspace/base/sandbox tip. The snapshot may
+already be stale relative to the server, just as the source's local refs were.
+
+**Missing metadata and compatibility.** Legacy archives without remote metadata,
+and remote-less exports with `remotes: []`, retain the previous remote-less behavior:
+import does not guess URLs or publication refs. Selectors naming a missing remote
+are invalid rather than silently ignored. With no restored remote refs,
+`workspace.localChanges` still reports the
+whole reachable history as unpushed, capped at 1000. Missing upstream/push fields
+do not invent settings. For legacy remote metadata without `trackingRefs[].bundleRef`,
+the bundle source is `refName` itself, still namespace-validated and checked against
+`sha`; missing `fetchRefspecs` has the legacy default described above. These field
+defaults do **not** relax the import header gate: `formatVersion` remains 1 and
+`creatingIntentdVersion` must still match the importing daemon's exact version.
+Neither the protocol version policy nor the daemon-version policy changes.
+Already-imported workspaces that lost their remotes are not repaired automatically;
+reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
 **Agent-authored sibling workspace proposals (MCP-only).** A foreground top-level
 agent can call `ws.workspace.proposeSibling({ title, initialPrompt, specialist?,
@@ -47,6 +175,33 @@ binding, and raw dispatch rejects it. Agents with a parent report the opportunit
 parentless background agents remain blocked and have no parent-report path. This is an MCP
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
+
+**Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
+`tool_result` regardless of the script's return value. When the binding runs, the MCP
+dispatch layer mints a `tar-` nonce, stamps it into the proposal's resource item, and
+collects the item for the §7.1 `AtToolResult` turn-attachment registry
+([07-agent-streaming.md](../07-agent-streaming.md)); the collected batch is registered when
+the script finishes — before the result returns to the provider — whether the script
+returned the proposal envelope, returned something else (e.g. `{ ok: true }`), or threw.
+When the provider reports the call completed, the daemon claims the batch either by finding
+a member's nonce in the echoed tool output or, when no nonce matches, by claiming the agent's
+oldest pending `AtToolResult` batch — the FIFO fallback, gated on the completed call's
+recorded tool name containing `workspace_api`. Scripts therefore need not return the
+proposal envelope and may emit several proposals in one call: all resource items of one
+call register as one batch and attach together. The completed `agent:tool:call` event
+carries the claimed batch as `registeredAttachments` and the ids of the standalone blocks
+as `proposalBlockIds`; the transcript gets one standalone
+`application/vnd.intent.proposal+json` resource block per proposal right after the
+`tool_result` (§7.1). The recorded tool name is derived provider-independently: when the
+ACP title carries no tool identifier — auggie titles the call with the model-authored
+`summary`, sends no `name`, and reports `kind: other` — an input holding exactly a
+non-empty string `code` plus a string `summary` (a daemon-stamped `_acpTitle` echo is
+tolerated) identifies `workspace_api` before the `<name>: <description>` title split runs
+(`intent-acp::session::is_workspace_api_input`;
+[intent-hq/intent#4491](https://github.com/intent-hq/intent/issues/4491),
+[intent-hq/intentd#1762](https://github.com/intent-hq/intentd/pull/1762)). Explicitly
+namespaced MCP titles (`mcp.<server>.<tool>`, `mcp__<server>__<tool>`) stay authoritative,
+so a foreign tool whose arguments happen to be `{ code, summary }` keeps its own name.
 
 ```json
 // → request
@@ -871,6 +1026,24 @@ without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
 both **standalone** repositories: `workspace.delete` skips the worktree-registration
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
+
+**`browserClientId` — the per-workspace browser-client pin (REV-2, v9.9;
+[intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760)).** The logical
+`clientId` (§5.17) that agent-initiated `browser.exec` requests for this workspace are routed
+to, written by `workspace.setBrowserClient` and cleared by passing `clientId: null`.
+**Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
+`workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
+is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
+first-connected eligible client). The pin is a persisted row column that only
+`workspace.setBrowserClient` writes: a general `workspace.update` never touches it, and the
+`workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
+committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
+`workspace.duplicate` copy starts unpinned, and although the transfer export carries the
+column, `workspace.import.commit` nulls it — a `clientId` names a client of the source
+daemon (the `client` table never transfers), so an imported workspace starts unpinned too.
+Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
+candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
+pinned (-32602) and never carries the field.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon

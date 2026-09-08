@@ -4,9 +4,9 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces sharing the same git repository (the workspace's own repo) |
-| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace |
-| crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace |
+| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces of the given workspace. Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
+| crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |

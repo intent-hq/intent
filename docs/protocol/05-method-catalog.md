@@ -2,26 +2,27 @@
 
 ## 5. Method Catalog
 
-The API exposes **345 dispatchable method names** across the following categories:
+The API exposes **354 dispatchable method names** across the following categories:
 
-- **Router methods:** 300 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 43 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 303 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 49 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 345 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 354 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 345 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 354 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.44) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract.
 
-### Router methods by namespace (300 total)
+### Router methods by namespace (303 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | agent | 46 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
@@ -43,7 +44,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
-| sandbox | 2 | discard, merge |
+| sandbox | 2 | cow.discard, cow.merge |
 | script | 9 | create, list, output, remove, restart, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
@@ -56,18 +57,17 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 37 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, transfer.plan, unarchive, update, updateContext, updateUiContext |
+| workspace | 39 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext |
 
-Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
+Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (43 total)
+### Fast-path methods (49 total)
 
-`providers.setup.status`, `providers.setup.start`, `providers.setup.login`, and
-`providers.setup.cancel` are local-app-only methods. See [§5.44](./methods/models-providers.md#544-guided-antigravity-setup).
+The following 49 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-The following 43 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, pairing.getInfo, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, pairing.getInfo, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
+The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, `syncTabs`, `navigateTab`, `closeTab`; v9.10–v9.11) are fast-path because the host-only reports are keyed by the connection's `client.hello` identity — see §5.45. The four `providers.setup.*` methods (v9.8, [intent-hq/intentd#1742](https://github.com/intent-hq/intentd/pull/1742)) are the guided managed-provider (Antigravity) setup surface — per-connection setup operations whose sign-in step is delegated back to the owning app via the `providers.setup.openLogin` reverse RPC (below); their local-app-only contract is documented in [§5.44](./methods/models-providers.md#544-guided-antigravity-setup).
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
@@ -214,6 +214,23 @@ The `system.status` result additionally reports the daemon's live **file-watch c
 - `totalRoots` counts the watch roots currently requested across every stream, whatever their registration state.
 - `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
 - All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
+
+#### `system.status` — file-descriptor fields (additive)
+
+The `system.status` result additionally reports the daemon's own **open file descriptor count** next to the **soft `RLIMIT_NOFILE`** it runs under, so descriptor exhaustion (`EMFILE` on `accept`, SQLite `code: 14` "unable to open database file") is attributable from a debug bundle rather than inferred from its symptoms ([intent-hq/intent#4390](https://github.com/intent-hq/intent/issues/4390)):
+
+```jsonc
+{
+  "fdCount": 312,   // open file descriptors held by the daemon process
+  "fdLimit": 10240  // soft RLIMIT_NOFILE in effect (after the startup raise)
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fdCount` is the size of the daemon's own descriptor table (`/proc/self/fd` on Linux, `/dev/fd` on macOS), sampled by the same ~1s own-process background sampler that serves `cpuPercent` / `memoryBytes` — the status read path never touches the OS. The first sample is taken synchronously before the listeners bind, so a running daemon reports it from the first `system.status` call. It excludes the transient handle the sampler itself holds while reading the table.
+- `fdLimit` is the soft `RLIMIT_NOFILE` the daemon actually runs under: `intentd serve` raises its soft limit to the hard limit at startup (capped at `OPEN_MAX` = 10240 on macOS) and records the value the kernel applied, so this is the ceiling `fdCount` is measured against. It is sampled once at startup and does not change over the daemon's lifetime.
+- The daemon also logs one WARN (`fd_count`, `fd_limit`) when `fdCount` reaches **80 %** of `fdLimit` — repeated at most once a minute while it stays there — and one INFO when it recovers below **60 %**; the band in between is hysteresis. The wire fields carry no threshold state; clients that want a warning compute `fdCount / fdLimit` themselves.
+- Both fields follow the **presence-detection convention** and are **independent**: `fdCount` is **absent** — never `null` or `0` — on platforms without a readable per-process descriptor table (anything other than Linux/macOS), and `fdLimit` is absent where `getrlimit` is unavailable (non-Unix) or failed at startup. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — `updateSupported` (additive, v8.7)
 
@@ -519,14 +536,15 @@ The daemon accepts these 2 alias forms and dispatches them to their canonical co
 - `git.diff` → `git.diffs`
 - `git.log` → `git.commits`
 
-### Client-served reverse RPCs (4 total)
+### Client-served reverse RPCs (5 total)
 
-Of these 4 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal` and `host.pickApplication` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the intent directly on the daemon host without a reverse dispatch (§5.14).
+Of these 5 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication` and `providers.setup.openLogin` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
-- `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role)
+- `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
+- `providers.setup.openLogin` *(v9.8)* — `{ operationId, url }` → `{ opened: boolean }`: during a `providers.setup.login` step the daemon asks the **calling connection's** app to open the provider sign-in URL after explicit user consent; the step counts as opened only when the reply is `{ opened: true }` (30 s timeout). Always dispatched on the connection that owns the setup operation — never subject to REV-2 target selection (daemon→client only)
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads (§5.19) plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -540,4 +558,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.44) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.45) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

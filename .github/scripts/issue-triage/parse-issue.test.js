@@ -8,7 +8,13 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { labelsForIssueBody, priorityForIssueBody } = require('./parse-issue.js');
+const {
+  ISSUE_TYPE_BY_LABEL,
+  LEGACY_TYPE_LABELS,
+  labelsForIssueBody,
+  planLegacyTypeLabels,
+  priorityForIssueBody,
+} = require('./parse-issue.js');
 
 const fixture = (name) =>
   fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
@@ -149,4 +155,126 @@ test('tilde fences are skipped and sections after a fence still parse', () => {
     '### Description\n\n~~~\n- [x] intentd (Rust backend daemon)\n~~~\n\n' +
     '### Component\n\n- [x] docs / tooling\n';
   assert.deepStrictEqual(labelsForIssueBody(body), ['docs']);
+});
+
+// --- legacy type-label retirement -----------------------------------------
+
+const ISSUE_TYPES = [
+  { id: 'IT_bug', name: 'Bug', isEnabled: true },
+  { id: 'IT_feature', name: 'Feature', isEnabled: true },
+  { id: 'IT_task', name: 'Task', isEnabled: true },
+];
+
+test('legacy type labels are bug and enhancement only; question stays a regular label', () => {
+  assert.deepStrictEqual(LEGACY_TYPE_LABELS, ['bug', 'enhancement']);
+  assert.deepStrictEqual(ISSUE_TYPE_BY_LABEL, { bug: 'Bug', enhancement: 'Feature', question: 'Task' });
+  for (const label of LEGACY_TYPE_LABELS) assert.ok(ISSUE_TYPE_BY_LABEL[label]);
+});
+
+test('planLegacyTypeLabels: no legacy label is a no-op', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({
+      labels: ['component:intentd', 'needs-triage', 'question'],
+      currentIssueType: null,
+      issueTypes: ISSUE_TYPES,
+    }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: [], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: undefined, currentIssueType: null, issueTypes: [] }),
+    { setType: null, removeLabels: [] },
+  );
+});
+
+test('planLegacyTypeLabels: legacy label + no Type + enabled Type -> set and remove', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['bug', 'component:fe'], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    { setType: { id: 'IT_bug', name: 'Bug' }, removeLabels: ['bug'] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['enhancement'], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    { setType: { id: 'IT_feature', name: 'Feature' }, removeLabels: ['enhancement'] },
+  );
+});
+
+test('planLegacyTypeLabels: existing Type is never overwritten; label is still removed', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['bug'], currentIssueType: 'Feature', issueTypes: ISSUE_TYPES }),
+    { setType: null, removeLabels: ['bug'] },
+  );
+  // Even when the Type list is unavailable the existing Type suffices.
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['enhancement'], currentIssueType: 'Bug', issueTypes: [] }),
+    { setType: null, removeLabels: ['enhancement'] },
+  );
+});
+
+test('planLegacyTypeLabels: Type unavailable -> nothing set, nothing removed', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['bug'], currentIssueType: null, issueTypes: [] }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['bug'], currentIssueType: null, issueTypes: undefined }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({
+      labels: ['bug'],
+      currentIssueType: null,
+      issueTypes: [{ id: 'IT_bug', name: 'Bug', isEnabled: false }, { id: 'IT_task', name: 'Task', isEnabled: true }],
+    }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({
+      labels: ['enhancement'],
+      currentIssueType: null,
+      issueTypes: [{ id: 'IT_bug', name: 'Bug', isEnabled: true }],
+    }),
+    { setType: null, removeLabels: [] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({
+      labels: ['bug'],
+      currentIssueType: null,
+      issueTypes: [{ id: '', name: 'Bug', isEnabled: true }],
+    }),
+    { setType: null, removeLabels: [] },
+  );
+});
+
+test('planLegacyTypeLabels: several legacy labels -> first in LEGACY_TYPE_LABELS order decides, all removed', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['enhancement', 'bug'], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    { setType: { id: 'IT_bug', name: 'Bug' }, removeLabels: ['bug', 'enhancement'] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['enhancement', 'bug'], currentIssueType: 'Task', issueTypes: ISSUE_TYPES }),
+    { setType: null, removeLabels: ['bug', 'enhancement'] },
+  );
+  // Only the deciding label needs an enabled Type; without one nothing moves.
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({
+      labels: ['enhancement', 'bug'],
+      currentIssueType: null,
+      issueTypes: [{ id: 'IT_feature', name: 'Feature', isEnabled: true }],
+    }),
+    { setType: null, removeLabels: [] },
+  );
+});
+
+test('planLegacyTypeLabels never removes question', () => {
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['question', 'bug'], currentIssueType: null, issueTypes: ISSUE_TYPES }),
+    { setType: { id: 'IT_bug', name: 'Bug' }, removeLabels: ['bug'] },
+  );
+  assert.deepStrictEqual(
+    planLegacyTypeLabels({ labels: ['question'], currentIssueType: 'Task', issueTypes: ISSUE_TYPES }),
+    { setType: null, removeLabels: [] },
+  );
 });

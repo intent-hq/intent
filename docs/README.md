@@ -92,6 +92,8 @@ removed. Bugs are now filed directly as GitHub issues on `intent-hq/intent`.
 
 Durable conventions carried forward from that phase:
 
+- **Classification** is the issue **Type** field (Bug / Feature / Task), not a
+  label — the `bug` / `enhancement` type labels are retired.
 - **Severity taxonomy** for triage (maps 1:1 onto the issue **Priority** field —
   Urgent / High / Medium / Low, formerly P0–P3):
   - **Urgent** — crash, data loss, or corruption; blocks shipping to external users
