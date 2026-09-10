@@ -58,10 +58,11 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   key **deletes** it. The merged config is what is persisted and what the restart (above)
   probes with. `mcp.servers.create` **rejects** a placeholder value with `-32602` — there is
   no stored secret to resolve it against. Responses stay redacted; no wire-shape change.
-- **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"error", pid?,
+- **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"auth_required"|"error", pid?,
   toolCount?, lastError?, startedAt? }`. `toolCount` is the number of tools the server advertised
   once connected. `pid` is stdio-only (remote servers have no process). For remote servers,
-  `state: "running"` means the probe succeeded, `state: "error"` carries the probe failure in
+  `state: "running"` means the probe succeeded, `state: "auth_required"` means the endpoint
+  rejected credentials with HTTP 401/403, `state: "error"` carries any other probe failure in
   `lastError`, and `startedAt` is the first successful probe time — preserved across consecutive
   `running` re-probes, so it reads as "reachable since".
 - **Remote transports (`http`/`sse`)** — starting a remote config (via `toggle`/`restart`/boot
@@ -77,13 +78,20 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   - `sse` is a **reachability probe only**: a GET with `Accept: text/event-stream` must answer
     2xx (the stream body is never read; full SSE sessions are out of scope), so an `sse`
     server's `running` status never carries `toolCount`.
+  - Authentication: when configured `headers` do not contain `Authorization`, the daemon reads
+    the saved server id's `mcp.oauth.*` bag, refreshes it when required (§5.22.1), and attaches
+    the resulting header to probes and forwarded `tools/list`/`tools/call` requests. An explicit
+    configured header always wins. Token material never appears in status, events, logs, or tool
+    errors. A 401/403 during either a probe or forwarded HTTP tool request moves the tracked remote
+    server to `auth_required`; a successful restart/re-probe moves it back to `running`.
   - Bounds and failure shaping: each request is bounded at 10 s and the whole probe at 15 s;
     redirects are **never followed** (configured `headers` may carry credentials that would
     otherwise be forwarded cross-host); failures map to actionable `lastError` strings —
     connect failure → "unreachable from daemon host: <url>", timeout → "timed out connecting
-    to <url>", HTTP 401/403 → "authentication failed (HTTP <code>) — check configured
-    headers", 5xx → "server error (HTTP <code>)".
-  - Lifecycle differences from stdio: a **failed probe keeps the entry tracked in `error`**
+    to <url>", HTTP 401/403 → `auth_required` with "authentication failed (HTTP <code>) — check
+    configured headers", 5xx → "server error (HTTP <code>)".
+  - Lifecycle differences from stdio: a **failed probe keeps the entry tracked in `error` or
+    `auth_required`**
     (unlike a failed stdio spawn, which drops back to `stopped`), so the health sweep re-probes
     it; the periodic health sweep (30 s cadence) **re-probes** remote servers concurrently
     (each bounded by the 15 s probe timeout, so a slow endpoint cannot starve the stdio pings)
