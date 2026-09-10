@@ -24,8 +24,16 @@ cloudlands-fe).
   contents:write on `intent-hq/cloudlands-fe`) and is fail-soft: a missing secret or
   failed dispatch logs a warning and never fails the publish — the fe crons then act
   as the backstop.
-- Stable is promotion-only: dispatch `promote-stable.yml` with the `version` input, then
-  verify `stable.json` on the `channel-stable` release.
+- Stable is promotion-only and beta-first: dispatch `promote-stable.yml` with the
+  `version` input, then verify `stable.json` on the `channel-stable` release. A guard
+  checks the current beta channel version (`beta.json` on the fixed `channel-beta`
+  release) is >= the promoted version — the invariant is that the beta channel can
+  never be behind stable — and fails fast before any channel asset is touched when
+  `beta.json` is missing/unparseable or the beta version is behind the promoted one.
+  (Note this enforces the beta-not-behind invariant, not that the promoted version
+  itself ever occupied beta — e.g. beta 2.0.2 still permits promoting stable 2.0.1.)
+  The optional `skip_beta_check` boolean dispatch input (default `false`) bypasses
+  the guard as an emergency escape hatch, logged as a warning.
 - Daemon archives and channel manifests are **mirrored** to the public
   [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) repo
   (`INTENTD_RELEASES_TOKEN` secret; mirror steps are skipped with a warning if it is
@@ -98,13 +106,24 @@ cloudlands-fe).
   pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
   and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
   unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
-- Stable: dispatch `release-stable.yml` with the `version` input.
+- Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
+  guard applies: the workflow checks the current beta channel version (the `beta`
+  release's `latest-mac.yml` feed on `intent-hq/cloudlands-releases`) is >= the
+  promoted version — beta can never be behind stable — and fails fast before any
+  channel asset is downloaded or uploaded: a missing/unparseable beta feed or a beta
+  version behind the promoted one aborts while the live stable channel is still
+  untouched (same caveat as intentd: the guard enforces the beta-not-behind
+  invariant, not that the promoted version itself ever occupied beta). The optional
+  `skip_beta_check` boolean dispatch input (default `false`) bypasses the guard for
+  emergencies, logged as a warning. After the stable feed is verified, propose the
+  website release notes PR on `intent-hq/intentapp.dev` for human review (see
+  [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
 
 ## Release notifier
 
 - Both component repos run `scripts/notify-fixed-issues.sh` from their release (tag
   build) workflows only — promotion workflows post nothing. Each release scans for
-  `intent-hq/monorepo#N` / full issue URL references (commit messages plus
+  `intent-hq/intent#N` / full issue URL references (commit messages plus
   squash-merged PR bodies, resolved via the `(#N)` subject suffix): intentd scans its
   released tag range; cloudlands-fe scans its own range plus the bundled intentd
   delta `v{prev pin}..v{new pin}`, so an fe release that merely bumps the sidecar
@@ -127,7 +146,7 @@ cloudlands-fe).
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
-  `intent-hq/monorepo` plus pull-requests:read on `intent-hq/intentd` and
+  `intent-hq/intent` plus pull-requests:read on `intent-hq/intentd` and
   `intent-hq/cloudlands-fe` — the PR reads power the completeness gate) in both
   component repos. Notifier steps are fail-soft (`continue-on-error`; skipped with a
   warning when the secret is absent) — they never block a release.
@@ -141,7 +160,10 @@ merge → tag + cargo-dist build → alpha manifest publish →
 (`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
-the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
+the crons (:15 pin bump, :30 cut) keep everything working at cron cadence. A
+cloudlands-fe stable promotion is followed by a website release notes PR on
+`intent-hq/intentapp.dev`, proposed for human review and outside the pipeline (see
+[fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
 
 ## Gotchas
 
@@ -152,5 +174,7 @@ the crons (:15 pin bump, :30 cut) keep everything working at cron cadence.
   `release-manifest.json` on the
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
   distribution repo (same tag) — cloudlands-fe source-repo releases carry no assets.
+  `scripts/shipped-in.sh intentd <sha>` (`make shipped-in`) performs this lookup and
+  prints the first cloudlands-releases tag whose pin carries the commit.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).

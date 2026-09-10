@@ -32,11 +32,11 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 
 | Method | Params | Result |
 | --- | --- | --- |
-| mcp.servers.list | workspaceId? | { servers: McpServerConfig[] } — sensitive `env`/`headers` redacted |
+| mcp.servers.list | workspaceId? | { servers: McpServerConfig[] } — sensitive `env`/`headers` redacted; with `workspaceId` every entry adds `workspaceDisabled: boolean` (see "Per-workspace disable") |
 | mcp.servers.create | config (req): McpServerConfig | { server: McpServerConfig } |
 | mcp.servers.update | serverId (req), config (req): McpServerConfig | { server: McpServerConfig } |
 | mcp.servers.delete | serverId (req) | { success: true } |
-| mcp.servers.toggle | serverId (req), enabled (req): boolean | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop) |
+| mcp.servers.toggle | serverId (req), enabled (req): boolean, workspaceId? | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop). With `workspaceId` the toggle is workspace-scoped instead and returns { status, workspaceDisabled } (see "Per-workspace disable") |
 | mcp.servers.restart | serverId (req) | { status: McpServerStatus } — stop-then-start |
 | mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
@@ -49,6 +49,15 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   their health. Sensitive `env` and
   `headers` values are **redacted** (presence/placeholder only) on `list`/`create`/`update`
   responses, mirroring `settings.*` (§5.12).
+- **Placeholder-preserve on write** ([intent-hq/intentd#1730](https://github.com/intent-hq/intentd/pull/1730),
+  fixes [intent-hq/intent#1181](https://github.com/intent-hq/intent/issues/1181)) — because
+  reads are redacted, the natural `list` → edit → `update` round trip echoes the `********`
+  placeholder back; `mcp.servers.update` therefore merges the incoming `env`/`headers` over
+  the stored config **per key**: a placeholder value **keeps the stored value** (dropped when
+  the stored config has no such key), any other literal **sets/replaces** it, and an absent
+  key **deletes** it. The merged config is what is persisted and what the restart (above)
+  probes with. `mcp.servers.create` **rejects** a placeholder value with `-32602` — there is
+  no stored secret to resolve it against. Responses stay redacted; no wire-shape change.
 - **McpServerStatus** — `{ serverId, state: "stopped"|"starting"|"running"|"error", pid?,
   toolCount?, lastError?, startedAt? }`. `toolCount` is the number of tools the server advertised
   once connected. `pid` is stdio-only (remote servers have no process). For remote servers,
@@ -95,6 +104,37 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 } } }
 ```
 
+- **Per-workspace disable** — a second, workspace-scoped disabled layer sits over the global
+  setting: **a global disable always wins; the workspace layer only narrows an
+  otherwise-enabled server.**
+  - `mcp.servers.toggle` with `workspaceId` sets (`enabled: false`) or clears
+    (`enabled: true`) the per-workspace disabled marker for that server **only** — the
+    global config's `enabled` flag, `mcp.disabledServers`, and the hub lifecycle are
+    untouched (the hub is one shared runtime; other workspaces may still use the server,
+    and enforcement happens per call on the agent surface). The result is
+    `{ status: McpServerStatus, workspaceDisabled: boolean }`, and the daemon emits a
+    self-sufficient `workspace:updated` delta (§6.5) carrying
+    `{ mcpServerToggled: { serverId, workspaceDisabled } }`. Unknown `serverId` **or**
+    unknown `workspaceId` → `-32602` with `data.code: "not-found"` (§9).
+  - `mcp.servers.list` with `workspaceId` adds `workspaceDisabled: boolean` to **every**
+    server entry; without it the key is absent entirely. The scoped read is lenient — an
+    unknown `workspaceId` yields `workspaceDisabled: false` on every entry, never an error.
+  - Agent surface (`ws.mcp.*`, no wire method): `listServers` keeps workspace-disabled
+    servers listed with `workspaceDisabled: true` (parity with globally disabled servers,
+    which stay listed with `enabled: false`); `listTools`/`callTool` against a
+    workspace-disabled server are rejected with
+    `mcp server <id> is disabled for this workspace`.
+
+```json
+// → request — disable an MCP server for ONE workspace (global config untouched)
+{ "jsonrpc":"2.0","id":62,"method":"mcp.servers.toggle",
+  "params":{ "serverId":"srv-fs","enabled":false,"workspaceId":"ws-1" } }
+// ← response (emits workspace:updated with { mcpServerToggled })
+{ "jsonrpc":"2.0","id":62,"result":{ "status":{
+  "serverId":"srv-fs","state":"running","pid":4821,"toolCount":7,"startedAt":1750000000000 },
+  "workspaceDisabled":true } }
+```
+
 > **No `memories.*` wire surface.** Long-term agent **memories** exist as an internal context source the
 > agent runtime consumes; they are **not** exposed over the wire (no client caller). The internal
 > `memories` table ships and the internal `search.memories` path scans it; a `memories.*` namespace
@@ -122,8 +162,35 @@ unbounded and rotate independently of the config surface.
   evolve without a daemon change; the typical bag is
   `{ access_token, refresh_token?, expires_at?, token_type? }`.
 - Missing/empty `serverId` yields `-32602`; `mcp.oauth.set` also requires `tokenBag`.
-- No `mcp.oauth:*` events are emitted — token rotation is a client-driven flow and the FE
-  polls / re-fetches on demand.
+- **Recognized bag fields (daemon-internal, best-effort).** The bag stays opaque on the
+  wire, but the internal header-building consumer best-effort recognizes these optional
+  object fields when present: `access_token`, `token_type`, `expires_at` (epoch **seconds
+  or milliseconds** — values > 10^12 read as ms; numeric strings accepted), and the
+  RFC 6749 §6 refresh metadata `refresh_token`, `token_endpoint`, `client_id` (plus
+  optional `client_secret`, `scope`). Bags without them behave exactly as before —
+  recognition never rejects or mutates a bag that lacks the fields.
+- **Daemon-side token refresh (behavior only; [monorepo#3403](https://github.com/intent-hq/monorepo/issues/3403)).**
+  When the internal consumer builds an outbound `Authorization` header and the bag's
+  `expires_at` is within 60 s of now AND the refresh metadata is complete
+  (`refresh_token` + `token_endpoint` + `client_id` all non-empty), the daemon first
+  refreshes the token: a form-encoded `grant_type=refresh_token` POST to the bag's
+  `token_endpoint` (bounded 10 s timeout). On success the response is merged over the
+  stored bag — a rotated `refresh_token` is honored, old values are kept when the
+  response omits them, and `expires_at` is recomputed from `expires_in` (or removed when
+  the response carries none, so a stale value cannot re-fire refresh every build) — and
+  the rewritten bag is re-persisted; the header is built from the refreshed token.
+  Refreshes are **single-flighted per server id** (concurrent header builds reuse the
+  winner's result) and a failed attempt arms a **60 s cooldown** so a dead token endpoint
+  cannot add latency to every build. The whole path is **fail-soft**: a missing/unparseable
+  `expires_at`, incomplete metadata, network error, or non-2xx response logs a warning
+  (never token material) and falls back to the stored `access_token` — never an RPC
+  error. Redaction semantics are unchanged: the bag — refreshed or not — never crosses
+  the wire.
+- No `mcp.oauth:*` events are emitted. Clients remain the only writers via
+  `mcp.oauth.set`, with one exception: after a successful daemon-side refresh grant
+  (above) the daemon rewrites the stored bag itself (`access_token`, recomputed
+  `expires_at`, rotated `refresh_token`). Either way, no event fires — the FE polls /
+  re-fetches on demand.
 
 ```json
 // → request — persist an OAuth bag for one MCP server
@@ -139,5 +206,53 @@ unbounded and rotate independently of the config surface.
 // ← response
 { "jsonrpc":"2.0","id":63,"result":{ "tokens":[
   { "serverId":"srv-linear","value":"********" } ] } }
+```
+
+#### 5.22.2 `mcp.testConnection` — one-shot connection/auth probe
+
+Probe an HTTP/SSE MCP endpoint **from the daemon host** to detect whether it is reachable
+and whether it requires authentication, so clients never contact MCP server URLs directly
+(new in v7.3). One JSON-RPC `initialize` POST is sent to the URL (MCP servers answer an
+auth error before processing, and even a 404/405 proves the host is up); only the HTTP
+status is inspected — the response body is never read, no session is established, and
+nothing is registered or persisted. Distinct from the `mcp.servers.*` lifecycle probe
+(§5.22 "Remote transports"), which runs the full MCP handshake against a **saved** config;
+this is a stateless pre-save check for any URL.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| mcp.testConnection | url (req), headers?: object, serverName? | { status: "connected"\|"auth_required"\|"error", statusCode?, errorMessage? } |
+
+- **Params** — `url` is required and non-empty (missing/empty → `-32602`). `headers` is an
+  optional object of extra request headers (non-string values are serialized, mirroring
+  the §5.22 `headers` handling). `serverName` optionally names an external MCP server id:
+  when present and no explicit `Authorization` header was supplied, the daemon reads the
+  stored `mcp.oauth.*` bag for that id (§5.22.1) and injects
+  `Authorization: <token_type> <access_token>` (a lowercase `bearer` is capitalized;
+  `token_type` defaults to `Bearer`) — the bag never crosses the wire in either direction.
+  Injection is **guarded by a same-origin check**: the bearer token is attached only when
+  the probe `url` shares the saved server config's origin (scheme + host + port, default
+  ports normalized), so a saved server id cannot be paired with an arbitrary URL to send
+  its token elsewhere. An unknown `serverName`, absent bag, missing saved config, or
+  origin mismatch is not an error; the probe simply runs without the header.
+- **Status mapping** — HTTP 401/403 → `auth_required`; any other status **below 500**
+  (2xx–4xx) → `connected` (the server is reachable — 404/405 just mean the endpoint shape
+  differs); 5xx → `error`. All three carry `statusCode`. A transport failure — connect
+  failure, timeout (requests are bounded at 10 s), or invalid URL — is `error` with
+  **no** `statusCode` and the same actionable `errorMessage` strings as the §5.22 probe
+  (`unreachable from daemon host: <url>`, `timed out connecting to <url>`).
+  `errorMessage` is present on `auth_required` and `error`, never on `connected`.
+- **Never a JSON-RPC error for probe outcomes** — the RPC itself only fails on caller
+  errors (`-32602`); every probe outcome, including unreachable hosts, is a success
+  response with the mapped `status`. Redirects are never followed (headers may carry
+  credentials that would otherwise be forwarded cross-host).
+
+```json
+// → request — probe an MCP endpoint, reusing the stored OAuth bag
+{ "jsonrpc":"2.0","id":64,"method":"mcp.testConnection",
+  "params":{ "url":"https://mcp.example.com/mcp","serverName":"srv-linear" } }
+// ← response — reachable but wants credentials
+{ "jsonrpc":"2.0","id":64,"result":{ "status":"auth_required","statusCode":401,
+  "errorMessage":"authentication required (HTTP 401) — check configured headers" } }
 ```
 

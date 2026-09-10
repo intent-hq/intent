@@ -4,9 +4,9 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces sharing the same git repository (the workspace's own repo) |
-| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace |
-| crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace |
+| crossWorkspace.listSiblings | workspaceId (req) | sibling workspaces of the given workspace. Siblings are workspaces with the same non-empty GitHub `repositoryOwner`/`repositoryName` (case-insensitive, trailing `.git` tolerated) OR an identical non-empty source `repositoryPath`; a caller with neither errors as not associated with a repository |
+| crossWorkspace.readNote | targetWorkspaceId (req), noteId (req) | note from a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
+| crossWorkspace.listNotes | targetWorkspaceId (req) | notes in a sibling workspace (same sibling rule as `listSiblings`; a non-sibling target is denied) |
 | primitive.addReference | noteId (req), semanticId (req), description (req), snapshot? | { ok, primitiveId, noteId } |
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
@@ -37,12 +37,27 @@
 resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
+**Base-tier replacement mode (`INTENTD_SPECIALISTS_DIR` / `intentd serve --specialists-dir`).**
+The effective `specialists.dir` setting (§5.12 — the `INTENTD_SPECIALISTS_DIR` startup pin, else
+a hand-written `[specialists] dir` in config.toml; the `--specialists-dir` serve flag folds into
+the env var pre-runtime, so the flag wins over an inherited env value, and an empty value counts
+as unset — no replacement) wholesale-**replaces** the base tier: the embedded bundle and the
+on-disk bundled `resources/specialists/` directory are both excluded, and the named directory
+becomes the sole base (`bundled`, read-only) tier — shipped ids (`implementor`, `spec-writer`, …)
+resolve only when present there or in the user/project tiers, which fold on top **unchanged**
+(same precedence, inherit-on-omit folds, and file watching as below; the replacement directory
+itself is static and unwatched, like the bundled tier it replaces). A missing or empty
+replacement directory yields an empty base tier. A startup-pinned replacement holds for the
+process lifetime, and session bundle pins never bypass a replacement: session-scoped resolution
+never resurrects shipped bundles the operator excluded.
+
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
-  roleReminder?, agentType?, prompt?, hidden?: boolean,
-  modelOptions?: [{ model, hint, reasoningEffort? }],
+  roleReminder?, agentType?, role?, icon?, prompt?, hidden?: boolean,
+  modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
+  aliases?: [string],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
-  scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`) are
-  first-class **string** fields on the wire, not
+  scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
+  `icon`) are first-class **string** fields on the wire, not
   frontmatter-only: `list`/`get` emit each one when its resolved value is non-empty, and
   `create`/`edit` accept them in `spec` (they are written to the file's frontmatter). On
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
@@ -59,8 +74,8 @@ non-existent or `bundled` definition → `-32602`.
   resolver as agent creation (§5.5 "Creation-time default-model resolution", steps 2–5 — a
   preview has no client-picked model, so step 1 never applies). The optional `provider`
   request param supplies the resolution context: absent/empty defaults to the
-  settings-derived default provider (provider of `model.default`, else `providers.active`,
-  else the first registered provider — [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
+  settings-derived default provider (`model.defaultProvider`, §5.12 — [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648); unset means
+  no preview provider and no positional fallback, [intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044) — [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922));
   an unknown id is rejected with `-32602` (`unknown provider: <p>`) on both
   methods. **Both fields are omitted** (never `null`) when resolution falls to the provider
   CLI default — clients render "Provider default". A specialist with no model config
@@ -80,7 +95,8 @@ non-existent or `bundled` definition → `-32602`.
   Hidden specialists stay in `list`/`get` results — clients filter them out of
   specialist pickers while keeping them visible on editing surfaces (e.g. Settings → AI
   Behavior). The bundled `chief-of-staff` is flagged hidden.
-- **Config scalars (`codingAgent` / `model` / `reasoningEffort` / `agentType`)** — the four
+- **Config scalars (`codingAgent` / `model` / `reasoningEffort` / `agentType` / `role` /
+  `icon`)** — the six
   optional config frontmatter scalars follow the same **inherit-on-omit** fold as `hidden`, each key
   independently, across the tiers (embedded bundled floor → bundled dir → user → project): a
   file that omits the key inherits the lower tiers' effective value, and an explicit non-empty
@@ -95,17 +111,21 @@ non-existent or `bundled` definition → `-32602`.
   rewrites the body.
   `reasoningEffort` is the specialist's default reasoning level (§5.5) — stored as-is, no
   vocabulary validation at this seam; it is the frontmatter rung of the delegation
-  reasoning-effort resolution below.
+  reasoning-effort resolution below. `role` and `icon` are the picker-metadata scalars
+  (below) — they follow this fold verbatim, with `role` additionally enum-validated on write
+  and read-normalized.
 - **`modelOptions?` (additive, [intent-hq/intentd#900](https://github.com/intent-hq/intentd/pull/900) /
   [intent-hq/intentd#908](https://github.com/intent-hq/intentd/pull/908))** — the ordered list of **delegation
-  model options** a specialist's author suggests: `[{ model, hint, reasoningEffort? }]` entries where `model` is
-  the model id to pass on delegation — typically an internal compound id (e.g.
-  `opencode:kimi-k3`); validation requires only a non-empty string — and `hint` is the author's
+  model options** a specialist's author suggests: `[{ provider?, model, hint, reasoningEffort? }]` entries where `model` is a **bare** model
+  id ([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)): specialist create/edit writes reject a compound `provider:model` value with
+  `-32602` naming the offending entry (`modelOptions[<i>].model`), while legacy compound ids
+  already stored in frontmatter still split on read into the `(provider, model)` pair — the
+  stored prefix winning over an entry-level `provider` field ([intent-hq/intentd#1654](https://github.com/intent-hq/intentd/pull/1654)) — and `hint` is the author's
   free-text guidance for choosing that option (`""` when none was given). Carried additively on
   `specialist.get`/`list`/`create`/`edit` — emitted when the resolved list is non-empty, omitted
   otherwise (never `null`/`[]` on the wire) — and accepted in `create`/`edit` `spec` bodies. In
   the file it is a frontmatter scalar encoded as a **single-line JSON array**
-  (`modelOptions: [{"model":"opencode:kimi-k3","hint":"cheap"}]`) so it fits the line-based
+  (`modelOptions: [{"provider":"opencode","model":"kimi-k3","hint":"cheap"}]`) so it fits the line-based
   frontmatter parser and round-trips parse→write→parse losslessly. Resolution follows the same
   3-tier **inherit-on-omit** fold as the config scalars above, with **`[]` as the explicit
   clear** (the array analogue of `key: ""`): an omitted key inherits the lower tiers' effective
@@ -127,6 +147,70 @@ non-existent or `bundled` definition → `-32602`.
   daemon injects each visible specialist's options into the delegating agent's `workspace_api`
   tool description (the `ws.agent.delegate` docs), and the delegating agent passes its pick as
   the explicit `model` param (resolution step 1).
+- **Picker metadata (`role?` / `teamAgents?` / `icon?`) (additive,
+  [intent-hq/intentd#1477](https://github.com/intent-hq/intentd/pull/1477))** — render-only
+  metadata for client specialist pickers; none of the three fields is ever consulted at
+  delegation time.
+  - **`role?`** — the picker-orchestration enum: `"orchestrator"` (powers the team-mode card)
+    or `"internal"` (excluded from the New Workspace modal's **single-agent** picker only);
+    absent ⇒ a standard pickable specialist. An inherited config scalar (the fold above:
+    omit inherits, explicit `""` clears). Writes are **strict**: `create`/`edit` reject any
+    value other than `"orchestrator"`, `"internal"`, or `""` (including non-strings) with
+    `-32602`. Reads are **lenient**: an out-of-enum on-disk value is normalized to an
+    **omitted** key (which inherits), like an unparseable `teamAgents` — `list`/`get` never
+    serve a value the strict write validation would reject when a client echoes the def back.
+  - **`icon?`** — names a client-side avatar design. An inherited config scalar (omit
+    inherits, explicit `""` clears). Icon names are free-form — no enum — but `create`/`edit`
+    reject a non-string value with `-32602`.
+  - **`teamAgents?`** — the orchestrator's **advisory team roster**: the specialist ids it
+    delegates to, used by clients to render the team-mode card; never enforced at delegation
+    time. On the wire it is an array of non-empty (non-whitespace) strings — `create`/`edit`
+    reject any other shape with `-32602` — emitted on `list`/`get` only when the resolved
+    list is non-empty (never `null`/`[]`). In the file it follows the `modelOptions` pattern:
+    a frontmatter scalar encoded as a **single-line JSON array**
+    (`teamAgents: ["implementor","verifier"]`), resolving through the same 3-tier
+    inherit-on-omit fold with **`[]` as the explicit clear** — an omitted key inherits, a
+    non-empty list overrides **wholesale** (entries never merge across tiers). Reads are
+    **lenient** (files are never rejected): an unparseable scalar or a non-array is treated
+    as an omitted key (inherits), unusable entries (non-strings, empty strings) are skipped
+    individually, and only a **literal `[]`** clears — a non-empty array whose entries are
+    ALL unusable is treated as omitted, so one bad hand-authored entry never silently drops
+    an inherited list.
+  - The v1.1 bundled specialists seed the metadata: `spec-writer` carries
+    `role: "orchestrator"` + `teamAgents: ["implementor","verifier"]`,
+    `implementor`/`verifier` carry `role: "internal"`, and every bundled file names an
+    `icon`. The picker/routing-metadata keys (including `aliases`, below) are the only
+    frontmatter allowed to diverge between the v1 and v1.1 bundled copies (the goldens pin
+    every other key to its v1 value).
+- **Specialist aliases (`aliases?`) (additive,
+  [intent-hq/intentd#1488](https://github.com/intent-hq/intentd/pull/1488))** — a
+  specialist's alternate ids: spawn/delegation callers may address the specialist by any
+  listed alias, and resolution maps the alias to the claiming (canonical) definition. On the
+  wire and in the file `aliases` follows the `teamAgents` contract exactly: an array of
+  non-empty (non-whitespace) strings — `create`/`edit` reject any other shape with `-32602`
+  — encoded in frontmatter as a **single-line JSON array** (`aliases: ["coordinator"]`),
+  resolving through the same 3-tier inherit-on-omit fold (omit inherits, literal `[]`
+  clears, a non-empty list overrides wholesale) with the same lenient reads.
+  - **Resolution order** — direct id lookup always runs first; the alias scan only runs on
+    a miss, so a **canonical id always beats an alias** with the same spelling. When
+    multiple specialists claim the same alias, the **lexicographically smallest canonical
+    id** wins (deterministic ascending-id catalog scan). The resolved def is the canonical
+    specialist's — its `id` carries the canonical id, never the alias — so `specialist.get`
+    on an alias serves the canonical resolved view.
+  - **Canonical-id persistence** — `agent.create` (and the seams that funnel through it:
+    `agent.delegate`, `agent.wakeOrCreate`, and `workspace.create`'s `initialAgent`, §5.1)
+    canonicalizes an alias **before** any downstream resolution runs: display-name
+    derivation, model/effort resolution, and the frozen prompt snapshot all see the
+    canonical id, and the session persists it — `metadata.specialist` carries
+    `"spec-writer"` when the caller spawned with `"coordinator"`, never the alias.
+    `agent.update`'s `specialist` change runs the same rewrite, so the invariant holds on
+    the update seam too — a wire client cannot persist an alias into
+    `metadata.specialist`. Unknown specialist ids are rejected with `-32602` at every
+    spawn/update seam (monorepo#3497 — the alias feature initially left them passing
+    through verbatim); see "Specialist validation (strict)" on `agent.create` (§5.5).
+  - The v1.1 bundled `spec-writer` claims `aliases: ["coordinator"]` (the v1 bundle stays
+    frozen), so `coordinator` resolves as a specialist id everywhere specialists are
+    accepted.
 - **Delegation reasoning-effort resolution (additive)** — `agent.delegate` and
   `agent.wakeOrCreate`'s create branch resolve the child's `reasoningEffort` (§5.5) in this
   order: (1) the caller's explicit `reasoningEffort` param — an empty/whitespace-only value is

@@ -26,7 +26,7 @@ in the bullet under this table).
 
 | Method | Direction | Params | Result |
 | --- | --- | --- | --- |
-| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, hasDisplay, locality, displayServer? } — host capability probe |
+| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, prettyHostname?, deviceKind?, hardwareModel?, hasDisplay, locality, displayServer? } — host capability probe. `prettyHostname?` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available; always present on daemons that ship it, but older daemons omit it — detect by presence. `deviceKind?` and `hardwareModel?` are additive and omitted (never `null`) when unknown — detect them by presence |
 | host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. Always dispatched to the connected client, which echoes its selection back as `applicationId?` (or nothing when no chooser is available); there is no daemon-side chooser |
@@ -40,6 +40,11 @@ in the bullet under this table).
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports, so a client can gate UI **before** connecting. When
   `hasDisplay=false`, clients should warn that GUI-spawning commands won't be visible.
+- `host.deviceKind` is an optional detected category: `"macMini" | "macStudio" | "laptop" |
+  "desktop" | "server" | "cloudVm"`. `host.hardwareModel` is the optional raw OS
+  product/model name. Both fields are additive and omitted (never `null`) when unknown;
+  clients detect them by presence. Detection runs in the background-refreshed host cache,
+  never on the RPC path.
 - `host.openExternal` / `host.openInEditor` / `host.pickApplication` are **served by the
   frontend, not the daemon** (reverse RPCs — the *daemon* sends the JSON-RPC `request` and the
   connected client returns the `response`). Clients never call `openExternal` /
@@ -93,7 +98,14 @@ in the bullet under this table).
   then captured vars fill gaps. `cwd` requires `workspaceId` so the daemon can enforce the same lexical
   within-workspace containment guard that `file.*` uses;
   a `cwd` outside the workspace root is rejected with `-32603 "Access denied: cwd outside
-  workspace"`. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
+  workspace"`. When `workspaceId` is present and `cwd` is **omitted**, the child runs from the
+  workspace's filesystem root ([intent-hq/intentd#1410](https://github.com/intent-hq/intentd/pull/1410),
+  monorepo#3231) — previously it inherited the daemon's own process cwd, so relative paths in
+  the command (e.g. `git -C .worktrees/x`) silently resolved against the wrong directory. The
+  default is best-effort and containment-neutral: a workspace with no resolvable filesystem
+  root (remote / skip-worktree rows, or a root missing on disk) falls back to the previous
+  daemon-cwd behavior rather than erroring, and requests with neither `workspaceId` nor `cwd`
+  are unchanged. Missing / invalid params surface as `-32602`. Long-lived / streaming processes
   stay on `script.*` and `terminal.*` (§5.8, §5.13) — `host.exec` is one-shot only.
 - `host.execStream` is the **streaming/interactive** counterpart for FE surfaces (e.g.
   `augment-cli`'s newline-delimited JSON chat) that need live stdout **and** a stdin channel —
@@ -101,7 +113,8 @@ in the bullet under this table).
   workspace-script-lifecycle `script.*` fit. It reuses every `host.exec` guarantee (argv-only,
   process-group + `kill_on_drop` + `timeoutMs` reap, the child-env contract above — caller
   `env` > daemon process env > captured credential gap-fill, plus enriched PATH,
-  workspace-containment on `cwd`, secret-safe env) and adds the streaming shape from
+  workspace-containment on `cwd` and the omitted-`cwd` workspace-root default,
+  secret-safe env) and adds the streaming shape from
   `git.clone` / `search.*` (§5.6 / §5.15 / §6.5): the method returns
   `{ requestId }` immediately (a `hexec-<uuid>` is minted when the caller omits one) and the
   daemon publishes one bus frame per output chunk plus one terminal exit frame, all correlated
@@ -155,6 +168,7 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":80,"method":"host.status" }
 // ← response (headless remote host)
 { "jsonrpc":"2.0","id":80,"result":{ "os":"linux","arch":"x86_64","hostname":"build-01",
+  "prettyHostname":"Build Box 01","deviceKind":"server","hardwareModel":"PowerEdge R650",
   "hasDisplay":false,"locality":"remote" } }
 // reverse RPC — daemon → client — open a detected URL on the user's machine (FE-served)
 // ← daemon sends the request (id in the `rev-<n>` namespace)
@@ -195,13 +209,18 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 { "jsonrpc":"2.0","id":"rev-4","result":{ "success":true,"results":[
   { "action":"listTabs","success":true,"result":[{"id":"tab-1"}] }
 ] } }
-// AGENT-INITIATED `browser.exec` (REV-1, interim) — the MCP `ws.browser.exec`
-// binding has no ambient client connection, so the daemon routes the reverse
-// RPC to the FIRST-connected live client (across UDS + WSS). When that client
-// disconnects the next-connected one takes over; when no client is connected
-// the call fails fast with `-32603` "browser.exec: no client connected".
-// Wire shape of the reverse RPC and its result is unchanged from the
-// client-triggered case above.
+// AGENT-INITIATED `browser.exec` (REV-2, v9.9–v9.11; §5.9) — the MCP
+// `ws.browser.exec` binding has no ambient client connection, so the daemon
+// routes the reverse RPC to the workspace's DRIVING client: the pinned
+// `browserClientId` (`workspace.setBrowserClient`, §5.1) when set — pinned but
+// offline is `-32603` "browser.exec: browser client \"<name>\" (<clientId>) for
+// this workspace is not connected", never a silent fallback — else the host of
+// the workspace's claimed registry tabs (§5.45), else the FIRST-connected
+// connection whose `client.hello` advertised `capabilities.browserExec` (§5.17;
+// across UDS + WSS). When no eligible client is connected the call fails fast
+// with `-32603` "browser.exec: no client connected". `listTabs` is answered by
+// the daemon from the tab registry and never forwarded. Wire shape of the
+// reverse RPC and its result is unchanged from the client-triggered case above.
 // → daemon-owned one-shot exec (argv only, cwd validated against workspace root)
 { "jsonrpc":"2.0","id":82,"method":"host.exec","params":{
   "command":"echo","args":["hello"],"timeoutMs":5000

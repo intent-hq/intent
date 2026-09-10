@@ -2,26 +2,27 @@
 
 ## 5. Method Catalog
 
-The API exposes **333 dispatchable method names** across the following categories:
+The API exposes **354 dispatchable method names** across the following categories:
 
-- **Router methods:** 294 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 37 methods intercepted before the router for performance or per-connection state
+- **Router methods:** 303 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 49 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 4 methods total — 2 are **dual-role** and counted within the 333 dispatchable names (`browser.exec`, `host.openInEditor`), and 2 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`) — see §5.9 and §5.14
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 354 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 333 dispatchable names + 1 notification. Of the 4 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 2 (`host.openExternal`, `host.pickApplication`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 354 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.43) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract.
 
-### Router methods by namespace (294 total)
+### Router methods by namespace (303 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
-| agent | 43 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, respondPermission, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| agent | 46 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
@@ -29,10 +30,10 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 24 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| github | 25 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
-| mcp | 11 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update |
+| mcp | 12 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update, testConnection |
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
@@ -43,7 +44,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
-| sandbox | 2 | discard, merge |
+| sandbox | 2 | cow.discard, cow.merge |
 | script | 9 | create, list, output, remove, restart, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
@@ -56,19 +57,21 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 36 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, markSeen, restore, saveSetupScript, setAutoCommit, transfer.plan, unarchive, update, updateContext, updateUiContext |
+| workspace | 39 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext |
 
-Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9.
+Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (37 total)
+### Fast-path methods (49 total)
 
-The following 37 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 49 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
 
-browser.exec, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.status, host.toolAvailability, pairing.getInfo, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.shutdown, system.status
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, pairing.getInfo, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
+
+The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, `syncTabs`, `navigateTab`, `closeTab`; v9.10–v9.11) are fast-path because the host-only reports are keyed by the connection's `client.hello` identity — see §5.45. The four `providers.setup.*` methods (v9.8, [intent-hq/intentd#1742](https://github.com/intent-hq/intentd/pull/1742)) are the guided managed-provider (Antigravity) setup surface — per-connection setup operations whose sign-in step is delegated back to the owning app via the `providers.setup.openLogin` reverse RPC (below); their local-app-only contract is documented in [§5.44](./methods/models-providers.md#544-guided-antigravity-setup).
 
 The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
-**UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` is available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
+**UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
 **`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
 
@@ -98,7 +101,7 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, �
 
 #### `system.status` — process resource fields (additive, optional)
 
-The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `host`):
+The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `updateSupported` (v8.7, below), `host`):
 
 ```jsonc
 {
@@ -167,19 +170,83 @@ The `system.status` result additionally reports the disk space of the **volume c
 
 #### `system.status` — daemon routing fields (additive)
 
-The `system.status` result also includes two **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
+The `system.status` result also includes **additive** routing fields so an authenticated client — including a **remote WSS** caller — can discover every route to the daemon and the host's name without the local-only `server.pairingInfo` / `pairing.getInfo` methods:
 
 ```jsonc
 {
-  "localIps": ["192.168.1.10", "10.0.0.5"], // non-loopback IPv4 addresses (same source as server.pairingInfo)
+  "localIps": ["192.168.1.10", "10.0.0.5"], // addresses the WSS listener actually answers on (bind-aware; empty when the listener is down)
   "hostname": "studio.local",               // local OS hostname
+  "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
+  "tcAddress": "tc7f2a91.tailcat.net",      // tailcat tunnel address — present only while the tunnel sidecar is running
+  "host": {
+    "deviceKind": "macStudio",
+    "hardwareModel": "Mac Studio",
+    // ...existing host fields (os, arch, hasDisplay, locality, ...)
+  },
   // ...existing status fields (running, listenMode, transports, port, ...)
 }
 ```
 
-- `localIps` lists the host's non-loopback IPv4 addresses (virtual/container interfaces skipped) — the same list `server.pairingInfo` returns. It may be **empty** on a host with no routable interface, but is always an array, never `null`. The daemon serves it from a background-refreshed cache (~15s TTL), so a freshly changed interface list may take one refresh interval to appear.
+- `localIps` is **bind-aware** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656)): it names only addresses the running WSS listener actually answers on, not a blanket interface enumeration. A listener bound to specific addresses advertises exactly those — **loopback included** when bound (this is the diagnostic surface; the pairing surfaces below filter loopback out), and since `127.0.0.1` is always bound alongside a specific `server.bindAddress` set ([intent-hq/intentd#1695](https://github.com/intent-hq/intentd/pull/1695); §1.1) it always appears here next to the configured addresses — while an unspecified bind falls back to enumerating the machine's local addresses (virtual/container interfaces skipped): non-loopback IPv4 for `0.0.0.0`, plus non-link-local IPv6 for `::` — link-local (`fe80::/10`) is skipped as unusable without a zone index, while ULA (`fd00::/8`) addresses are advertised (the `::` listener is bound explicitly dual-stack, so the advertised IPv4 routes are reachable on every OS). With **no live TCP listener** (UDS-only daemon, stopped/failed WSS) it is **empty** — every entry would be a dead route — instead of the historical full enumeration. Always an array, never `null`. The interface enumerations come from a background-refreshed cache (~15s TTL) but the bind-set filter runs on the read path, so a runtime `server.bindAddress` change is reflected immediately while a changed interface list may take one refresh interval to appear.
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
-- Both fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
+- `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
+- `host.deviceKind` / `host.hardwareModel` are optional, additive host-identity fields shared with `host.status` and `server.pairingInfo`. `deviceKind`, when known, is `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`; `hardwareModel` is the raw OS product/model name. Both fields are omitted (never `null`) when unknown and must be detected by presence. Detection runs in the background-refreshed host cache, never on the RPC path.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12), served alongside `localIps` to local and remote callers alike so a connected client can refresh its stored tunnel route from `system.status` alone. Present only while the tunnel sidecar is actually running; **omitted** — never `null` — when the tunnel is disabled or the sidecar is down (including the restart-backoff window after an unexpected sidecar exit, so the field never advertises a route nothing is serving). Same address as `server.pairingInfo` / `pairing.getInfo`; detect by presence.
+- These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
+
+#### `system.status` — file-watch coverage fields (additive)
+
+The `system.status` result additionally reports the daemon's live **file-watch coverage** — whether the roots the daemon *wants* watched (workspace checkouts and other watch roots) are actually registered with the OS ([intent-hq/intent#3708](https://github.com/intent-hq/intent/issues/3708), [intent-hq/intentd#1550](https://github.com/intent-hq/intentd/pull/1550)):
+
+```jsonc
+{
+  "fileWatch": {
+    "activeStreams": 1, // shared OS watch streams whose watcher is actually live
+    "totalRoots": 12,   // watch roots currently requested, whatever their registration state
+    "failedRoots": 0    // roots whose OS registration failed; 0 when coverage is healthy
+  }
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fileWatch` follows the **presence-detection convention** at object granularity: the whole object is **absent** — never `null` — until the watcher registry attaches shortly after daemon start (registry init is backgrounded so it cannot delay the UDS bind), and again once the registry is dropped at shutdown. Once attached it is **always present**, healthy or degraded — a degraded reading is a real value, never an absence — so clients must presence-detect the object, then read the counts.
+- `activeStreams` counts the shared OS watch streams (groups; one `notify` watcher each) whose watcher is **actually created**. A stream stuck in the watcher-creation retry loop is NOT counted, so it reads `0` while `totalRoots > 0` under creation failure — the degradation this object exists to surface. On Linux all roots share a single global stream, so a healthy Linux daemon reads `activeStreams: 1`; on macOS streams group per parent directory, so the healthy count scales with distinct parent directories.
+- `totalRoots` counts the watch roots currently requested across every stream, whatever their registration state.
+- `failedRoots` counts roots whose OS registration settled as **failed** (watcher creation failure, `ENOSPC` watch-slot exhaustion, a vanished directory); a still-pending registration is not a failure. `failedRoots > 0` — or `activeStreams` below the expected count — means **degraded watch coverage**: file events under the affected roots are silently missed until a retry recovers them (the daemon retries watcher creation with capped exponential backoff and re-registers roots on recovery). On Linux the usual cause is inotify limit exhaustion — see the host-tuning guidance in [docs/ARCHITECTURE.md](../ARCHITECTURE.md#file-watching-shared-os-watchers--linux-host-limits).
+- All of this is **additive** optional response content shipped without a version bump (the method surface is unchanged); clients must detect it by **presence**, not by protocol version.
+
+#### `system.status` — file-descriptor fields (additive)
+
+The `system.status` result additionally reports the daemon's own **open file descriptor count** next to the **soft `RLIMIT_NOFILE`** it runs under, so descriptor exhaustion (`EMFILE` on `accept`, SQLite `code: 14` "unable to open database file") is attributable from a debug bundle rather than inferred from its symptoms ([intent-hq/intent#4390](https://github.com/intent-hq/intent/issues/4390)):
+
+```jsonc
+{
+  "fdCount": 312,   // open file descriptors held by the daemon process
+  "fdLimit": 10240  // soft RLIMIT_NOFILE in effect (after the startup raise)
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `fdCount` is the size of the daemon's own descriptor table (`/proc/self/fd` on Linux, `/dev/fd` on macOS), sampled by the same ~1s own-process background sampler that serves `cpuPercent` / `memoryBytes` — the status read path never touches the OS. The first sample is taken synchronously before the listeners bind, so a running daemon reports it from the first `system.status` call. It excludes the transient handle the sampler itself holds while reading the table.
+- `fdLimit` is the soft `RLIMIT_NOFILE` the daemon actually runs under: `intentd serve` raises its soft limit to the hard limit at startup (capped at `OPEN_MAX` = 10240 on macOS) and records the value the kernel applied, so this is the ceiling `fdCount` is measured against. It is sampled once at startup and does not change over the daemon's lifetime.
+- The daemon also logs one WARN (`fd_count`, `fd_limit`) when `fdCount` reaches **80 %** of `fdLimit` — repeated at most once a minute while it stays there — and one INFO when it recovers below **60 %**; the band in between is hysteresis. The wire fields carry no threshold state; clients that want a warning compute `fdCount / fdLimit` themselves.
+- Both fields follow the **presence-detection convention** and are **independent**: `fdCount` is **absent** — never `null` or `0` — on platforms without a readable per-process descriptor table (anything other than Linux/macOS), and `fdLimit` is absent where `getrlimit` is unavailable (non-Unix) or failed at startup. Additive response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version.
+
+#### `system.status` — `updateSupported` (additive, v8.7)
+
+The `system.status` result additionally reports whether the daemon can act on `system.requestUpdate` (v8.6, below) — i.e. whether it is **sitter-supervised** — so a client can proactively hide an Update affordance for daemons that cannot self-update instead of failing reactively ([intent-hq/intent#3875](https://github.com/intent-hq/intent/issues/3875), [intent-hq/intentd#1582](https://github.com/intent-hq/intentd/pull/1582)):
+
+```jsonc
+{
+  "updateSupported": true
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `updateSupported` is `true` **exactly** when the daemon is sitter-supervised: `<data_dir>/sitter/sitter.pid` names the daemon's **direct parent** AND that process carries a sitter binary name — the same check `system.requestUpdate` performs before signaling. It is `false` otherwise, **including on platforms without Unix signals** (where sitter supervision cannot exist).
+- Evaluated at **read time** on every `system.status` call, so a supervision change mid-session (sitter started or stopped) is reflected on the next read; clients that only read on (re)connect pick it up at the next reconnect.
+- `updateSupported: true` reports that the supervision check **passed at read time** — not a delivery guarantee: the sitter can exit (or signaling can fail) between the status read and a later `system.requestUpdate`, so callers must still handle that call's documented `-32603`. It also says nothing about whether an update exists — the check outcome is observed out-of-band (see `system.requestUpdate` below).
+- **Additive** response field carrying the **v8.7** minor bump (the method surface is unchanged). **Always present** on 8.7+ daemons (a plain boolean, never `null`); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
 
 #### `system.importLegacy` (UDS-only, v2.2)
 
@@ -227,6 +294,23 @@ Resolves the daemon-managed GitHub credential for the `intentd git-credential` h
 - **UDS-only:** a remote (TCP/WSS) caller is rejected with `-32001 "system.gitCredential is available over UDS only"` — the credential must never cross the network.
 - Each grant is audit-logged by the daemon (requesting pid only; the token value is never logged).
 
+#### `system.requestUpdate` (v8.6)
+
+Asks the daemon's supervising [`intentd-sitter`](https://github.com/intent-hq/intentd) to run an update check **now** ([intent-hq/intentd#1546](https://github.com/intent-hq/intentd/pull/1546)): the daemon locates the sitter via `<data_dir>/sitter/sitter.pid`, verifies the recorded pid is a live `intentd-sitter` process, and sends it `SIGUSR1` — the sitter's on-demand check signal. The sitter runs the check immediately (re-arming its periodic schedule) and gracefully restarts the daemon only when a newer version installs; an already-current channel or a failed check leaves the daemon running.
+
+**Request:** `{}` (no parameters)
+
+**Response:**
+
+```json
+{ "ok": true }
+```
+
+- Available on **both** UDS and WSS — unlike `system.shutdown`, a remote client is exactly who needs to trigger an update.
+- `-32603` with a human-readable reason when the daemon is not sitter-supervised (missing/unparsable/stale pidfile, or a pidfile whose pid the OS recycled to a non-sitter process), when signaling fails, or on a platform without Unix signals.
+- `{ "ok": true }` means the signal was **delivered**, not that an update exists: the check outcome (restart or no-op) is observed out-of-band (e.g. the daemon restarting, `system.status` `version`/`uptimeSeconds`).
+- Clients can read `updateSupported` on `system.status` (above) to gate the update affordance instead of probing for the `-32603` failure. It is a read-time hint, not a guarantee: supervision can change between the status read and this call, so callers must still handle `-32603` here.
+
 #### `pairing.getInfo` (local-only)
 
 Returns the structured QR pairing payload so local clients (the `intentd pair` CLI, desktop GUI) can render a QR code for LAN pairing.
@@ -237,19 +321,23 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 
 ```json
 {
-  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...",
+  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...&tc=tc7f2a91.tailcat.net",
   "hosts": ["192.168.1.10", "10.0.0.5"],
   "port": 5181,
   "fingerprint": "AA:BB:...",
   "token": "abab...",
-  "version": 1
+  "version": 1,
+  "tcAddress": "tc7f2a91.tailcat.net"
 }
 ```
 
-- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>` (query values percent-encoded where needed). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`) are provided so clients can render their own payloads.
-- Hosts, TLS fingerprint, and bearer token come from the same sources as `intentd pair`, so all pairing surfaces stay consistent.
+- `uri` is the plaintext payload encoded in the QR code: `intent://pair?v=1&host=<ip[,ip...]>&port=<p>&fp=<sha256>&token=<t>[&tc=<addr>]` (query values percent-encoded where needed; `host=` may be **empty** — the hostless form, see the `hosts` bullet). The component fields (`hosts`, `port`, `fingerprint`, `token`, `version`, and — when the tunnel is up — `tcAddress`) are provided so clients can render their own payloads.
+- `hosts` is the **dialable pairing host set** — bind-aware and **never containing loopback** ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656), [intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)): a listener bound to specific addresses advertises exactly those, an unspecified bind (`0.0.0.0` / `::`) enumerates the machine's local addresses (virtual/container interfaces skipped; `::` adds non-link-local IPv6 — link-local needs a zone index, ULA included; its listener is dual-stack), and loopback (`127.0.0.1` / `::1`) is filtered out even when explicitly bound: pairing hosts feed remote devices, and loopback is not dialable from another device. With a loopback-only bind and the tunnel **up**, `hosts` is **empty** and the payload pairs **hostless** — the `host=` URI param is empty and the `tc=` route alone carries the connection. TLS fingerprint and bearer token come from the same sources as `intentd pair` and `server.pairingInfo`, so all pairing surfaces stay consistent.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12). Present only while the tunnel sidecar is running; **omitted** — never `null` — when the tunnel is disabled or down; detect by presence. When present it is also appended to `uri` as the **final** `tc=` query param (percent-encoded); when absent the URI carries no `tc=` param. The param is additive: clients that predate it tolerate the unknown query param, so the URI stays parseable everywhere.
 - **Local-only:** the payload embeds the long-lived bearer token, so remote (TCP/WSS) callers are rejected with `-32001` regardless of locality flags. Call it over UDS.
-- Errors with a descriptive message when the TCP (WSS) listener is not running (no port to pair against) or when no non-loopback IPv4 address is available. The listener-down failure carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator. The no-address failure keeps its plain descriptive message.
+- Errors (`-32603`) when pairing is impossible, instead of minting a payload no other device can connect through:
+  - **Listener down** — the TCP (WSS) listener is not running, so there is no port to embed. Carries the machine-readable discriminator `error.data = { "code": "listener-down" }` on the otherwise-unchanged `-32603` envelope ([intent-hq/intentd#1065](https://github.com/intent-hq/intentd/pull/1065); monorepo#1822) — clients (e.g. the `intentd pair` auto-enable flow) match `error.data.code` first and keep the message-prose match only as a fallback for older daemons that predate the discriminator.
+  - **No dialable route** ([intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)) — the listener is up but the advertised host set is empty and no tunnel is active. A loopback-only `server.bindAddress` gets actionable guidance naming both remediations: `"listener is bound to loopback only and no tunnel is active — set server.bindAddress to a LAN address or enable the tunnel (server.tunnel.enabled) before pairing"`. An unspecified/unknown bind whose enumeration found no dialable address keeps the plain `"no non-loopback IPv4 address found — connect this machine to a network before pairing"`. Neither no-route variant carries `error.data`. (Before intentd#1672 a loopback-only bind returned a success payload advertising loopback; clients must now handle the error.)
 
 #### `server.pairingInfo` (local-only)
 
@@ -266,13 +354,23 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "port": 5181,
   "path": "/ws",
   "localIps": ["192.168.1.10", "10.0.0.5"],
-  "hostname": "my-mac.local"
+  "availableIps": ["192.168.1.10", "10.0.0.5", "100.64.0.3"],
+  "hostname": "my-mac.local",
+  "prettyHostname": "Clement's Mac Studio",
+  "deviceKind": "macStudio",
+  "hardwareModel": "Mac Studio",
+  "tcAddress": "tc7f2a91.tailcat.net"
 }
 ```
 
 - `token` is the long-lived bearer token (64 hex chars, §2.1); `certFingerprint` is the SHA-256 fingerprint of the daemon's TLS certificate (§1.2).
 - `port` is the bound WSS port, or `null` when the TCP (WSS) listener is not running; `path` is always `"/ws"`.
-- `localIps` lists non-loopback IPv4 addresses (virtual/container interfaces such as `docker*`/`veth*` are skipped) — the same host set `pairing.getInfo` reports, so all pairing surfaces stay consistent.
+- `localIps` is the **loopback-free pairing host set** — while the listener is up, the same set `pairing.getInfo` reports as `hosts` ([intent-hq/intentd#1656](https://github.com/intent-hq/intentd/pull/1656), [intent-hq/intentd#1672](https://github.com/intent-hq/intentd/pull/1672)): bind-aware (a specific bind advertises exactly its addresses; an unspecified bind enumerates local addresses, with virtual/container interfaces such as `docker*`/`veth*` skipped and non-link-local IPv6 added for `::`) and **never containing loopback**, even when loopback is explicitly bound. **May be empty** (e.g. a loopback-only bind) — with the tunnel up, `tcAddress` then carries the only dialable route. Unlike `pairing.getInfo`, this method still answers with the listener **down**: `port` is `null` and the stopped listener's bind set is no longer known, so `localIps` falls back to the non-loopback IPv4 enumeration — address material nothing is currently serving on; treat `port: null` as the listener-down signal rather than reading `localIps` as proof of a live route. Note the contrast with `system.status` `localIps`, which is the diagnostic surface, keeps bound loopback entries, and empties when the listener is down.
+- `availableIps` (additive, [intent-hq/intentd#1708](https://github.com/intent-hq/intentd/pull/1708)) is the **bind-candidate set** — every non-loopback IPv4 address the machine could listen on, enumerated with the same interface filters as the unspecified-bind `localIps` fallback (virtual/container interfaces such as `docker*`/`veth*`/`br-*`/`bridge*`/`vboxnet*`/`vmnet*` skipped, deduplicated) and **not narrowed by the current bind set**: a daemon locked to loopback still reports its LAN/tailnet addresses here, so clients can offer a bind-address picker (`server.bindAddress`, §5.12) without a second enumeration surface. Loopback is never listed (clients render it themselves); IPv6 is not enumerated. Always present on daemons that serve it (may be empty on a machine with no non-loopback IPv4); absent on older daemons — detect by presence. `localIps` semantics are unchanged.
+- `prettyHostname` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name), falling back to `hostname` when no pretty name is available — matching `host.status` / `system.status`; detect by presence.
+- `deviceKind` is an optional detected category: `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`. `hardwareModel` is the optional raw OS product/model name. Both fields are additive and **omitted (never null)** when unknown; clients detect them by presence. The same values appear in the `system.status.host` block and at the `host.status` result root.
+- Detection runs in the daemon's background-refreshed host cache, never on the RPC path. macOS classifies product names (with Intel model-identifier prefixes as fallback). Linux checks VM, cloud, and container signals first, then DMI chassis type, then display presence (`headless` → `server`, otherwise `desktop`). Windows and other unsupported platforms omit the fields when no model/category is known.
+- `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12) — the same field `pairing.getInfo` and `system.status` carry, with the same availability semantics: present only while the tunnel sidecar is running, **omitted** — never `null` — when the tunnel is disabled or down; detect by presence.
 - **Local-only:** gated on the real connection origin (UDS vs TCP), not locality flags — a remote (TCP/WSS) caller is rejected with `-32001 "server.* methods are local-only"`. Call it over UDS.
 
 #### `server.rotateToken` (local-only)
@@ -328,16 +426,42 @@ Daemon-owned provider auth probes: reports whether each CLI-backed agent provide
 {
   "providers": [
     { "id": "auggie", "authenticated": true },
-    { "id": "claude-code", "authenticated": false },
+    {
+      "id": "claude-code",
+      "authenticated": true,
+      "identity": { "email": "dev@example.com", "orgName": "Example Org", "subscriptionType": "max" }
+    },
     { "id": "grok", "authenticated": null }
   ]
 }
 ```
 
-- Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`. With `providerId`, the `providers` array contains only that provider.
+- Without `providerId`, the sweep covers all probe-able providers: `auggie`, `claude-code`, `codex`, `opencode`, `droid`, `grok`, `pi`, `antigravity`. With `providerId`, the `providers` array contains only that provider.
 - `authenticated` is tri-state: `true` (probe confirmed logged in), `false` (probe confirmed logged out), `null` (unknown — probe failed or timed out, or the provider is not installed). Not-installed providers are never probed. Installed-ness comes from the daemon's provider discovery, which resolves `opencode` and `grok` from their native installer locations (`~/.opencode/bin/opencode`, `~/.grok/bin/grok`) ahead of the `PATH` scan (see §5.30), so a natively installed CLI is probed even when the daemon's `PATH` does not include it. Since intentd#725, the install gate also honors **valid `providers.paths` overrides** for the providers whose gate command is the registry primary — `auggie`, `opencode`, `droid`, `grok` — so an override-only install is probed, while an invalid override contributes nothing and the gate falls through to auto-detection. For `opencode` / `droid` / `grok` a valid override is an absolute path to an executable file (the same validation as spawn resolution); `auggie`'s gate instead follows the `host.checkAuggie` precedence (`context.auggiePath` setting → `providers.paths.auggie`, with checkAuggie's file/symlink validation) before falling through to auggie auto-detection. `claude-code`, `codex`, and `pi` gate on the real `claude` / `codex` / `pi` CLIs — distinct from the adapter binaries their `providers.paths` keys describe — so adapter overrides are ignored for their gates.
-- **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie`, `claude-code`, and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok` and `opencode` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, and `opencode models` requires at least one `provider/model` line beyond exit 0), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
+- **Probe mechanics.** CLI-probed providers run their registry `auth_check_args`; `auggie` and `codex` ride a **generic exit-code arm** — exit 0 ⇒ `true`, non-zero ⇒ `false`, except exit 127 (command-resolution failure), spawn errors, and timeouts yield `null` — with the child's stdout and stderr **discarded**, never captured, logged, or surfaced. `grok` and `opencode` keep bespoke output-sniffing arms (their stdout is piped: `grok models` exits 0 in both auth states so its output is parsed for explicit auth markers, and `opencode models` requires at least one `provider/model` line beyond exit 0), while `droid` and `pi` probe via their adapters instead of `auth_check_args`. `auggie` probes with `auggie token print` ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): it has no bespoke probe any more, and the discarded output matters here because the command prints the auth session secret. The former `auggie model list` output-sniffing probe is retired.
+- **Claude authentication.** `claude-code` runs the real `claude auth status` CLI and privately parses stdout as JSON; stderr is discarded, and neither the payload nor parsing errors are logged or surfaced. A top-level boolean `loggedIn` determines `authenticated: true` or `false` regardless of ordinary exit code, and both verdicts skip ACP. Missing/non-boolean `loggedIn`, malformed JSON, spawn/output errors, exit 127, signal termination, and the 8-second CLI timeout are inconclusive. Only inconclusive CLI outcomes fall back to the pinned Claude ACP adapter: an explicit auth-required error yields `false`; everything else, including a served model catalog or a failed/timed-out adapter probe, yields `null`. The catalog never proves authentication, and the fallback never confirms `true`.
+- **Provider identity** *(v9.4; [intent-hq/intentd#1685](https://github.com/intent-hq/intentd/pull/1685))*: entries carry the optional `identity` object — `{ "email"?, "orgName"?, "subscriptionType"? }`, each field an optional string — captured from the same `claude auth status` JSON that decides the verdict, and **omitted entirely** when the provider supplies no identity (every provider except `claude-code` today), so pre-9.4 clients and identity-less entries see the previous shape byte-for-byte. Identity rides the cached verdict entry under the same TTL/epoch semantics as the verdict itself: a test-prompt **promotion** to a hard `true` (`host.providerTestPrompt` below) preserves the identity captured by the CLI probe, while a **demotion** to a hard `false` clears it — a logged-out provider never serves stale identity.
+- **Antigravity:** discovery resolves the official ACP server, not the separate `agy` CLI. Auth, model discovery, and sessions honor `providers.paths.antigravity`. A guarded, temporary ACP session confirms personal OAuth without prompting or opening a browser. Explicit authentication-required responses return `false`; inconclusive errors return `null`. A valid session confirms authentication even when it reports no models. To sign in, run `intentd provider login antigravity` on the daemon host. This terminal command uses the official personal Google OAuth flow and verifies a fresh session afterward. There is no login RPC, and no credential or OAuth URL enters the auth-status response.
 - Results are cached with a **60-second TTL** and probes are single-flighted (concurrent callers join the in-flight probe). `force: true` bypasses the cache read but still joins any in-flight probe.
+
+#### `host.providerTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
+
+Live end-to-end provider test: spawns the provider's ACP adapter through the same launch resolution as `agent.completeOnce` (§5.32) — `providers.paths` overrides honored, npx fallback, isolated throwaway `CODEX_HOME` for codex — runs `initialize` → `session/new` → one `session/prompt` with the literal text `"say hello"`, and tears the process down. A passed test confirms that the provider can complete a live prompt. Claude's adapter can serve its model catalog without credentials, which does not establish authentication; even a confirmed CLI login from `host.providerAuthStatus` does not guarantee that the provider can actually answer.
+
+**Request:** `{ "providerId": "claude-code", "model": "claude-sonnet-4-5" }` — `providerId` required (a missing/empty/non-string value or an unknown provider yields `-32602`); `model` optional (must be a non-empty string when present, applied exactly as `agent.completeOnce` applies it: launch args or post-`session/new` config option, provider-dependent).
+
+**Response** — always a **result**, never a wire error, once the provider id is known:
+
+```jsonc
+{ "ok": true }                                                    // the adapter answered the live prompt
+{ "ok": false, "reason": "auth-required", "message": "..." }      // failure: structured reason + human-readable detail
+```
+
+- `reason` ∈ `"unsupported" | "not-installed" | "spawn-failed" | "auth-required" | "busy" | "timeout" | "error"`. `unsupported` = the provider opts out of the test prompt (see `supportsTestPrompt` below), answered without resolving or spawning anything; `not-installed` = no adapter could be resolved (binary not found and npx unavailable); `spawn-failed` = the adapter process could not be spawned; `auth-required` = the adapter rejected a call with an auth-required error (the same `-32000`/auth-pattern/`401` classification as the runtime spawn seam); `busy` = pre-spawn queueing pressure — the daemon-wide adapter bound never freed a slot, no provider was ever launched, and the client can back off and retry (the structured-result analogue of `agent.completeOnce`'s `adapter-busy` split, §5.32); `timeout` = the setup phase or prompt phase hit its budget with the provider actually running; `error` = any other adapter failure (JSON-RPC error, transport failure, early exit).
+- Unlike `agent.completeOnce` (curated to claude-code / codex / pi because its *answer* is the product), the test prompt covers the whole catalog: every provider is driven through the same ACP adapter and launch args real agent sessions spawn, and only turn completion matters. Providers outside the completeOnce set are intentionally best-effort — an adapter that cannot complete a bare one-shot turn surfaces a structured failure, never a wire error.
+- **Any successfully completed turn is a pass** — the answer is never surfaced or streamed, and a turn that completes with no assistant text still passes. The prompt phase budget is **90 seconds** (absorbs a first-run npx package download); setup keeps the launch's npx-aware staged budgets, and the run claims a slot in the same daemon-wide adapter bound as `agent.completeOnce` (§5.32).
+- **Auth-verdict cache coupling:** a passed test **promotes** the provider's cached `host.providerAuthStatus` verdict to a hard `true`; an `auth-required` failure **demotes** it to a hard `false` (the same demotion seam as the runtime spawn/prompt auth mapping) — in both directions the live result supersedes any probe already in flight. Other failure reasons leave the cache untouched.
+- `providers.catalog` rows (§5.38) always include `supportsTestPrompt`, which tells clients whether a provider supports this probe. It is `false` for `unsloth` because its first prompt can trigger a long model download or load. It is also `false` for `antigravity`, which requires a private guarded profile.
 
 #### `host.providerDiscovery`
 
@@ -412,14 +536,15 @@ The daemon accepts these 2 alias forms and dispatches them to their canonical co
 - `git.diff` → `git.diffs`
 - `git.log` → `git.commits`
 
-### Client-served reverse RPCs (4 total)
+### Client-served reverse RPCs (5 total)
 
-Of these 4 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal` and `host.pickApplication` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the intent directly on the daemon host without a reverse dispatch (§5.14).
+Of these 5 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication` and `providers.setup.openLogin` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
-- `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role)
+- `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
+- `providers.setup.openLogin` *(v9.8)* — `{ operationId, url }` → `{ opened: boolean }`: during a `providers.setup.login` step the daemon asks the **calling connection's** app to open the provider sign-in URL after explicit user consent; the step counts as opened only when the reply is `{ opened: true }` (30 s timeout). Always dispatched on the connection that owns the setup operation — never subject to REV-2 target selection (daemon→client only)
 
 > **Internal, not wire (Code Changes Review).** Diff computation/versioning (`diffs.*`), agent-attribution `trackChange`, and metrics aggregation (`metrics.calculate` and the `update*` writers) run **entirely inside the backend** with no client RPC. Diff bodies are computed/stored internally and surfaced through the `file-tracking.*` reads (§5.19) plus the change events in §6.5 — clients never call a `diffs.*` method. See the cross-cutting principle in §6.8.
 
@@ -433,4 +558,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.43) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.45) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

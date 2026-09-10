@@ -87,15 +87,19 @@ The **stabilization and hardening phase** ran post-initial-port as file-based is
 tracking (`STABILIZATION.md` + `KNOWN_ISSUES.md`) while development moved onto the
 self-hosted Intent stack (`intentd` + `cloudlands-fe`). The phase concluded on
 2026-07-22: all open items were migrated to
-[GitHub issues](https://github.com/intent-hq/monorepo/issues) and the directory was
-removed. Bugs are now filed directly as GitHub issues on `intent-hq/monorepo`.
+[GitHub issues](https://github.com/intent-hq/intent/issues) and the directory was
+removed. Bugs are now filed directly as GitHub issues on `intent-hq/intent`.
 
 Durable conventions carried forward from that phase:
 
-- **Severity taxonomy** for triage:
-  - **P0** — crash, data-loss, or corruption; blocks shipping to external users
-  - **P1** — broken feature; app still usable but with significant workaround required
-  - **P2** — papercut; annoying but does not block workflows
+- **Classification** is the issue **Type** field (Bug / Feature / Task), not a
+  label — the `bug` / `enhancement` type labels are retired.
+- **Severity taxonomy** for triage (maps 1:1 onto the issue **Priority** field —
+  Urgent / High / Medium / Low, formerly P0–P3):
+  - **Urgent** — crash, data loss, or corruption; blocks shipping to external users
+  - **High** — broken feature; app still usable but with significant workaround required
+  - **Medium** — degraded behavior; should be fixed, but impact is limited
+  - **Low** — papercut; annoying but does not block workflows
 - **Regression coverage** expected with each fix:
   - **intentd**: `make check` + `make test` green
   - **cloudlands-fe**: `pnpm run check` + `pnpm vitest run` green
@@ -105,4 +109,4 @@ Durable conventions carried forward from that phase:
 
 For the agent commit/PR workflow and issue tracking, see the root
 [AGENTS.md](../AGENTS.md). Bugs and open work are tracked as
-[GitHub issues](https://github.com/intent-hq/monorepo/issues).
+[GitHub issues](https://github.com/intent-hq/intent/issues).

@@ -75,8 +75,27 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
 | file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
 | file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
 | file-tracking.getLineStats | workspaceId (req) | { additions, deletions } — real-time totals across unstaged + staged + local commits |
+| file-tracking.getAgentLocks | workspaceId (req) | { autoCommitEnabled, lockedAgentIds: string[], lockedFilePaths: string[] } — the daemon-computed **agent-lock snapshot**; hydration read for the `changes:agent-locks` event (§6.5). Lock semantics below |
 | file-tracking.stage | workspaceId (req), paths (req): string[] | { ok: true } — stages the referenced files |
 | file-tracking.unstage | workspaceId (req), paths (req): string[] | { ok: true } — unstages the referenced files |
+
+**`file-tracking.getAgentLocks` lock semantics (v8.8).** The daemon owns the agent-lock
+computation (previously client-side): which agents' files must **not** be manually
+staged/reverted because the owning agent is actively working with auto-commit enabled —
+a manual stage/revert there would race the daemon's auto-commit. An agent is **locked** when
+all three hold: (1) the workspace's **effective auto-commit** is enabled (the §5.1
+`workspace.getAutoCommit` resolution — per-workspace override, else global `git.autoCommit`);
+(2) the agent owns at least one tracked change at the `unstaged` or `staged` stage (§5.19
+attribution rows; later stages never lock); (3) the agent is **actively working** — its session
+is running a turn (`pending`/`active`), or its linked task note's status is not terminal
+(`complete`/`cancelled`). Retired and deleted sessions never lock. `lockedFilePaths` is the
+union of the locked agents' unstaged/staged tracked-change paths (repo-relative, forward-slash).
+Both arrays are sorted and deduplicated; when auto-commit is off the snapshot is
+`{ autoCommitEnabled: false, lockedAgentIds: [], lockedFilePaths: [] }`. Store failures degrade
+to the empty (unlocked) snapshot rather than an error. Live updates ride the self-sufficient
+`changes:agent-locks` event (§6.5) — same payload plus `workspaceId` — published by a daemon
+recompute worker (debounced ~500 ms) whenever agent lifecycle, task status, auto-commit
+policy, or tracked-change churn moves the snapshot; unchanged snapshots are never re-emitted.
 
 **`file-tracking.loadCommits` boundary semantics.** The commit walk is bounded by the workspace's **boundary commit** so a workspace only surfaces its own history:
 

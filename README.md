@@ -1,10 +1,10 @@
 # Intent
 
-**Intent** is a local-first agentic coding platform. A Rust daemon (`intentd`)
-runs on your machine and owns everything — workspaces, notes, tasks, coding
-agents, git, terminals, and events — exposing it all through a JSON-RPC API.
-A desktop app (Electron + SvelteKit) and an iOS companion app connect to the
-daemon as thin clients.
+**Intent** is a platform for coordinating coding agents at scale. A Rust
+daemon (`intentd`) runs on your machine and owns everything — workspaces,
+notes, tasks, coding agents, git, terminals, and events — exposing it all
+through a JSON-RPC API. A desktop app (Electron + SvelteKit) and an iOS
+companion app connect to the daemon as thin clients.
 
 <!-- TODO: screenshot/demo -->
 
@@ -95,13 +95,20 @@ Releases. Until then, you can [build it from source](#build-from-source).
 ## Build from source
 
 ```sh
-git clone --recurse-submodules https://github.com/intent-hq/monorepo.git
-cd monorepo
+git clone --recurse-submodules https://github.com/intent-hq/intent.git
+cd intent
 
+make doctor  # report missing development prerequisites; use BOOTSTRAP_YES=1 make bootstrap-dev-host to install them
 make check   # cargo fmt --check + cargo clippy -- -D warnings
 make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install cargo-nextest --locked)
 make build   # cargo build --workspace
 ```
+
+Developing from a remote daemon host? Start with the one-screen
+[agent loop](AGENTS.md#developing-on-a-remote-host); use the
+[frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)
+and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) only when you
+need component or implementation detail.
 
 `packages/ios` is a private submodule and is skipped automatically
 (`update = none` in `.gitmodules`), so the clone succeeds without access to
@@ -157,7 +164,9 @@ update checks against public GitHub Releases and actions you take yourself:
 
 - **Desktop app auto-updates** — the packaged app checks for and downloads
   updates from GitHub Releases on
-  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases).
+  [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases),
+  and fetches release notes for the installed version from the same repo's
+  GitHub Releases API.
 - **intentd sitter self-update** — the sitter (see [Install](#install))
   downloads the daemon and checks the channel manifests published on the
   public
@@ -166,19 +175,17 @@ update checks against public GitHub Releases and actions you take yourself:
   [intentd releases page](https://github.com/intent-hq/intentd/releases). The
   mirror is the permanent public distribution channel, kept even after the
   intentd repo goes public.
-- **Auggie binary download (on demand)** — installing the Auggie CLI from the
-  desktop app downloads the pre-built binary from the latest public release of
-  [augmentcode/auggie](https://github.com/augmentcode/auggie).
 - **Provider sign-ins (user-initiated)** — signing in to a coding-agent
   provider (Auggie, Claude Code, Codex, OpenCode, Droid, Grok, Pi) runs that
-  provider's own CLI sign-in flow; each provider CLI talks to its own vendor
-  service when you sign in.
+  provider's own CLI/OAuth sign-in flow through the daemon; each provider
+  talks to its own vendor service when you sign in.
 - **User-configured integrations** — connecting GitHub (OAuth device flow or
-  personal access token), Linear (API key), or Sentry calls the respective
-  service's API with credentials you provide. Sentry is opt-in in two places:
-  the desktop app talks to the sentry.io API when you connect a Sentry
-  account, and the daemon's Sentry integration uses an API token you
-  configure. Nothing is sent to any of these services unless you connect them.
+  personal access token), Linear (API key), or Sentry (API token) has the
+  daemon call the respective service's API with credentials you provide.
+  Nothing is sent to any of these services unless you connect them.
+- **User-configured MCP servers** — the daemon connects to the MCP servers
+  you configure (including when testing a server's connection as you set it
+  up) and to no others.
 
 Coding agents you run are external programs and may access the network
 according to their own provider's behavior.
@@ -187,12 +194,12 @@ according to their own provider's behavior.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — bug reports and feature requests are
   very welcome via the
-  [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose);
+  [issue forms](https://github.com/intent-hq/intent/issues/new/choose);
   external pull requests are deferred for now while the public repository is a
   read-only snapshot mirror.
 - [SECURITY.md](SECURITY.md) — report security vulnerabilities privately, not
   through public issues.
-- [Issue tracker](https://github.com/intent-hq/monorepo/issues) — the single
+- [Issue tracker](https://github.com/intent-hq/intent/issues) — the single
   tracker for all Intent components.
 
 ## iOS companion app

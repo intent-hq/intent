@@ -7,31 +7,180 @@ This guide reflects the current Intent repository layout and APIs as of package 
 ### Prerequisites
 
 - Node.js 18+
-- `pnpm`
+- Corepack with the repository-pinned `pnpm` version
 - Git
 - Auggie CLI for the default ACP provider workflow
 
 ### Install and Run
 
-```bash
-pnpm install
+Agents on a remote daemon host should follow the root
+[situate → act → observe → prove → hand-off loop](../../AGENTS.md#developing-on-a-remote-host).
+The root section is the canonical operational recipe and health-hook source. This guide
+documents frontend-specific behavior and implementation detail.
 
-# Start the Electron app with the Chrome DevTools Protocol flow enabled
-pnpm run dev:cdp
+From the monorepo root, inspect the free port block the next sandbox start will use, then
+start the fast component preview. The target installs locked frontend dependencies when
+`node_modules` is missing.
+
+```bash
+make ports
+make dev-sandbox-ui
 ```
+
+`make ports` prints the free per-worktree `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` block for the next start. Once a sandbox is running, its listener can move the
+next free block; read the running port from `make sandbox-status` or
+`.dev/sandbox/<mode>.json`. The sandbox passes the derived `DEV_PORT` to Vite, avoiding
+collisions between concurrent workspaces. An explicit override remains available when needed:
+
+```bash
+make dev-sandbox-ui DEV_PORT=5291
+```
+
+From `packages/cloudlands-fe`, the equivalent fresh setup is:
+
+```bash
+corepack pnpm install --frozen-lockfile
+DEV_PORT=5291 corepack pnpm run dev:ui
+```
+
+Choose the smallest launcher that includes the behavior under test:
+
+- `dev:ui` starts the fast named-state component preview. It does not start Electron,
+  native helpers, the daemon, or production application sagas.
+- `dev:web` starts the complete browser renderer. Use it for browser behavior that needs
+  the mock client or a daemon connection but does not need Electron APIs.
+- `dev:cdp` starts the Electron development stack with Chrome DevTools Protocol support.
+  Use it for main-process, preload, native, window, or Electron-shell work.
+- `dev` starts the standard Electron development stack without the explicit CDP flow.
 
 ### Common Commands
 
 ```bash
-pnpm run dev           # Standard development launcher
-pnpm run dev:cdp       # Development launcher with CDP support
-pnpm run build         # Production build
-pnpm run check         # Svelte + TypeScript checks
-pnpm run lint          # ESLint
-pnpm run format        # Prettier write pass
-pnpm run test:unit     # Vitest suite
-pnpm run test:playwright
+corepack pnpm run dev:ui        # Fast named-state UI preview
+corepack pnpm run dev:web       # Complete plain-browser renderer
+corepack pnpm run dev           # Standard Electron launcher
+corepack pnpm run dev:cdp       # Electron launcher with CDP support
+corepack pnpm run build         # Production build
+corepack pnpm run check         # Svelte + TypeScript checks
+corepack pnpm run lint          # ESLint
+corepack pnpm run format        # Prettier write pass
+corepack pnpm run test:unit     # Vitest suite
+corepack pnpm run test:playwright
 ```
+
+For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
+`make dev-sandbox-stack` for an isolated intentd plus renderer. The first tunneled
+hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
+load. Follow the root health wait and keep waiting if the splash remains.
+
+### Remote Sandbox Internals
+
+`scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
+blocks beginning at 5200. The block assigns `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` in order. If any derived port is busy, it selects the next completely free
+block and prints the replacement; explicit overrides are validated and never remapped.
+
+On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with this schema:
+
+| Field | Meaning |
+|---|---|
+| `mode`, `pid` | `ui`, `app`, or `stack`, and the owning sandbox process |
+| `pidStartTime`, `pidCommandLine` | Process identity used to reject stale files after PID reuse |
+| `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
+| `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
+| `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
+| `startedAt`, `readyAt` | UTC lifecycle timestamps |
+| `warm` | `{ok, ms}` readiness-gate result and duration |
+| `supervisor` | Supervisor metadata when available; currently `null` |
+
+The filename is keyed only by mode, not port or agent. A worktree can therefore track one
+sandbox of each mode; starting a second same-mode sandbox overwrites that mode's identity.
+Run `make sandbox-status` first and coordinate with the recorded owner, or use a separate
+worktree.
+
+`make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
+nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
+removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
+uses TERM followed by KILL escalation. For a workspace service, use `ws.script.stop(id)`;
+otherwise the external supervisor may restart the process.
+
+App and stack enable the dev-only same-origin bridge. `GET /__sandbox/health` accepts only
+loopback, same-origin requests and returns 200 only when `ok` is true, otherwise 503:
+
+| Object | Fields |
+|---|---|
+| root | `ok` |
+| `vite` | `ready` |
+| `daemon` | `socket`, `reachable`, and optional `error` |
+| `warm` | `moduleGraph`, `entriesWarm` |
+| `git` | `sha`, `branch` |
+
+The endpoint makes a bounded UDS connection. Before answering, it waits for Vite's active
+warm-up requests to become idle and verifies the configured entries are in the client
+module graph: the root layout, app page, and named-preview page. This endpoint is installed
+only by the dev-server plugin, not production builds. The sandbox prints its single ready
+line and writes state only after this gate succeeds; older frontend branches fall back to
+socket and HTTP readiness probes.
+
+`STATUS_JSON=1 make status` consumes these files and health responses into
+`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+ahead/behind state, and optional PR/check summaries when GitHub authentication is
+available. The report is read-only, including stale sandbox state.
+
+## Fast UI Preview Workflow
+
+After `make dev-sandbox-ui` prints `Sandbox ready:`, read its `devPort` from
+`make sandbox-status` or `.dev/sandbox/ui.json` and open a named preview. `make ports`
+shows the block the next start will use and may differ while this sandbox is running.
+The examples below use `<DEV_PORT>` as the recorded running value:
+
+```text
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=default&theme=system&width=420&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=loading&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=disabled&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=destructive&theme=dark&width=960&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=idle&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=waiting&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=error&theme=system&width=420&motion=full
+```
+
+`theme` accepts `system`, `light`, or `dark`. `width` accepts an integer from 240 to
+1600 pixels. `motion` accepts `full` or `reduced`. Keep the URL stable while you edit;
+Vite hot module replacement updates the same tab.
+
+The sandbox installs a small browser API. Run these expressions in the page:
+
+```javascript
+window.__INTENT_PREVIEW__.list();
+await window.__INTENT_PREVIEW__.states("button");
+window.__INTENT_PREVIEW__.current();
+```
+
+`list()` returns preview IDs. `states(id)` returns the named states for one preview.
+`current()` returns the ready preview's slug, state, width, and status, or `null` while
+no named preview is ready. Wait for `[data-preview-ready=true]` before inspection or
+capture.
+
+For a cold renderer launch, use the [self-checking readiness hook](https://github.com/intent-hq/cloudlands-fe/blob/main/.agents/skills/electron/SKILL.md#wait-for-renderer-readiness) instead of polling or rescheduling an expired hook.
+
+For an agent, run the long-lived command through a workspace service script. Call
+`ws.browser.listTabs` before opening the URL and reuse a matching tab. A new
+`ws.browser.openTab` tab is hidden by default, but DOM, accessibility, evaluation, and
+screenshot actions still work. Keep that hidden tab open during edits so Vite HMR can
+update it. Call `ws.browser.showTab` only when a person wants to see it; pass
+`focus: true` when it must also receive focus. Use
+`http://daemon.localhost:<DEV_PORT>` in `ws.browser` URLs so the browser tool can
+resolve a local or remote daemon correctly.
+
+Run the focused avatar component test from `packages/cloudlands-fe`:
+
+```bash
+corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
+```
+
+The component-test harness defaults to port 3100; set `CT_PORT` to override it. If the
+chosen port is occupied, stop the process that owns it before rerunning the command.
 
 ## Project Structure
 
@@ -70,14 +219,14 @@ When updating docs or adding features, verify which side of the app owns the beh
 Use `agentFactory.createAgent(...)` for agent creation. The factory is the supported public entry point and normalizes agent config before backend creation.
 
 ```typescript
-import { agentFactory } from '$features/agent/services/agent-factory';
+import { agentFactory } from "$features/agent/services/agent-factory";
 
 const result = await agentFactory.createAgent(workspace, {
-  name: 'Review Changes',
-  agentType: 'task-loop',
-  model: 'haiku4.5',
-  initialMessage: 'Review the current diff and summarize the risks.',
-  source: 'workspace-initializer',
+  name: "Review Changes",
+  agentType: "task-loop",
+  model: "haiku4.5",
+  initialMessage: "Review the current diff and summarize the risks.",
+  source: "workspace-initializer",
 });
 ```
 

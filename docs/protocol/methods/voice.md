@@ -127,7 +127,7 @@ transcription model (see "Providers" above). `voice.workspaceVocabulary.maxTerms
 caps the auto-derived workspace vocabulary (v5.1; see "Workspace vocabulary" above).
 The API keys are the **sensitive** catalog
 entries `voice.elevenlabs.apiKey` / `voice.openai.apiKey`, persisted to the daemon's
-file-backed secret store (`~/intent/secrets.json`, `0600`) and settable via
+file-backed secret store (`~/intent/.secrets.json`, `0600`) and settable via
 `settings.update` — the FE "connect" flow, exactly like `linear.token`. Key resolution
 is **secret store first, then env fallback** (`ELEVENLABS_API_KEY` / `OPENAI_API_KEY`);
 empty/whitespace-only values are treated as absent at both levels.

@@ -1,4 +1,11 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.37 Managed Unsloth server — `unsloth.*` · §5.39 Token-rate history — `stats.getRateHistory` · §5.43 Daemon stack sampling — `debug.sampleStacks`.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.7 daemon status identity · §5.37 Managed Unsloth server — `unsloth.*` · §5.39 Token-rate history — `stats.getRateHistory` · §5.43 Daemon stack sampling — `debug.sampleStacks`.
+
+### 5.7 Daemon build identity — `system.status`
+
+The `system.status` result keeps its required `version` field and can also carry the additive
+`buildCommit` string. `buildCommit` is the source commit embedded when the daemon binary was
+built. It is omitted, never `null`, when that identity is unavailable. Clients must detect it
+by field presence and must continue to use `version` as the release version.
 
 ### 5.37 Managed Unsloth server — `unsloth.status` / `unsloth.stop` *(v2.5)*
 
@@ -18,7 +25,8 @@ over it. Both are **daemon-global**: they take no params and no `workspaceId` (l
 `running: true` and the other fields are present:
 
 - `repoId` — full HF repo id currently served (or being started), e.g.
-  `"unsloth/gemma-3-27b-it-GGUF"` (the compound model id is `unsloth:<repoId>`, §5.30).
+  `"unsloth/gemma-3-27b-it-GGUF"` (on the wire the pair is provider `unsloth` plus the bare
+  `<repoId>` as the model id, §5.30).
 - `port` — port the managed server listens on (default `8888`); `pid` — OS pid of the server
   child (`null` when unknown).
 - `uptimeSecs` — seconds since the server child was spawned.
@@ -99,7 +107,9 @@ cacheCreationTokens, thoughtTokens }`:
   field, samples here are **dense**: every counter is always present, so a minute with no
   reasoning tokens (including every bucket recorded before this field shipped) emits
   `"thoughtTokens": 0`. Clients written against the pre-`thoughtTokens` shape are
-  unaffected — the counter is additional, never carved out of `outputTokens` by the daemon.
+  unaffected — the counter is additional. It is **disjoint** from `outputTokens`: providers
+  whose wire report is a subset (codex, grok) have it carved out of `outputTokens` at
+  ingestion (intent-hq/intent#3796), so clients may sum all five counters freely.
 
 Note the trailing-window semantics: like §5.36's `24h` period this is an **absolute
 rolling window** ending at the current minute; there is no timezone parameter — samples

@@ -5,7 +5,9 @@
 Add an embedded browser feature to the Intent app that allows users to:
 1. Enter URLs and view web pages in the main content area
 2. Access recent URLs quickly from the sidebar
-3. Toggle embedded DevTools from the browser toolbar; future work can add richer console capture for agents
+3. Navigate and inspect pages from a compact, responsive toolbar
+4. Preview responsive layouts with fit, device-preset, and custom viewport modes
+5. Attach a page screenshot or selected DOM element to the next agent message
 
 ## Current State
 
@@ -28,11 +30,18 @@ src/features/browser/
 ├── types.ts                   # BrowserSession, RecentUrl types
 
 src/store/renderer/slices/browser/
-├── browser-slice.ts           # State: recent URLs, current session
+├── browser-slice.ts           # Recent URLs, zoom requests, pending browser captures
+├── browser-selectors.ts       # Workspace-scoped browser selectors
+└── browser-types.ts           # Recent URL and browser capture contracts
 
 src/lib/components/browser/
 ├── BrowserPanel.svelte        # Sidebar: URL input + recent list
-├── EmbeddedBrowser.svelte     # Main content: webview component
+├── EmbeddedBrowser.svelte     # Webview, toolbar, navigation, and capture orchestration
+├── BrowserOverflowMenu.svelte # Secondary tools and narrow-width controls
+├── BrowserViewportMenu.svelte # Fit, preset, custom, and rotation controls
+├── BrowserDeviceFrame.svelte  # Scaled fixed-size frame and drag resize handle
+├── BrowserElementPickerButton.svelte
+└── element-picker-*           # Guest-page picker, validation, and capture coordinates
 ```
 
 ### Key Technical Decisions
@@ -43,6 +52,9 @@ src/lib/components/browser/
 | State management | Redux slice (`src/store/renderer/slices/browser/`) | Matches current state architecture |
 | Recent URLs limit | 20 per workspace | Balance between utility and clutter |
 | URL validation | URL constructor | Simple, built-in validation |
+| Default viewport | Fit panel | Uses all available panel space without a device frame |
+| Fixed viewports | Persisted preset/custom mode | Exact CSS dimensions survive layout rehydration |
+| Capture delivery | Pending Redux capture consumed by the target chat | Lets the user review/remove context before sending |
 
 ## Phase 1: Core Browser Feature
 
@@ -96,15 +108,67 @@ interface Props {
 Main content component using Electron's webview.
 
 **Features:**
-- Navigation: back, forward, refresh, home
-- URL bar with current URL display
+- Navigation: back, forward, refresh, and editable address
 - Loading indicator
 - Error handling for failed loads
 - Webview partition isolation via `BROWSER_PANEL_PARTITION`
 - Protocol allowlist enforcement via `BROWSER_PROTOCOLS.NAVIGATION_ALLOWED`
 - Browser zoom controls via `browser:zoom` events
-- Embedded DevTools toggle (`webview.openDevTools()` / `closeDevTools()`)
+- DevTools Console, Sources, and Elements panel shortcuts
 - Focus propagation and browser-specific shortcut handling for the active panel
+- Per-tab viewport emulation and an agent-native element picker
+
+#### Toolbar
+
+The toolbar is one 48px row. It shows back, forward, reload, page identity, element
+selection, viewport mode, a vertical-kebab overflow menu, and close. The identity is the
+page title plus a subdued hostname instead of a permanent URL field. Clicking it, or using
+the address shortcut, replaces it with a prefilled `bg-background` input; Enter navigates,
+while Escape or blur discards the edit. Agent-owned tabs show the owning agent's live avatar
+and state; unowned tabs show the page favicon when available.
+
+The overflow menu contains, in order: Open in external browser, Copy URL, a separator,
+Screenshot, Console, Source, Inspector, and Reload without cache. Console errors increment a
+badge on the kebab trigger and the count resets on top-level navigation. Console, Source, and
+Inspector open the matching Electron DevTools panel, falling back to plain DevTools if panel
+selection is unavailable. Screenshot creates a pending chat capture; it does not write to the
+clipboard.
+
+Toolbar collapsing is based on the toolbar's own width:
+- At 560px and wider, all primary controls and the hostname are visible.
+- From 400px through 559px, the hostname is hidden first.
+- Below 400px, back/forward, element selection, and viewport mode move to the top of the
+  overflow menu. Reload, page title, kebab, and close remain visible.
+
+#### Viewport modes
+
+Viewport mode is persisted per browser tab and absent legacy values resolve to **Fit panel**:
+- **Fit panel** fills the available webview area with no fixed frame or letterboxing. Unowned
+  tabs use native sizing. Owned tabs remain CDP-emulated at the visible panel bounds; hidden
+  owned tabs use their last emulated size or 1280×800 as a fallback.
+- **Preset** offers iPhone SE, iPhone 15, Pixel 8, iPad Mini, iPad Pro 11″, 1280×800, and
+  1440×900. The page lays out at the exact preset dimensions and scales down, never up, when
+  the panel is smaller.
+- **Custom** accepts integer width and height values from 320 through 3840 CSS pixels.
+
+Preset and custom modes render a centered device frame with an exact W × H readout. The menu
+can rotate fixed dimensions, and dragging the frame's bottom-right handle converts the mode to
+custom. An agent `openTab` without dimensions uses Fit panel; explicit `openTab` dimensions or
+`resizeTab` select custom mode.
+
+#### Element selection and chat attachment
+
+Select element activates a crosshair picker inside the guest page. Hovering outlines the
+candidate and labels its tag and dimensions. Clicking captures the element's visible bounds
+and records its page URL, DOM path, CSS selector, text snippet, viewport size, and a best-effort
+source reference from framework development metadata. Escape, navigation, or toggling the
+control again cancels selection and removes the overlay.
+
+The capture becomes two removable items in the target chat composer: a PNG image and structured
+selection context. The focused active agent chat is preferred; if no agent chat is active, an
+agent-owned browser tab falls back to its owner. The overflow Screenshot action uses the same
+flow for a whole-viewport image. Captures are attached to the next message only after remaining
+in the composer; removing either item excludes that image or context from the send.
 
 **Webview Events to Handle:**
 - `did-start-loading` / `did-stop-loading` - Loading state
@@ -126,6 +190,11 @@ interface Props {
   onFocus?: () => void;
   focusUrlBarOnMount?: boolean;
   isFocused?: boolean;
+  isActive?: boolean;
+  ownerAgentId?: string;
+  ownerAgentName?: string;
+  viewport?: BrowserTabViewport;
+  onViewportChange?: (viewport: BrowserTabViewport) => void;
 }
 ```
 
@@ -153,17 +222,22 @@ Main Content Area
     ↓ renders EmbeddedBrowser with URL
 ```
 
-## Phase 2: Console Capture (Future)
+## Phase 2: Browser Inspection
 
-- Capture console logs via `console-message` event
-- Create `BrowserConsolePanel.svelte` for log display
-- Filter logs by level (log, warn, error, info, debug)
+- Implemented: count error-level `console-message` events and surface the count on the overflow
+  trigger.
+- Implemented: best-effort opening of Console, Sources, or Elements from the overflow menu runs
+  `DevToolsAPI.showPanel` inside `devToolsWebContents` after opening DevTools and falls back to
+  plain DevTools when panel selection is unavailable.
+- Future: capture and stream full console entries for agents.
 
-## Phase 3: Agent Integration (Future)
+## Phase 3: Agent Integration
 
-- MCP tools: `browser_get_console_logs`, `browser_screenshot`, `browser_execute_js`
-- DOM inspection for agents
-- Screenshot with annotation support
+- Implemented: element and viewport screenshots become removable chat-composer context.
+- Implemented: selected-element metadata includes DOM path, selector, text, bounds, viewport, and
+  best-effort source reference.
+- Browser automation for agents remains available through `browser.exec`; richer console capture
+  is future work.
 
 ## Implementation Tasks
 
@@ -186,6 +260,10 @@ Main Content Area
 - [ ] Test: Recent URLs persist across sessions
 - [ ] Test: Navigation controls work (back/forward/refresh)
 - [ ] Test: Sites that block iframes load correctly
+- [ ] Test: Fit mode tracks both a user tab and an agent-owned tab's visible panel bounds
+- [ ] Test: Presets/custom dimensions match `window.innerWidth` and rotate/resize correctly
+- [ ] Test: Selecting an element attaches image + DOM/source context to the intended chat
+- [ ] Test: Narrow toolbar widths preserve collapsed controls in the overflow menu
 
 ## UI Design Notes
 
@@ -208,6 +286,14 @@ Main Content Area
 3. **Should recent URLs sync across workspaces?**
    - Recommendation: No, keep per-workspace for context relevance
 
-4. **Keyboard shortcuts?**
-   - `Cmd+L` to focus URL bar (when browser panel focused)
-   - Standard nav: `Alt+Left/Right` for back/forward
+4. **Keyboard shortcuts**
+   - `Cmd/Ctrl+L`: edit the current address.
+   - `Cmd/Ctrl+R` or `F5`: refresh the focused browser.
+   - `Alt+Left/Right`: navigate back/forward.
+   - `Cmd/Ctrl+Shift+C`: copy the current browser URL (default binding).
+   - `Cmd+Option+I` on macOS or `Ctrl+Shift+I` elsewhere: toggle DevTools.
+   - `Cmd/Ctrl+W`: close the browser tab through the panel system.
+   - `Escape`: cancel address editing or active element selection.
+
+Shortcuts are intercepted both from app chrome and inside the guest webview so behavior remains
+consistent as focus moves across the panel.
