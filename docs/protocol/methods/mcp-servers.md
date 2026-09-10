@@ -37,7 +37,7 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 | mcp.servers.update | serverId (req), config (req): McpServerConfig | { server: McpServerConfig } |
 | mcp.servers.delete | serverId (req) | { success: true } |
 | mcp.servers.toggle | serverId (req), enabled (req): boolean, workspaceId? | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop). With `workspaceId` the toggle is workspace-scoped instead and returns { status, workspaceDisabled } (see "Per-workspace disable") |
-| mcp.servers.restart | serverId (req) | { status: McpServerStatus } — stop-then-start |
+| mcp.servers.restart | serverId (req) | { status: McpServerStatus } — authoritative stop-then-start: reset the current connection/session, then perform a fresh launch or remote probe |
 | mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
 - **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
@@ -78,7 +78,9 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
   - `sse` is a **reachability probe only**: a GET with `Accept: text/event-stream` must answer
     2xx (the stream body is never read; full SSE sessions are out of scope), so an `sse`
     server's `running` status never carries `toolCount`.
-  - Authentication: when configured `headers` do not contain `Authorization`, the daemon reads
+  - Authentication: the client runs the initial OAuth flow and saves its token bag through
+    `mcp.oauth.*`; the daemon owns later persistence, refresh, injection, and lifecycle status.
+    When configured `headers` do not contain `Authorization`, the daemon reads
     the saved server id's `mcp.oauth.*` bag, refreshes it when required (§5.22.1), and attaches
     the resulting header to probes and forwarded `tools/list`/`tools/call` requests. An explicit
     configured header always wins. Token material never appears in status, events, logs, or tool
@@ -88,8 +90,8 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
     redirects are **never followed** (configured `headers` may carry credentials that would
     otherwise be forwarded cross-host); failures map to actionable `lastError` strings —
     connect failure → "unreachable from daemon host: <url>", timeout → "timed out connecting
-    to <url>", HTTP 401/403 → `auth_required` with "authentication failed (HTTP <code>) — check
-    configured headers", 5xx → "server error (HTTP <code>)".
+    to <url>", HTTP 401/403 → `auth_required` with "authentication failed (HTTP <code>) —
+    authenticate or check configured credentials", 5xx → "server error (HTTP <code>)".
   - Lifecycle differences from stdio: a **failed probe keeps the entry tracked in `error` or
     `auth_required`**
     (unlike a failed stdio spawn, which drops back to `stopped`), so the health sweep re-probes
@@ -99,9 +101,9 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
     consecutive-failure count (there is no process to restart, only status to flip);
     `mcp.servers:status-changed` (§6.5) is emitted only on an actual state transition, with
     `startedAt` preserved across consecutive `running` probes. `mcp.servers.update` restarts
-    any **tracked** server (running, or a remote in `error`) so an error-state remote re-probes
-    the updated URL/headers immediately instead of keeping the old config until the next sweep;
-    `restart` on a remote server is a re-probe.
+    any **tracked** server (running, or a remote in `error` or `auth_required`) so a failed remote
+    re-probes the updated URL/credentials immediately instead of keeping the old config until the
+    next sweep; `restart` is authoritative and resets a remote server before a fresh probe.
 
 ```json
 // → request — enable (start) an MCP server
