@@ -114,6 +114,44 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | browser tab registry (new in intentd, v9.10) | browser:tab-opened, browser:tab-updated, browser:tab-closed | Daemon-owned browser tab registry (§5.45; [intent-hq/intentd#1763](https://github.com/intent-hq/intentd/pull/1763); v9.11 routing/tombstone semantics [intent-hq/intentd#1770](https://github.com/intent-hq/intentd/pull/1770)). `browser:tab-opened` / `browser:tab-closed` → data { tab }; `browser:tab-updated` → data { tab, changes } — `tab` is the full canonical `BrowserTab` row (`tabId`, `workspaceId`, `hostClientId`, `url`, `requestedUrl?`, `title?`, `ownerAgentId?`, `ownerAgentName?`, `visibility`, `emulatedSize?`, `createdAt`, `updatedAt`) and `changes` the **field-wise diff** — the host-reported fields that differed (`url`, `requestedUrl`, `title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`; a cleared optional field rides as an explicit `null`) or, on a daemon-side re-home, `hostClientId` (+ `ownerAgentId` for an agent `claimTab`, §5.9). Emitted from the host reports `browser.upsertTab` / `browser.removeTab` / `browser.syncTabs` (one event per created / changed / closed row; a report that changes nothing emits nothing), from the `claimTab` re-home and the `workspace.setBrowserClient` claimed-tab migration (`browser:tab-updated`), and from a daemon-side tombstone (`browser.closeTab { force: true }` **only** — regardless of host connectivity; `browser:tab-closed`). A `browser.closeTab` without `force` never tombstones: its close is routed to the host, whose own `browser.removeTab` emits the `browser:tab-closed`, and an offline target is the -32603 not-connected error with **no** mutation and **no** event. **Workspace-scoped** (the tab's `workspaceId` — a `tabId` never moves between workspaces, so no workspace is left with a ghost tab); self-sufficient payloads (§6.7). Actor: `{ type: "user", id: <hostClientId> }` — the reporting host client. |
 
 
+#### Pending-question `agent:updated` payloads
+
+A committed pending-question marker mutation emits `agent:updated` with the mutated value in
+`event.data`. A set carries the question-bearing assistant message id:
+
+```json
+{ "type":"agent:updated", "data":{
+  "agentId":"agent-123", "pendingQuestionsMessageId":"msg-question-1" } }
+```
+
+A clear is a **written empty string**, not an omitted field or `null`:
+
+```json
+{ "type":"agent:updated", "data":{
+  "agentId":"agent-123", "pendingQuestionsMessageId":"" } }
+```
+
+Clients must preserve this presence distinction. A non-empty value selects one authoritative
+question-bearing row unless its id matches `dismissedQuestionsMessageId`; `""` authoritatively
+clears the slot. `agent.dismissQuestions` emits `agent:updated` with the dismissal marker and
+the session's current pending marker alongside it whenever that marker has ever been written
+(including `""`; [monorepo#3180](https://github.com/intent-hq/monorepo/issues/3180)), matching the
+`AgentLite` projection (§5.5). Dismissal does not rewrite the pending marker: clients compare
+the two ids to determine whether that question set is still pending.
+
+```json
+{ "type":"agent:updated", "data":{
+  "agentId":"agent-123", "dismissedQuestionsMessageId":"msg-question-1",
+  "pendingQuestionsMessageId":"msg-question-1" } }
+```
+
+Dismissing an older set instead carries the newer pending id unchanged, so it does not suppress
+the newer wizard. A legacy session whose pending marker was never written omits the field; it
+does not fabricate an empty-string clear. Older daemons may also omit it from dismissal events,
+so clients supporting those daemons must reconcile the `AgentLite` projection on such events
+rather than interpreting omission as a clear. Other `agent:updated` events without either
+question marker are unrelated to pending-question state.
+
 ### 6.6 Turn/event lifecycle & batching window
 
 **Prompt (user-initiated) turns.** A turn opened by a daemon-dispatched `session/prompt`

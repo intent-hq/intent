@@ -941,12 +941,27 @@ exactly as the daemon does (set AND ≠ `dismissedQuestionsMessageId`); when the
 omitted (legacy) they fall back to the transcript plus the answer tag below, and the daemon's
 own verdict is always readable through `displayStatus` (§5.1 step 2).
 
+Frontends must test field presence, not truthiness: render only the question set named by a
+present non-empty marker (unless dismissed), and treat a present empty string as authoritative
+"nothing pending" without re-deriving a set from the transcript. Transcript-tail derivation is
+only a fallback for an absent field.
+
 *Pre-upgrade fallback.* A session whose marker key is **absent entirely** (the daemon never wrote
 it) falls back once to the legacy transcript tail walk — walking back past any trailing `system`
 rows, pending when the first non-system row is an un-dismissed question-bearing assistant message
 — and the derived pending set is immediately **materialized** as a marker, so a set that was live
 across the upgrade is not lost on the next plain user row. A marker written as the empty string
 does NOT fall back.
+
+*Client compatibility.* A new frontend connected to an old daemon that does not project the
+marker sees the field as absent and uses that same non-system transcript-tail rule. An old
+frontend connected to a new daemon remains wire-compatible because the marker and its
+`agent:updated` payload field are additive. The daemon still owns marker persistence and
+resolution, but it cannot make an old frontend honor a written-empty clear or a specific
+non-empty marker. Such a frontend can only derive from the transcript rows it loaded: it can
+re-show an answered question when the answer row is outside its page, and it cannot recover a
+marked question-bearing row that is off-page. Pending questions do not hold deliveries on
+current daemons (v9.5+), regardless of frontend version.
 
 *Marker re-derivation on transcript swaps.* `agent.replaceMessages` re-mints row ids, so any
 surviving marker is dangling by construction; `agent.editAndRegenerate` truncation keeps the kept
