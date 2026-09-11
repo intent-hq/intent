@@ -479,7 +479,9 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
 `main.rs` beside the PR-refresh sweep) ticks on the live
 `prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
-on an effective interval stretched so the loop is modelled to spend at most
+becomes due after an effective interval (the minimum time between two polls of
+one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
+up to the next `pollSeconds` tick) stretched so the loop is modelled to spend at most
 the live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
 minimum 60, maximum 5000; each PR poll costed at 3 REST calls — a cadence
 **cost model**, not a hard ceiling: no request is counted or blocked against
