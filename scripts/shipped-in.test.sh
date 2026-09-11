@@ -190,11 +190,59 @@ echo "shipped-in tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSIO
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
 # then rerun the fixtures under a real Bash 3 when one can be found:
-# BASH3_BIN, a bash3 on PATH, Homebrew bash@3, or a 3.x /bin/bash.
+# BASH3_BIN, a bash3 on PATH, Homebrew bash@3, or a 3.x /bin/bash. The
+# pattern gate is a best-effort guard for hosts without a Bash 3; the real
+# Bash 3 fixture run is the authoritative check.
 bash -n "$script" || fail "shipped-in.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "shipped-in.test.sh does not parse"
-bash4_constructs='(declare|local|typeset) +-[A-Za-z]*[An]|mapfile|readarray|\$\{[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&|coproc'
-gate_hits=$(grep -nE "$bash4_constructs" "$script" "${BASH_SOURCE[0]}" | grep -v -F 'bash4_constructs' || true)
+bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An]([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
+# Full-line comments, the pattern itself and the gate_sample table below are
+# not scanned.
+gate_matches() {
+  grep -nE "$bash4_constructs" "$@" | grep -vE '^([^:]*:)?[0-9]+:[[:blank:]]*#' |
+    grep -v -F -e 'bash4_constructs' -e 'gate_sample' || true
+}
+gate_sample() {
+  local expected=$1 sample=$2 hit
+  hit=$(printf '%s\n' "$sample" | gate_matches)
+  case "$expected:${hit:+hit}" in
+    hit:hit | miss:) ;;
+    *) fail "gate regex $expected sample misclassified: $sample" ;;
+  esac
+}
+gate_sample hit 'declare -A m=()'
+gate_sample hit 'local -gA x'
+gate_sample hit 'declare -r -A cache=()'
+gate_sample hit $'declare\t-A m'
+gate_sample hit 'typeset -n ref=x'
+gate_sample hit 'mapfile -t a'
+gate_sample hit 'readarray a <f'
+gate_sample hit 'coproc x'
+gate_sample hit 'echo ${var,,}'
+gate_sample hit 'echo ${var^^}'
+gate_sample hit 'echo ${var^}'
+gate_sample hit 'echo ${1^^}'
+gate_sample hit 'echo ${@,,}'
+gate_sample hit 'echo ${arr[1],,[a-z]}'
+gate_sample hit 'cmd &>> log'
+gate_sample hit 'cmd |& tee'
+gate_sample hit 'x) y ;;&'
+gate_sample hit 'x) y ;&'
+gate_sample miss 'local head=$1 status'
+gate_sample miss 'declare -a arr'
+gate_sample miss 'local -r x=1'
+gate_sample miss 'echo ${record%% *}'
+gate_sample miss 'echo ${1#--limit=}'
+gate_sample miss 'echo ${tags[0]}'
+gate_sample miss 'echo ${repo/\//__}'
+gate_sample miss 'a || b'
+gate_sample miss 'x) y ;;'
+gate_sample miss 'echo ${tag##*.}'
+gate_sample miss 'cmd 2>&1 >>log'
+gate_sample miss '# mapfile is unavailable on Bash 3'
+gate_sample miss 'readarray_count=0'
+gate_sample miss 'my_coproc=1'
+gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
 find_bash3() {
