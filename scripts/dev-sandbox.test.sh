@@ -301,6 +301,7 @@ wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did
 state_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$state_dir/ui.json")
 state_ppid=$(ps -o ppid= -p "$state_pid" | tr -d ' ')
 [[ "$state_ppid" == "$sandbox_pid" ]] || fail "recipe shell did not exec the sandbox script"
+supervised_pgid=$sandbox_pid
 kill -TERM -- "-$sandbox_pid"
 set +e
 wait "$sandbox_pid"
@@ -308,11 +309,32 @@ status=$?
 set -e
 sandbox_pid=""
 [[ "$status" -ne 0 ]] || fail "supervised recipe unexpectedly exited successfully after TERM"
-for _ in {1..50}; do
+# GNU make blocks on its local child when TERMed, so once wait returns the
+# script's EXIT trap has already run: the script must be gone and the state
+# file removed. The deadlines are generous so timing only matters when
+# cleanup is genuinely broken.
+dump_supervised_residue() {
+  echo "residual $state_dir/ui.json:" >&2
+  cat "$state_dir/ui.json" >&2 2>/dev/null || echo "(absent)" >&2
+  echo "processes in group $supervised_pgid:" >&2
+  ps -eo pid,ppid,pgid,stat,command | awk -v pg="$supervised_pgid" 'NR == 1 || $3 == pg' >&2
+}
+for _ in {1..500}; do
+  kill -0 "$state_pid" 2>/dev/null || break
+  sleep 0.02
+done
+if kill -0 "$state_pid" 2>/dev/null; then
+  dump_supervised_residue
+  fail "sandbox script pid $state_pid still alive 10s after the supervised recipe exited"
+fi
+for _ in {1..500}; do
   [[ ! -e "$state_dir/ui.json" ]] && break
   sleep 0.02
 done
-[[ ! -e "$state_dir/ui.json" ]] || fail "state remained after external TERM of the recipe process tree"
+if [[ -e "$state_dir/ui.json" ]]; then
+  dump_supervised_residue
+  fail "state remained after external TERM of the recipe process tree"
+fi
 python3 - "$port" <<'PY' || fail "supervised recipe listener remained after TERM"
 import socket
 import sys
