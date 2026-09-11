@@ -477,8 +477,24 @@ lives in `intent-services` (`services::pr_monitor`): agents register monitors
 via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
 `flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
-`main.rs` beside the PR-refresh sweep) polls every active monitor on the live
-`prMonitor.pollSeconds` cadence, diffs the merge-requirements checklist
+`main.rs` beside the PR-refresh sweep) ticks on the live
+`prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
+on an effective interval stretched so the loop is modelled to spend at most
+the live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
+minimum 60, maximum 5000; each PR poll costed at 3 REST calls — a cadence
+**cost model**, not a hard ceiling: no request is counted or blocked against
+it, and actual spend can differ — the 3-call unit is a single-page estimate,
+so paginated review lists and degraded-path REST fallbacks cost more, while
+GraphQL reads ride their own quota), fetching a capped oldest-first subset per tick so
+a large monitor set is spread across ticks instead of burst-fetched, and
+honouring the global forge rate-limit gate (`services::rate_limit`,
+monorepo#2961) shared with the PR-refresh and git-root sweeps: a
+quota-exhausted forge read — the PR read itself or any secondary checklist /
+comment read — pauses all PR-monitor polling until the window resets,
+recording the pause as `lastError` on the affected monitors, and the gate
+is re-consulted before every fetch within a sweep so a pause opened by a
+sibling sweep stops the in-flight sweep too — diffs the
+merge-requirements checklist
 (checks, reviews, threads, mergeability, branch rules — composed in
 `pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
 the monitor's persisted **emit baseline** (the PR state as of the last
