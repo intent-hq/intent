@@ -373,10 +373,10 @@ remove_state_file() {
 }
 
 cleanup() {
-  local pid
   # bash runs pending signal traps between commands even inside the EXIT trap,
   # so a repeated HUP/INT/TERM would otherwise longjmp out mid-cleanup.
   trap '' HUP INT TERM
+  local pid
   [[ "$cleaning" -eq 0 ]] || return
   cleaning=1
   remove_state_file
