@@ -20,7 +20,7 @@ documents frontend-specific behavior and implementation detail.
 
 From the monorepo root, inspect the free port block the next sandbox start will use, then
 start the fast component preview. The target installs locked frontend dependencies when
-`node_modules` is missing.
+`node_modules` is missing or its installed lockfile no longer matches `pnpm-lock.yaml`.
 
 ```bash
 make ports
