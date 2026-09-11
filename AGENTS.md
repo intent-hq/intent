@@ -283,8 +283,10 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   `make shipped-in COMPONENT=... SHA=...`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
   tag carrying the commit (for intentd, via the `intentdVersion` pin in that tag's
-  `release-manifest.json`) and exits 3 while nothing carries it yet. Never block a
-  turn polling — schedule this hook after replacing the placeholders:
+  `release-manifest.json`), exits 3 while nothing carries it yet, and exits 4 on a
+  transient GitHub failure (rate limit, 5xx, network) that the next poll should
+  simply retry. Never block a turn polling — schedule this hook after replacing
+  the placeholders:
 
   ```javascript
   await ws.hook.schedule({
@@ -295,7 +297,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
     command: "scripts/shipped-in.sh", args: ["<COMPONENT>", "<SHA>"], timeoutMs: 120_000,
   });
   if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
-  if (run.exitCode === 3) return { dispatch: false };
+  if (run.exitCode === 3 || run.exitCode === 4) return { dispatch: false };
   throw new Error("shipped-in failed (exit " + run.exitCode + "): " + run.stderr.trim());`,
   });
   ```
