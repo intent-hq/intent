@@ -256,7 +256,7 @@ with no rollback.
   a matching record and run the complete suite.
 - Run long gates as saved command-mode `ws.script` entries via `ws.script.start` plus a
   self-checking `ws.hook.schedule` polling `ws.script.status` (dispatch on exit), then
-  `ws.script.output`. `ws.script.run` (~30s call budget) rejects longer `timeoutSeconds`.
+  `ws.script.output`. `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default).
 
 ## Release Process
 
