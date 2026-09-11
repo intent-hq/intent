@@ -121,6 +121,15 @@ class ResumableNextestTests(unittest.TestCase):
                 {name: value for name, value in values.items() if name != "UNRELATED"},
             )
 
+    def test_nextest_env_hides_progress_bar_unless_caller_overrides(self):
+        with mock.patch.dict(os.environ, {"PATH": "/bin"}, clear=True):
+            env = gate.nextest_env()
+            self.assertEqual(env["NEXTEST_HIDE_PROGRESS_BAR"], "1")
+            self.assertEqual(env["NEXTEST_EXPERIMENTAL_LIBTEST_JSON"], "1")
+            self.assertEqual(env["PATH"], "/bin")
+        with mock.patch.dict(os.environ, {"NEXTEST_HIDE_PROGRESS_BAR": "0"}, clear=True):
+            self.assertEqual(gate.nextest_env()["NEXTEST_HIDE_PROGRESS_BAR"], "0")
+
     def test_prune_removes_only_old_key_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary)
