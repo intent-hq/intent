@@ -33,10 +33,17 @@ export function findMovedGitlinks(rawDiff) {
   return paths;
 }
 
-export function findOffendingGitlinks(rawDiff, headRef, labels) {
-  if (EXEMPT_HEAD_REFS.includes(headRef ?? '')) return [];
+// The head-ref exemption is name-based, so it only counts for branches in this
+// repository: a fork can name its branch anything.
+export function findOffendingGitlinks(rawDiff, headRef, labels, { fromFork = false } = {}) {
+  if (!fromFork && EXEMPT_HEAD_REFS.includes(headRef ?? '')) return [];
   if ((labels ?? []).includes(EXEMPTION_LABEL)) return [];
   return findMovedGitlinks(rawDiff);
+}
+
+function fromForkFromEnvironment() {
+  const { PR_HEAD_REPO: headRepo, GITHUB_REPOSITORY: baseRepo } = process.env;
+  return Boolean(headRepo && baseRepo && headRepo !== baseRepo);
 }
 
 function labelsFromEnvironment() {
@@ -55,7 +62,9 @@ async function rawDiffFromArguments(argv) {
 
 async function main() {
   const { diff, baseRef } = await rawDiffFromArguments(process.argv.slice(2));
-  const offending = findOffendingGitlinks(diff, process.env.PR_HEAD_REF, labelsFromEnvironment());
+  const offending = findOffendingGitlinks(diff, process.env.PR_HEAD_REF, labelsFromEnvironment(), {
+    fromFork: fromForkFromEnvironment(),
+  });
   if (offending.length === 0) {
     console.log('No manual submodule pin changes found.');
     return;

@@ -111,4 +111,53 @@ PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
 grep -q '^auth status$' "$GH_TEST_LOG" || fail "gh authentication was not checked"
 ! grep -q '^pr ' "$GH_TEST_LOG" || fail "PR lookup ran without authenticated gh"
 
+# Gitlink fixture: a throwaway monorepo with real submodule checkouts, so the
+# pin / gitlinkDirty fields are asserted for in-sync, moved, and uninitialized.
+fixture="$temp_dir/fixture"
+git_fixture() { git -c protocol.file.allow=always -C "$fixture" "$@"; }
+export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
+export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
+mkdir -p "$fixture/scripts"
+cp "$script" "$fixture/scripts/dev-status.sh"
+git init -q -b main "$fixture"
+for name in intentd cloudlands-fe; do
+  git init -q -b main "$temp_dir/src-$name"
+  git -C "$temp_dir/src-$name" commit -q --allow-empty -m "$name base"
+  git_fixture submodule add -q "$temp_dir/src-$name" "packages/$name"
+done
+git_fixture commit -q -m "fixture base"
+intentd_pin=$(git_fixture rev-parse --short=7 HEAD:packages/intentd)
+
+fixture_status() {
+  PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+    bash "$fixture/scripts/dev-status.sh" | python3 -c '
+import json, sys
+repos = json.load(sys.stdin)["repos"]
+print(json.dumps({k: [v["initialized"], v["pin"], v["gitlinkDirty"]] for k, v in repos.items()}, sort_keys=True))'
+}
+
+in_sync=$(fixture_status)
+[[ "$in_sync" == "{\"cloudlands-fe\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)\", false], \"intentd\": [true, \"$intentd_pin\", false]}" ]] \
+  || fail "in-sync fixture reported $in_sync"
+
+git -C "$fixture/packages/intentd" commit -q --allow-empty -m "moved off the pin"
+moved=$(fixture_status)
+python3 - "$moved" "$intentd_pin" <<'PY' || fail "moved gitlink fixture reported $moved"
+import json, sys
+repos, pin = json.loads(sys.argv[1]), sys.argv[2]
+assert repos["intentd"] == [True, pin, True], repos
+assert repos["cloudlands-fe"][2] is False, repos
+PY
+grep -q "^Repo *intentd: .* gitlink=moved(pin $intentd_pin)" <(PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$fixture/scripts/dev-status.sh") \
+  || fail "human status did not flag the moved gitlink"
+
+git_fixture submodule deinit -q -f packages/cloudlands-fe
+deinit=$(fixture_status)
+python3 - "$deinit" <<'PY' || fail "uninitialized fixture reported $deinit"
+import json, sys
+repos = json.loads(sys.argv[1])
+assert repos["cloudlands-fe"][0] is False and repos["cloudlands-fe"][2] is False, repos
+assert isinstance(repos["cloudlands-fe"][1], str), repos
+PY
+
 echo "dev-status tests passed (no-gh ${elapsed_ms}ms)"

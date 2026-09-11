@@ -53,6 +53,13 @@ test('exempts the automation head branch', () => {
   assert.deepEqual(findOffendingGitlinks(movedIntentd, 'auto/submodule-bump-2', []), ['packages/intentd']);
 });
 
+test('does not exempt the automation branch name when it comes from a fork', () => {
+  assert.deepEqual(findOffendingGitlinks(movedIntentd, EXEMPT_HEAD_REFS[0], [], { fromFork: true }), [
+    'packages/intentd',
+  ]);
+  assert.deepEqual(findOffendingGitlinks(movedIntentd, EXEMPT_HEAD_REFS[0], [], { fromFork: false }), []);
+});
+
 test('exempts pull requests carrying the exemption label', () => {
   assert.deepEqual(findOffendingGitlinks(movedIntentd, 'feature/new-submodule', ['x', EXEMPTION_LABEL]), []);
 });
