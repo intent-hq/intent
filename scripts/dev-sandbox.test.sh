@@ -32,6 +32,19 @@ fail() {
   exit 1
 }
 
+# errexit exits silently on a plain command failure, leaving an empty log with
+# status 1. Name the command before that happens. The trap stays quiet inside
+# the deliberate `set +e … wait … set -e` windows, and bash already skips it in
+# the same conditional contexts (&&, ||, if, while, !) in which errexit is
+# suppressed, so helpers that return non-zero on purpose do not report.
+report_unexpected_failure() {
+  local status=$1 line=$2 command=$3 pipestatus=$4
+  [[ $- == *e* ]] || return 0
+  echo "dev-sandbox test: unexpected failure (status $status, pipestatus [$pipestatus]) at line $line: $command" >&2
+}
+set -o errtrace
+trap 'report_unexpected_failure "$?" "$LINENO" "$BASH_COMMAND" "${PIPESTATUS[*]}"' ERR
+
 free_port() {
   python3 - <<'PY'
 import socket
@@ -79,6 +92,31 @@ wait_for_ready() {
     kill -0 "$sandbox_pid" 2>/dev/null || return 1
     sleep 0.05
   done
+  return 1
+}
+
+# Print the pid of the fake frontend (`python3 - <port>`) running under the
+# sandbox script. A no-match pgrep exits 1, so a bare `$(pgrep -P … | head -1)`
+# assignment tripped errexit/pipefail on a transient miss before the caller's
+# `fail` guard could run; the lookup is retried for up to 2s instead, matching
+# the command line so a transient sibling child is never chosen, and fails only
+# after the deadline (or once the sandbox has died) with the child listing and
+# the sandbox output dumped.
+find_frontend_pid() {
+  local parent=$1 port=$2 output=$3 matches
+  for _ in {1..100}; do
+    matches=$(pgrep -P "$parent" -f "python3 - $port" 2>/dev/null || true)
+    if [[ -n "$matches" ]]; then
+      echo "${matches%%$'\n'*}"
+      return 0
+    fi
+    kill -0 "$parent" 2>/dev/null || break
+    sleep 0.02
+  done
+  echo "children of sandbox pid $parent (alive: $(kill -0 "$parent" 2>/dev/null && echo yes || echo no)):" >&2
+  ps -eo pid,ppid,stat,command | awk -v pp="$parent" 'NR == 1 || $2 == pp' >&2
+  echo "sandbox output:" >&2
+  cat "$output" >&2 || true
   return 1
 }
 
@@ -255,8 +293,8 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM
   bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
-frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
-[[ -n "$frontend_pid" ]] || fail "could not find double-TERM frontend child"
+frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/double-term.out") \
+  || fail "could not find double-TERM frontend child"
 kill -TERM "$sandbox_pid"
 for _ in {1..100}; do
   [[ ! -e "$state_dir/ui.json" ]] && break
@@ -301,8 +339,8 @@ for iteration in $(seq 1 20); do
     bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
   sandbox_pid=$!
   wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
-  frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
-  [[ -n "$frontend_pid" ]] || fail "could not find signal-window frontend child (iteration $iteration)"
+  frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/signal-window.out") \
+    || fail "could not find signal-window frontend child (iteration $iteration)"
   kill -TERM "$sandbox_pid"
   kill -TERM "$sandbox_pid" 2>/dev/null || true
   set +e
@@ -433,8 +471,8 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" SANDBOX_STATE_
   SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/child-failure.out" || fail "child-failure sandbox did not become ready"
-frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
-[[ -n "$frontend_pid" ]] || fail "could not find frontend child"
+frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/child-failure.out") \
+  || fail "could not find frontend child"
 kill -KILL "$frontend_pid"
 set +e
 wait "$sandbox_pid"
