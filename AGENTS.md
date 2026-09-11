@@ -342,19 +342,8 @@ for all components.
   not apply them (triage retires them — on the issue's open / edit / reopen, or as
   soon as the label is applied — after setting the matching Type; the `question`
   label stays a regular label). Set the Type when filing:
-  `gh issue create --repo intent-hq/intent --type Bug ...` (gh ≥ 2.94.0). On older
-  gh, create the issue first, then set the Type via
-  `gh api graphql` with the `updateIssue` mutation, passing an `issueTypeId`
-  resolved from the repository's `issueTypes` connection:
-
-  ```bash
-  gh api graphql -f query='query { repository(owner: "intent-hq", name: "intent") {
-    issueTypes(first: 10) { nodes { id name } } } }'
-  gh api graphql -f query='mutation($id: ID!, $type: ID!) {
-    updateIssue(input: { id: $id, issueTypeId: $type }) { issue { number } } }' \
-    -f id="$(gh issue view <N> --repo intent-hq/intent --json id -q .id)" -f type=<issueTypeId>
-  ```
-
+  `gh issue create --repo intent-hq/intent --type Bug ...`. `make doctor` enforces
+  gh >= 2.94.0; if `--type` is unrecognized, run `make bootstrap-dev-host` to upgrade.
 - **Labels**: apply the appropriate `component:*` label (`component:intentd`,
   `component:fe`, `component:ios`) plus `agent-filed`.
 - **Aggressive dedup**: search existing issues first

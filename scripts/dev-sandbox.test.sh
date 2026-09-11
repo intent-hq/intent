@@ -562,6 +562,18 @@ mkdir -p "$COREPACK_HOME/v1/pnpm/10.30.3"
 touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
 printf '10.30.3\n'
 SH
+write_gh_stub() {
+  cat >"$bootstrap_bin/gh" <<SH
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+  "--version ") printf 'gh version $1 (2025-01-01)\nhttps://github.com/cli/cli/releases/tag/v$1\n' ;;
+  "auth status") exit $2 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$bootstrap_bin/gh"
+}
+write_gh_stub 2.45.0 1
 chmod +x "$bootstrap_bin/corepack" "$bootstrap_bin/pnpm"
 set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
@@ -571,5 +583,103 @@ set -e
 [[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of reporting its expected gaps"
 [[ -z $(find "$corepack_cache" -mindepth 1 -print -quit) ]] \
   || fail "check-only pnpm probe invoked the Corepack shim and populated its cache"
+grep -q '^\[missing\]  GitHub CLI: gh 2\.45\.0 is below the required 2\.94\.0' "$temp_dir/bootstrap-check.out" \
+  || fail "outdated gh 2.45.0 was not reported as a missing gap naming 2.94.0"
+
+write_gh_stub 2.100.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-ok.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was not accepted as satisfying >= 2.94.0"
+! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was reported as a missing gap"
+
+write_gh_stub 2.94.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-min.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.94\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-min.out" \
+  || fail "gh 2.94.0 (exact minimum) was not accepted as satisfying >= 2.94.0"
+
+write_gh_stub 2.94.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-rc.out" 2>&1
+set -e
+grep -q '^\[missing\]  GitHub CLI: gh 2\.94\.0-rc\.1 is below the required 2\.94\.0' "$temp_dir/bootstrap-check-gh-rc.out" \
+  || fail "prerelease gh 2.94.0-rc.1 was not reported as a missing gap below 2.94.0"
+
+write_gh_stub 2.95.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-next-rc.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-next-rc.out" \
+  || fail "prerelease gh 2.95.0-rc.1 of a newer release was not accepted as satisfying >= 2.94.0"
+
+# install_gh on macOS: exercise the function alone with a stubbed uname/brew/gh.
+bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$bootstrap_root/scripts/bootstrap-dev-host.sh" >"$bootstrap_funcs"
+grep -q '^install_gh() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_gh fixture"
+! grep -q '^install_gh$' "$bootstrap_funcs" || fail "bootstrap function extraction kept the main install flow"
+brew_bin="$temp_dir/brew-bin"
+mkdir -p "$brew_bin"
+printf '#!/usr/bin/env bash\nprintf "Darwin\\n"\n' >"$brew_bin/uname"
+cat >"$brew_bin/brew" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BREW_LOG"
+case "$*" in
+  "list --versions gh") [[ "$BREW_OWNS_GH" == 1 ]] ;;
+  "install gh"|"upgrade gh") [[ -n "${BREW_GH_RESULT:-}" ]] && "$BREW_WRITE_GH_STUB" "$BREW_GH_RESULT" 0; exit 0 ;;
+  *) exit 2 ;;
+esac
+SH
+cat >"$brew_bin/write-gh-stub" <<SH
+#!/usr/bin/env bash
+bootstrap_bin="$bootstrap_bin"
+$(declare -f write_gh_stub)
+write_gh_stub "\$@"
+SH
+chmod +x "$brew_bin/uname" "$brew_bin/brew" "$brew_bin/write-gh-stub"
+run_install_gh() {
+  BREW_LOG="$temp_dir/brew.log" BREW_OWNS_GH="$1" BREW_GH_RESULT="${2:-}" BREW_WRITE_GH_STUB="$brew_bin/write-gh-stub" \
+    PATH="$brew_bin:$bootstrap_bin:$PATH" \
+    bash -c 'funcs=$1; set --; source "$funcs"; install_gh' bash "$bootstrap_funcs" >"$temp_dir/install-gh.out" 2>&1
+}
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew install produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'install gh' "$temp_dir/brew.log" || fail "a gh not owned by Homebrew did not trigger brew install gh"
+! grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "brew upgrade gh ran for a gh the gh formula does not own"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 1 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew upgrade produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "a Homebrew-owned gh did not trigger brew upgrade gh"
+! grep -qx 'install gh' "$temp_dir/brew.log" || fail "brew install gh ran for a gh the gh formula already owns"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "install_gh returned $status instead of 1 when a stale gh kept shadowing the installed one"
+grep -q "^ERROR: gh 2\.45\.0 ($bootstrap_bin/gh) is still below 2\.94\.0 after install\." "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not name the stale binary and version: $(cat "$temp_dir/install-gh.out")"
+grep -q 'shadows the new one.*https://github.com/cli/cli#installation' "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not explain PATH shadowing with the install URL"
 
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
