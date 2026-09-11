@@ -254,8 +254,9 @@ with no rollback.
   live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
   `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
   a matching record and run the complete suite.
-- Run long gates as saved command-mode `ws.script` entries and give `ws.script.run`
-  an explicit `timeoutSeconds`; its default timeout is only 30 seconds.
+- Run long gates as saved command-mode `ws.script` entries via `ws.script.start` plus a
+  self-checking `ws.hook.schedule` polling `ws.script.status` (dispatch on exit), then
+  `ws.script.output`. `ws.script.run` (~30s call budget) rejects longer `timeoutSeconds`.
 
 ## Release Process
 
