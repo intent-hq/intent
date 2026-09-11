@@ -254,9 +254,12 @@ with no rollback.
   live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
   `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
   a matching record and run the complete suite.
-- Run long gates as saved command-mode `ws.script` entries via `ws.script.start` plus a
-  self-checking `ws.hook.schedule` polling `ws.script.status` (dispatch on exit), then
-  `ws.script.output`. `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default).
+- Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
+  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`);
+  `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
+  are PTY-backed, so use the `make` targets — they set `NEXTEST_SHOW_PROGRESS=none` and
+  `CARGO_TERM_PROGRESS_WHEN=never`; a raw `cargo nextest run` / `cargo build` must pass
+  the same or its progress-bar redraws flood the output buffer.
 
 ## Release Process
 
