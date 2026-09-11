@@ -110,11 +110,12 @@ docs-check: ## Check documented development targets, knobs, and remote-host guid
 	@scripts/docs-check.sh
 
 # Release tracking: which cloudlands-releases alpha first carries a merged
-# commit. The script exits 3 for "not shipped yet" (make reports it as
-# `Error 3`); background hooks should invoke scripts/shipped-in.sh directly so
-# they can branch on that code. `LIMIT=N` widens the scan window past the
-# newest 10 releases.
-shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit> (script exit 3 = not yet)
+# commit. The script exits 3 for "not shipped yet" and 4 for a transient
+# GitHub failure (rate limit, 5xx, network) worth retrying (make reports them
+# as `Error 3` / `Error 4`); background hooks should invoke
+# scripts/shipped-in.sh directly so they can branch on those codes. `LIMIT=N`
+# widens the scan window past the newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit> (script exit 3 = not yet, 4 = transient gh failure)
 	@scripts/shipped-in.sh "$(COMPONENT)" "$(SHA)" $(if $(LIMIT),--limit "$(LIMIT)",)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
