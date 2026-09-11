@@ -65,18 +65,31 @@ compare_status() {
   printf '%s\n' "$status"
 }
 
-declare -A manifest_versions=()
+# Stock macOS ships Bash 3.2, which has no associative arrays: caches are
+# newline-separated "<key> <value>" records in plain strings.
+cache_get() {
+  local record
+  while IFS= read -r record; do
+    if [[ "${record%% *}" == "$2" ]]; then
+      printf '%s\n' "${record#* }"
+      return 0
+    fi
+  done <<<"$1"
+  return 1
+}
+
+manifest_versions=""
 manifest_version() {
   local tag=$1 version
-  if [[ -z "${manifest_versions[$tag]+x}" ]]; then
+  if ! version=$(cache_get "$manifest_versions" "$tag"); then
     version=$(gh release download "$tag" --repo "$releases_repo" \
       --pattern release-manifest.json --output - 2>/dev/null |
       python3 -c 'import json, sys; print(json.load(sys.stdin)["intentdVersion"])' 2>/dev/null) ||
       fail "could not read intentdVersion from release-manifest.json for $tag on $releases_repo"
     [[ -n "$version" ]] || fail "release-manifest.json for $tag has an empty intentdVersion"
-    manifest_versions[$tag]=$version
+    manifest_versions+="$tag $version"$'\n'
   fi
-  printf '%s\n' "${manifest_versions[$tag]}"
+  printf '%s\n' "$version"
 }
 
 carries() {
@@ -93,18 +106,21 @@ release_list=$(
   gh release list --repo "$releases_repo" --limit "$((limit + 10))" --exclude-drafts \
     --json tagName --jq '.[].tagName' 2>/dev/null
 ) || fail "gh release list on $releases_repo failed"
-mapfile -t tags < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" | head -n "$limit" || true)
+tags=()
+while IFS= read -r tag; do
+  tags+=("$tag")
+done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" | head -n "$limit" || true)
 ((${#tags[@]} > 0)) || fail "gh release list on $releases_repo returned no vX.Y.Z tags"
 
-declare -A intentd_status=()
+intentd_status=""
 first_hit=""
 for tag in "${tags[@]}"; do
   if [[ "$component" == intentd ]]; then
     version=$(manifest_version "$tag")
-    if [[ -z "${intentd_status[$version]+x}" ]]; then
-      intentd_status[$version]=$(compare_status "v$version")
+    if ! status=$(cache_get "$intentd_status" "$version"); then
+      status=$(compare_status "v$version")
+      intentd_status+="$version $status"$'\n'
     fi
-    status=${intentd_status[$version]}
   else
     status=$(compare_status "$tag")
   fi
