@@ -150,9 +150,7 @@ jobs:
         env:
           PR_HEAD_REF: ${{ github.head_ref }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: |
-          git diff --raw --no-renames "origin/${{ github.base_ref }}...HEAD" > "$RUNNER_TEMP/gitlink-diff"
-          node scripts/check-submodule-pins.mjs "$RUNNER_TEMP/gitlink-diff"
+        run: node scripts/check-submodule-pins.mjs --base "origin/${{ github.base_ref }}"
 
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.

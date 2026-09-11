@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -10,6 +11,16 @@ export const EXEMPT_HEAD_REFS = ['auto/submodule-bump'];
 export const EXEMPTION_LABEL = 'submodule-pin-intended';
 
 const RAW_LINE = /^:(\d{6}) (\d{6}) \S+ \S+ \S+\t(.+)$/;
+
+// --ignore-submodules=none overrides any `ignore = all` a branch could add to
+// .gitmodules, which would otherwise hide the moved gitlink from the diff.
+export function rawDiffArgs(baseRef, headRef = 'HEAD') {
+  return ['diff', '--raw', '--no-renames', '--ignore-submodules=none', `${baseRef}...${headRef}`];
+}
+
+export function rawDiff(baseRef, options = {}) {
+  return execFileSync('git', rawDiffArgs(baseRef), { encoding: 'utf8', ...options });
+}
 
 export function findMovedGitlinks(rawDiff) {
   const paths = [];
@@ -36,19 +47,23 @@ function labelsFromEnvironment() {
   return labels;
 }
 
-async function main() {
-  const rawDiffPath = process.argv[2];
-  if (!rawDiffPath) throw new Error('usage: check-submodule-pins.mjs <raw-diff-file>');
+async function rawDiffFromArguments(argv) {
+  if (argv[0] === '--base' && argv[1]) return { diff: rawDiff(argv[1]), baseRef: argv[1] };
+  if (argv[0] && argv[0] !== '--base') return { diff: await fs.readFile(argv[0], 'utf8'), baseRef: '<base>' };
+  throw new Error('usage: check-submodule-pins.mjs (--base <ref> | <raw-diff-file>)');
+}
 
-  const rawDiff = await fs.readFile(rawDiffPath, 'utf8');
-  const offending = findOffendingGitlinks(rawDiff, process.env.PR_HEAD_REF, labelsFromEnvironment());
+async function main() {
+  const { diff, baseRef } = await rawDiffFromArguments(process.argv.slice(2));
+  const offending = findOffendingGitlinks(diff, process.env.PR_HEAD_REF, labelsFromEnvironment());
   if (offending.length === 0) {
     console.log('No manual submodule pin changes found.');
     return;
   }
   for (const pathspec of offending) console.error(`Submodule gitlink changed in this pull request: ${pathspec}`);
   console.error('Submodule pins are advanced only by the auto-bump-submodules workflow (auto/submodule-bump).');
-  console.error('Drop the gitlink change from this branch (git submodule update --checkout <path>) and, if a bump is urgent, run: gh workflow run auto-bump-submodules.yml');
+  console.error(`Restore the base pin and commit: git checkout ${baseRef} -- <path> && git submodule update --checkout <path>`);
+  console.error('If a bump is urgent, dispatch the workflow instead: gh workflow run auto-bump-submodules.yml');
   console.error(`Apply the ${EXEMPTION_LABEL} label only when a manual pin change is intentional.`);
   process.exitCode = 1;
 }

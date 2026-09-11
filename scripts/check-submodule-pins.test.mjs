@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 import {
@@ -6,6 +10,8 @@ import {
   EXEMPT_HEAD_REFS,
   findMovedGitlinks,
   findOffendingGitlinks,
+  rawDiff,
+  rawDiffArgs,
 } from './check-submodule-pins.mjs';
 
 const movedIntentd = ':160000 160000 3d37461 1c3dfbc M\tpackages/intentd';
@@ -49,4 +55,45 @@ test('exempts the automation head branch', () => {
 
 test('exempts pull requests carrying the exemption label', () => {
   assert.deepEqual(findOffendingGitlinks(movedIntentd, 'feature/new-submodule', ['x', EXEMPTION_LABEL]), []);
+});
+
+test('diff arguments compare the merge base and never ignore submodules', () => {
+  assert.deepEqual(rawDiffArgs('origin/main'), [
+    'diff',
+    '--raw',
+    '--no-renames',
+    '--ignore-submodules=none',
+    'origin/main...HEAD',
+  ]);
+});
+
+test('detects a moved gitlink even when the branch sets ignore = all in .gitmodules', (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'check-submodule-pins-'));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  const git = (...args) =>
+    execFileSync('git', args, {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.invalid',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.invalid',
+      },
+    });
+  git('init', '-q', '-b', 'main');
+  git('update-index', '--add', '--cacheinfo', `160000,${'1'.repeat(40)},packages/foo`);
+  git('commit', '-q', '-m', 'base');
+  fs.writeFileSync(
+    path.join(repo, '.gitmodules'),
+    '[submodule "foo"]\n\tpath = packages/foo\n\turl = https://example.invalid/foo\n\tignore = all\n',
+  );
+  git('add', '.gitmodules');
+  git('update-index', '--add', '--cacheinfo', `160000,${'2'.repeat(40)},packages/foo`);
+  git('commit', '-q', '-m', 'bump');
+
+  const defaultDiff = git('diff', '--raw', '--no-renames', 'HEAD~1...HEAD');
+  assert.deepEqual(findMovedGitlinks(defaultDiff), [], 'fixture must reproduce the ignore = all bypass');
+  assert.deepEqual(findMovedGitlinks(rawDiff('HEAD~1', { cwd: repo })), ['packages/foo']);
 });
