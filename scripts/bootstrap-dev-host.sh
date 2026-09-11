@@ -139,7 +139,7 @@ gh_version() {
   command -v gh >/dev/null 2>&1 || return 1
   local line
   line=$(gh --version 2>/dev/null | head -n 1)
-  [[ "$line" =~ ^gh\ version\ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  [[ "$line" =~ ^gh\ version\ ([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?) ]] || return 1
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
@@ -157,9 +157,12 @@ version_ge() {
 }
 
 gh_ready() {
-  local version
+  local version base
   version=$(gh_version) || return 1
-  version_ge "$version" "$GH_MIN_VERSION"
+  base=${version%%-*}
+  version_ge "$base" "$GH_MIN_VERSION" || return 1
+  # A prerelease sorts below its stable release: 2.94.0-rc.1 is still short of 2.94.0.
+  [[ "$version" == "$base" || "$base" != "$GH_MIN_VERSION" ]]
 }
 
 installable_gap_exists() {
@@ -482,7 +485,11 @@ install_gh() {
         TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/gh-cli.repo.XXXXXX") || exit 1
         curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o "$TEMP_FILE" || exit 1
         as_root install -D -m 0644 "$TEMP_FILE" /etc/yum.repos.d/gh-cli.repo || exit 1
-        as_root dnf install -y gh --repo gh-cli || exit 1
+        if rpm -q gh >/dev/null 2>&1; then
+          as_root dnf update -y gh --repo gh-cli || exit 1
+        else
+          as_root dnf install -y gh --repo gh-cli || exit 1
+        fi
       else
         echo "ERROR: unsupported Linux package manager; install gh >= $GH_MIN_VERSION from $GH_INSTALL_URL and re-run" >&2
         exit 1

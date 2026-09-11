@@ -500,4 +500,28 @@ grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0), authenticated' "$
 ! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-ok.out" \
   || fail "gh 2.100.0 was reported as a missing gap"
 
+write_gh_stub 2.94.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-min.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.94\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-min.out" \
+  || fail "gh 2.94.0 (exact minimum) was not accepted as satisfying >= 2.94.0"
+
+write_gh_stub 2.94.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-rc.out" 2>&1
+set -e
+grep -q '^\[missing\]  GitHub CLI: gh 2\.94\.0-rc\.1 is below the required 2\.94\.0' "$temp_dir/bootstrap-check-gh-rc.out" \
+  || fail "prerelease gh 2.94.0-rc.1 was not reported as a missing gap below 2.94.0"
+
+write_gh_stub 2.95.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-next-rc.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-next-rc.out" \
+  || fail "prerelease gh 2.95.0-rc.1 of a newer release was not accepted as satisfying >= 2.94.0"
+
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
