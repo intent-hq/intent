@@ -288,6 +288,42 @@ assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
 s.close()
 PY
 
+# Regression: bash checks pending signal traps before the first command of the
+# EXIT trap string, so a second TERM that is already pending when the first
+# TERM's `exit` starts the EXIT trap used to longjmp out before cleanup ran,
+# leaving the state file and the frontend behind (pre-fix ~65% of iterations).
+# The signal traps now run cleanup themselves. Two back-to-back TERMs to the
+# script pid hit that window; the loop makes a regression practically certain.
+for iteration in $(seq 1 20); do
+  port=$(free_port)
+  PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
+    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+    bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
+  sandbox_pid=$!
+  wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
+  frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
+  [[ -n "$frontend_pid" ]] || fail "could not find signal-window frontend child (iteration $iteration)"
+  kill -TERM "$sandbox_pid"
+  kill -TERM "$sandbox_pid" 2>/dev/null || true
+  set +e
+  wait "$sandbox_pid"
+  status=$?
+  set -e
+  sandbox_pid=""
+  frontend_alive=0
+  kill -0 "$frontend_pid" 2>/dev/null && frontend_alive=1
+  kill -KILL "$frontend_pid" 2>/dev/null || true
+  if [[ -e "$state_dir/ui.json" || "$frontend_alive" -ne 0 ]]; then
+    echo "residual $state_dir/ui.json (iteration $iteration, script exit $status):" >&2
+    cat "$state_dir/ui.json" >&2 2>/dev/null || echo "(absent)" >&2
+    echo "signal-window sandbox output:" >&2
+    cat "$temp_dir/signal-window.out" >&2 || true
+    rm -f "$state_dir/ui.json"
+    fail "second TERM in the exit path skipped cleanup (iteration $iteration; frontend alive: $frontend_alive)"
+  fi
+  [[ "$status" -eq 143 ]] || fail "signal-window TERM returned $status instead of 143 (iteration $iteration)"
+done
+
 cat >"$temp_dir/supervised.mk" <<'MAKE'
 supervised-ui:
 	@exec bash "$(SCRIPT)" ui
@@ -319,7 +355,7 @@ dump_supervised_residue() {
   echo "processes in group $supervised_pgid:" >&2
   ps -eo pid,ppid,pgid,stat,command | awk -v pg="$supervised_pgid" 'NR == 1 || $3 == pg' >&2
   echo "supervised recipe output:" >&2
-  cat "$temp_dir/supervised.out" >&2
+  cat "$temp_dir/supervised.out" >&2 || true
 }
 for _ in {1..500}; do
   kill -0 "$state_pid" 2>/dev/null || break
