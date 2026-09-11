@@ -632,12 +632,16 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   is the `QueuedMessage.id` of the entry the row was drained from, stamped on EVERY
   queue-drained user row (all three drain arms — single, worker, batch — and
   `agent.sendQueuedMessageNow`) regardless of the wait threshold, and lifted onto the row's
-  user-row `agent:message` echo as `queuedMessageId?` (§6.5). The row's own `id` is always
-  freshly minted — never the entry id — so this stamp is the only link between the
-  persisted row and the entry still listed in `agent:queue:updated` until the shrunk
-  snapshot lands (§6.5 drain ordering contract): a client that mirrors the queue can match
-  `row.metadata.queueInfo.queuedMessageId == queueEntry.id` and drop its queued rendering
-  the moment the row arrives. Unlike the wait/batch stamps it is always (re)written to the
+  user-row `agent:message` echo as `queuedMessageId?` (§6.5). On the three queue-drain arms
+  the row's own `id` is freshly minted — never the entry id — so there this stamp is the
+  only link between the persisted row and the entry still listed in `agent:queue:updated`
+  until the shrunk snapshot lands (§6.5 drain ordering contract); on both
+  `agent.sendQueuedMessageNow` paths (runtime and store-only fallback) the row is persisted
+  UNDER the entry id, so `row.id`, `queueInfo.queuedMessageId`, and the result `messageId`
+  all coincide and the stamp is redundant-but-uniform. Either way a client that mirrors the
+  queue can match `row.metadata.queueInfo.queuedMessageId == queueEntry.id` and drop its
+  queued rendering the moment the row arrives, without special-casing the send-now path.
+  Unlike the wait/batch stamps it is always (re)written to the
   entry delivering now (a requeue re-drained under a fresh entry id re-links to that id);
   `persisted: true` requeues are never stamped and rows persisted by older daemons lack it.
   `queueInfo` is daemon-reserved: a caller-supplied `messageMetadata.queueInfo` that is
