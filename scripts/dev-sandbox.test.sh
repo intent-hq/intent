@@ -318,6 +318,8 @@ dump_supervised_residue() {
   cat "$state_dir/ui.json" >&2 2>/dev/null || echo "(absent)" >&2
   echo "processes in group $supervised_pgid:" >&2
   ps -eo pid,ppid,pgid,stat,command | awk -v pg="$supervised_pgid" 'NR == 1 || $3 == pg' >&2
+  echo "supervised recipe output:" >&2
+  cat "$temp_dir/supervised.out" >&2
 }
 for _ in {1..500}; do
   kill -0 "$state_pid" 2>/dev/null || break

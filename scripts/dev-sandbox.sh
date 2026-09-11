@@ -363,12 +363,23 @@ elif [[ "$mode" == stop ]]; then
 fi
 
 # Fork-free so it cannot fail under host load: write_state_file emits compact
-# JSON, so "pid":$$, is a stable own-pid token.
+# JSON, so "pid":$$, is a stable own-pid token. Every non-removal of an
+# existing file is reported so a leftover state file is never silent.
 remove_state_file() {
-  local state_line=""
+  local state_line="" pid_token=""
   [[ -e "$state_file" ]] || return 0
-  IFS= read -r state_line 2>/dev/null <"$state_file" || true
-  [[ "$state_line" == *"\"pid\":$$,"* ]] || return 0
+  if ! IFS= read -r state_line 2>/dev/null <"$state_file" && [[ -z "$state_line" ]]; then
+    echo "[dev-sandbox-$mode] WARNING: could not read sandbox state at $state_file; leaving it in place" >&2
+    return 0
+  fi
+  if [[ "$state_line" != *"\"pid\":$$,"* ]]; then
+    if [[ "$state_line" == *'"pid":'* ]]; then
+      pid_token=${state_line#*\"pid\":}
+      pid_token=${pid_token%%,*}
+    fi
+    echo "[dev-sandbox-$mode] WARNING: sandbox state at $state_file records pid ${pid_token:-(none)}, not this process ($$); leaving it in place" >&2
+    return 0
+  fi
   rm -f -- "$state_file" || echo "[dev-sandbox-$mode] WARNING: could not remove sandbox state at $state_file" >&2
 }
 
@@ -401,9 +412,19 @@ cleanup() {
   done
 }
 
+# bash checks pending signal traps before the first command of the EXIT trap
+# string, so a signal landing between a normal `exit` and cleanup starting
+# would skip cleanup entirely if the signal trap were a bare `exit`. The
+# signal traps therefore run cleanup themselves (idempotent via `cleaning`).
+on_signal() {
+  trap '' HUP INT TERM
+  cleanup
+  exit "$1"
+}
+
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' HUP TERM
+trap 'on_signal 130' INT
+trap 'on_signal 143' HUP TERM
 
 socket_accepts() {
   [[ -S "$socket_path" ]] || return 1
