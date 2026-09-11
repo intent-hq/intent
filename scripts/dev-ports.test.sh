@@ -78,6 +78,36 @@ if (cd "$temp_dir" && DEV_PORT="$busy_port" bash "$script" >"$temp_dir/explicit.
 fi
 grep -q 'explicit DEV_PORT=.* is busy' "$temp_dir/explicit.stderr" || fail "busy explicit port error was unclear"
 
+# Regression for intent-hq/intent#4619: a connection accepted and closed by a
+# now-gone listener leaves TIME_WAIT state on the port, which is not a listener.
+timewait_port=$(python3 - <<'PY'
+import socket
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", 0))
+server.listen()
+port = server.getsockname()[1]
+client = socket.create_connection(("127.0.0.1", port))
+accepted, _ = server.accept()
+accepted.close()
+client.close()
+server.close()
+print(port)
+PY
+)
+python3 - "$timewait_port" <<'PY' || fail "TIME_WAIT probe port unexpectedly accepts connections"
+import socket
+import sys
+s = socket.socket()
+s.settimeout(0.2)
+assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
+s.close()
+PY
+timewait_output=$(cd "$temp_dir" && DEV_PORT="$timewait_port" bash "$script" 2>"$temp_dir/timewait.stderr") \
+  || fail "a closed connection's TIME_WAIT state was reported as a busy port: $(cat "$temp_dir/timewait.stderr")"
+[[ "$(value_of "$timewait_output" DEV_PORT)" == "$timewait_port" ]] || fail "TIME_WAIT port was not kept as the explicit DEV_PORT"
+
 default_output=$(cd "$repo_root" && "$make_bin" -n)
 grep -q 'cargo build --workspace' <<<"$default_output" || fail "plain make no longer selects the build target"
 [[ $(head -n 1 <<<"$default_output") != 'set -- .dev/sandbox/'* ]] || fail "plain make still selects the ports target"

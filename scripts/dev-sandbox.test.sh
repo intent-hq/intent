@@ -161,6 +161,8 @@ if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$busy_port" \
 fi
 grep -q "explicit DEV_PORT=$busy_port is busy; explicit ports are never remapped" "$temp_dir/busy-port.out" \
   || fail "busy explicit port error was not actionable"
+grep -q "127.0.0.1:$busy_port is held by PID $listener_pid" "$temp_dir/busy-port.out" \
+  || fail "busy explicit port error did not name the owning PID"
 kill "$listener_pid"
 wait "$listener_pid" 2>/dev/null || true
 listener_pid=""
@@ -335,6 +337,83 @@ set -e
 sandbox_pid=""
 [[ "$status" -ne 0 ]] || fail "frontend child failure was not propagated"
 [[ ! -e "$state_dir/ui.json" ]] || fail "state file remained after frontend child failure"
+[[ -f "$state_dir/ui.port" ]] || fail "pinned port record was not written on readiness"
+grep -qx "DEV_PORT=$port" "$state_dir/ui.port" || fail "pinned port record did not hold the ready DEV_PORT"
+
+# Regression for intent-hq/intent#4619: a supervised restart with a derived
+# (Makefile-default) port comes back on the recorded port, even when the derived
+# block moved, so the existing tunnel URL stays valid.
+pinned_port=$port
+derived_port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/pinned-restart.out" || fail "pinned restart sandbox did not become ready"
+grep -q "Reusing recorded DEV_PORT=$pinned_port from $state_dir/ui.port" "$temp_dir/pinned-restart.out" \
+  || fail "pinned restart did not report the reused port"
+grep -q "^Sandbox ready: http://127.0.0.1:$pinned_port/" "$temp_dir/pinned-restart.out" \
+  || fail "pinned restart did not come back on the recorded port"
+python3 - "$state_dir/ui.json" "$pinned_port" <<'PY' || fail "pinned restart state did not record the reused port"
+import json
+import sys
+assert json.load(open(sys.argv[1], encoding="utf-8"))["devPort"] == int(sys.argv[2])
+PY
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+[[ -f "$state_dir/ui.port" ]] || fail "pinned port record did not survive a TERM exit"
+
+# A busy recorded port falls back to the derived port and names the holder.
+python3 - "$pinned_port" "$busy_ready.pinned" <<'PY' &
+import pathlib
+import socket
+import sys
+import time
+
+sock = socket.socket()
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", int(sys.argv[1])))
+sock.listen()
+pathlib.Path(sys.argv[2]).touch()
+time.sleep(30)
+PY
+listener_pid=$!
+for _ in {1..100}; do
+  [[ -e "$busy_ready.pinned" ]] && break
+  sleep 0.01
+done
+[[ -e "$busy_ready.pinned" ]] || fail "pinned-port listener did not start"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/pinned-busy.out" || fail "sandbox with a busy recorded port did not become ready"
+grep -q "recorded DEV_PORT=$pinned_port from $state_dir/ui.port is busy; starting on derived DEV_PORT=$derived_port" "$temp_dir/pinned-busy.out" \
+  || fail "busy recorded port fallback was not reported"
+grep -q "127.0.0.1:$pinned_port is held by PID $listener_pid" "$temp_dir/pinned-busy.out" \
+  || fail "busy recorded port did not name the owning PID"
+grep -q "^Sandbox ready: http://127.0.0.1:$derived_port/" "$temp_dir/pinned-busy.out" \
+  || fail "busy recorded port did not fall back to the derived port"
+grep -qx "DEV_PORT=$derived_port" "$state_dir/ui.port" || fail "pinned port record was not re-pointed at the fallback port"
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+kill "$listener_pid"
+wait "$listener_pid" 2>/dev/null || true
+listener_pid=""
+
+# An explicit port always wins over the recorded one.
+explicit_port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$explicit_port" DEV_PORT_ORIGIN="command line" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/explicit-restart.out" || fail "explicit-port sandbox did not become ready"
+grep -q "^Sandbox ready: http://127.0.0.1:$explicit_port/" "$temp_dir/explicit-restart.out" \
+  || fail "explicit DEV_PORT was overridden by the recorded port"
+! grep -q 'Reusing recorded DEV_PORT' "$temp_dir/explicit-restart.out" || fail "explicit DEV_PORT reported a recorded-port reuse"
+MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >/dev/null
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+[[ ! -e "$state_dir/ui.port" ]] || fail "sandbox-stop did not forget the pinned port record"
 
 if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
   SANDBOX_STATE_DIR="$state_dir" INTENTD_SOCKET="$temp_dir/missing.sock" bash "$script" app >"$temp_dir/app.out" 2>&1; then

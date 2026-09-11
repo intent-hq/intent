@@ -11,14 +11,27 @@ canonical_path=$(pwd -P)
 path_hash=$(printf '%s' "$canonical_path" | cksum | awk '{print $1}')
 preferred_block=$((path_hash % BLOCK_COUNT))
 
+# Busy means a live listener: something accepts on loopback, or a SO_REUSEADDR
+# bind fails (EADDRINUSE from a LISTEN socket). Recently closed connections in
+# TIME_WAIT/CLOSE_WAIT do not block a SO_REUSEADDR bind, so they read as free —
+# the same answer the FE dev server (which also sets SO_REUSEADDR) would get.
 port_is_free() {
   python3 - "$1" <<'PY'
 import socket
 import sys
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+port = int(sys.argv[1])
+probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+probe.settimeout(0.25)
 try:
-    sock.bind(("127.0.0.1", int(sys.argv[1])))
+    if probe.connect_ex(("127.0.0.1", port)) == 0:
+        raise SystemExit(1)
+finally:
+    probe.close()
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind(("127.0.0.1", port))
 except OSError:
     raise SystemExit(1)
 finally:

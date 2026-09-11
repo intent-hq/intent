@@ -99,6 +99,14 @@ sandbox of each mode; starting a second same-mode sandbox overwrites that mode's
 Run `make sandbox-status` first and coordinate with the recorded owner, or use a separate
 worktree.
 
+Readiness also records `.dev/sandbox/<mode>.port` (`DEV_PORT=` and `DEV_TCP_PORT=` lines).
+Unlike the state file, it survives every exit, so a supervised restart that starts with the
+Makefile-derived ports reuses the recorded port when it is free and the tunnel URL stays
+valid; an explicit `DEV_PORT=` override always wins, and `make sandbox-stop` forgets the
+record. The port probe sets `SO_REUSEADDR` and treats only a live listener as busy —
+`TIME_WAIT`/`CLOSE_WAIT` leftovers from a just-stopped sandbox are free — and a busy
+explicit port is reported with the owning PID when it is visible.
+
 `make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
 nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
 removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
