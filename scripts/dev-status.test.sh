@@ -72,7 +72,9 @@ assert {"DEV_PORT", "DEV_TCP_PORT", "BRIDGE_PORT", "CDP_PORT"} <= set(report["po
 assert report["sandboxes"] == []
 assert set(report["repos"]) == {"intentd", "cloudlands-fe"}
 for repo in report["repos"].values():
-    assert {"branch", "dirty", "ahead", "behind"} <= set(repo)
+    assert {"branch", "dirty", "ahead", "behind", "pin", "gitlinkDirty"} <= set(repo)
+    assert repo["pin"] is None or isinstance(repo["pin"], str)
+    assert isinstance(repo["gitlinkDirty"], bool)
     assert "pr" not in repo
 assert report["docs"]["remoteHost"] == "AGENTS.md#developing-on-a-remote-host"
 PY

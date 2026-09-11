@@ -133,8 +133,9 @@ socket and HTTP readiness probes.
 
 `STATUS_JSON=1 make status` consumes these files and health responses into
 `{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
-ahead/behind state, and optional PR/check summaries when GitHub authentication is
-available. The report is read-only, including stale sandbox state.
+ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
+submodule HEAD has moved off it, and optional PR/check summaries when GitHub
+authentication is available. The report is read-only, including stale sandbox state.
 
 ## Fast UI Preview Workflow
 
