@@ -4,6 +4,10 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/shipped-in.sh"
+# The interpreter that runs the script under test defaults to the one running
+# this suite; the Bash 3.2 compatibility pass at the end re-executes the suite
+# with it set to a real Bash 3.
+script_bash=${SHIPPED_IN_TEST_BASH:-$BASH}
 temp_dir=$(mktemp -d)
 bin_dir="$temp_dir/bin"
 stub_dir="$temp_dir/stub"
@@ -64,7 +68,7 @@ reset_stub() {
 run_script() {
   set +e
   PATH="$bin_dir" GH_STUB_DIR="$stub_dir" GH_TEST_LOG="$temp_dir/gh.log" \
-    bash "$script" "$@" >"$temp_dir/stdout" 2>"$temp_dir/stderr"
+    "$script_bash" "$script" "$@" >"$temp_dir/stdout" 2>"$temp_dir/stderr"
   status=$?
   set -e
   stdout=$(<"$temp_dir/stdout")
@@ -180,4 +184,38 @@ run_script cloudlands-fe "$sha" --limit 0
 [[ "$status" -eq 2 ]] || fail "--limit 0 exited $status (expected 2)"
 ! grep -q '^release list' "$temp_dir/gh.log" || fail "usage errors reached gh"
 
-echo "shipped-in tests passed"
+echo "shipped-in tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
+[[ -z "${SHIPPED_IN_TEST_BASH:-}" ]] || exit 0
+
+# Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
+# accepts Bash 4+ builtins and expansions, so reject them by pattern too,
+# then rerun the fixtures under a real Bash 3 when one can be found:
+# BASH3_BIN, a bash3 on PATH, Homebrew bash@3, or a 3.x /bin/bash.
+bash -n "$script" || fail "shipped-in.sh does not parse"
+bash -n "${BASH_SOURCE[0]}" || fail "shipped-in.test.sh does not parse"
+bash4_constructs='(declare|local|typeset) +-[A-Za-z]*[An]|mapfile|readarray|\$\{[A-Za-z_][A-Za-z_0-9]*(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&|coproc'
+gate_hits=$(grep -nE "$bash4_constructs" "$script" "${BASH_SOURCE[0]}" | grep -v -F 'bash4_constructs' || true)
+[[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
+
+find_bash3() {
+  local candidate resolved brew_prefix
+  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
+  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
+    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
+    [[ -n "$candidate" ]] || continue
+    resolved=$(command -v "$candidate" 2>/dev/null) || continue
+    [[ -x "$resolved" ]] || continue
+    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
+    printf '%s\n' "$resolved"
+    return 0
+  done
+  return 1
+}
+
+if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
+  : # the fixtures above already ran under Bash 3
+elif bash3=$(find_bash3); then
+  SHIPPED_IN_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
+else
+  echo "shipped-in tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+fi
