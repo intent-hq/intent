@@ -140,6 +140,17 @@ SWEEP_DAYS ?= 3
 TEST_THREADS ?= -2
 BUILD_JOBS ?= -2
 
+# Progress rendering for the Rust gate targets. Agents run these as saved
+# command-mode ws.script entries, which are PTY-backed, so nextest and cargo
+# see an interactive stderr and redraw their progress bars into the captured
+# buffer (one full-suite run produced ~530 KB of cursor-control sequences
+# and overflowed an agent's context). Default to line-oriented output; a
+# human at a terminal can restore the bars with
+# `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
+# CI already sets CI=true, under which both tools are non-interactive anyway.
+gate test test-intentd coverage-e2e coverage-all: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy build-intentd test test-intentd coverage-e2e coverage-all: export CARGO_TERM_PROGRESS_WHEN ?= never
+
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
 RESUME ?= 0
@@ -328,7 +339,9 @@ test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORC
 # none, so nothing is lost.
 # Capped to $(TEST_THREADS) test threads / $(BUILD_JOBS) build jobs (CPUs-2
 # by default) so a local run leaves CPU headroom; override for full speed,
-# e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`.
+# e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`. Progress bars
+# are off by default (see NEXTEST_SHOW_PROGRESS / CARGO_TERM_PROGRESS_WHEN
+# above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 test-intentd: ensure-intentd-submodule
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
