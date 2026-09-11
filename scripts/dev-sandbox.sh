@@ -115,8 +115,11 @@ if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
   [[ "$dev_tcp_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_TCP_PORT must be numeric." >&2; exit 2; }
   [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
   [[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+  derived_dev_port=$dev_port
   if [[ "$dev_port_explicit" -eq 0 ]] && pinned_port=$(pinned_value DEV_PORT) && [[ "$pinned_port" != "$dev_port" ]]; then
-    if port_is_free "$pinned_port"; then
+    if [[ "$pinned_port" == "$dev_tcp_port" && "$dev_tcp_port_explicit" -eq 1 ]]; then
+      echo "[dev-sandbox-$mode] WARNING: recorded DEV_PORT=$pinned_port from $pin_file collides with explicit DEV_TCP_PORT=$dev_tcp_port; starting on derived DEV_PORT=$dev_port instead." >&2
+    elif port_is_free "$pinned_port"; then
       echo "[dev-sandbox-$mode] Reusing recorded DEV_PORT=$pinned_port from $pin_file (derived DEV_PORT=$dev_port not used); run 'make sandbox-stop MODE=$mode' to forget it."
       dev_port=$pinned_port
     else
@@ -129,6 +132,10 @@ if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
     if [[ "$mode" != stack || ${SANDBOX_TCP:-0} != 1 ]] || port_is_free "$pinned_tcp_port"; then
       dev_tcp_port=$pinned_tcp_port
     fi
+  fi
+  if [[ "$dev_port" != "$derived_dev_port" && "$dev_port" == "$dev_tcp_port" ]]; then
+    echo "[dev-sandbox-$mode] WARNING: recorded DEV_PORT=$dev_port from $pin_file collides with DEV_TCP_PORT=$dev_tcp_port; starting on derived DEV_PORT=$derived_dev_port instead." >&2
+    dev_port=$derived_dev_port
   fi
   export DEV_PORT="$dev_port" DEV_TCP_PORT="$dev_tcp_port"
   if [[ "$dev_port_explicit" -eq 1 ]] && ! port_is_free "$dev_port"; then

@@ -401,6 +401,23 @@ kill "$listener_pid"
 wait "$listener_pid" 2>/dev/null || true
 listener_pid=""
 
+# A recorded DEV_PORT that equals an explicit DEV_TCP_PORT is never reused: the
+# resolved pair must stay unique. The record now points at $derived_port.
+collide_port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$collide_port" DEV_PORT_ORIGIN=file \
+  DEV_TCP_PORT="$derived_port" DEV_TCP_PORT_ORIGIN="command line" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/pinned-collide.out" || fail "sandbox with a colliding recorded port did not become ready"
+grep -q "recorded DEV_PORT=$derived_port from $state_dir/ui.port collides with explicit DEV_TCP_PORT=$derived_port; starting on derived DEV_PORT=$collide_port" "$temp_dir/pinned-collide.out" \
+  || fail "colliding recorded port was not reported"
+! grep -q 'Reusing recorded DEV_PORT' "$temp_dir/pinned-collide.out" || fail "recorded DEV_PORT was reused despite colliding with DEV_TCP_PORT"
+grep -q "^Sandbox ready: http://127.0.0.1:$collide_port/" "$temp_dir/pinned-collide.out" \
+  || fail "colliding recorded port was not replaced by the derived port"
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
 # An explicit port always wins over the recorded one.
 explicit_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$explicit_port" DEV_PORT_ORIGIN="command line" \
