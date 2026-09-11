@@ -27,6 +27,13 @@ INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
 
+# FE dependency freshness guard shared by every target that needs an installed
+# frontend tree. pnpm writes the lockfile it installed from to
+# node_modules/.pnpm/lock.yaml, so the tree is stale when that copy is missing
+# or no longer byte-identical to pnpm-lock.yaml. Use as `$(FE_DEPS_FRESH) || (...)`.
+FE_DEPS_FRESH = [ -f $(FE_DIR)/node_modules/.pnpm/lock.yaml ] && cmp -s $(FE_DIR)/pnpm-lock.yaml $(FE_DIR)/node_modules/.pnpm/lock.yaml
+FE_DEPS_INSTALL_MSG = installing/refreshing FE deps (lockfile changed or node_modules missing)
+
 # cargo install may place subcommands outside PATH when cargo itself comes from
 # a distro package. Make every recipe discover the effective install bin dir.
 CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
@@ -456,7 +463,7 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@$(MAKE) release-daemon
 
 dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
 		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
 		exit 1; \
@@ -469,18 +476,18 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
 
 dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-ui] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
 
 dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-app] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
 
 dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev-sandbox-stack] installing FE deps (corepack pnpm install)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
 		SANDBOX_TCP="$(SANDBOX_TCP)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" BUILD_JOBS="$(BUILD_JOBS)" \
@@ -524,10 +531,10 @@ dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS soc
 	@INTENTD_SOCKET="$(DEV_DATA_DIR)/intentd.sock" $(MAKE) fe-launch
 
 # Internal FE-launch helper shared by dev-fe and dev-prod (not listed in
-# `make help`): pnpm-install-if-missing guard + `pnpm run dev`, inheriting the
+# `make help`): FE_DEPS_FRESH install guard + `pnpm run dev`, inheriting the
 # caller's INTENTD_SOCKET and resolving DEV_PORT only when the launcher runs.
 fe-launch: ensure-fe-submodule
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[fe-launch] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[fe-launch] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" pnpm run dev
 
 run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
@@ -549,7 +556,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 	# (intentd-spawn-policy.ts) — so only the daemon connection changes; the
 	# dev FE keeps its own DEV_PORT-namespaced userData dir.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe-local] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[run-fe-local] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@sock="$$INTENTD_SOCKET"; \
 	is_windows=0; \
 	case "$$(uname -s)" in \
@@ -619,7 +626,7 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# staging helper (or a future copy-sidecar dep) expects an installed tree —
 	# and so `dist-mac` (which depends on this target) does not install after
 	# the sidecar step.
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[build-sidecar] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
@@ -676,7 +683,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#   INTENTD_LEGACY_IMPORT_ROOTS="" — disables the legacy import hook: the dev
 	#     seat starts with a fresh $(DEV_DATA_DIR) DB, so the sidecar's first boot
 	#     would otherwise scan the shared ~/intent/workspaces root.
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
