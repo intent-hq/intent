@@ -13,10 +13,13 @@ esac
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 state_dir=${SANDBOX_STATE_DIR:-"$repo_root/.dev/sandbox"}
 fe_dir=${FE_DIR:-"$repo_root/packages/cloudlands-fe"}
+# The Makefile always passes DEV_PORT/DEV_TCP_PORT and reports where each came
+# from via $(origin): "file" means the worktree-derived default, anything else
+# (environment, command line) is an explicit pin that is never remapped.
 dev_port_explicit=0
 dev_tcp_port_explicit=0
-[[ ${DEV_PORT+x} == x ]] && dev_port_explicit=1
-[[ ${DEV_TCP_PORT+x} == x ]] && dev_tcp_port_explicit=1
+[[ ${DEV_PORT+x} == x && ${DEV_PORT_ORIGIN:-} != file ]] && dev_port_explicit=1
+[[ ${DEV_TCP_PORT+x} == x && ${DEV_TCP_PORT_ORIGIN:-} != file ]] && dev_tcp_port_explicit=1
 dev_port=${DEV_PORT:-5190}
 dev_tcp_port=${DEV_TCP_PORT:-5181}
 ready_timeout=${SANDBOX_READY_TIMEOUT:-60}
@@ -33,20 +36,34 @@ daemon_pid=""
 cleaning=0
 child_exit_status=0
 state_file="$state_dir/$mode.json"
+# The pin record outlives the state file (which is removed on every exit) so a
+# supervised restart of this mode comes back on the port its tunnel URL uses.
+pin_file="$state_dir/$mode.port"
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 warm_ok=true
 warm_ms=0
 intentd_source=installed
 [[ "$mode" == ui ]] && intentd_source=none
 
+# Mirrors scripts/dev-ports.sh: busy means a live listener (loopback connect
+# accepted, or a SO_REUSEADDR bind fails); TIME_WAIT/CLOSE_WAIT leftovers are free.
 port_is_free() {
   python3 - "$1" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+port = int(sys.argv[1])
+probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+probe.settimeout(0.25)
 try:
-    sock.bind(("127.0.0.1", int(sys.argv[1])))
+    if probe.connect_ex(("127.0.0.1", port)) == 0:
+        raise SystemExit(1)
+finally:
+    probe.close()
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind(("127.0.0.1", port))
 except OSError:
     raise SystemExit(1)
 finally:
@@ -54,17 +71,81 @@ finally:
 PY
 }
 
+port_owner() {
+  local port=$1 pid="" comm=""
+  if command -v ss >/dev/null 2>&1; then
+    pid=$(ss -Hltnp "sport = :$port" 2>/dev/null | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | head -n 1)
+  fi
+  if [[ -z "$pid" ]] && command -v lsof >/dev/null 2>&1; then
+    pid=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | head -n 1)
+  fi
+  [[ -n "$pid" ]] || return 1
+  comm=$(ps -o comm= -p "$pid" 2>/dev/null | tr -d ' ')
+  printf 'PID %s%s' "$pid" "${comm:+ ($comm)}"
+}
+
+describe_busy_port() {
+  local port=$1 owner
+  if owner=$(port_owner "$port"); then
+    echo "[dev-ports] 127.0.0.1:$port is held by $owner; stop it or choose another port." >&2
+  else
+    echo "[dev-ports] No listening PID is visible for 127.0.0.1:$port (another user's process, or connections still draining); retry shortly or choose another port." >&2
+  fi
+}
+
+pinned_value() {
+  local key=$1 line
+  [[ -f "$pin_file" ]] || return 1
+  while IFS= read -r line; do
+    if [[ "$line" == "$key="* && "${line#*=}" =~ ^[0-9]+$ ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <"$pin_file"
+  return 1
+}
+
+write_pin_file() {
+  local temp_file="$pin_file.tmp.$$"
+  printf 'DEV_PORT=%s\nDEV_TCP_PORT=%s\n' "$dev_port" "$dev_tcp_port" >"$temp_file" && mv -f "$temp_file" "$pin_file"
+}
+
 if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
   [[ "$dev_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_PORT must be numeric." >&2; exit 2; }
   [[ "$dev_tcp_port" =~ ^[0-9]+$ ]] || { echo "[dev-sandbox-$mode] ERROR: DEV_TCP_PORT must be numeric." >&2; exit 2; }
   [[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_READY_TIMEOUT must be a positive integer." >&2; exit 2; }
   [[ "$warm_timeout" =~ ^[1-9][0-9]*$ ]] || { echo "[dev-sandbox-$mode] ERROR: SANDBOX_WARM_TIMEOUT must be a positive integer." >&2; exit 2; }
+  derived_dev_port=$dev_port
+  if [[ "$dev_port_explicit" -eq 0 ]] && pinned_port=$(pinned_value DEV_PORT) && [[ "$pinned_port" != "$dev_port" ]]; then
+    if [[ "$pinned_port" == "$dev_tcp_port" && "$dev_tcp_port_explicit" -eq 1 ]]; then
+      echo "[dev-sandbox-$mode] WARNING: recorded DEV_PORT=$pinned_port from $pin_file collides with explicit DEV_TCP_PORT=$dev_tcp_port; starting on derived DEV_PORT=$dev_port instead." >&2
+    elif port_is_free "$pinned_port"; then
+      echo "[dev-sandbox-$mode] Reusing recorded DEV_PORT=$pinned_port from $pin_file (derived DEV_PORT=$dev_port not used); run 'make sandbox-stop MODE=$mode' to forget it."
+      dev_port=$pinned_port
+    else
+      echo "[dev-sandbox-$mode] WARNING: recorded DEV_PORT=$pinned_port from $pin_file is busy; starting on derived DEV_PORT=$dev_port instead." >&2
+      describe_busy_port "$pinned_port"
+    fi
+  fi
+  if [[ "$dev_tcp_port_explicit" -eq 0 ]] && pinned_tcp_port=$(pinned_value DEV_TCP_PORT) \
+    && [[ "$pinned_tcp_port" != "$dev_tcp_port" && "$pinned_tcp_port" != "$dev_port" ]]; then
+    if [[ "$mode" != stack || ${SANDBOX_TCP:-0} != 1 ]] || port_is_free "$pinned_tcp_port"; then
+      dev_tcp_port=$pinned_tcp_port
+    fi
+  fi
+  if [[ "$dev_port" != "$derived_dev_port" && "$dev_port" == "$dev_tcp_port" ]]; then
+    echo "[dev-sandbox-$mode] WARNING: recorded DEV_PORT=$dev_port from $pin_file collides with DEV_TCP_PORT=$dev_tcp_port; starting on derived DEV_PORT=$derived_dev_port instead." >&2
+    dev_port=$derived_dev_port
+  fi
+  export DEV_PORT="$dev_port" DEV_TCP_PORT="$dev_tcp_port"
   if [[ "$dev_port_explicit" -eq 1 ]] && ! port_is_free "$dev_port"; then
     echo "[dev-ports] ERROR: explicit DEV_PORT=$dev_port is busy; explicit ports are never remapped." >&2
+    describe_busy_port "$dev_port"
     exit 1
   fi
   if [[ "$mode" == stack && ${SANDBOX_TCP:-0} == 1 && "$dev_tcp_port_explicit" -eq 1 ]] && ! port_is_free "$dev_tcp_port"; then
     echo "[dev-ports] ERROR: explicit DEV_TCP_PORT=$dev_tcp_port is busy; explicit ports are never remapped." >&2
+    describe_busy_port "$dev_tcp_port"
     exit 1
   fi
 fi
@@ -216,9 +297,11 @@ stop_sandboxes() {
   mkdir -p "$state_dir"
   if [[ -n "$requested_mode" ]]; then
     [[ -e "$state_dir/$requested_mode.json" ]] && paths+=("$state_dir/$requested_mode.json")
+    rm -f "$state_dir/$requested_mode.port"
   else
     shopt -s nullglob
     paths=("$state_dir"/*.json)
+    for path in "$state_dir"/*.port; do rm -f "$path"; done
     shopt -u nullglob
   fi
   if [[ ${#paths[@]} -eq 0 ]]; then
@@ -571,6 +654,7 @@ if ! write_state_file "$ready_at"; then
   echo "[dev-sandbox-$mode] ERROR: could not write sandbox state at $state_file" >&2
   exit 1
 fi
+write_pin_file || echo "[dev-sandbox-$mode] WARNING: could not record the pinned port at $pin_file" >&2
 echo "Sandbox ready: http://127.0.0.1:${dev_port}/  (open as http://daemon.localhost:${dev_port}/ from the client)"
 
 if [[ -z "$daemon_pid" ]]; then
