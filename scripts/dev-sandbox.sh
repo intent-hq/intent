@@ -362,9 +362,10 @@ elif [[ "$mode" == stop ]]; then
   exit $?
 fi
 
-# Fork-free so it cannot fail under host load: write_state_file emits compact
-# JSON, so "pid":$$, is a stable own-pid token. Every non-removal of an
-# existing file is reported so a leftover state file is never silent.
+# The own-pid ownership check uses only bash builtins (no python helper), so a
+# missing or failed helper can no longer leave the state in place; write_state_file
+# emits compact JSON, so "pid":$$, is a stable own-pid token. rm remains external,
+# and every non-removal of an existing file is reported so it is never silent.
 remove_state_file() {
   local state_line="" pid_token=""
   [[ -e "$state_file" ]] || return 0
