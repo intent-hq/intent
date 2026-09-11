@@ -195,7 +195,7 @@ echo "shipped-in tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSIO
 # Bash 3 fixture run is the authoritative check.
 bash -n "$script" || fail "shipped-in.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "shipped-in.test.sh does not parse"
-bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An]([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
+bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
 # Full-line comments, the pattern itself and the gate_sample table below are
 # not scanned.
 gate_matches() {
@@ -213,8 +213,13 @@ gate_sample() {
 gate_sample hit 'declare -A m=()'
 gate_sample hit 'local -gA x'
 gate_sample hit 'declare -r -A cache=()'
+gate_sample hit 'declare -Ar cache=()'
+gate_sample hit 'declare -Ax cache=()'
+gate_sample hit 'declare -r -Ax cache=()'
 gate_sample hit $'declare\t-A m'
 gate_sample hit 'typeset -n ref=x'
+gate_sample hit 'local -nr ref=x'
+gate_sample hit 'typeset -Anr ref=x'
 gate_sample hit 'mapfile -t a'
 gate_sample hit 'readarray a <f'
 gate_sample hit 'coproc x'
