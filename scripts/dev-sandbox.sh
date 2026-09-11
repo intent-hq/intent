@@ -362,25 +362,21 @@ elif [[ "$mode" == stop ]]; then
   exit $?
 fi
 
+# Fork-free so it cannot fail under host load: write_state_file emits compact
+# JSON, so "pid":$$, is a stable own-pid token.
 remove_state_file() {
-  python3 - "$state_file" "$$" <<'PY'
-import json
-import os
-import sys
-
-path, expected_pid = sys.argv[1], int(sys.argv[2])
-try:
-    with open(path, encoding="utf-8") as handle:
-        state = json.load(handle)
-    if int(state.get("pid", -1)) == expected_pid:
-        os.unlink(path)
-except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
-    pass
-PY
+  local state_line=""
+  [[ -e "$state_file" ]] || return 0
+  IFS= read -r state_line 2>/dev/null <"$state_file" || true
+  [[ "$state_line" == *"\"pid\":$$,"* ]] || return 0
+  rm -f -- "$state_file" || echo "[dev-sandbox-$mode] WARNING: could not remove sandbox state at $state_file" >&2
 }
 
 cleanup() {
   local pid
+  # bash runs pending signal traps between commands even inside the EXIT trap,
+  # so a repeated HUP/INT/TERM would otherwise longjmp out mid-cleanup.
+  trap '' HUP INT TERM
   [[ "$cleaning" -eq 0 ]] || return
   cleaning=1
   remove_state_file

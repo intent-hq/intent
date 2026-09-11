@@ -89,7 +89,10 @@ exec python3 - "$DEV_PORT" <<'PY'
 import http.server
 import json
 import os
+import signal
 import sys
+if os.environ.get("FE_IGNORE_TERM") == "1":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
@@ -234,6 +237,49 @@ if SANDBOX_STATE_DIR="$state_dir" bash "$script" status >"$temp_dir/stopped-stat
   fail "sandbox status succeeded after stop"
 fi
 python3 - "$port" <<'PY' || fail "UI listener remained after sandbox-stop"
+import socket
+import sys
+s = socket.socket()
+s.settimeout(0.2)
+assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
+s.close()
+PY
+
+# Regression: a second TERM landing while cleanup waits on a TERM-ignoring
+# frontend must not abort cleanup; the KILL escalation still has to run. The
+# state file disappearing proves cleanup has started, and the frontend holds
+# it in its 50x0.1s wait loop, so 0.2s later the second TERM lands mid-loop.
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
+frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
+[[ -n "$frontend_pid" ]] || fail "could not find double-TERM frontend child"
+kill -TERM "$sandbox_pid"
+for _ in {1..100}; do
+  [[ ! -e "$state_dir/ui.json" ]] && break
+  sleep 0.02
+done
+if [[ -e "$state_dir/ui.json" ]]; then
+  kill -KILL "$frontend_pid" 2>/dev/null || true
+  fail "double-TERM cleanup did not remove the state file within 2s"
+fi
+sleep 0.2
+kill -TERM "$sandbox_pid"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+frontend_alive=0
+kill -0 "$frontend_pid" 2>/dev/null && frontend_alive=1
+kill -KILL "$frontend_pid" 2>/dev/null || true
+[[ "$status" -eq 143 ]] || fail "double TERM returned $status instead of 143"
+[[ "$frontend_alive" -eq 0 ]] || fail "second TERM during cleanup aborted the KILL escalation; frontend $frontend_pid survived"
+[[ ! -e "$state_dir/ui.json" ]] || fail "UI state file remained after double TERM"
+python3 - "$port" <<'PY' || fail "double-TERM listener remained after the sandbox exited"
 import socket
 import sys
 s = socket.socket()
