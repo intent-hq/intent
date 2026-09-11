@@ -362,24 +362,32 @@ elif [[ "$mode" == stop ]]; then
   exit $?
 fi
 
+# The own-pid ownership check uses only bash builtins (no python helper), so a
+# missing or failed helper can no longer leave the state in place; write_state_file
+# emits compact JSON, so "pid":$$, is a stable own-pid token. rm remains external,
+# and every non-removal of an existing file is reported so it is never silent.
 remove_state_file() {
-  python3 - "$state_file" "$$" <<'PY'
-import json
-import os
-import sys
-
-path, expected_pid = sys.argv[1], int(sys.argv[2])
-try:
-    with open(path, encoding="utf-8") as handle:
-        state = json.load(handle)
-    if int(state.get("pid", -1)) == expected_pid:
-        os.unlink(path)
-except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError):
-    pass
-PY
+  local state_line="" pid_token=""
+  [[ -e "$state_file" ]] || return 0
+  if ! IFS= read -r state_line 2>/dev/null <"$state_file" && [[ -z "$state_line" ]]; then
+    echo "[dev-sandbox-$mode] WARNING: could not read sandbox state at $state_file; leaving it in place" >&2
+    return 0
+  fi
+  if [[ "$state_line" != *"\"pid\":$$,"* ]]; then
+    if [[ "$state_line" == *'"pid":'* ]]; then
+      pid_token=${state_line#*\"pid\":}
+      pid_token=${pid_token%%,*}
+    fi
+    echo "[dev-sandbox-$mode] WARNING: sandbox state at $state_file records pid ${pid_token:-(none)}, not this process ($$); leaving it in place" >&2
+    return 0
+  fi
+  rm -f -- "$state_file" || echo "[dev-sandbox-$mode] WARNING: could not remove sandbox state at $state_file" >&2
 }
 
 cleanup() {
+  # bash runs pending signal traps between commands even inside the EXIT trap,
+  # so a repeated HUP/INT/TERM would otherwise longjmp out mid-cleanup.
+  trap '' HUP INT TERM
   local pid
   [[ "$cleaning" -eq 0 ]] || return
   cleaning=1
@@ -405,9 +413,19 @@ cleanup() {
   done
 }
 
+# bash checks pending signal traps before the first command of the EXIT trap
+# string, so a signal landing between a normal `exit` and cleanup starting
+# would skip cleanup entirely if the signal trap were a bare `exit`. The
+# signal traps therefore run cleanup themselves (idempotent via `cleaning`).
+on_signal() {
+  trap '' HUP INT TERM
+  cleanup
+  exit "$1"
+}
+
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' HUP TERM
+trap 'on_signal 130' INT
+trap 'on_signal 143' HUP TERM
 
 socket_accepts() {
   [[ -S "$socket_path" ]] || return 1
