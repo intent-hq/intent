@@ -12,6 +12,11 @@ CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
 PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_HOME PATH
 
+# Minimum GitHub CLI: `gh issue create --type` and a `gh pr edit` that survives
+# the projectCards API deprecation both need this release or newer.
+GH_MIN_VERSION="2.94.0"
+GH_INSTALL_URL="https://github.com/cli/cli#installation"
+
 MODE=install
 ASSUME_YES=${BOOTSTRAP_YES:-0}
 FAILURES=0
@@ -130,6 +135,33 @@ openssl_dev_ready() {
   command -v pkg-config >/dev/null 2>&1 && pkg-config --exists openssl
 }
 
+gh_version() {
+  command -v gh >/dev/null 2>&1 || return 1
+  local line
+  line=$(gh --version 2>/dev/null | head -n 1)
+  [[ "$line" =~ ^gh\ version\ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+version_ge() {
+  local IFS=.
+  local -a have want
+  read -r -a have <<<"$1"
+  read -r -a want <<<"$2"
+  local i
+  for i in 0 1 2; do
+    if (( 10#${have[i]:-0} > 10#${want[i]:-0} )); then return 0; fi
+    if (( 10#${have[i]:-0} < 10#${want[i]:-0} )); then return 1; fi
+  done
+  return 0
+}
+
+gh_ready() {
+  local version
+  version=$(gh_version) || return 1
+  version_ge "$version" "$GH_MIN_VERSION"
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -144,6 +176,7 @@ installable_gap_exists() {
   command -v corepack >/dev/null 2>&1 || return 0
   pnpm_ready || return 0
   [[ -d "$FE_DIR/node_modules" ]] || return 0
+  gh_ready || return 0
   return 1
 }
 
@@ -235,14 +268,20 @@ check_all() {
     missing "frontend dependencies: run corepack pnpm install --frozen-lockfile"
   fi
 
-  if command -v gh >/dev/null 2>&1; then
-    if gh auth status >/dev/null 2>&1; then
-      ok "GitHub CLI: present and authenticated"
-    else
-      optional "GitHub CLI: present but not authenticated; PR reporting is disabled until gh auth login"
-    fi
+  local gh_found
+  if ! command -v gh >/dev/null 2>&1; then
+    missing "GitHub CLI: gh >= $GH_MIN_VERSION is required (gh pr edit, gh issue create --type); run make bootstrap-dev-host"
+  elif ! gh_ready; then
+    gh_found=$(gh_version || echo unknown)
+    missing "GitHub CLI: gh $gh_found is below the required $GH_MIN_VERSION; run make bootstrap-dev-host (apt via https://cli.github.com/packages, dnf via gh-cli repo, or brew upgrade gh)"
   else
-    optional "GitHub CLI: not installed (PR reporting only; bootstrap does not install it)"
+    gh_found=$(gh_version)
+    if gh auth status >/dev/null 2>&1; then
+      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION), authenticated"
+    else
+      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
+      optional "GitHub CLI: not authenticated; PR reporting is disabled until gh auth login"
+    fi
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -413,6 +452,50 @@ install_node() {
   esac
 }
 
+install_gh() {
+  if gh_ready; then
+    echo "[skip] GitHub CLI $(gh_version) satisfies >= $GH_MIN_VERSION"
+    return
+  fi
+
+  echo "[install] GitHub CLI >= $GH_MIN_VERSION"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install the GitHub CLI on macOS; see $GH_INSTALL_URL" >&2; exit 1; }
+      if command -v gh >/dev/null 2>&1; then
+        brew upgrade gh || exit 1
+      else
+        brew install gh || exit 1
+      fi
+      ;;
+    Linux)
+      command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install the GitHub CLI" >&2; exit 1; }
+      if command -v apt-get >/dev/null 2>&1; then
+        TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/githubcli-archive-keyring.XXXXXX") || exit 1
+        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o "$TEMP_FILE" || exit 1
+        as_root install -D -m 0644 "$TEMP_FILE" /usr/share/keyrings/githubcli-archive-keyring.gpg || exit 1
+        printf 'deb [arch=%s signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main\n' \
+          "$(dpkg --print-architecture)" | as_root tee /etc/apt/sources.list.d/github-cli.list >/dev/null || exit 1
+        as_root apt-get update || exit 1
+        as_root apt-get install -y gh || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/gh-cli.repo.XXXXXX") || exit 1
+        curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o "$TEMP_FILE" || exit 1
+        as_root install -D -m 0644 "$TEMP_FILE" /etc/yum.repos.d/gh-cli.repo || exit 1
+        as_root dnf install -y gh --repo gh-cli || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install gh >= $GH_MIN_VERSION from $GH_INSTALL_URL and re-run" >&2
+        exit 1
+      fi
+      rm -f -- "$TEMP_FILE"
+      TEMP_FILE=""
+      hash -r
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install gh >= $GH_MIN_VERSION from $GH_INSTALL_URL" >&2; exit 1 ;;
+  esac
+  gh_ready || { echo "ERROR: gh $(gh_version || echo unknown) is still below $GH_MIN_VERSION after install; see $GH_INSTALL_URL" >&2; exit 1; }
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -471,6 +554,7 @@ install_native_build_dependencies
 install_rust
 install_node
 install_frontend
+install_gh
 
 echo
 check_all

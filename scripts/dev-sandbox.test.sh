@@ -466,6 +466,18 @@ mkdir -p "$COREPACK_HOME/v1/pnpm/10.30.3"
 touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
 printf '10.30.3\n'
 SH
+write_gh_stub() {
+  cat >"$bootstrap_bin/gh" <<SH
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+  "--version ") printf 'gh version $1 (2025-01-01)\nhttps://github.com/cli/cli/releases/tag/v$1\n' ;;
+  "auth status") exit $2 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$bootstrap_bin/gh"
+}
+write_gh_stub 2.45.0 1
 chmod +x "$bootstrap_bin/corepack" "$bootstrap_bin/pnpm"
 set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
@@ -475,5 +487,17 @@ set -e
 [[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of reporting its expected gaps"
 [[ -z $(find "$corepack_cache" -mindepth 1 -print -quit) ]] \
   || fail "check-only pnpm probe invoked the Corepack shim and populated its cache"
+grep -q '^\[missing\]  GitHub CLI: gh 2\.45\.0 is below the required 2\.94\.0' "$temp_dir/bootstrap-check.out" \
+  || fail "outdated gh 2.45.0 was not reported as a missing gap naming 2.94.0"
+
+write_gh_stub 2.100.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-ok.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was not accepted as satisfying >= 2.94.0"
+! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was reported as a missing gap"
 
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
