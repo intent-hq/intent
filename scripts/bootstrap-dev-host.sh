@@ -465,7 +465,8 @@ install_gh() {
   case "$(uname -s)" in
     Darwin)
       command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install the GitHub CLI on macOS; see $GH_INSTALL_URL" >&2; exit 1; }
-      if command -v gh >/dev/null 2>&1; then
+      # A gh on PATH may come from Nix, MacPorts, or a manual install; only the formula can be upgraded.
+      if brew list --versions gh >/dev/null 2>&1; then
         brew upgrade gh || exit 1
       else
         brew install gh || exit 1
@@ -496,11 +497,18 @@ install_gh() {
       fi
       rm -f -- "$TEMP_FILE"
       TEMP_FILE=""
-      hash -r
       ;;
     *) echo "ERROR: only Linux and macOS are supported; install gh >= $GH_MIN_VERSION from $GH_INSTALL_URL" >&2; exit 1 ;;
   esac
-  gh_ready || { echo "ERROR: gh $(gh_version || echo unknown) is still below $GH_MIN_VERSION after install; see $GH_INSTALL_URL" >&2; exit 1; }
+  hash -r
+  gh_ready && return
+
+  local gh_path gh_found
+  gh_path=$(command -v gh || echo "no gh on PATH")
+  gh_found=$(gh_version || echo unknown)
+  echo "ERROR: gh $gh_found ($gh_path) is still below $GH_MIN_VERSION after install." >&2
+  echo "       A gh not installed by the package manager sits earlier on PATH and shadows the new one; remove it or move the package-manager gh ahead of it on PATH, then re-run. See $GH_INSTALL_URL" >&2
+  exit 1
 }
 
 install_frontend() {

@@ -524,4 +524,66 @@ set -e
 grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-next-rc.out" \
   || fail "prerelease gh 2.95.0-rc.1 of a newer release was not accepted as satisfying >= 2.94.0"
 
+# install_gh on macOS: exercise the function alone with a stubbed uname/brew/gh.
+bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$bootstrap_root/scripts/bootstrap-dev-host.sh" >"$bootstrap_funcs"
+grep -q '^install_gh() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_gh fixture"
+! grep -q '^install_gh$' "$bootstrap_funcs" || fail "bootstrap function extraction kept the main install flow"
+brew_bin="$temp_dir/brew-bin"
+mkdir -p "$brew_bin"
+printf '#!/usr/bin/env bash\nprintf "Darwin\\n"\n' >"$brew_bin/uname"
+cat >"$brew_bin/brew" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BREW_LOG"
+case "$*" in
+  "list --versions gh") [[ "$BREW_OWNS_GH" == 1 ]] ;;
+  "install gh"|"upgrade gh") [[ -n "${BREW_GH_RESULT:-}" ]] && "$BREW_WRITE_GH_STUB" "$BREW_GH_RESULT" 0; exit 0 ;;
+  *) exit 2 ;;
+esac
+SH
+cat >"$brew_bin/write-gh-stub" <<SH
+#!/usr/bin/env bash
+bootstrap_bin="$bootstrap_bin"
+$(declare -f write_gh_stub)
+write_gh_stub "\$@"
+SH
+chmod +x "$brew_bin/uname" "$brew_bin/brew" "$brew_bin/write-gh-stub"
+run_install_gh() {
+  BREW_LOG="$temp_dir/brew.log" BREW_OWNS_GH="$1" BREW_GH_RESULT="${2:-}" BREW_WRITE_GH_STUB="$brew_bin/write-gh-stub" \
+    PATH="$brew_bin:$bootstrap_bin:$PATH" \
+    bash -c 'funcs=$1; set --; source "$funcs"; install_gh' bash "$bootstrap_funcs" >"$temp_dir/install-gh.out" 2>&1
+}
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew install produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'install gh' "$temp_dir/brew.log" || fail "a gh not owned by Homebrew did not trigger brew install gh"
+! grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "brew upgrade gh ran for a gh the gh formula does not own"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 1 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew upgrade produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "a Homebrew-owned gh did not trigger brew upgrade gh"
+! grep -qx 'install gh' "$temp_dir/brew.log" || fail "brew install gh ran for a gh the gh formula already owns"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "install_gh returned $status instead of 1 when a stale gh kept shadowing the installed one"
+grep -q "^ERROR: gh 2\.45\.0 ($bootstrap_bin/gh) is still below 2\.94\.0 after install\." "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not name the stale binary and version: $(cat "$temp_dir/install-gh.out")"
+grep -q 'shadows the new one.*https://github.com/cli/cli#installation' "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not explain PATH shadowing with the install URL"
+
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
