@@ -178,6 +178,15 @@ def write_tool_config(
     temporary.replace(path)
 
 
+def nextest_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["NEXTEST_EXPERIMENTAL_LIBTEST_JSON"] = "1"
+    # nextest draws its progress bar on stderr whenever stderr is a TTY; under a
+    # PTY-backed script runner that fills the captured output with redraws.
+    env.setdefault("NEXTEST_HIDE_PROGRESS_BAR", "1")
+    return env
+
+
 def run_nextest(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root).resolve()
     intentd_dir = (repo_root / args.intentd_dir).resolve()
@@ -195,8 +204,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
         return 0
 
-    env = os.environ.copy()
-    env["NEXTEST_EXPERIMENTAL_LIBTEST_JSON"] = "1"
+    env = nextest_env()
     list_output = run(
         [
             "cargo", "nextest", "list", "--workspace",
