@@ -78,9 +78,10 @@ conventional commit before pushing.
 
 Keep the relevant checks green before opening a PR:
 
-- **intentd**: `cargo fmt --check`, `cargo clippy -- -D warnings`, and
-  `cargo build` — the monorepo-root `Makefile` wraps these as `make check`
-  (fmt + clippy) and `make build`; run `make test` for the test suite.
+- **intentd**: `cargo fmt --check`, `cargo clippy -- -D warnings`, the
+  repo-slug fold lint, and `cargo build` — the monorepo-root `Makefile` wraps
+  these as `make check` (fmt + clippy + repo-slug fold lint) and `make build`;
+  run `make test` for the test suite.
 - **cloudlands-fe**: `pnpm run check` and `pnpm vitest run`.
 - **ios**: build + test targets passing.
 
