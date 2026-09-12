@@ -109,14 +109,24 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 docs-check: ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
 
-# Release tracking: which cloudlands-releases alpha first carries a merged
-# commit. The script exits 3 for "not shipped yet" and 4 for a transient
-# GitHub failure (rate limit, 5xx, network) worth retrying (make reports them
-# as `Error 3` / `Error 4`); background hooks should invoke
-# scripts/shipped-in.sh directly so they can branch on those codes. `LIMIT=N`
-# widens the scan window past the newest 10 releases.
-shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit> (script exit 3 = not yet, 4 = transient gh failure)
-	@scripts/shipped-in.sh "$(COMPONENT)" "$(SHA)" $(if $(LIMIT),--limit "$(LIMIT)",)
+# Release tracking: which cloudlands-releases alpha first carries one or more
+# merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
+# PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
+# tokens, forwarded as positional pairs; the tag must carry every pair). The
+# script exits 3 for "not shipped yet" and 4 for a transient GitHub failure
+# (rate limit, 5xx, network) worth retrying (make reports them as `Error 3` /
+# `Error 4`); background hooks should invoke scripts/shipped-in.sh directly so
+# they can branch on those codes. `LIMIT=N` widens the scan window past the
+# newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 4 = transient gh failure)
+	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
+	for pair in $(PAIRS); do \
+		case "$$pair" in \
+			*:*) set -- "$$@" "$${pair%%:*}" "$${pair#*:}" ;; \
+			*) echo "shipped-in: PAIRS entries must be <component>:<sha>, got '$$pair'" >&2; exit 2 ;; \
+		esac; \
+	done; \
+	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS

@@ -233,7 +233,98 @@ run_script intentd "$sha"
 [[ "$status" -eq 1 ]] || fail "missing manifest exited $status (expected 1)"
 [[ "$stderr" == *"release download release-manifest.json for v2.2.0 on intent-hq/cloudlands-releases failed: stub: no manifest v2.2.0" ]] || fail "missing manifest hid gh stderr: $stderr"
 
+# Several <component> <sha> pairs: the answer is the oldest tag carrying every
+# pair, so a cross-component workspace can wait on one invocation.
+sha2=d1ec26651cc3f101b740d3f970d7fd54bf4b0268
+set_manifests() {
+  printf '{"version":"2.3.0","intentdVersion":"%s"}\n' "$1" >"$manifest_dir/v2.3.0.json"
+  printf '{"version":"2.2.0","intentdVersion":"%s"}\n' "$2" >"$manifest_dir/v2.2.0.json"
+  printf '{"version":"2.1.0","intentdVersion":"%s"}\n' "$3" >"$manifest_dir/v2.1.0.json"
+}
+
 reset_stub
+set_manifests 0.9.5 0.9.4 0.9.4
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo identical >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+echo ahead >"$intentd_compare/$sha2...v0.9.5"
+echo behind >"$intentd_compare/$sha2...v0.9.4"
+run_script cloudlands-fe "$sha" intentd "$sha2"
+[[ "$status" -eq 0 ]] || fail "fe+intentd pair exited $status: $stderr"
+[[ "$stdout" == "v2.3.0 intentdVersion=0.9.5" ]] || fail "fe+intentd pair printed '$stdout' (v2.2.0 carries fe but not intentd)"
+grep -q "^api repos/intent-hq/cloudlands-fe/compare/$sha...v2.3.0 " "$temp_dir/gh.log" || fail "fe pair was not compared"
+grep -q "^api repos/intent-hq/intentd/compare/$sha2...v0.9.5 " "$temp_dir/gh.log" || fail "intentd pair was not compared"
+
+reset_stub
+set_manifests 0.9.5 0.9.4 0.9.4
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo ahead >"$fe_compare/$sha...v2.2.0"
+echo ahead >"$fe_compare/$sha...v2.1.0"
+echo behind >"$intentd_compare/$sha2...v0.9.5"
+echo behind >"$intentd_compare/$sha2...v0.9.4"
+run_script cloudlands-fe "$sha" intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "uncarried intentd pair exited $status (expected 3): $stderr"
+[[ -z "$stdout" ]] || fail "uncarried intentd pair printed '$stdout'"
+[[ "$stderr" == "shipped-in: intentd $sha2 is not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)" ]] || fail "uncarried intentd pair message: $stderr"
+
+reset_stub
+echo behind >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+echo diverged >"$intentd_compare/$sha2...v0.9.0"
+run_script cloudlands-fe "$sha" intentd "$sha2"
+[[ "$status" -eq 3 ]] || fail "two uncarried pairs exited $status (expected 3): $stderr"
+[[ "$stderr" == "shipped-in: cloudlands-fe $sha, intentd $sha2 are not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)" ]] || fail "two uncarried pairs message: $stderr"
+
+# Two intentd SHAs against the same pinned version must not share a cached
+# compare status.
+reset_stub
+set_manifests 0.9.5 0.9.5 0.9.4
+echo ahead >"$intentd_compare/$sha...v0.9.5"
+echo ahead >"$intentd_compare/$sha...v0.9.4"
+echo ahead >"$intentd_compare/$sha2...v0.9.5"
+echo behind >"$intentd_compare/$sha2...v0.9.4"
+run_script intentd "$sha" intentd "$sha2"
+[[ "$status" -eq 0 ]] || fail "two intentd pairs exited $status: $stderr"
+[[ "$stdout" == "v2.2.0 intentdVersion=0.9.5" ]] || fail "two intentd pairs printed '$stdout' (v2.1.0 carries $sha but not $sha2)"
+for range in "$sha...v0.9.5" "$sha...v0.9.4" "$sha2...v0.9.5" "$sha2...v0.9.4"; do
+  [[ "$(grep -c "^api repos/intent-hq/intentd/compare/$range " "$temp_dir/gh.log")" -eq 1 ]] || fail "intentd compare $range was not run exactly once"
+done
+for tag in v2.3.0 v2.1.0; do
+  [[ "$(grep -c "^release download $tag " "$temp_dir/gh.log")" -eq 1 ]] || fail "manifest for $tag was downloaded once per intentd pair instead of once per tag"
+done
+
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+GH_STUB_FAIL=ratelimit GH_STUB_FAIL_ON="api repos/intent-hq/intentd/compare/$sha2...v0.9.0" run_script cloudlands-fe "$sha" intentd "$sha2"
+[[ "$status" -eq 4 ]] || fail "rate-limited second pair exited $status (expected 4): $stderr"
+[[ -z "$stdout" ]] || fail "rate-limited second pair printed '$stdout'"
+[[ "$stderr" == *"compare $sha2...v0.9.0 on intent-hq/intentd failed: gh: API rate limit exceeded"* ]] || fail "rate-limited second pair message: $stderr"
+grep -q "^api repos/intent-hq/cloudlands-fe/compare/$sha...v2.3.0 " "$temp_dir/gh.log" || fail "first pair was not checked before the second pair failed"
+
+reset_stub
+set_manifests 0.9.5 0.9.4 0.9.3
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo identical >"$fe_compare/$sha...v2.1.0"
+echo ahead >"$intentd_compare/$sha2...v0.9.5"
+echo behind >"$intentd_compare/$sha2...v0.9.4"
+echo ahead >"$intentd_compare/$sha2...v0.9.3"
+run_script cloudlands-fe "$sha" intentd "$sha2" --limit 2
+[[ "$status" -eq 0 ]] || fail "multi-pair --limit 2 exited $status: $stderr"
+[[ "$stdout" == "v2.3.0 intentdVersion=0.9.5" ]] || fail "multi-pair --limit 2 printed '$stdout' (v2.1.0 is outside the limit)"
+grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 12 ' "$temp_dir/gh.log" || fail "multi-pair --limit 2 was not over-fetched as 12"
+! grep -q 'v2.1.0' "$temp_dir/gh.log" || fail "multi-pair --limit 2 inspected v2.1.0"
+run_script cloudlands-fe "$sha" --limit=2 intentd "$sha2"
+[[ "$status" -eq 0 && "$stdout" == "v2.3.0 intentdVersion=0.9.5" ]] || fail "--limit between pairs exited $status with '$stdout': $stderr"
+
+reset_stub
+run_script cloudlands-fe "$sha" intentd
+[[ "$status" -eq 2 ]] || fail "odd positional count exited $status (expected 2)"
+run_script cloudlands-fe "$sha" ios "$sha2"
+[[ "$status" -eq 2 ]] || fail "unknown component in second pair exited $status (expected 2)"
+run_script cloudlands-fe "$sha" intentd main
+[[ "$status" -eq 2 ]] || fail "non-sha ref in second pair exited $status (expected 2)"
 run_script ios "$sha"
 [[ "$status" -eq 2 ]] || fail "unknown component exited $status (expected 2)"
 run_script cloudlands-fe main
