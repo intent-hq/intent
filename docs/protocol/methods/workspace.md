@@ -599,8 +599,12 @@ is distinct from starting the first provider turn:
   `metadata` copies — same harvest as `agent.create`). Attachment-only content —
   blocks with no text — starts a turn whose message text is empty, consistent with
   `agent.sendMessage` (§5.5).
-  `contextReferences` alone are not content: they are persisted and threaded into
-  the first turn, but do not start one by themselves.
+  `contextReferences` alone are not content: they are persisted on the session and
+  threaded into a **create-triggered** first turn (one started by prompt/attachment
+  content on this call), but do not start one by themselves — and a later
+  `agent.sendMessage` uses only its own params (it does not reload the persisted
+  references), so a client that creates an idle initial agent with context must
+  re-supply `contextReferences` on that first send.
 - With no content the agent is an **idle session**: the row exists and is returned,
   no message is persisted (`agent.getConversation` is empty), and no `agent:stream:*`
   frame is emitted. The client's first `agent.sendMessage` starts the turn — this is
