@@ -240,7 +240,9 @@
 >   `title?`, `ownerAgentId` — `null` when unowned —, `ownerAgentName?`,
 >   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`,
 >   `displayed?` — the host-reported layout fact as the host last reported it, omitted
->   only while the host has never reported it, never a default `false`; within v9.12,
+>   whenever the daemon holds **no current report** for it (not yet reported, cleared
+>   by a later report that omitted it, or lost to a daemon restart) — *unknown*,
+>   never a default `false`; within v9.12,
 >   [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835))
 >   **plus** `hostClientId`, `hostName?` (the host's hello `name` while it is live) and
 >   `hostConnected` (whether the host currently has a live hello'd connection). A
@@ -309,11 +311,13 @@
 >   **`displayed?: boolean`** — a **layout contract**, not a paint guarantee: true
 >   when the tab is not hidden AND is the active tab of the panel that holds it in
 >   the workspace's saved layout; hidden tabs are `displayed: false` whenever the
->   field is present. The field is **present only when the host has reported it**
->   (the daemon answers `listTabs` from the registry, §5.45, and keeps `displayed`
->   process-local: it is absent after a daemon restart until the host's connect-time
->   `browser.syncTabs` re-reports it) — absent means *unknown*, never `false`, and
->   the caller re-reads with `listTabs` once the host has reconnected
+>   field is present. The field is **present only while the daemon holds a current
+>   host report** for it (the daemon answers `listTabs` from the registry, §5.45, and
+>   keeps `displayed` process-local): it is absent before the host first reports it,
+>   after a later upsert / sync that omitted it cleared it, and after a daemon
+>   restart until the host's connect-time `browser.syncTabs` re-reports it — absent
+>   means *unknown*, never `false`, and says nothing about whether the field was
+>   ever reported; the caller re-reads with `listTabs`
 >   ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
 >   What a `displayed: true` tab can actually paint is stated once in the
 >   **capture ops and workspace visibility** contract below (monorepo#3045).
@@ -380,7 +384,8 @@
 >   tab): with `focus: false` it is a no-op success; with `focus: true` it still
 >   focuses its panel. `visibility: 'visible'` alone does not mean displayed: a
 >   visible tab that is not its panel's active tab is in the layout but sits behind
->   another tab and does not paint (`visibility: 'visible', displayed: false`), and
+>   another tab and is not painted on screen (`visibility: 'visible', displayed:
+>   false`; a capture op may still mount it on demand, see below), and
 >   `showTab` on it (default `focus: false`) brings it to the front without moving
 >   focus. `displayed: true` is a layout state, not a paint guarantee — see the
 >   capture-ops contract below. `showTab` succeeds only
@@ -410,46 +415,62 @@
 > bare-loopback rewrite warning above (monorepo#2323). The warning never rides
 > `error`, never fails the action, and is absent when the workspace is visible.
 >
-> **Capture ops** (`screenshot`, `getAccessibilityTree`, `evaluate`, and `navigate`,
-> which runs through `evaluate`) need a **mounted webview**. A hidden
-> tab is always mounted offscreen (it renders via emulation, whether or not its
-> workspace is in view). A **visible** tab whose webview is not mounted — because
-> its workspace is not in view, or it sits behind another tab in its panel — is
-> **mounted on demand** by the capture op itself: the FE hydrates the workspace
-> layout, waits for the offscreen host to register the tab, waits for the guest to
-> finish loading, then captures. The whole sequence is bounded by **one request
+> **Capture ops** (`screenshot`, `getAccessibilityTree`, `evaluate`) and `navigate`
+> (which runs through `evaluate`) need a **mounted webview**. A tab whose webview is
+> not mounted — typically a **visible** tab whose workspace is not in view or that
+> sits behind another tab in its panel, but also a tab opened while its workspace
+> was not in view, whatever its `visibility` — is **mounted on demand** by the op
+> itself: the FE hydrates the workspace layout and waits for the offscreen host to
+> register the tab. For the three capture ops the whole pipeline — mount, a wait
+> for the guest to finish loading, then the capture — is bounded by **one request
 > deadline** (the reverse-RPC timeout minus a transport margin; each stage gets the
-> lesser of its own cap and the budget remaining) — a capture op never outlives the
-> daemon's reverse request. A capture that mounted on demand against a not-in-view
-> workspace succeeds with the same additive `warning` string as above; a hidden
-> tab in a displayed workspace mounts with no warning.
+> lesser of its own cap and the budget remaining), so a capture op is designed not
+> to outlive the daemon's reverse request. `navigate` runs only the mount step: it
+> passes no deadline (its mount wait is bounded by that stage's own cap alone), does
+> not wait for the guest to settle, and performs no origin check. `snapshot` does
+> not go through the mount path at all. A mount on demand against a not-in-view
+> workspace succeeds with the same additive `warning` string as above; a hidden tab
+> in a displayed workspace mounts with no warning.
 >
-> When a mount or paint cannot happen, the op fails as an **action-result error**
-> (the per-action `{ action, success: false, error }` envelope, never a JSON-RPC
-> or FE top-level error) whose human-readable `error` names the cause and remedy,
-> and which carries an **additive structured `errorCode`** when the cause is one of:
+> When a mount, settle, or paint cannot happen, the op fails as an **action-result
+> error** (the per-action `{ action, success: false, error }` envelope) whose
+> human-readable `error` names the cause and remedy, and which carries an
+> **additive structured `errorCode`** when the cause is one of:
 >
-> - `workspace-not-visible` — the tab has no mounted webview and no window hosts
->   the workspace, so it cannot be mounted on demand; the remedy is to open the
->   workspace in a window and retry.
-> - `deadline-exhausted` — the request deadline ran out at a named stage (before
->   or during the mount, the load settle, or the capture itself); retry the capture.
-> - `still-loading` — the guest was still loading after the bounded settle wait;
->   retry, or `snapshot` with `waitFor: { networkIdle }` first.
-> - `navigated-away` — the mounted guest now shows a different **origin** than the
->   tab list recorded for the tab (same-origin URL drift is not reported); the
->   remedy is `navigate` back, or `listTabs` to re-check the tab.
-> - `not-painting` — the webview is mounted but its surface has not painted within
->   the capture stage's own cap (e.g. a `displayed: false` tab behind a sibling, or
->   a `displayed: true` tab whose panel is hidden by zoom); the remedy is `showTab`
->   (activate without moving focus) or `focusTab` (activate and focus), then
->   capture again.
+> - `workspace-not-visible` — the tab could not be mounted on demand while the
+>   workspace is not **displayed** in any window: either no window hosts the
+>   workspace at all (the hydration nudge reaches no renderer, so the op fails fast
+>   instead of waiting), or a background window does host it but the offscreen
+>   registration wait ran out at its own cap. Retry shortly or `listTabs` to confirm
+>   the tab still exists; if the workspace is open nowhere, open it in a window and
+>   retry.
+> - `deadline-exhausted` — (capture ops only) the request deadline ran out at a
+>   named stage (before or during the mount, the load settle, or the capture
+>   itself); retry the capture.
+> - `still-loading` — (capture ops only) the guest was still loading after the
+>   bounded settle wait; retry, or `snapshot` with `waitFor: { networkIdle }` first.
+> - `navigated-away` — (capture ops only, and **only after a mount on demand**) the
+>   freshly mounted guest shows a different **origin** than the tab list recorded
+>   for the tab; same-origin URL drift is not reported, and origin drift on an
+>   already-mounted guest is not checked. The remedy is `navigate` back, or
+>   `listTabs` to re-check the tab.
+> - `not-painting` — (capture ops only) the webview is mounted but its surface has
+>   not painted: `capturePage` produced an empty image, reported as soon as it is
+>   observed rather than after a wait (e.g. a `displayed: false` tab behind a
+>   sibling, or a `displayed: true` tab whose panel is hidden by zoom); the remedy
+>   is `showTab` (activate without moving focus) or `focusTab` (activate and
+>   focus), then capture again.
 >
-> `errorCode` is absent on other failures (unknown tab, ownership errors keep their
-> own `not-owner` / `already-claimed` codes). `displayed: true` therefore never
+> Other failures (unknown tab, a CDP error outside these stages) carry no
+> `errorCode`; ownership failures keep their own `not-owner` / `already-claimed`
+> codes. One exception to the action-result rule: should a batch still not have
+> settled shortly **after** the request deadline (a stage that takes no deadline,
+> such as `navigate`'s mount or its evaluate), the FE's executor backstop answers
+> with the **top-level** failure envelope (`success: false`, `results: []`, `error`
+> naming the "action execution" stage, no per-action `errorCode`) before the daemon
+> gives up — which the daemon maps to `-32603` as above. `displayed: true` never
 > guarantees a paint by itself; it says the tab is the active tab of its panel in
-> the saved layout, and the capture op supplies the mount when the workspace is not
-> in view.
+> the saved layout, and the op supplies the mount when the workspace is not in view.
 >
 > **Viewport sizing invariant.** Every tab has a persisted viewport mode. **Fit panel**
 > is the default: a visible tab follows the panel's webview area with no fixed frame or
@@ -595,7 +616,8 @@ interface BrowserTabInput {            // host-reported fields
   emulatedSize?: { width: number, height: number } | null;   // omitted / null = native viewport
   displayed?: boolean | null;          // §5.9 layout fact: not hidden AND the active tab of its
                                        // panel in the workspace's saved layout; omitted / null =
-                                       // not reported (within v9.12, intent-hq/intent#4835)
+                                       // no value, clears a previously reported one
+                                       // (within v9.12, intent-hq/intent#4835)
 }
 // Input nullability: the six nullable report fields above accept an explicit null
 // (≡ omitted). The canonical BrowserTab row (below, list results, event `tab`) never
@@ -612,8 +634,9 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
   ownerAgentName?: string;
   visibility: "visible" | "hidden";    // always present on read
   emulatedSize?: { width: number, height: number };
-  displayed?: boolean;                 // as the host last reported it; omitted = never reported
-                                       // (NOT a default false — detect by presence)
+  displayed?: boolean;                 // as the host last reported it; omitted = no current report
+                                       // (unknown — NOT a default false; detect by presence, and do
+                                       // not infer report history from absence)
   createdAt: string;                   // ISO-8601
   updatedAt: string;
 }
@@ -630,12 +653,14 @@ projections unchanged.
 Every other host-reported field is a `browser_tab` column; `displayed` is a layout fact of
 the live host process, so the daemon keeps it in a process-local overlay keyed by `tabId`
 rather than a column — no schema migration. It is diffed, applied and read back exactly
-like the other fields (an identical report is still a no-op; a report that omits it
-clears it, `changes: { displayed: null }`), but it does not survive a daemon restart: after
-a restart every row reads with `displayed` **absent** ("never reported") until its host
+like the other fields (an identical report is still a no-op; a later upsert / sync that
+omits or nulls it **clears** it within the same daemon lifetime, `changes: { displayed:
+null }`, and the row reads with `displayed` absent again), and it does not survive a daemon
+restart: after a restart every row reads with `displayed` **absent** until its host
 re-reports it — which the host's connect-time `browser.syncTabs` does for its whole tab
-set, so the fact is truthful again as soon as the host reconnects, and in between clients
-see "unknown" rather than a value the daemon can no longer vouch for. Hosts MUST include
+set, so the fact is truthful again as soon as the host reconnects. Absence therefore always
+means "no current report" (unknown), whatever the cause; clients see that rather than a
+value the daemon can no longer vouch for, and must not read report history into it. Hosts MUST include
 `displayed` on every upsert / sync entry they can compute it for and re-report whenever
 the layout fact changes (panel active tab, visibility, workspace layout).
 
