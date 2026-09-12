@@ -148,6 +148,13 @@ if [[ "$mode" == ui || "$mode" == app || "$mode" == stack ]]; then
     describe_busy_port "$dev_tcp_port"
     exit 1
   fi
+  # Every mode runs the frontend through `corepack pnpm`. The Makefile targets
+  # preflight the full toolchain via `make ensure-fe-toolchain`; this covers
+  # direct callers of this script.
+  if ! command -v corepack >/dev/null 2>&1; then
+    echo "[dev-sandbox-$mode] ERROR: corepack is required to run the frontend; run 'make bootstrap-dev-host'." >&2
+    exit 1
+  fi
 fi
 
 children_of() {

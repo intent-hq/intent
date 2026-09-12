@@ -826,4 +826,176 @@ grep -q "^ERROR: gh 2\.45\.0 ($bootstrap_bin/gh) is still below 2\.94\.0 after i
 grep -q 'shadows the new one.*https://github.com/cli/cli#installation' "$temp_dir/install-gh.out" \
   || fail "shadowed gh error did not explain PATH shadowing with the install URL"
 
+# Frontend-toolchain preflight (bootstrap-dev-host.sh --check-frontend and the
+# dev-sandbox.sh guard). The fixtures are self-contained under $temp_dir and run
+# on a sanitized PATH so the host's real corepack/pnpm — present or absent —
+# cannot decide the outcome.
+fe_root="$temp_dir/fe-preflight-root"
+fe_stub_bin="$temp_dir/fe-preflight-bin"
+sanitized_bin="$temp_dir/fe-preflight-sanitized-bin"
+fe_cargo_home="$temp_dir/fe-preflight-cargo-home"
+fe_bootstrap="$fe_root/scripts/bootstrap-dev-host.sh"
+mkdir -p "$fe_root/scripts" "$fe_root/packages/intentd" "$fe_root/packages/cloudlands-fe" \
+  "$fe_stub_bin" "$sanitized_bin"
+cp "$repo_root/scripts/bootstrap-dev-host.sh" "$fe_bootstrap"
+touch "$fe_root/packages/intentd/.git" "$fe_root/packages/cloudlands-fe/.git"
+printf 'channel = "1.96.0"\n' >"$fe_root/packages/intentd/rust-toolchain.toml"
+printf '{"packageManager":"pnpm@10.30.3"}\n' >"$fe_root/packages/cloudlands-fe/package.json"
+for tool in bash sh env sed head grep find cat rm mkdir mktemp touch dirname date sleep tr uname ps pgrep python3; do
+  tool_path=$(command -v "$tool" 2>/dev/null) || continue
+  [[ "$tool_path" == /* ]] || continue
+  ln -sf "$tool_path" "$sanitized_bin/$tool"
+done
+if (PATH="$sanitized_bin"; command -v corepack >/dev/null 2>&1); then
+  fail "sanitized PATH still resolves corepack; the absent-corepack fixtures would be meaningless"
+fi
+cat >"$fe_stub_bin/corepack" <<'SH'
+#!/usr/bin/env bash
+printf '0.35.0\n'
+SH
+cat >"$fe_stub_bin/pnpm" <<'SH'
+#!/usr/bin/env bash
+mkdir -p "$COREPACK_HOME/v1/pnpm/10.30.3"
+touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
+printf '10.30.3\n'
+SH
+chmod +x "$fe_stub_bin/corepack" "$fe_stub_bin/pnpm"
+
+ready_cache="$temp_dir/fe-preflight-cache-ready"
+mkdir -p "$ready_cache/v1/pnpm/10.30.3"
+touch "$ready_cache/v1/pnpm/10.30.3/.corepack"
+set +e
+PATH="$fe_stub_bin:$sanitized_bin" COREPACK_HOME="$ready_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check-frontend >"$temp_dir/fe-ready.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "--check-frontend returned $status on a ready frontend toolchain"
+[[ ! -s "$temp_dir/fe-ready.out" ]] || fail "--check-frontend was not silent on a ready frontend toolchain"
+[[ ! -e "$ready_cache/v1/pnpm/10.30.3/downloaded" ]] \
+  || fail "--check-frontend invoked the Corepack pnpm shim instead of reading its cache metadata"
+
+no_corepack_cache="$temp_dir/fe-preflight-cache-no-corepack"
+mkdir -p "$no_corepack_cache"
+set +e
+PATH="$sanitized_bin" COREPACK_HOME="$no_corepack_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check-frontend >"$temp_dir/fe-no-corepack.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "--check-frontend returned $status instead of 1 without corepack"
+grep -qx '\[missing\]  Corepack: required to select the frontend pnpm version' "$temp_dir/fe-no-corepack.out" \
+  || fail "--check-frontend did not report the missing Corepack in doctor's wording"
+grep -qx 'run: make bootstrap-dev-host' "$temp_dir/fe-no-corepack.out" \
+  || fail "--check-frontend did not name the fix (make bootstrap-dev-host)"
+
+unpinned_cache="$temp_dir/fe-preflight-cache-unpinned"
+mkdir -p "$unpinned_cache"
+set +e
+PATH="$fe_stub_bin:$sanitized_bin" COREPACK_HOME="$unpinned_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check-frontend >"$temp_dir/fe-unpinned.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "--check-frontend returned $status instead of 1 without the pinned pnpm"
+grep -q 'frontend package manager: expected pnpm@10.30.3 via Corepack' "$temp_dir/fe-unpinned.out" \
+  || fail "--check-frontend did not report the unpinned frontend package manager"
+! grep -q 'Corepack: required to select' "$temp_dir/fe-unpinned.out" \
+  || fail "--check-frontend reported Corepack missing while it was on PATH"
+[[ -z $(find "$unpinned_cache" -mindepth 1 -print -quit) ]] \
+  || fail "--check-frontend populated the Corepack cache while reporting the pinned pnpm gap"
+
+# Drift guard: doctor and the preflight must print the same [missing] lines for
+# the two frontend items, byte for byte, on the same fixture.
+set +e
+PATH="$sanitized_bin" COREPACK_HOME="$no_corepack_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check >"$temp_dir/fe-doctor.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of reporting the frontend gaps"
+fe_missing_pattern='^\[missing\]  (Corepack|frontend package manager|frontend packageManager):'
+grep -E "$fe_missing_pattern" "$temp_dir/fe-doctor.out" >"$temp_dir/fe-doctor.lines" \
+  || fail "fixture doctor printed no frontend [missing] lines"
+grep -E "$fe_missing_pattern" "$temp_dir/fe-no-corepack.out" >"$temp_dir/fe-preflight.lines" \
+  || fail "--check-frontend printed no frontend [missing] lines"
+[[ $(wc -l <"$temp_dir/fe-doctor.lines") -eq 2 ]] \
+  || fail "fixture doctor did not report both frontend items as missing"
+cmp -s "$temp_dir/fe-doctor.lines" "$temp_dir/fe-preflight.lines" \
+  || fail "doctor and --check-frontend disagree on the frontend [missing] wording"
+
+# A Corepack that is on PATH but fails its bounded launcher probe
+# (intent-hq/intent#4635) is a third outcome: both modes must report the probe
+# error itself, in the same words, rather than claiming Corepack is absent.
+broken_stub_bin="$temp_dir/fe-preflight-broken-bin"
+mkdir -p "$broken_stub_bin"
+cat >"$broken_stub_bin/corepack" <<'SH'
+#!/usr/bin/env bash
+echo "corepack: cannot find dist/corepack.js" >&2
+exit 1
+SH
+chmod +x "$broken_stub_bin/corepack"
+broken_cache="$temp_dir/fe-preflight-cache-broken"
+mkdir -p "$broken_cache"
+set +e
+PATH="$broken_stub_bin:$sanitized_bin" COREPACK_HOME="$broken_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check-frontend >"$temp_dir/fe-broken.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "--check-frontend returned $status instead of 1 on a failing Corepack probe"
+grep -q "\[missing\]  Corepack: 'corepack --version' failed with exit 1 via $broken_stub_bin/corepack" \
+  "$temp_dir/fe-broken.out" || fail "--check-frontend did not report the Corepack probe error"
+! grep -q 'Corepack: required to select' "$temp_dir/fe-broken.out" \
+  || fail "--check-frontend claimed Corepack was absent while it was on PATH but broken"
+set +e
+PATH="$broken_stub_bin:$sanitized_bin" COREPACK_HOME="$broken_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check >"$temp_dir/fe-broken-doctor.out" 2>&1
+set -e
+grep -E "$fe_missing_pattern" "$temp_dir/fe-broken-doctor.out" >"$temp_dir/fe-broken-doctor.lines" \
+  || fail "fixture doctor printed no frontend [missing] lines on a failing Corepack probe"
+grep -E "$fe_missing_pattern" "$temp_dir/fe-broken.out" >"$temp_dir/fe-broken-preflight.lines" \
+  || fail "--check-frontend printed no frontend [missing] lines on a failing Corepack probe"
+cmp -s "$temp_dir/fe-broken-doctor.lines" "$temp_dir/fe-broken-preflight.lines" \
+  || fail "doctor and --check-frontend disagree on the Corepack probe-error wording"
+
+# Corepack installed but never `corepack enable`d: no pnpm shim on PATH, yet the
+# pinned version sits in the Corepack cache, so `corepack pnpm run ...` — the
+# command the guarded targets actually run — works. The preflight must not be
+# stricter than the command it guards, while doctor keeps requiring the shim for
+# the bare-pnpm targets (fe-launch, dev, run-fe-local).
+corepack_only_bin="$temp_dir/fe-preflight-corepack-only-bin"
+mkdir -p "$corepack_only_bin"
+cp "$fe_stub_bin/corepack" "$corepack_only_bin/corepack"
+chmod +x "$corepack_only_bin/corepack"
+if (PATH="$corepack_only_bin:$sanitized_bin"; command -v pnpm >/dev/null 2>&1); then
+  fail "the shim-less fixture still resolves a pnpm shim"
+fi
+shimless_cache="$temp_dir/fe-preflight-cache-shimless"
+mkdir -p "$shimless_cache/v1/pnpm/10.30.3"
+touch "$shimless_cache/v1/pnpm/10.30.3/.corepack"
+set +e
+PATH="$corepack_only_bin:$sanitized_bin" COREPACK_HOME="$shimless_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check-frontend >"$temp_dir/fe-shimless.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "--check-frontend returned $status without a pnpm shim that corepack pnpm does not need"
+[[ ! -s "$temp_dir/fe-shimless.out" ]] || fail "--check-frontend was not silent without a pnpm shim"
+set +e
+PATH="$corepack_only_bin:$sanitized_bin" COREPACK_HOME="$shimless_cache" CARGO_HOME="$fe_cargo_home" \
+  bash "$fe_bootstrap" --check >"$temp_dir/fe-shimless-doctor.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of flagging the absent pnpm shim"
+grep -qx '\[missing\]  frontend package manager: expected pnpm@10.30.3 via Corepack' \
+  "$temp_dir/fe-shimless-doctor.out" \
+  || fail "doctor stopped requiring the pnpm shim its bare-pnpm targets need"
+
+no_corepack_state="$temp_dir/no-corepack-state"
+set +e
+PATH="$sanitized_bin" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
+  SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT=5 \
+  bash "$script" ui >"$temp_dir/no-corepack-ui.out" 2>&1
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "UI sandbox returned $status instead of 1 without corepack"
+grep -q "\[dev-sandbox-ui\] ERROR: corepack is required to run the frontend; run 'make bootstrap-dev-host'." \
+  "$temp_dir/no-corepack-ui.out" || fail "missing corepack message did not name the fix"
+[[ ! -e "$no_corepack_state" ]] || fail "UI sandbox wrote state before failing the corepack preflight"
+
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"

@@ -46,14 +46,17 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--yes]"
-  echo "  --check  Report missing requirements without changing the host"
-  echo "  --yes    Install without prompting"
+  echo "Usage: $0 [--check] [--check-frontend] [--yes]"
+  echo "  --check            Report missing requirements without changing the host"
+  echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
+  echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --yes              Install without prompting"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
+    --check-frontend) MODE=check-frontend ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -277,8 +280,15 @@ corepack_home() {
 pnpm_ready() {
   [[ -n "$PNPM_VERSION" ]] || return 1
   command -v corepack >/dev/null 2>&1 || return 1
-  command -v pnpm >/dev/null 2>&1 || return 1
-  if [[ "$MODE" == check ]]; then
+  # The `pnpm` shim is required everywhere except check-frontend mode: the
+  # targets that mode guards run `corepack pnpm`, which resolves the pinned
+  # version straight from the Corepack cache, so a host with Corepack installed
+  # but never `corepack enable`d runs them fine. Doctor keeps requiring the shim
+  # for the bare-`pnpm` targets (fe-launch, dev, run-fe-local).
+  if [[ "$MODE" != check-frontend ]]; then
+    command -v pnpm >/dev/null 2>&1 || return 1
+  fi
+  if [[ "$MODE" == check || "$MODE" == check-frontend ]]; then
     local metadata
     for metadata in "$(corepack_home)"/v*/pnpm/"$PNPM_VERSION"/.corepack; do
       [[ -f "$metadata" ]] && return 0
@@ -338,6 +348,47 @@ installable_gap_exists() {
   pnpm_ready || return 0
   frontend_dependencies_ready || return 0
   gh_ready || return 0
+  return 1
+}
+
+# Reports the Corepack and frontend-package-manager state shared by check_all
+# (doctor) and check_frontend (the dev/sandbox preflight), so the two modes have
+# a single wording source; scripts/dev-sandbox.test.sh guards them against
+# drift. With a non-empty $1 the [ok] lines are suppressed: the preflight is
+# silent when the toolchain is ready.
+report_frontend_toolchain() {
+  local quiet=${1:-}
+
+  if ! command -v corepack >/dev/null 2>&1; then
+    missing "Corepack: required to select the frontend pnpm version"
+  elif launcher_probe "$ROOT_DIR" corepack corepack --version; then
+    [[ -n "$quiet" ]] || ok "Corepack: $PROBE_OUTPUT"
+  else
+    missing "Corepack: $PROBE_ERROR"
+  fi
+
+  if [[ -z "$PACKAGE_MANAGER" ]]; then
+    missing "frontend packageManager: cannot read packages/cloudlands-fe/package.json"
+  elif pnpm_ready; then
+    [[ -n "$quiet" ]] || ok "frontend package manager: $PACKAGE_MANAGER via Corepack"
+  else
+    missing "frontend package manager: expected $PACKAGE_MANAGER via Corepack"
+  fi
+}
+
+# Preflight for the targets that shell out to `corepack pnpm` (dev-ui,
+# dev-sandbox-ui|app|stack). It reports the same lines check_all prints for
+# Corepack and the pinned package manager, never invokes the pnpm shim, and
+# never populates the Corepack cache. node_modules is deliberately not checked:
+# the targets install it themselves.
+check_frontend() {
+  FAILURES=0
+  load_versions
+
+  report_frontend_toolchain quiet
+
+  [[ "$FAILURES" -eq 0 ]] && return 0
+  echo "run: make bootstrap-dev-host"
   return 1
 }
 
@@ -412,21 +463,7 @@ check_all() {
     missing "Node: $NODE_REQUIREMENT is required (node-gyp 13 builds the frontend native modules)"
   fi
 
-  if ! command -v corepack >/dev/null 2>&1; then
-    missing "Corepack: required to select the frontend pnpm version"
-  elif launcher_probe "$ROOT_DIR" corepack corepack --version; then
-    ok "Corepack: $PROBE_OUTPUT"
-  else
-    missing "Corepack: $PROBE_ERROR"
-  fi
-
-  if [[ -z "$PACKAGE_MANAGER" ]]; then
-    missing "frontend packageManager: cannot read packages/cloudlands-fe/package.json"
-  elif pnpm_ready; then
-    ok "frontend package manager: $PACKAGE_MANAGER via Corepack"
-  else
-    missing "frontend package manager: expected $PACKAGE_MANAGER via Corepack"
-  fi
+  report_frontend_toolchain
 
   if [[ ! -d "$FE_DIR/node_modules" ]]; then
     missing "frontend dependencies: run corepack pnpm install --frozen-lockfile in packages/cloudlands-fe"
@@ -709,6 +746,11 @@ install_frontend() {
     fi
   fi
 }
+
+if [[ "$MODE" == check-frontend ]]; then
+  check_frontend
+  exit $?
+fi
 
 if [[ "$MODE" == check ]]; then
   check_all

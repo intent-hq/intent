@@ -176,6 +176,7 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
@@ -195,6 +196,17 @@ doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 
 bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
 	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
+
+# Frontend-toolchain preflight for the targets that shell out to
+# `corepack pnpm`. Fails fast with doctor's [missing] wording plus
+# `run: make bootstrap-dev-host` instead of a mid-run "corepack: command not
+# found". Port-independent like doctor: it must never expand DEV_PORT. It reads
+# the frontend package.json for the pinned pnpm version, so it must not race
+# the submodule checkout under `make -j`: order it after ensure-fe-submodule
+# rather than relying on the sibling prerequisite lists, which make is free to
+# run in parallel.
+ensure-fe-toolchain: ensure-fe-submodule
+	@scripts/bootstrap-dev-host.sh --check-frontend
 
 # The iOS submodule is private and marked `update = none` in .gitmodules, so
 # the generic `git submodule update --init` would silently skip it while
@@ -486,7 +498,7 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
 	@$(MAKE) release-daemon
 
-dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
+dev-ui: ensure-fe-submodule ensure-fe-toolchain ## Run the fast browser-only frontend UI preview
 	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
 		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
@@ -499,20 +511,20 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	fi; \
 	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
 
-dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
+dev-sandbox-ui: ensure-fe-submodule ensure-fe-toolchain ## UI preview sandbox on this worktree's derived DEV_PORT
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
 
-dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
+dev-sandbox-app: ensure-fe-submodule ensure-fe-toolchain ## Web renderer sandbox connected to the installed intentd
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
 
-dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
+dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ensure-fe-toolchain ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
