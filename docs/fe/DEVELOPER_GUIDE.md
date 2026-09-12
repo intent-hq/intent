@@ -142,8 +142,8 @@ available. The report is read-only, including stale sandbox state.
 footer collapse/expand (`--scenario footer`, default) or context-well open/close
 (`--scenario context-well`) against a running `make dev-sandbox-app` / `dev-sandbox-stack`,
 then samples scroll geometry per animation frame. `--url` is a workspace page whose transcript
-scrolls and whose chat shows the event-subscriptions footer header (footer) or a context well
-(context-well); `--out` must not exist. Optional: `--inflate <nodes>` (clone transcript rows
+scrolls and whose footer shows its disclosure header (footer; agent-only event subscriptions render
+no header and fail fast) or has a context well (context-well); `--out` must not exist. Optional: `--inflate <nodes>` (clone transcript rows
 until the DOM reaches this count, 10000; donor rows need more than 20 descendants and under 2000 px
 height, so a transcript rendering as one tall row fails — pass `--inflate 0` to skip), `--frames` (40),
 `--scroll-up` (800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000), `--headed`
