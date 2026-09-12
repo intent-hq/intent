@@ -279,14 +279,19 @@ expect_plan "-p beta"
 expect_cargo "-p beta"
 [[ "$stdout" != *"note:"* ]] || fail "$case_name printed the src note for a subsumed selection: $stdout"
 
-case_name="benches, examples and non-crate paths are ignored"
+case_name="benches, examples and inert non-crate paths are ignored"
 reset_repo
 edit crates/alpha/benches/bench.rs
 edit crates/alpha/examples/demo.rs
 edit README.md
 edit docs/guide.md
-edit scripts/tool.sh
-write .github/workflows/ci.yml
+write .github/workflows/x.yml
+write LICENSE
+write NOTICE
+write .gitignore
+write deny.toml
+write release-plz.toml
+write dist-workspace.toml
 run_script
 expect_ok
 [[ "$stdout" == *"nothing to test"* ]] || fail "$case_name printed '$stdout'"
@@ -367,6 +372,21 @@ for path in Cargo.toml Cargo.lock rust-toolchain.toml .config/nextest.toml .carg
   [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
   [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
   [[ "$stderr" == *"need the full suite -- run 'make test':"*"  $path"* ]] || fail "$case_name stderr: $stderr"
+  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+done
+# Tests read repo files outside crates/ through CARGO_MANIFEST_DIR
+# (scripts/install.sh, repo-wide lints), so any non-inert path out there also
+# defers to the full suite, even alongside a precisely mapped test change.
+for path in scripts/install.sh scripts/tool.sh packaging/deb/control unknown.toml; do
+  case_name="non-crate change $path"
+  reset_repo
+  write "$path" "// changed"
+  edit crates/alpha/tests/one.rs
+  run_script
+  [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
+  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
+  [[ "$stderr" == *"need the full suite -- run 'make test':"*"  $path"* ]] || fail "$case_name stderr: $stderr"
+  [[ "$stderr" != *"crates/alpha/tests/one.rs"* ]] || fail "$case_name listed a mapped path: $stderr"
   [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
 done
 case_name="untracked build-wide file with a non-ASCII name"

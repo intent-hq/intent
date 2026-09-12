@@ -18,7 +18,12 @@
 #                                    (--lib only when src/lib.rs exists)
 #   crates/<c>/benches|examples/**   ignored (nextest does not run them)
 #   crates/<c>/<anything else>       -p <c>  (all test targets of <c>)
-#   outside crates/                  ignored
+#   outside crates/, inert           ignored: *.md, LICENSE, NOTICE, .gitignore,
+#                                    .github/**, docs/**, deny.toml,
+#                                    release-plz.toml, dist-workspace.toml
+#   outside crates/, anything else   full suite (exit 3) -- tests read repo
+#                                    files such as scripts/install.sh via
+#                                    CARGO_MANIFEST_DIR, so fail closed
 # A broader selection subsumes narrower ones for the same crate. Cargo applies
 # target flags to every -p package on one command line, so crates with
 # different selections run as separate `cargo nextest run` invocations and
@@ -29,8 +34,9 @@
 # Exit codes: 0 = nothing to test, or every invocation passed; 2 = usage error
 # or BASE cannot be resolved; 3 = a build-wide file changed (Cargo.toml,
 # Cargo.lock, crates/*/Cargo.toml, crates/*/build.rs, .config/nextest.toml,
-# rust-toolchain.toml, .cargo/**) -- run the full `make test` instead; any
-# other code is the first failing cargo invocation's exit code.
+# rust-toolchain.toml, .cargo/**) or a non-inert path outside crates/ changed
+# -- run the full `make test` instead; any other code is the first failing
+# cargo invocation's exit code.
 
 set -euo pipefail
 
@@ -88,12 +94,24 @@ git rev-parse --git-dir >/dev/null 2>&1 || die 2 "$display_dir is not a git chec
 merge_base=$(git merge-base HEAD "$base" 2>/dev/null) ||
   die 2 "cannot resolve BASE '$base' in $display_dir; run 'git -C $display_dir fetch origin main' or set BASE=<ref>"
 
+# Paths outside crates/ that no test can observe.
+is_inert() {
+  case "$1" in
+    *.md | LICENSE | NOTICE | .gitignore | deny.toml | release-plz.toml | dist-workspace.toml) return 0 ;;
+    .github/* | docs/*) return 0 ;;
+  esac
+  return 1
+}
+
 is_fallback() {
   case "$1" in
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .config/nextest.toml | .cargo/*) return 0 ;;
     crates/*/Cargo.toml | crates/*/build.rs) return 0 ;;
+    crates/*) return 1 ;;
   esac
-  return 1
+  # Anything else outside crates/ may be read by a test through
+  # CARGO_MANIFEST_DIR (scripts/install.sh, repo-wide lints), so fail closed.
+  ! is_inert "$1"
 }
 
 # Prints "<crate>\t<kind>[\t<test>]" for a path under crates/, kinds ranked
