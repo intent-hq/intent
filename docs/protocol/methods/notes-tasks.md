@@ -13,7 +13,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement. `-32602` when `new` is the line-numbered `note.read` display (see below) |
 | note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive). `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` only when the bounded read-merge-persist loop (5 attempts) is exhausted by concurrent versioned writes. `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` (no write) in exactly two cases: an `expectedVersion` **above** the current `rev` — a rev this note never served — is rejected immediately, and a bounded read-merge-persist loop (5 attempts) whose every attempt misses its rev gate surfaces the last `Conflict`. `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.updateMetadata | noteId (req), title?, tags?: string | string[] |
 | note.delete | noteId (req) | { ok, noteId, deleted } — emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
@@ -46,8 +46,8 @@ on the wire yet, so every version is stamped with the system author
 
 **Three-way merge on stale `expectedVersion` (§5.2 / A5).** `note.setContent`
 is **not** last-write-wins and does **not** reject a stale base: the writer
-sends the `rev` it read as `expectedVersion`, and when that no longer matches
-the stored `rev` the daemon recovers the writer's **base** — the retained
+sends the `rev` it read as `expectedVersion`, and when that is **below** the
+stored `rev` the daemon recovers the writer's **base** — the retained
 `note_version` snapshot for that rev (newest snapshot with `rev <= expectedVersion`,
 see "Version history" above) — and applies the writer's intent
 `diff(base → content)` onto the **current** stored text with a pure three-way
@@ -59,20 +59,34 @@ variant (`WaWb`) — nothing is dropped and no markers are inserted. When no
 snapshot survives for the stale rev (pruned past the 50-version cap or predating
 the note's version history) the write degrades to honest last-writer-wins:
 `content` lands verbatim. An absent `expectedVersion`, or one equal to the current
-`rev`, skips the merge and replaces the note as-is. The merged text is what the
+`rev`, skips the merge and replaces the note as-is. An `expectedVersion` **above**
+the current `rev` is a rev this note never served, so it is the plain
+optimistic-concurrency mismatch: `-32005` carrying the current entity,
+immediately and without a write (it is never treated as a stale base that
+resolves to the newest snapshot). The merged text is what the
 daemon cleans and persists through the normal mutation flow (comment re-anchor,
 version snapshot, line-attribution recompute, `@@@task` auto-conversion, one
 `note:updated`). Read → merge → persist is atomic per attempt: the persist is
 gated on the `rev` that was read, and a concurrent versioned write that lands in
 between makes the daemon re-fetch, re-merge against the new current and retry
-(bounded, 5 attempts) — only exhaustion surfaces `-32005`. The reduction guard is
+(bounded, 5 attempts) — `-32005` surfaces only when every attempt misses its gate,
+again without a write. In summary: future revision rejects, stale recoverable
+revision merges, missing base falls back to last-writer-wins, five gate misses
+return `-32005`. The reduction guard is
 measured against the writer's base when one is recoverable (so a small edit on a
 note that another writer has since grown is not misread as a wipe) and against
 the current text otherwise. The content arm of `note.update` does not merge: it is a
-plain versioned write that keeps the `-32005` guard on a stale `expectedVersion`. The
-surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
-`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write straight
-to storage.
+plain versioned write that keeps the `-32005` guard on a stale `expectedVersion`.
+The surgical mutations run through the same gated loop rather than writing straight
+to storage: `note.add`, `note.edit`, `note.editLines`, `task.updateStatus` and
+`task.update` apply their transform to the row they read and persist it via the
+read-merge-persist loop above with that read's `rev` as the base (a write that
+lands in between is merged into on the next attempt, never overwritten);
+`task.convertBlocks` and `comment.add` persist gated on the `rev` they read and, on
+a miss, re-derive from the fresh content (re-convert only blocks still present /
+re-anchor the comment) instead of merging generated ids or markers. Both share the
+5-attempt bound. `note.restoreVersion` is a deliberate unconditional replacement and
+takes no `expectedVersion`.
 
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
