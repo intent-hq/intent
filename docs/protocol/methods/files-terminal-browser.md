@@ -455,8 +455,10 @@
 >   already-mounted guest is not checked. The remedy is `navigate` back, or
 >   `listTabs` to re-check the tab.
 > - `not-painting` — (capture ops only) the webview is mounted but its surface has
->   not painted: `capturePage` produced an empty image, reported as soon as it is
->   observed rather than after a wait (e.g. a `displayed: false` tab behind a
+>   not painted, detected either way: `capturePage` did not return within the
+>   capture stage's **own** cap (when that cap, not the request deadline, is the
+>   binding bound), **or** it returned an empty / empty-encoded image, which is
+>   reported as soon as it is observed (e.g. a `displayed: false` tab behind a
 >   sibling, or a `displayed: true` tab whose panel is hidden by zoom); the remedy
 >   is `showTab` (activate without moving focus) or `focusTab` (activate and
 >   focus), then capture again.
