@@ -10,8 +10,8 @@
 # are inherited as-is (the Makefile sets them).
 #
 # The changed set is `git diff --name-only $(git merge-base HEAD BASE)` inside
-# INTENTD_DIR (committed, staged and unstaged edits) plus the untracked paths
-# from `git status --porcelain`. Paths map to per-crate nextest selections:
+# INTENTD_DIR (committed, staged and unstaged edits) plus the untracked files
+# from `git ls-files --others`. Paths map to per-crate nextest selections:
 #   crates/<c>/tests/<t>.rs          -p <c> --test <t>   (--tests once deleted)
 #   crates/<c>/tests/<dir>/**        -p <c> --tests
 #   crates/<c>/src/**                -p <c> --lib --bins --tests
@@ -88,18 +88,6 @@ git rev-parse --git-dir >/dev/null 2>&1 || die 2 "$display_dir is not a git chec
 merge_base=$(git merge-base HEAD "$base" 2>/dev/null) ||
   die 2 "cannot resolve BASE '$base' in $display_dir; run 'git -C $display_dir fetch origin main' or set BASE=<ref>"
 
-# Committed + staged + unstaged edits since the merge base, then untracked
-# paths (`?? <path>`; renames are reported as `<old> -> <new>`).
-changed=$(
-  git diff --name-only "$merge_base" --
-  git status --porcelain --untracked-files=all | while IFS= read -r line; do
-    [[ "$line" == '??'* ]] || continue
-    path=${line:3}
-    printf '%s\n' "${path##* -> }"
-  done
-)
-changed=$(printf '%s\n' "$changed" | sort -u)
-
 is_fallback() {
   case "$1" in
     Cargo.toml | Cargo.lock | rust-toolchain.toml | .config/nextest.toml | .cargo/*) return 0 ;;
@@ -133,14 +121,27 @@ map_path() {
 
 fallback=""
 mapped=""
-while IFS= read -r path; do
-  [[ -n "$path" ]] || continue
+seen=""
+classify() {
+  local path=$1
+  [[ -n "$path" && "$seen" != *$'\n'"$path"$'\n'* ]] || return 0
+  seen+=$'\n'"$path"$'\n'
   if is_fallback "$path"; then
     fallback+="$path"$'\n'
   else
     mapped+="$(map_path "$path")"$'\n'
   fi
-done <<<"$changed"
+}
+
+# Committed + staged + unstaged edits since the merge base, then untracked
+# files. Both are read NUL-delimited so paths arrive raw: line-oriented
+# porcelain output C-quotes names with spaces or non-ASCII characters.
+while IFS= read -r -d '' path; do
+  classify "$path"
+done < <(git diff --name-only -z "$merge_base" --)
+while IFS= read -r -d '' path; do
+  classify "$path"
+done < <(git ls-files -z --others --exclude-standard)
 
 if [[ -n "$fallback" ]]; then
   echo "[test-changed] build-wide change(s) vs $base need the full suite -- run 'make test':" >&2

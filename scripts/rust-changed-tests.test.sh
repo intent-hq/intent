@@ -63,6 +63,7 @@ write crates/alpha/tests/one.rs
 write crates/alpha/tests/two.rs
 write crates/alpha/tests/common/mod.rs
 write crates/alpha/tests/fixtures/data.json
+write crates/alpha/tests/fixtures/café.json
 write crates/alpha/benches/bench.rs
 write crates/alpha/examples/demo.rs
 write crates/beta/Cargo.toml
@@ -191,6 +192,29 @@ run_script
 expect_ok
 expect_cargo "-p alpha --tests"
 
+# Git C-quotes such names in line-oriented output; the script must read raw
+# NUL-delimited paths (verifier repro on 91fb6b0).
+case_name="untracked fixture with a space in its name"
+reset_repo
+write "crates/alpha/tests/fixtures/new fixture.json"
+run_script
+expect_ok
+expect_cargo "-p alpha --tests"
+
+case_name="tracked fixture with a non-ASCII name"
+reset_repo
+edit crates/alpha/tests/fixtures/café.json
+run_script
+expect_ok
+expect_cargo "-p alpha --tests"
+
+case_name="renamed integration test selects the new name"
+reset_repo
+g mv crates/alpha/tests/one.rs crates/alpha/tests/moved.rs
+run_script
+expect_ok
+expect_cargo "-p alpha --test moved"
+
 case_name="deleted integration test falls back to --tests"
 reset_repo
 g rm -q crates/alpha/tests/two.rs
@@ -317,6 +341,13 @@ for path in Cargo.toml Cargo.lock rust-toolchain.toml .config/nextest.toml .carg
   [[ "$stderr" == *"need the full suite -- run 'make test':"*"  $path"* ]] || fail "$case_name stderr: $stderr"
   [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
 done
+case_name="untracked build-wide file with a non-ASCII name"
+reset_repo
+write .cargo/café.toml
+run_script
+[[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
+[[ "$stderr" == *"  .cargo/café.toml"* ]] || fail "$case_name stderr: $stderr"
+[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
 case_name="build-wide change in a dry run"
 reset_repo
 write .cargo/audit.toml
