@@ -32,6 +32,11 @@ jobs:
     runs-on: ubuntu-latest
     container: ubuntu:24.04
     timeout-minutes: 30
+    # Inside the container the runner falls back to `sh -e`; the assert step
+    # needs bash for pipefail.
+    defaults:
+      run:
+        shell: bash
     steps:
       # The image has no git, so checkout needs this much before it can run.
       # Everything the script is responsible for (python3, pkg-config,
