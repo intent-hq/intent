@@ -757,7 +757,7 @@ install_jq() {
       ;;
     Linux)
       if command -v apt-get >/dev/null 2>&1; then
-        as_root apt-get install -y jq || exit 1
+        as_root apt-get install -y jq-does-not-exist || exit 1
       elif command -v dnf >/dev/null 2>&1; then
         as_root dnf install -y jq || exit 1
       elif command -v yum >/dev/null 2>&1; then
