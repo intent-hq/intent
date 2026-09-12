@@ -7,11 +7,11 @@
 | script.list | workspaceId (req) | { scripts: [...] } |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
-| script.start | workspaceId (req), scriptId (req) | { ok, scriptId } |
+| script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) and published as `script:state` **before the reply**, so a `script.status` read after the reply never observes the pre-launch `idle`; the spawn flips it on to `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears `previouslyRunning` (in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
-| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, previouslyRunning?, ... } — the `ScriptRuntimeState` snapshot; the runtime status value is one of `idle \| running \| restarting \| exited`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a script that was running when the daemon last stopped — see the was-running marker note below |
+| script.status | workspaceId (req), scriptId (req) | { state, pid, exitCode, url?, previouslyRunning?, ... } — the `ScriptRuntimeState` snapshot; the runtime status value is one of `idle \| starting \| running \| restarting \| exited`. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a script that was running when the daemon last stopped — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } |
 
 > **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
@@ -24,10 +24,20 @@
 >
 > **Runtime status values.** The `ScriptRuntimeState` served by `script.status` (and as the
 > runtime part of `script.list` entries) and carried on `script:state` events reports one of
-> `idle | running | restarting | exited`. `restarting` (new in intentd, monorepo#1318) covers
+> `idle | starting | running | restarting | exited`. `starting` (new in intentd, within v9.12 —
+> intent-hq/intent#4858) covers the `script.start` launch window: `script.start` flips the
+> status under the same registry lock as its already-running guard, before the supervisor
+> task exists, and publishes the transition as `script:state` **before it replies**, so a
+> `script.status` read after the reply never observes the pre-launch `idle`; the spawn flips
+> it on to `running` (or `exited` + `error` on a launch failure). `starting` is as exclusive
+> as `running` — a second `script.start` inside the window is a no-op, `script.run` inside it
+> returns the already-running `warning`, and `script.stop` inside it settles the status back
+> to `idle` with a `script:state`. `restarting` (new in intentd, monorepo#1318) covers
 > the restart-in-flight window — a service auto-restart's backoff between an exit and the next
 > spawn attempt, and `script.restart`'s stop→start gap — distinguishing it from a final exit;
-> the respawn flips it back to `running`.
+> the respawn flips it back to `running` (no `starting` is emitted for the restart gap).
+> Clients should treat any status other than `idle` / `exited` as live (the FE's
+> `isLiveScriptStatus` allowlist), so future transitional states degrade correctly.
 >
 > **Was-running marker (`previouslyRunning?`, new in intentd, within v5.1).** Closing the app
 > stops the daemon and kills every running script, and boot hydration previously loaded all
