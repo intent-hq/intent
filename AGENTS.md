@@ -31,7 +31,9 @@ and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodu
 off its pin), and branch PR checks when `gh` is authenticated.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
-system packages may require privilege. Do not discover prerequisites during a build.
+system packages may require privilege. Do not discover prerequisites during a build: the
+dev and sandbox targets preflight the frontend toolchain and exit naming the missing item
+and `make bootstrap-dev-host`.
 
 ### Act
 
