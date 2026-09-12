@@ -135,19 +135,21 @@ cloudlands-fe).
   pre-filter that nominates candidates; the gate decides. A comment is posted only
   when **both** hold: (1) at least one PR linked to the issue via a GitHub closing
   keyword (`Fixes intent-hq/intent#N` — what `closedByPullRequestsReferences`
-  reports) is merged and contained in the release, with every other in-scope linked
-  fix PR also merged and contained; and (2) the issue is closed at release time. A
-  PR or commit that merely *mentions* the issue is not evidence of a fix — the
-  notifier stays silent on mention-only references, and an open issue never gets a
-  comment even when a linked PR is delivered. The gates differ in scope: intentd's
-  gate is component-scoped — it checks only intentd-linked fix PRs against the
-  released intentd tag (an intentd release still comments while an fe-side fix PR is
-  open); cloudlands-fe's gate is cross-repo — fe PRs must be contained in the fe tag
-  AND intentd PRs in the bundled intentd tag, making the fe comment the user-facing
-  availability signal. Any in-scope open or not-yet-contained linked fix PR → skip; a
-  later release whose scan re-references the issue picks it up. When completeness
-  cannot be determined (API error, token cannot see a repo), the notifier skips with
-  a warning rather than post a possibly-false claim.
+  reports) is merged and contained in the release, no in-scope linked fix PR is
+  still open, and every merged in-scope linked fix PR is contained (linked PRs that
+  were closed without merging are abandoned and ignored); and (2) the issue is
+  closed at release time. A PR or commit that merely *mentions* the issue is not
+  evidence of a fix — the notifier stays silent on mention-only references, and an
+  open issue never gets a comment even when a linked PR is delivered. The gates
+  differ in scope: intentd's gate is component-scoped — it checks only
+  intentd-linked fix PRs against the released intentd tag (an intentd release still
+  comments while an fe-side fix PR is open); cloudlands-fe's gate is cross-repo — fe
+  PRs must be contained in the fe tag AND intentd PRs in the bundled intentd tag,
+  making the fe comment the user-facing availability signal. Any in-scope open or
+  not-yet-contained linked fix PR → skip; a later release whose scan re-references
+  the issue picks it up. When completeness cannot be determined (API error, token
+  cannot see a repo), the notifier skips with a warning rather than post a
+  possibly-false claim.
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
