@@ -382,14 +382,17 @@ write .cargo/audit.toml
 DRY_RUN=1 run_script
 [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
 [[ "$stderr" == *"  .cargo/audit.toml"* ]] || fail "$case_name stderr: $stderr"
-case_name="renamed build-wide file still needs the full suite"
-reset_repo
-g mv Cargo.lock Cargo.lock.backup
-run_script
-[[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-[[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-[[ "$stderr" == *"  Cargo.lock"* ]] || fail "$case_name stderr: $stderr"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+for rename in "Cargo.lock Cargo.lock.backup" "crates/beta/build.rs crates/beta/retired.rs"; do
+  case_name="renamed build-wide file ($rename) still needs the full suite"
+  reset_repo
+  # shellcheck disable=SC2086
+  g mv $rename
+  run_script
+  [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
+  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
+  [[ "$stderr" == *"  ${rename%% *}"* ]] || fail "$case_name stderr: $stderr"
+  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+done
 
 # A failing git command is an error, never an empty change set.
 for subcommand in diff ls-files; do
