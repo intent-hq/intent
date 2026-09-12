@@ -159,8 +159,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd coverage-e2e coverage-all: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy build-intentd test test-intentd coverage-e2e coverage-all: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+# Pagers on the same targets. A saved-script PTY has no keyboard, so any
+# git/gh step that pages to `less` stalls forever waiting for a keypress.
+# nextest ignores PAGER (only --no-pager / user config disable its paging),
+# hence the explicit --no-pager on list-tests.
+gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -178,7 +184,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd list-tests coverage-e2e coverage-all \
 	fmt clippy check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -378,6 +384,15 @@ test-intentd: ensure-intentd-submodule
 		--force "$(GATE_FORCE)" \
 		--build-jobs "$(BUILD_JOBS)" \
 		--test-threads "$(TEST_THREADS)"
+
+# nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
+# export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.
+list-tests: ensure-intentd-submodule ## List nextest tests without a pager (ARGS="-p <crate>" to narrow)
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[list-tests] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	cd $(INTENTD_DIR) && cargo nextest list --no-pager $(ARGS)
 
 # Local reproduction of the CI coverage jobs (packages/intentd
 # .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same

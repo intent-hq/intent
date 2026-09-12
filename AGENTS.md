@@ -259,9 +259,10 @@ with no rollback.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`);
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
-  are PTY-backed, so use the `make` targets — they set `NEXTEST_SHOW_PROGRESS=none` and
-  `CARGO_TERM_PROGRESS_WHEN=never`; a raw `cargo nextest run` / `cargo build` must pass
-  the same or its progress-bar redraws flood the output buffer.
+  are PTY-backed with no keyboard, so use the `make` targets — they disable progress bars
+  and pagers (`make list-tests` for nextest discovery, which ignores `PAGER`); a raw
+  `cargo nextest` / `cargo build` / `git` / `gh` must pass `--no-pager` / the same env or
+  it floods the buffer or stalls on `less`.
 
 ## Release Process
 
