@@ -144,9 +144,9 @@ footer collapse/expand (`--scenario footer`, default) or context-well open/close
 then samples scroll geometry per animation frame. `--url` is a workspace page whose transcript
 scrolls and whose chat shows the event-subscriptions footer header (footer) or a context well
 (context-well); `--out` must not exist. Optional: `--inflate <nodes>` (clone transcript rows
-until the DOM reaches this count, 10000; donor rows must be under 2000 px tall, so a transcript
-rendering as one tall row fails — pass `--inflate 0` to skip), `--frames` (40), `--scroll-up`
-(800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000), `--headed`
+until the DOM reaches this count, 10000; donor rows need more than 20 descendants and under 2000 px
+height, so a transcript rendering as one tall row fails — pass `--inflate 0` to skip), `--frames` (40),
+`--scroll-up` (800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000), `--headed`
 (default headless). Exit 0 writes `trace.json`, `summary.json`, `samples.json`, and screenshots
 (`expanded.png` + `collapsed.png` for footer, `closed.png` + `opened.png` for context-well, plus
 `scrolled-up.png`) into `--out` and prints the summary; exit 1 is a runtime failure; exit 2 is a
