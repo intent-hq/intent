@@ -306,12 +306,17 @@
 >   info, **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
 >   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`** plus
->   **`displayed: boolean`** (unconditional on every listed tab) — a **layout
->   contract**, not a paint guarantee: true when the tab is not hidden AND is the
->   active tab of the panel that holds it in the workspace's saved layout; hidden
->   tabs are always `displayed: false`. A `displayed: true` tab paints only while
->   the workspace is in view and its panel is not hidden (e.g. by zoom)
->   (monorepo#3045, see the hidden-by-default block below).
+>   **`displayed?: boolean`** — a **layout contract**, not a paint guarantee: true
+>   when the tab is not hidden AND is the active tab of the panel that holds it in
+>   the workspace's saved layout; hidden tabs are `displayed: false` whenever the
+>   field is present. The field is **present only when the host has reported it**
+>   (the daemon answers `listTabs` from the registry, §5.45, and keeps `displayed`
+>   process-local: it is absent after a daemon restart until the host's connect-time
+>   `browser.syncTabs` re-reports it) — absent means *unknown*, never `false`, and
+>   the caller re-reads with `listTabs` once the host has reconnected
+>   ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
+>   What a `displayed: true` tab can actually paint is stated once in the
+>   **capture ops and workspace visibility** contract below (monorepo#3045).
 > - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
 >   own — another agent's tab, or an unowned tab the caller has not claimed) and
 >   `already-claimed` (a claim lost to an earlier claim) surface as **action-result
@@ -377,9 +382,8 @@
 >   visible tab that is not its panel's active tab is in the layout but sits behind
 >   another tab and does not paint (`visibility: 'visible', displayed: false`), and
 >   `showTab` on it (default `focus: false`) brings it to the front without moving
->   focus. `displayed: true` is a layout state, not a paint guarantee — the tab
->   paints only while the workspace is in view and its panel is not hidden (e.g.
->   by zoom); see the workspace-inactive semantics below. `showTab` succeeds only
+>   focus. `displayed: true` is a layout state, not a paint guarantee — see the
+>   capture-ops contract below. `showTab` succeeds only
 >   once a fresh tab list confirms the tab as not hidden **and** its panel's active
 >   tab; otherwise it fails as an action-result error.
 >   An unknown `tabId` fails as an **action-result error** (the per-action
@@ -388,37 +392,64 @@
 > - **`focusTab` is unchanged for visible tabs** (activate + focus the panel). On a
 >   **hidden** tab it fails with an action-result error directing the caller to
 >   `showTab` — there is no focusTab overload that reveals a hidden tab.
-> - **`screenshot` on a non-painting visible tab** — a visible tab paints only while
->   it is on screen (its panel's active tab, workspace in view, panel not hidden by
->   zoom); hidden tabs always paint offscreen via emulation. A capture of a visible
->   tab whose surface has not painted (`displayed: false`, or `displayed: true` in a
->   workspace not in view) fails as an **action-result error** (the per-action
->   `{ action, success: false, error }` envelope, never a JSON-RPC-level error)
->   whose human-readable `error` names the not-painting cause and directs the
->   caller to `showTab` (activate without moving focus) or `focusTab` (activate and
->   focus) before capturing again. The error text is FE-served prose, not a
->   structured code.
 >
-> **Workspace-inactive semantics (monorepo#3045).** Agent tab operations do **not**
-> require the tab's workspace to be currently open/visible in the FE: every action
-> (`openTab` hidden or visible, `closeTab`, `showTab`, `evaluate`, `screenshot`, …)
-> works regardless of workspace visibility — webviews spin up in the background as
-> needed. Visibility/activation effects apply to the **persisted layout state**:
-> `showTab` activates the tab in a visible panel of the workspace's layout (and with
-> `focus: true`, also focuses it) so the layout is correct when the user next opens
-> the workspace, and `displayed` reports that persisted layout state — it can be
-> `true` for a tab in a workspace that is not currently in view (the tab then
-> paints once the workspace is shown). When the
-> workspace is **not** currently visible in the UI, no actual UI focus/activation
-> side effect is attempted: `showTab { focus: true }`, `focusTab`, and
-> `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
-> focus attempt**, and the action's `result` payload carries an **additive
-> human-readable `warning` string** stating that the workspace is not visible so no
-> UI focus was attempted — the same additive-`warning` channel as the bare-loopback
-> rewrite warning above (monorepo#2323). The per-action
-> `{ action, success, result?, error? }` envelope is unchanged: the warning never
-> rides `error` and never fails the action, and the field is absent when the
-> workspace is visible.
+> **Capture ops and workspace visibility — one contract (monorepo#3045,
+> [intent-hq/intent#4103](https://github.com/intent-hq/intent/issues/4103),
+> [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).**
+> Agent tab operations do **not** require the tab's workspace to be currently
+> open/visible in the FE. Layout-only actions (`openTab` hidden or visible,
+> `closeTab`, `showTab`, `focusTab`, `claimTab`, `resizeTab`, …) apply their effects
+> to the **persisted layout state** so the layout is correct when the user next
+> opens the workspace, and `displayed` reports that persisted state — it can be
+> `true` for a tab in a workspace that is not currently in view. When the workspace
+> is **not** visible in the UI, no actual UI focus/activation side effect is
+> attempted: `showTab { focus: true }`, `focusTab`, and `openTab { visible: true }`
+> **succeed**, skip the UI focus attempt, and the action's `result` carries an
+> **additive human-readable `warning` string** saying the workspace is not visible
+> so no UI focus was attempted — the same additive-`warning` channel as the
+> bare-loopback rewrite warning above (monorepo#2323). The warning never rides
+> `error`, never fails the action, and is absent when the workspace is visible.
+>
+> **Capture ops** (`screenshot`, `getAccessibilityTree`, `evaluate`, and `navigate`,
+> which runs through `evaluate`) need a **mounted webview**. A hidden
+> tab is always mounted offscreen (it renders via emulation, whether or not its
+> workspace is in view). A **visible** tab whose webview is not mounted — because
+> its workspace is not in view, or it sits behind another tab in its panel — is
+> **mounted on demand** by the capture op itself: the FE hydrates the workspace
+> layout, waits for the offscreen host to register the tab, waits for the guest to
+> finish loading, then captures. The whole sequence is bounded by **one request
+> deadline** (the reverse-RPC timeout minus a transport margin; each stage gets the
+> lesser of its own cap and the budget remaining) — a capture op never outlives the
+> daemon's reverse request. A capture that mounted on demand against a not-in-view
+> workspace succeeds with the same additive `warning` string as above; a hidden
+> tab in a displayed workspace mounts with no warning.
+>
+> When a mount or paint cannot happen, the op fails as an **action-result error**
+> (the per-action `{ action, success: false, error }` envelope, never a JSON-RPC
+> or FE top-level error) whose human-readable `error` names the cause and remedy,
+> and which carries an **additive structured `errorCode`** when the cause is one of:
+>
+> - `workspace-not-visible` — the tab has no mounted webview and no window hosts
+>   the workspace, so it cannot be mounted on demand; the remedy is to open the
+>   workspace in a window and retry.
+> - `deadline-exhausted` — the request deadline ran out at a named stage (before
+>   or during the mount, the load settle, or the capture itself); retry the capture.
+> - `still-loading` — the guest was still loading after the bounded settle wait;
+>   retry, or `snapshot` with `waitFor: { networkIdle }` first.
+> - `navigated-away` — the mounted guest now shows a different **origin** than the
+>   tab list recorded for the tab (same-origin URL drift is not reported); the
+>   remedy is `navigate` back, or `listTabs` to re-check the tab.
+> - `not-painting` — the webview is mounted but its surface has not painted within
+>   the capture stage's own cap (e.g. a `displayed: false` tab behind a sibling, or
+>   a `displayed: true` tab whose panel is hidden by zoom); the remedy is `showTab`
+>   (activate without moving focus) or `focusTab` (activate and focus), then
+>   capture again.
+>
+> `errorCode` is absent on other failures (unknown tab, ownership errors keep their
+> own `not-owner` / `already-claimed` codes). `displayed: true` therefore never
+> guarantees a paint by itself; it says the tab is the active tab of its panel in
+> the saved layout, and the capture op supplies the mount when the workspace is not
+> in view.
 >
 > **Viewport sizing invariant.** Every tab has a persisted viewport mode. **Fit panel**
 > is the default: a visible tab follows the panel's webview area with no fixed frame or
