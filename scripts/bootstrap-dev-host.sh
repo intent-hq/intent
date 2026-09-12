@@ -17,6 +17,10 @@ export CARGO_HOME PATH
 GH_MIN_VERSION="2.94.0"
 GH_INSTALL_URL="https://github.com/cli/cli#installation"
 
+# jq: the release-notifier test suites parse GitHub API fixtures with it
+# (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
+JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
+
 # Minimum Node: the frontend install builds node-pty (and cpu-features) with
 # node-gyp 13, whose engines.node is "^22.22.2 || ^24.15.0 || >=26.0.0"; its undici
 # dependency throws on Node 20 (intent-hq/intent#4669). fe CI runs Node 24.
@@ -338,6 +342,7 @@ installable_gap_exists() {
   pnpm_ready || return 0
   frontend_dependencies_ready || return 0
   gh_ready || return 0
+  command -v jq >/dev/null 2>&1 || return 0
   return 1
 }
 
@@ -452,6 +457,12 @@ check_all() {
       ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
       optional "GitHub CLI: not authenticated; PR reporting is disabled until gh auth login"
     fi
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    ok "jq: $(jq --version 2>/dev/null | head -n 1)"
+  else
+    missing "jq: required by the release-notifier test suites (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit); run make bootstrap-dev-host"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -678,6 +689,35 @@ install_gh() {
   exit 1
 }
 
+install_jq() {
+  if command -v jq >/dev/null 2>&1; then
+    echo "[skip] jq already installed"
+    return
+  fi
+
+  echo "[install] jq"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install jq on macOS; see $JQ_INSTALL_URL" >&2; exit 1; }
+      brew install jq || exit 1
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y jq || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y jq || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y jq || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install jq from $JQ_INSTALL_URL and re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install jq from $JQ_INSTALL_URL" >&2; exit 1 ;;
+  esac
+  hash -r
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -744,6 +784,7 @@ install_rust
 install_node
 install_frontend
 install_gh
+install_jq
 
 echo
 check_all

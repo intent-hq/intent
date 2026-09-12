@@ -222,4 +222,12 @@ rm -f "$bin_dir/node"
 run_doctor
 expect_line "[missing]  Node: 22.22.2+, 24.15.0+ (recommended) or 26+ is required"
 
+# jq is required; without it the doctor names the suites that need it.
+expect_line "[missing]  jq: required by the release-notifier test suites"
+write_launcher jq '[ "$1" = --version ] && { echo jq-1.7.1; exit 0; }; exit 1'
+run_doctor
+expect_line "[ok]       jq: jq-1.7.1"
+reject_line "[missing]  jq:"
+rm -f "$bin_dir/jq"
+
 echo "bootstrap-dev-host tests passed"
