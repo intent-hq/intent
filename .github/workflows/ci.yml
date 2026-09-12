@@ -86,6 +86,7 @@ jobs:
           submodules: false
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
+          bash scripts/bootstrap-dev-host.test.sh
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
