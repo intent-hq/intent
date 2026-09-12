@@ -238,7 +238,10 @@
 >   (`"mine"` / `"unclaimed"` / `"all"`, default `all`; any other value ⇒ `-32602`),
 >   each entry in the FE's field names (`tabId`, `workspaceId`, `url`, `requestedUrl?`,
 >   `title?`, `ownerAgentId` — `null` when unowned —, `ownerAgentName?`,
->   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`)
+>   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`,
+>   `displayed?` — the host-reported layout fact as the host last reported it, omitted
+>   only while the host has never reported it, never a default `false`; within v9.12,
+>   [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835))
 >   **plus** `hostClientId`, `hostName?` (the host's hello `name` while it is live) and
 >   `hostConnected` (whether the host currently has a live hello'd connection). A
 >   `listTabs` batch must contain **only** `listTabs` actions (`-32602` otherwise); its
@@ -537,7 +540,7 @@ connection's `client.hello` identity, never by a wire parameter.
 | Method | Params | Result |
 | --- | --- | --- |
 | browser.listTabs *(v9.10)* | workspaceId (req) | { tabs: (BrowserTab & { hostConnected: boolean, hostName? })[] } — every **open** registry tab of the workspace, oldest first (`createdAt`, then `tabId`), any client may call it. `hostConnected` is whether the tab's host has a live hello'd connection right now; `hostName` is that host's hello `name` (omitted while the host is offline or nameless). Tombstoned rows (see `browser.closeTab`) are excluded. -32602 on a missing/empty `workspaceId`. |
-| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object; `tabId` missing, non-string or empty; `url` missing or non-string — an **empty** `url` string is accepted; a wrong-typed optional field; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
+| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / displayed-or-not / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object; `tabId` missing, non-string or empty; `url` missing or non-string — an **empty** `url` string is accepted; a wrong-typed optional field; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
 | browser.removeTab *(v9.10)* | tabId (req) | { ok: true } — **host-only** report that the tab is gone. Deletes the row (an open row emits `browser:tab-closed`; a tombstone is purged silently — the host has acknowledged the daemon-side close). Unknown ids are an idempotent no-op. -32602 on an un-hello'd connection or a tab hosted by another client. |
 | browser.syncTabs *(v9.10)* | tabs (req): BrowserTabInput[] | { drop: tabId[] } — **host-only** full-snapshot reconciliation of the host's tab set **across all workspaces** (each entry carries its own `workspaceId`; duplicate ids after the first are ignored), one transaction — nothing is written when any entry is rejected. Per entry: unknown ⇒ created (`browser:tab-opened`); open and hosted by this host ⇒ refreshed (`browser:tab-updated { changes }` when anything differed; another `workspaceId` for a known tab rejects the **whole** snapshot with -32602); tombstoned or hosted **elsewhere** ⇒ untouched and listed in `drop` (a tab has exactly one host; the tombstone is retained, so a repeated stale snapshot keeps answering `drop` instead of reviving the tab). Every row of this host **absent** from the snapshot is deleted — open rows emit `browser:tab-closed`, tombstones are purged silently. Hosts send it on connect / reconnect and after a `client:disconnected`-worthy gap. -32602 on an un-hello'd connection, a non-array `tabs`, or a malformed entry (non-object; `tabId` / `workspaceId` missing, non-string or empty — here `workspaceId` **is** required per entry, there being no envelope value to inject; `url` missing or non-string, an empty `url` being accepted). |
 | browser.navigateTab *(v9.11)* | tabId (req), url (req) | the routed `navigate` action's `{ action, success, result?, error? }` envelope — any client. The daemon looks the tab up (-32602 `browser.navigateTab: tab not found: <tabId>` for an unknown or tombstoned id) and dispatches a reverse `browser.exec { workspaceId, tabId, actions: [{ action: "navigate", tabId, url }] }` to the tab's **routing target**: a **claimed** tab (`ownerAgentId` set) goes to its workspace's driving client (§5.9 REV-2 rules), an **unclaimed** one to its physical host. The host then reports the resulting navigation via `browser.upsertTab` and every client follows the canonical row. -32603 `browser.navigateTab: browser client "<name>" (<clientId>) for this workspace is not connected` when the target is offline; `browser.navigateTab: no client connected` when no eligible client exists at all. |
@@ -559,8 +562,11 @@ interface BrowserTabInput {            // host-reported fields
   visibility?: "visible" | "hidden";   // default "visible" when omitted; null is REJECTED (-32602);
                                        // §5.9 hidden-by-default block
   emulatedSize?: { width: number, height: number } | null;   // omitted / null = native viewport
+  displayed?: boolean | null;          // §5.9 layout fact: not hidden AND the active tab of its
+                                       // panel in the workspace's saved layout; omitted / null =
+                                       // not reported (within v9.12, intent-hq/intent#4835)
 }
-// Input nullability: the five nullable report fields above accept an explicit null
+// Input nullability: the six nullable report fields above accept an explicit null
 // (≡ omitted). The canonical BrowserTab row (below, list results, event `tab`) never
 // carries null — a cleared field is omitted; only the browser:tab-updated `changes`
 // diff uses explicit null to signal a clear.
@@ -575,6 +581,8 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
   ownerAgentName?: string;
   visibility: "visible" | "hidden";    // always present on read
   emulatedSize?: { width: number, height: number };
+  displayed?: boolean;                 // as the host last reported it; omitted = never reported
+                                       // (NOT a default false — detect by presence)
   createdAt: string;                   // ISO-8601
   updatedAt: string;
 }
@@ -584,7 +592,21 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
 with `hostConnected` / `hostName?`, the `browser.listTabs` entry. The agent-facing
 `listTabs` action (§5.9) projects the same rows into the FE's field names instead
 (`mode` + `width` / `height` in place of `emulatedSize`, `ownerAgentId: null` when
-unowned) plus `hostClientId` / `hostName?` / `hostConnected`.
+unowned) plus `hostClientId` / `hostName?` / `hostConnected`; `displayed?` rides both
+projections unchanged.
+
+**`displayed` is process-local, not persisted** ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
+Every other host-reported field is a `browser_tab` column; `displayed` is a layout fact of
+the live host process, so the daemon keeps it in a process-local overlay keyed by `tabId`
+rather than a column — no schema migration. It is diffed, applied and read back exactly
+like the other fields (an identical report is still a no-op; a report that omits it
+clears it, `changes: { displayed: null }`), but it does not survive a daemon restart: after
+a restart every row reads with `displayed` **absent** ("never reported") until its host
+re-reports it — which the host's connect-time `browser.syncTabs` does for its whole tab
+set, so the fact is truthful again as soon as the host reconnects, and in between clients
+see "unknown" rather than a value the daemon can no longer vouch for. Hosts MUST include
+`displayed` on every upsert / sync entry they can compute it for and re-report whenever
+the layout fact changes (panel active tab, visibility, workspace layout).
 
 **Host vs. driving client.** A tab's **host** is the physical client rendering it — set
 at creation from the reporting connection and only ever changed by the daemon: an agent's
@@ -599,8 +621,8 @@ host materialises it from the canonical row.
 **Events (§6.5).** `browser:tab-opened` / `browser:tab-closed` carry `data: { tab }`;
 `browser:tab-updated` carries `data: { tab, changes }` where `changes` is the
 **field-wise diff** — the host-reported fields that differed (`url`, `requestedUrl`,
-`title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`; a cleared
-optional field appears as an explicit `null`) or, for daemon-side re-homing,
+`title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`, `displayed`; a
+cleared optional field appears as an explicit `null`) or, for daemon-side re-homing,
 `hostClientId` / `ownerAgentId`. All three are **workspace-scoped** (the tab's
 `workspaceId`) with actor `{ type: "user", id: <hostClientId> }` — the reporting host —
 and are tailed by an ordinary `events.subscribe` on the workspace. A report that changes
@@ -612,7 +634,7 @@ nothing emits nothing.
   "params":{ "workspaceId":"ws-abc","tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
     "url":"http://127.0.0.1:5173/","requestedUrl":"http://daemon.localhost:5173/",
     "title":"Dev server","ownerAgentId":"agent-1","ownerAgentName":"Implementor",
-    "visibility":"hidden","emulatedSize":{ "width":1280,"height":800 } } } }
+    "visibility":"hidden","emulatedSize":{ "width":1280,"height":800 },"displayed":false } } }
 // ← { "jsonrpc":"2.0","id":80,"result":{ "tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
 //      "hostClientId":"cli-7f3a","url":"http://127.0.0.1:5173/", ..., "createdAt":"…","updatedAt":"…" } } }
 // ← every workspace subscriber: browser:tab-opened { tab }
