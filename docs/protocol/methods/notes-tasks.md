@@ -13,7 +13,7 @@ All `note.*` methods require `workspaceId`. All except `list` and `create` addit
 | note.add | noteId (req), content (req), heading?, position?: "end" \| "start" | { ok, ... } — `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.edit | noteId (req), old (req), new (req) | { ok, ... } — first exact-match replacement. `-32602` when `new` is the line-numbered `note.read` display (see below) |
 | note.editLines | noteId (req), start (req,int), end (req,int), content (req) | { ok, ... } (1-based inclusive). `-32602` when `content` is the line-numbered `note.read` display (see below) |
-| note.setContent | noteId (req), content (req), confirmReplacement?: boolean | { ok, ... } (full replace). `-32602` when `content` is the line-numbered `note.read` display (see below) |
+| note.setContent | noteId (req), content (req), confirmReplacement?: boolean, expectedVersion?: int | { ok, noteId, title, previousTitle?, updatedAt, oldContent?, newContent, convertedCount, createdTaskNoteIds, createdTasks, warnings, rev } (full replace). `rev` (additive) is the note's post-write `rev` — after any `@@@task` auto-conversion refetch — i.e. the value a follow-up conditional write sends as `expectedVersion`; `newContent` is the persisted (possibly merged) text. `expectedVersion` is the base the writer read: absent or equal to the current `rev` → `content` replaces the note as-is; **stale** → the write is **merged, not rejected** (see "Three-way merge on stale `expectedVersion`" below) — the writer's intent (`diff(base → content)`, base = the retained snapshot at that rev) is applied onto the current text, or degrades to last-writer-wins when no snapshot survives for that rev. The reduction guard (`> 50 %` shorter without `confirmReplacement`, `-32603`) is measured `base → content` when a base is recoverable and `current → content` otherwise. `-32005` only when the bounded read-merge-persist loop (5 attempts) is exhausted by concurrent versioned writes. `-32602` when `content` is the line-numbered `note.read` display (see below) |
 | note.updateMetadata | noteId (req), title?, tags?: string | string[] |
 | note.delete | noteId (req) | { ok, noteId, deleted } — emits `note:deleted`. Deleting a **task note** additionally recomputes + emits `task:ready-tasks-changed` (§6.5) after the `note:deleted`, with the additive trigger `triggeredBy: { noteId, reason: "note-deleted" }` (monorepo#1981; generalized by intentd#1121, monorepo#2006), whenever the delete actually **moves** the ready set: deleting a task that was itself ready drops its id from `readyTaskIds`, deleting the last incomplete task child of a parent readies the parent (tree rule), and deleting a task note that other tasks `dependsOn` keeps the #1981 always-emit contract — the dangling edge counts as unmet, so deleting a previously-`complete` dep drops its dependents out of `readyTaskIds`. The pre-delete and post-delete ready sets are compared, so a delete that provably cannot move the set (e.g. a terminal task nobody depends on) emits no recompute. Deleting a **`complete`** dep also re-announces each dependent task note via `note:updated` (the computed `unmetDependsOn` projection moved, monorepo#1979) after the ready-set event — same ordering as the status-transition path (`task:*` first, dependent `note:updated` last) |
 | note.listTasks | noteId (req) | { tasks: [...] } (checkbox/task rows + taskNoteId). Rows with a linked task note also carry the linked task's `dependsOn?` / `conflictsWith?` / computed `unmetDependsOn?` (v6.8; presence-detected, omitted when empty — see §5.4 task.setRelations). A row's `status` word (`done` / `in-progress` / `todo`) is read from the line's checkbox marker; on a row with a `taskNoteId` that marker is the daemon-materialized projection of the task note's status (§5.4 "Linked checkboxes are projections of the task note") |
@@ -44,20 +44,34 @@ metadata-only updates do not create versions. `note.*` writes carry no author co
 on the wire yet, so every version is stamped with the system author
 (`{ id:"system", name:"intentd", type:"system" }`).
 
-**CRDT merge on full-content writes (§5.2 / A5).** `note.setContent` and the
-content arm of `note.update` are **not** last-write-wins: incoming content is
-routed through a per-note `yrs` (Rust Yjs) document seeded from the note's
-stored content on first touch, and each write applies a single-hunk char-level
-diff (common UTF-16 prefix / suffix trimmed) inside a `yrs` transaction. The
-merged `Y.Text` output is what the daemon cleans and persists, so two
-concurrent full-content writes whose diffs target different regions both
-survive in the stored content. The CRDT state is **session-only** — never
-persisted, sweepable after 24 h idle, keyed by `(workspaceId, noteId)`. The
-surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
-`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write
-straight to storage and invalidate the cached session so the next full-content
-write reseeds from the fresh persisted content; `note.delete` drops the
-session. The wire shapes on §5.2 are unchanged.
+**Three-way merge on stale `expectedVersion` (§5.2 / A5).** `note.setContent`
+is **not** last-write-wins and does **not** reject a stale base: the writer
+sends the `rev` it read as `expectedVersion`, and when that no longer matches
+the stored `rev` the daemon recovers the writer's **base** — the retained
+`note_version` snapshot for that rev (newest snapshot with `rev <= expectedVersion`,
+see "Version history" above) — and applies the writer's intent
+`diff(base → content)` onto the **current** stored text with a pure three-way
+character merge (Myers hunks per Unicode scalar value, so a merge never splits a
+code point). Non-overlapping hunks from either side apply; identical edits apply
+once; hunks from both sides that overlap the same base span form one conflicting
+cluster rendered as the *current* variant immediately followed by the *incoming*
+variant (`WaWb`) — nothing is dropped and no markers are inserted. When no
+snapshot survives for the stale rev (pruned past the 50-version cap or predating
+the note's version history) the write degrades to honest last-writer-wins:
+`content` lands verbatim. An absent `expectedVersion`, or one equal to the current
+`rev`, skips the merge and replaces the note as-is. The merged text is what the
+daemon cleans and persists through the normal mutation flow (comment re-anchor,
+version snapshot, line-attribution recompute, `@@@task` auto-conversion, one
+`note:updated`). Read → merge → persist is atomic per attempt: the persist is
+gated on the `rev` that was read, and a concurrent versioned write that lands in
+between makes the daemon re-fetch, re-merge against the new current and retry
+(bounded, 5 attempts) — only exhaustion surfaces `-32005`. The reduction guard is
+measured against the writer's base when one is recoverable (so a small edit on a
+note that another writer has since grown is not misread as a wipe) and against
+the current text otherwise. The content arm of `note.update` keeps the session-only
+`yrs` merge for now; the surgical mutations (`note.add`, `note.edit`,
+`note.editLines`, `note.restoreVersion`, `task.updateStatus`, `task.update`,
+`task.convertBlocks`, `comment.add`) write straight to storage.
 
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
@@ -85,8 +99,8 @@ monorepo#4299; a rejected call creates no child task note). The other `task.*`
 methods take no note content: `task.convertBlocks` reads `@@@task` blocks already
 persisted through a guarded write, and `task.markAsTask` / `task.update` params are
 task metadata or a single checkbox line. The check runs in the service layer before the note is
-fetched and before the CRDT merge, so a rejected write touches neither the store nor
-the `yrs` document (the note is unchanged, no version is appended, no event is
+fetched and before any merge, so a rejected write touches neither the store nor
+the merge state (the note is unchanged, no version is appended, no event is
 emitted) and applies on every transport, including the FE editor's `note.setContent`
 save path. The detector anchors on the **leading run**: the content must open with at
 least two consecutive lines of the exact binding shape — a number column that is
