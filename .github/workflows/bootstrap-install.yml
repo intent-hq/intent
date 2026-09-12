@@ -10,14 +10,21 @@
 # are workflow-level, and this run is minutes-long, so it is gated to the
 # files that can change the installer's behavior plus a weekly cron that
 # catches upstream repository drift. It is not a required check.
+#
+# The Rust toolchain pin (packages/intentd/rust-toolchain.toml) and the
+# frontend packageManager (packages/cloudlands-fe/package.json) live inside
+# submodules, so a monorepo PR never diffs them: it moves the gitlink. The
+# filter therefore lists the gitlink paths, which means every submodule bump
+# PR runs this job (~2 min) and a bump that changes either pin is exercised.
 name: bootstrap-install
 on:
   pull_request:
     paths:
       - scripts/bootstrap-dev-host.sh
       - scripts/bootstrap-dev-host.test.sh
-      - packages/intentd/rust-toolchain.toml
-      - packages/cloudlands-fe/package.json
+      - packages/intentd
+      - packages/cloudlands-fe
+      - .gitmodules
       - .github/workflows/bootstrap-install.yml
   schedule:
     # Mondays 06:17 UTC — upstream repo drift backstop (NodeSource, cli.github.com).
