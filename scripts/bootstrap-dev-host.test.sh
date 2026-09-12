@@ -39,8 +39,11 @@ write_launcher() {
   chmod +x "$bin_dir/$1"
 }
 
+# The node shim answers --version with the version under test and hands
+# everything else (the pty.node load probe) to the real node.
+real_node=$(command -v node) || fail "a real node is required to exercise the pty.node load probe"
 set_node_version() {
-  write_launcher node "echo v$1"
+  write_launcher node "[ \"\$1\" = --version ] && { echo v$1; exit 0; }; exec \"$real_node\" \"\$@\""
 }
 
 host_platform=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -50,12 +53,50 @@ case "$(uname -m)" in
   *) host_arch=$(uname -m) ;;
 esac
 
+# A loadable pty.node cannot be fabricated without a compiler; use the one the
+# repository's frontend checkout built for this host when it exists. Any
+# bundled prebuild for another platform serves as the foreign binary, with a
+# Mach-O header as the stand-in when none is bundled.
+loadable_pty=""
+foreign_pty=""
+for candidate in \
+  "$repo_root/packages/cloudlands-fe/node_modules/node-pty/build/Release/pty.node" \
+  "$repo_root/packages/cloudlands-fe/node_modules/node-pty/prebuilds/$host_platform-$host_arch/pty.node"; do
+  if [[ -z "$loadable_pty" && -f "$candidate" ]]; then
+    loadable_pty=$candidate
+  fi
+done
+for candidate in "$repo_root"/packages/cloudlands-fe/node_modules/node-pty/prebuilds/*/pty.node; do
+  case "$candidate" in
+    */"$host_platform-$host_arch"/*) ;;
+    *)
+      if [[ -z "$foreign_pty" && -f "$candidate" ]]; then
+        foreign_pty=$candidate
+      fi
+      ;;
+  esac
+done
+if [[ -z "$foreign_pty" ]]; then
+  foreign_pty="$temp_dir/foreign-pty.node"
+  printf '\317\372\355\376\007\000\000\001\003\000\000\000' >"$foreign_pty"
+fi
+
+# set_pty_binaries [source=]path...: installs each path under node_modules/node-pty,
+# copied from source when given and empty otherwise.
 set_pty_binaries() {
   rm -rf "$pty_dir/build" "$pty_dir/prebuilds"
-  local path
-  for path in "$@"; do
+  local entry source path
+  for entry in "$@"; do
+    case "$entry" in
+      *=*) source=${entry%%=*}; path=${entry#*=} ;;
+      *) source=""; path=$entry ;;
+    esac
     mkdir -p "$pty_dir/$(dirname "$path")"
-    : >"$pty_dir/$path"
+    if [[ -n "$source" ]]; then
+      cp "$source" "$pty_dir/$path"
+    else
+      : >"$pty_dir/$path"
+    fi
   done
 }
 
@@ -80,14 +121,23 @@ reject_line() {
   ! grep -qF -- "$1" "$output" || fail "expected doctor output not to contain: $1"
 }
 
-# Healthy host: supported Node, a launcher that answers, node-pty built for this platform.
+ok_dependencies="[ok]       frontend dependencies: packages/cloudlands-fe/node_modules with node-pty loadable on $host_platform-$host_arch"
+
+# Healthy host: supported Node, a launcher that answers, node-pty loadable on this platform.
 set_node_version 24.19.0
 write_launcher corepack 'echo 0.35.0'
-set_pty_binaries build/Release/pty.node
+if [[ -n "$loadable_pty" ]]; then
+  set_pty_binaries "$loadable_pty=build/Release/pty.node"
+else
+  echo "bootstrap-dev-host tests: no built pty.node in packages/cloudlands-fe/node_modules; loadable-binary assertions skipped" >&2
+  set_pty_binaries build/Release/pty.node
+fi
 run_doctor
 expect_line "[ok]       Node: v24.19.0"
 expect_line "[ok]       Corepack: 0.35.0"
-expect_line "[ok]       frontend dependencies: packages/cloudlands-fe/node_modules with node-pty built for $host_platform-$host_arch"
+if [[ -n "$loadable_pty" ]]; then
+  expect_line "$ok_dependencies"
+fi
 [[ "$elapsed_ms" -lt 5000 ]] || fail "healthy doctor took ${elapsed_ms}ms (expected under 5000ms)"
 
 # A Corepack launcher that re-invokes itself fails within the probe timeout and names its path.
@@ -124,9 +174,31 @@ expect_line "corepack pnpm install --frozen-lockfile, then corepack pnpm rebuild
 set_pty_binaries prebuilds/win32-x64/pty.node prebuilds/win32-arm64/pty.node
 run_doctor
 expect_line "[missing]  frontend dependencies: node-pty has no pty.node for $host_platform-$host_arch"
-set_pty_binaries "prebuilds/$host_platform-$host_arch/pty.node"
+if [[ -n "$loadable_pty" ]]; then
+  set_pty_binaries "$loadable_pty=prebuilds/$host_platform-$host_arch/pty.node"
+  run_doctor
+  expect_line "$ok_dependencies"
+fi
+
+# A pty.node that exists but cannot be loaded (truncated build output) is a gap, not a pass.
+set_pty_binaries build/Release/pty.node
 run_doctor
-expect_line "[ok]       frontend dependencies: packages/cloudlands-fe/node_modules with node-pty built for $host_platform-$host_arch"
+expect_line "[missing]  frontend dependencies: node cannot load node-pty/build/Release/pty.node (exit 1: "
+expect_line "(built for another platform or corrupted); run corepack pnpm rebuild node-pty in packages/cloudlands-fe"
+reject_line "[ok]       frontend dependencies:"
+
+# A binary built for another platform in the generic build/Release path is a gap too.
+set_pty_binaries "$foreign_pty=build/Release/pty.node"
+run_doctor
+expect_line "[missing]  frontend dependencies: node cannot load node-pty/build/Release/pty.node (exit 1: "
+reject_line "[ok]       frontend dependencies:"
+
+# The load probe is bounded like the launcher probes.
+write_launcher node "[ \"\$1\" = --version ] && { echo v24.19.0; exit 0; }; exec sleep 6543"
+run_doctor
+expect_line "[missing]  frontend dependencies: loading node-pty/build/Release/pty.node with node did not finish within 2s"
+[[ "$elapsed_ms" -lt 10000 ]] || fail "stalled load probe doctor took ${elapsed_ms}ms (expected under 10000ms)"
+set_node_version 24.19.0
 
 # No node_modules at all keeps the install hint.
 mv "$fe_dir/node_modules" "$temp_dir/node_modules.bak"

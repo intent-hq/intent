@@ -232,8 +232,34 @@ node_pty_binary() {
   return 1
 }
 
+# node_pty_loadable: the binary node-pty would pick must actually load on this
+# host. build/Release and build/Debug are not platform-specific paths, so a tree
+# copied from another machine (or a truncated build output) passes the file
+# check but fails dlopen at runtime. Loads it with node under PROBE_TIMEOUT;
+# on failure PROBE_ERROR says why.
+node_pty_loadable() {
+  local binary relative status reason
+  PROBE_ERROR=""
+  binary=$(node_pty_binary) || { PROBE_ERROR="node-pty has no pty.node for $(host_platform)-$(host_arch)"; return 1; }
+  relative=${binary#"$FE_DIR/node_modules/"}
+  command -v node >/dev/null 2>&1 || { PROBE_ERROR="node is not on PATH, so $relative cannot be load-tested"; return 1; }
+  run_bounded "$PROBE_TIMEOUT" "$FE_DIR" node -e 'require(process.argv[1])' "$binary"
+  status=$?
+  case "$status" in
+    0) return 0 ;;
+    124) PROBE_ERROR="loading $relative with node did not finish within ${PROBE_TIMEOUT}s" ;;
+    *)
+      reason=$(printf '%s\n' "$PROBE_OUTPUT" | grep '^Error: ' | head -n 1 | sed 's/^Error: //')
+      [[ -n "$reason" ]] || reason=$(printf '%s\n' "$PROBE_OUTPUT" | grep -v '^$' | head -n 1)
+      reason=${reason#"$binary: "}
+      PROBE_ERROR="node cannot load $relative (exit $status${reason:+: $reason})"
+      ;;
+  esac
+  return 1
+}
+
 frontend_dependencies_ready() {
-  [[ -d "$FE_DIR/node_modules" ]] && node_pty_binary >/dev/null
+  [[ -d "$FE_DIR/node_modules" ]] && node_pty_loadable
 }
 
 corepack_home() {
@@ -404,10 +430,12 @@ check_all() {
 
   if [[ ! -d "$FE_DIR/node_modules" ]]; then
     missing "frontend dependencies: run corepack pnpm install --frozen-lockfile in packages/cloudlands-fe"
-  elif node_pty_binary >/dev/null; then
-    ok "frontend dependencies: packages/cloudlands-fe/node_modules with node-pty built for $(host_platform)-$(host_arch)"
-  else
+  elif ! node_pty_binary >/dev/null; then
     missing "frontend dependencies: node-pty has no pty.node for $(host_platform)-$(host_arch) under packages/cloudlands-fe/node_modules (interrupted or script-less install); run corepack pnpm install --frozen-lockfile, then corepack pnpm rebuild node-pty if it is still missing"
+  elif node_pty_loadable; then
+    ok "frontend dependencies: packages/cloudlands-fe/node_modules with node-pty loadable on $(host_platform)-$(host_arch)"
+  else
+    missing "frontend dependencies: $PROBE_ERROR under packages/cloudlands-fe/node_modules (built for another platform or corrupted); run corepack pnpm rebuild node-pty in packages/cloudlands-fe"
   fi
 
   local gh_found
@@ -674,9 +702,10 @@ install_frontend() {
   else
     echo "[install] frontend dependencies"
     (cd "$FE_DIR" && corepack pnpm install --frozen-lockfile) || exit 1
-    if ! node_pty_binary >/dev/null; then
-      echo "[install] node-pty native module for $(host_platform)-$(host_arch)"
+    if ! node_pty_loadable; then
+      echo "[install] node-pty native module for $(host_platform)-$(host_arch): $PROBE_ERROR"
       (cd "$FE_DIR" && corepack pnpm rebuild node-pty) || exit 1
+      node_pty_loadable || { echo "ERROR: frontend dependencies: $PROBE_ERROR after corepack pnpm rebuild node-pty" >&2; exit 1; }
     fi
   fi
 }
