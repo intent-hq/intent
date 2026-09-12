@@ -86,7 +86,12 @@ hydration_docs=(AGENTS.md docs/fe/DEVELOPER_GUIDE.md)
 [[ -f "$fe_agents" ]] && hydration_docs+=("$fe_agents")
 canonical_range=
 for file in "${hydration_docs[@]}"; do
-  mapfile -t anchors < <(grep -ni 'first tunneled' "$file" || true)
+  # Read lines into the array with a loop: stock macOS ships Bash 3.2, which
+  # lacks the Bash 4 array-fill builtin (intent-hq/intent#4759).
+  anchors=()
+  while IFS= read -r anchor; do
+    anchors+=("$anchor")
+  done < <(grep -ni 'first tunneled' "$file" || true)
   if ((${#anchors[@]} != 1)); then
     fail "$file" 1 "expected exactly one first-tunneled hydration expectation; found ${#anchors[@]}"
     continue
