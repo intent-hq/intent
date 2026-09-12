@@ -228,6 +228,12 @@ write_launcher jq '[ "$1" = --version ] && { echo jq-1.7.1; exit 0; }; exit 1'
 run_doctor
 expect_line "[ok]       jq: jq-1.7.1"
 reject_line "[missing]  jq:"
+
+# A jq on PATH that cannot run is a broken install, not a pass.
+write_launcher jq 'echo "cannot execute" >&2; exit 1'
+run_doctor
+expect_line "[missing]  jq: $bin_dir/jq is on PATH but jq --version fails"
+reject_line "[ok]       jq:"
 rm -f "$bin_dir/jq"
 
 echo "bootstrap-dev-host tests passed"

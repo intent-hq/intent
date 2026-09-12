@@ -327,6 +327,19 @@ gh_ready() {
   [[ "$version" == "$base" || "$base" != "$GH_MIN_VERSION" ]]
 }
 
+jq_version() {
+  command -v jq >/dev/null 2>&1 || return 1
+  local output
+  output=$(jq --version 2>/dev/null) || return 1
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+# A jq pathname on PATH is not enough: a broken or stale shim passes command -v
+# but cannot run, so require jq --version to succeed.
+jq_ready() {
+  jq_version >/dev/null
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -342,7 +355,7 @@ installable_gap_exists() {
   pnpm_ready || return 0
   frontend_dependencies_ready || return 0
   gh_ready || return 0
-  command -v jq >/dev/null 2>&1 || return 0
+  jq_ready || return 0
   return 1
 }
 
@@ -459,10 +472,12 @@ check_all() {
     fi
   fi
 
-  if command -v jq >/dev/null 2>&1; then
-    ok "jq: $(jq --version 2>/dev/null | head -n 1)"
-  else
+  if ! command -v jq >/dev/null 2>&1; then
     missing "jq: required by the release-notifier test suites (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit); run make bootstrap-dev-host"
+  elif ! jq_ready; then
+    missing "jq: $(command -v jq) is on PATH but jq --version fails; reinstall it (run make bootstrap-dev-host)"
+  else
+    ok "jq: $(jq_version)"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -690,8 +705,8 @@ install_gh() {
 }
 
 install_jq() {
-  if command -v jq >/dev/null 2>&1; then
-    echo "[skip] jq already installed"
+  if jq_ready; then
+    echo "[skip] jq $(jq_version) already installed"
     return
   fi
 
