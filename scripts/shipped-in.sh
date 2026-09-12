@@ -1,20 +1,25 @@
 #!/usr/bin/env bash
-# Print the first intent-hq/cloudlands-releases tag that carries a merged commit.
+# Print the first intent-hq/cloudlands-releases tag that carries one or more
+# merged commits.
 #
-#   scripts/shipped-in.sh <intentd|cloudlands-fe> <commit-sha> [--limit N]
+#   scripts/shipped-in.sh <intentd|cloudlands-fe> <commit-sha> \
+#     [<intentd|cloudlands-fe> <commit-sha>]... [--limit N]
 #
-# cloudlands-fe: the tag carries the commit when the GitHub compare
+# Each `<component> <commit-sha>` pair is checked independently; the same
+# component may appear more than once with different SHAs.
+# cloudlands-fe: a tag carries the commit when the GitHub compare
 # `<sha>...<tag>` on intent-hq/cloudlands-fe reports `ahead` or `identical`.
 # intentd: each tag's release-manifest.json names the pinned `intentdVersion`;
 # the tag carries the commit when `<sha>...v<intentdVersion>` on
 # intent-hq/intentd reports `ahead` or `identical`. `behind` and `diverged`
 # never count. The newest N releases are scanned (default 10) and the oldest
-# carrying tag is printed as `<tag> intentdVersion=<version>`.
+# tag carrying EVERY pair is printed as `<tag> intentdVersion=<version>`.
 #
-# Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries the
-# commit yet (stdout empty); 4 = transient GitHub failure (rate limit, 5xx,
-# network) -- retry later; 2 = usage error; 1 = any other gh/API or manifest
-# failure. gh's own error text is appended to the message on 1 and 4.
+# Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
+# pair yet (stdout empty; stderr names the pairs the newest scanned release
+# misses); 4 = transient GitHub failure (rate limit, 5xx, network) -- retry
+# later; 2 = usage error; 1 = any other gh/API or manifest failure. gh's own
+# error text is appended to the message on 1 and 4.
 
 set -euo pipefail
 
@@ -23,13 +28,13 @@ fe_repo=intent-hq/cloudlands-fe
 intentd_repo=intent-hq/intentd
 
 usage() {
-  echo "Usage: $0 <intentd|cloudlands-fe> <commit-sha> [--limit N]" >&2
+  echo "Usage: $0 <intentd|cloudlands-fe> <commit-sha> [<intentd|cloudlands-fe> <commit-sha>]... [--limit N]" >&2
   exit 2
 }
 
-component=${1:-}
-sha=${2:-}
-[[ -n "$component" && -n "$sha" ]] || usage
+components=("${1:-}")
+shas=("${2:-}")
+[[ -n "${components[0]}" && -n "${shas[0]}" ]] || usage
 shift 2
 limit=10
 while (($# > 0)); do
@@ -44,16 +49,24 @@ while (($# > 0)); do
       [[ "$limit" =~ ^[1-9][0-9]*$ ]] || usage
       shift
       ;;
-    *) usage ;;
+    -*) usage ;;
+    *)
+      (($# >= 2)) || usage
+      components+=("$1")
+      shas+=("$2")
+      shift 2
+      ;;
   esac
 done
 
-case "$component" in
-  intentd) compare_repo=$intentd_repo ;;
-  cloudlands-fe) compare_repo=$fe_repo ;;
-  *) usage ;;
-esac
-[[ "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]] || usage
+pair_count=${#components[@]}
+for ((i = 0; i < pair_count; i++)); do
+  case "${components[i]}" in
+    intentd | cloudlands-fe) ;;
+    *) usage ;;
+  esac
+  [[ "${shas[i]}" =~ ^[0-9a-fA-F]{7,40}$ ]] || usage
+done
 
 fail() {
   echo "shipped-in: $*" >&2
@@ -79,9 +92,9 @@ gh_fail() {
 }
 
 compare_status() {
-  local head=$1 status
-  status=$(gh api "repos/$compare_repo/compare/$sha...$head" --jq .status 2>"$gh_err") ||
-    gh_fail "gh api compare $sha...$head on $compare_repo failed"
+  local repo=$1 sha=$2 head=$3 status
+  status=$(gh api "repos/$repo/compare/$sha...$head" --jq .status 2>"$gh_err") ||
+    gh_fail "gh api compare $sha...$head on $repo failed"
   printf '%s\n' "$status"
 }
 
@@ -134,23 +147,53 @@ while IFS= read -r tag; do
 done < <(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' <<<"$release_list" | head -n "$limit" || true)
 ((${#tags[@]} > 0)) || fail "gh release list on $releases_repo returned no vX.Y.Z tags"
 
+# A single pair is reported by its sha alone; several pairs by component + sha.
+describe_pair() {
+  if ((pair_count == 1)); then
+    printf '%s\n' "${shas[$1]}"
+  else
+    printf '%s %s\n' "${components[$1]}" "${shas[$1]}"
+  fi
+}
+
+has_intentd=0
+for ((i = 0; i < pair_count; i++)); do
+  [[ "${components[i]}" != intentd ]] || has_intentd=1
+done
+
+# Several tags pin the same intentd version, so intentd compares are cached
+# per "<sha>:<version>" -- two intentd pairs never share a status.
 intentd_status=""
 first_hit=""
+newest_uncarried=""
 for tag in "${tags[@]}"; do
-  if [[ "$component" == intentd ]]; then
+  version=""
+  if ((has_intentd)); then
     version=$(manifest_version "$tag")
-    if ! status=$(cache_get "$intentd_status" "$version"); then
-      status=$(compare_status "v$version")
-      intentd_status+="$version $status"$'\n'
-    fi
-  else
-    status=$(compare_status "$tag")
   fi
-  carries "$status" && first_hit=$tag
+  uncarried=""
+  for ((i = 0; i < pair_count; i++)); do
+    if [[ "${components[i]}" == intentd ]]; then
+      if ! status=$(cache_get "$intentd_status" "${shas[i]}:$version"); then
+        status=$(compare_status "$intentd_repo" "${shas[i]}" "v$version")
+        intentd_status+="${shas[i]}:$version $status"$'\n'
+      fi
+    else
+      status=$(compare_status "$fe_repo" "${shas[i]}" "$tag")
+    fi
+    carries "$status" || uncarried+="${uncarried:+, }$(describe_pair "$i")"
+  done
+  if [[ -z "$uncarried" ]]; then
+    first_hit=$tag
+  elif [[ "$tag" == "${tags[0]}" ]]; then
+    newest_uncarried=$uncarried
+  fi
 done
 
 if [[ -z "$first_hit" ]]; then
-  echo "shipped-in: $sha is not carried by the newest ${#tags[@]} release(s) on $releases_repo (newest ${tags[0]})" >&2
+  verb=is
+  [[ "$newest_uncarried" != *", "* ]] || verb=are
+  echo "shipped-in: $newest_uncarried $verb not carried by the newest ${#tags[@]} release(s) on $releases_repo (newest ${tags[0]})" >&2
   exit 3
 fi
 
