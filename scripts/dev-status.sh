@@ -2,7 +2,8 @@
 # JSON schema:
 # {"host":{"doctorOk":bool,"gaps":[string]},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
-#  "behind":int|null,"pr?":{"number":int,"url":string,"state":string,
+#  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
+#  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
 
@@ -151,21 +152,44 @@ def branch_pr(path, branch):
     }
 
 
+def recorded_pin(relative_path):
+    entry = git_output(root, "ls-tree", "HEAD", "--", relative_path)
+    if not entry:
+        return None
+    fields = entry.split(None, 3)
+    if len(fields) < 3 or fields[0] != "160000":
+        return None
+    return fields[2]
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
+    pin = recorded_pin(relative_path)
+    short_pin = pin[:7] if pin else None
     git_marker = os.path.join(path, ".git")
     inside = git_output(path, "rev-parse", "--is-inside-work-tree") if os.path.exists(git_marker) else None
     if inside != "true":
-        return {"initialized": False, "branch": None, "dirty": False, "ahead": None, "behind": None}
+        return {
+            "initialized": False,
+            "branch": None,
+            "dirty": False,
+            "ahead": None,
+            "behind": None,
+            "pin": short_pin,
+            "gitlinkDirty": False,
+        }
 
     branch = git_output(path, "branch", "--show-current") or None
     porcelain = git_output(path, "status", "--short", "--untracked-files=normal")
+    head = git_output(path, "rev-parse", "HEAD")
     repo = {
         "initialized": True,
         "branch": branch,
         "dirty": bool(porcelain),
         "ahead": None,
         "behind": None,
+        "pin": short_pin,
+        "gitlinkDirty": bool(pin and head and head != pin),
     }
     if branch is None:
         repo["head"] = git_output(path, "rev-parse", "--short", "HEAD")
@@ -231,6 +255,7 @@ for name, repo in report["repos"].items():
     branch = repo["branch"] or f"detached@{repo.get('head') or '?'}"
     tracking = "-/-" if repo["ahead"] is None else f"+{repo['ahead']}/-{repo['behind']}"
     dirty = "dirty" if repo["dirty"] else "clean"
+    gitlink_text = f" gitlink=moved(pin {repo['pin'] or '?'})" if repo["gitlinkDirty"] else ""
     pr = repo.get("pr")
     pr_text = ""
     if pr:
@@ -239,6 +264,6 @@ for name, repo in report["repos"].items():
             f" PR #{pr['number']} checks={checks['passing']} pass/"
             f"{checks['pending']} pending/{checks['failing']} fail"
         )
-    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{pr_text}")
+    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{pr_text}")
 print(f"Docs       {report['docs']['remoteHost']}")
 PY

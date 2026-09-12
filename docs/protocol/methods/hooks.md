@@ -100,7 +100,12 @@ state**: it is injected into the next run as the `hookState` global (`null` when
 an omitted `state` keeps the previous value, `state: null` clears it, and a value whose
 JSON serialization exceeds ~16 KiB is dropped (the previous state is kept and a warning
 line is appended to that run's `lastLogs`). The schedule-time validation run persists
-its returned state too. `hook:*` event payloads (§6.5) stay light
+its returned state too. The dispatch `message` a run returns — and the error text an
+eviction wake carries — is bounded at 32 Ki chars before the wake is framed and queued:
+longer text keeps its head and gains a trailing `[hook message truncated: …]` marker, so
+a hook wake is always bounded in size (the cap bounds the wake itself; it does not
+guarantee the provider has context room for it; `lastError` itself is persisted
+verbatim). `hook:*` event payloads (§6.5) stay light
 and do **not** carry `lastLogs` or `lastState` (they do carry `perpetual`/`dispatchCount`);
 clients read the heavy fields via `hook.list`.
 

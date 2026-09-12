@@ -20,12 +20,67 @@ fail() {
   failures=$((failures + 1))
 }
 
+# Emit `file:line:make <target>` for every mention that appears in code: lines
+# inside fenced code blocks and the contents of inline backtick spans. Prose
+# mentions such as "can make an export" are ignored. An inline span may wrap
+# onto following lines within the same paragraph; a blank line ends it.
+code_make_mentions() {
+  awk '
+    function emit(text,   rest) {
+      rest = text
+      while (match(rest, /make[[:space:]]+[A-Za-z0-9_-]+/)) {
+        print FILENAME ":" FNR ":" substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+    function fence_run(line,   run) {
+      if (match(line, /^[ \t]*(```+|~~~+)/)) {
+        run = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]+/, "", run)
+        return run
+      }
+      return ""
+    }
+    FNR == 1 { in_fence = 0; open_tick = "" }
+    {
+      run = fence_run($0)
+      if (in_fence) {
+        if (run != "" && substr(run, 1, 1) == substr(fence, 1, 1) &&
+            length(run) >= length(fence) && $0 ~ /^[ \t]*(`+|~+)[ \t]*$/) {
+          in_fence = 0
+          next
+        }
+        emit($0)
+        next
+      }
+      if (run != "") { in_fence = 1; fence = run; open_tick = ""; next }
+      if ($0 ~ /^[ \t]*$/) open_tick = ""
+      rest = $0
+      if (open_tick != "") {
+        close_pos = index(rest, open_tick)
+        if (close_pos == 0) { emit(rest); next }
+        emit(substr(rest, 1, close_pos - 1))
+        rest = substr(rest, close_pos + length(open_tick))
+        open_tick = ""
+      }
+      while (match(rest, /`+/)) {
+        tick = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        close_pos = index(rest, tick)
+        if (close_pos == 0) { open_tick = tick; emit(rest); break }
+        emit(substr(rest, 1, close_pos - 1))
+        rest = substr(rest, close_pos + length(tick))
+      }
+    }
+  ' "${docs[@]}"
+}
+
 while IFS=: read -r file line mention; do
   read -r _ target <<<"$mention"
   if ! grep -Eq "^${target}[[:space:]]*:" Makefile; then
     fail "$file" "$line" "documented make target '$target' does not exist"
   fi
-done < <(grep -nHEo 'make[[:space:]]+[A-Za-z0-9_-]+' "${docs[@]}" || true)
+done < <(code_make_mentions)
 
 section_lines() {
   local file=$1 start=$2 stop=$3
@@ -86,7 +141,12 @@ hydration_docs=(AGENTS.md docs/fe/DEVELOPER_GUIDE.md)
 [[ -f "$fe_agents" ]] && hydration_docs+=("$fe_agents")
 canonical_range=
 for file in "${hydration_docs[@]}"; do
-  mapfile -t anchors < <(grep -ni 'first tunneled' "$file" || true)
+  # Read lines into the array with a loop: stock macOS ships Bash 3.2, which
+  # lacks the Bash 4 array-fill builtin (intent-hq/intent#4759).
+  anchors=()
+  while IFS= read -r anchor; do
+    anchors+=("$anchor")
+  done < <(grep -ni 'first tunneled' "$file" || true)
   if ((${#anchors[@]} != 1)); then
     fail "$file" 1 "expected exactly one first-tunneled hydration expectation; found ${#anchors[@]}"
     continue

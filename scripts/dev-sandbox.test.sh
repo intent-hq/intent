@@ -32,6 +32,19 @@ fail() {
   exit 1
 }
 
+# errexit exits silently on a plain command failure, leaving an empty log with
+# status 1. Name the command before that happens. The trap stays quiet inside
+# the deliberate `set +e … wait … set -e` windows, and bash already skips it in
+# the same conditional contexts (&&, ||, if, while, !) in which errexit is
+# suppressed, so helpers that return non-zero on purpose do not report.
+report_unexpected_failure() {
+  local status=$1 line=$2 command=$3 pipestatus=$4
+  [[ $- == *e* ]] || return 0
+  echo "dev-sandbox test: unexpected failure (status $status, pipestatus [$pipestatus]) at line $line: $command" >&2
+}
+set -o errtrace
+trap 'report_unexpected_failure "$?" "$LINENO" "$BASH_COMMAND" "${PIPESTATUS[*]}"' ERR
+
 free_port() {
   python3 - <<'PY'
 import socket
@@ -82,6 +95,31 @@ wait_for_ready() {
   return 1
 }
 
+# Print the pid of the fake frontend (`python3 - <port>`) running under the
+# sandbox script. A no-match pgrep exits 1, so a bare `$(pgrep -P … | head -1)`
+# assignment tripped errexit/pipefail on a transient miss before the caller's
+# `fail` guard could run; the lookup is retried for up to 2s instead, matching
+# the command line so a transient sibling child is never chosen, and fails only
+# after the deadline (or once the sandbox has died) with the child listing and
+# the sandbox output dumped.
+find_frontend_pid() {
+  local parent=$1 port=$2 output=$3 matches
+  for _ in {1..100}; do
+    matches=$(pgrep -P "$parent" -f "python3 - $port" 2>/dev/null || true)
+    if [[ -n "$matches" ]]; then
+      echo "${matches%%$'\n'*}"
+      return 0
+    fi
+    kill -0 "$parent" 2>/dev/null || break
+    sleep 0.02
+  done
+  echo "children of sandbox pid $parent (alive: $(kill -0 "$parent" 2>/dev/null && echo yes || echo no)):" >&2
+  ps -eo pid,ppid,stat,command | awk -v pp="$parent" 'NR == 1 || $2 == pp' >&2
+  echo "sandbox output:" >&2
+  cat "$output" >&2 || true
+  return 1
+}
+
 mkdir -p "$temp_dir/bin" "$temp_dir/fe"
 cat >"$temp_dir/bin/corepack" <<'SH'
 #!/usr/bin/env bash
@@ -89,7 +127,10 @@ exec python3 - "$DEV_PORT" <<'PY'
 import http.server
 import json
 import os
+import signal
 import sys
+if os.environ.get("FE_IGNORE_TERM") == "1":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self):
         self.send_response(200)
@@ -242,6 +283,85 @@ assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
 s.close()
 PY
 
+# Regression: a second TERM landing while cleanup waits on a TERM-ignoring
+# frontend must not abort cleanup; the KILL escalation still has to run. The
+# state file disappearing proves cleanup has started, and the frontend holds
+# it in its 50x0.1s wait loop, so 0.2s later the second TERM lands mid-loop.
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
+frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/double-term.out") \
+  || fail "could not find double-TERM frontend child"
+kill -TERM "$sandbox_pid"
+for _ in {1..100}; do
+  [[ ! -e "$state_dir/ui.json" ]] && break
+  sleep 0.02
+done
+if [[ -e "$state_dir/ui.json" ]]; then
+  kill -KILL "$frontend_pid" 2>/dev/null || true
+  fail "double-TERM cleanup did not remove the state file within 2s"
+fi
+sleep 0.2
+kill -TERM "$sandbox_pid"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+frontend_alive=0
+kill -0 "$frontend_pid" 2>/dev/null && frontend_alive=1
+kill -KILL "$frontend_pid" 2>/dev/null || true
+[[ "$status" -eq 143 ]] || fail "double TERM returned $status instead of 143"
+[[ "$frontend_alive" -eq 0 ]] || fail "second TERM during cleanup aborted the KILL escalation; frontend $frontend_pid survived"
+[[ ! -e "$state_dir/ui.json" ]] || fail "UI state file remained after double TERM"
+python3 - "$port" <<'PY' || fail "double-TERM listener remained after the sandbox exited"
+import socket
+import sys
+s = socket.socket()
+s.settimeout(0.2)
+assert s.connect_ex(("127.0.0.1", int(sys.argv[1]))) != 0
+s.close()
+PY
+
+# Regression: bash checks pending signal traps before the first command of the
+# EXIT trap string, so a second TERM that is already pending when the first
+# TERM's `exit` starts the EXIT trap used to longjmp out before cleanup ran,
+# leaving the state file and the frontend behind (pre-fix ~65% of iterations).
+# The signal traps now run cleanup themselves. Two back-to-back TERMs to the
+# script pid hit that window; the loop makes a regression practically certain.
+for iteration in $(seq 1 20); do
+  port=$(free_port)
+  PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
+    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+    bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
+  sandbox_pid=$!
+  wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
+  frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/signal-window.out") \
+    || fail "could not find signal-window frontend child (iteration $iteration)"
+  kill -TERM "$sandbox_pid"
+  kill -TERM "$sandbox_pid" 2>/dev/null || true
+  set +e
+  wait "$sandbox_pid"
+  status=$?
+  set -e
+  sandbox_pid=""
+  frontend_alive=0
+  kill -0 "$frontend_pid" 2>/dev/null && frontend_alive=1
+  kill -KILL "$frontend_pid" 2>/dev/null || true
+  if [[ -e "$state_dir/ui.json" || "$frontend_alive" -ne 0 ]]; then
+    echo "residual $state_dir/ui.json (iteration $iteration, script exit $status):" >&2
+    cat "$state_dir/ui.json" >&2 2>/dev/null || echo "(absent)" >&2
+    echo "signal-window sandbox output:" >&2
+    cat "$temp_dir/signal-window.out" >&2 || true
+    rm -f "$state_dir/ui.json"
+    fail "second TERM in the exit path skipped cleanup (iteration $iteration; frontend alive: $frontend_alive)"
+  fi
+  [[ "$status" -eq 143 ]] || fail "signal-window TERM returned $status instead of 143 (iteration $iteration)"
+done
+
 cat >"$temp_dir/supervised.mk" <<'MAKE'
 supervised-ui:
 	@exec bash "$(SCRIPT)" ui
@@ -255,6 +375,7 @@ wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did
 state_pid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' "$state_dir/ui.json")
 state_ppid=$(ps -o ppid= -p "$state_pid" | tr -d ' ')
 [[ "$state_ppid" == "$sandbox_pid" ]] || fail "recipe shell did not exec the sandbox script"
+supervised_pgid=$sandbox_pid
 kill -TERM -- "-$sandbox_pid"
 set +e
 wait "$sandbox_pid"
@@ -262,11 +383,34 @@ status=$?
 set -e
 sandbox_pid=""
 [[ "$status" -ne 0 ]] || fail "supervised recipe unexpectedly exited successfully after TERM"
-for _ in {1..50}; do
+# GNU make blocks on its local child when TERMed, so once wait returns the
+# script's EXIT trap has already run: the script must be gone and the state
+# file removed. The deadlines are generous so timing only matters when
+# cleanup is genuinely broken.
+dump_supervised_residue() {
+  echo "residual $state_dir/ui.json:" >&2
+  cat "$state_dir/ui.json" >&2 2>/dev/null || echo "(absent)" >&2
+  echo "processes in group $supervised_pgid:" >&2
+  ps -eo pid,ppid,pgid,stat,command | awk -v pg="$supervised_pgid" 'NR == 1 || $3 == pg' >&2
+  echo "supervised recipe output:" >&2
+  cat "$temp_dir/supervised.out" >&2 || true
+}
+for _ in {1..500}; do
+  kill -0 "$state_pid" 2>/dev/null || break
+  sleep 0.02
+done
+if kill -0 "$state_pid" 2>/dev/null; then
+  dump_supervised_residue
+  fail "sandbox script pid $state_pid still alive 10s after the supervised recipe exited"
+fi
+for _ in {1..500}; do
   [[ ! -e "$state_dir/ui.json" ]] && break
   sleep 0.02
 done
-[[ ! -e "$state_dir/ui.json" ]] || fail "state remained after external TERM of the recipe process tree"
+if [[ -e "$state_dir/ui.json" ]]; then
+  dump_supervised_residue
+  fail "state remained after external TERM of the recipe process tree"
+fi
 python3 - "$port" <<'PY' || fail "supervised recipe listener remained after TERM"
 import socket
 import sys
@@ -327,8 +471,8 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" SANDBOX_STATE_
   SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/child-failure.out" || fail "child-failure sandbox did not become ready"
-frontend_pid=$(pgrep -P "$sandbox_pid" | head -1)
-[[ -n "$frontend_pid" ]] || fail "could not find frontend child"
+frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/child-failure.out") \
+  || fail "could not find frontend child"
 kill -KILL "$frontend_pid"
 set +e
 wait "$sandbox_pid"
@@ -562,6 +706,18 @@ mkdir -p "$COREPACK_HOME/v1/pnpm/10.30.3"
 touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
 printf '10.30.3\n'
 SH
+write_gh_stub() {
+  cat >"$bootstrap_bin/gh" <<SH
+#!/usr/bin/env bash
+case "\$1 \${2:-}" in
+  "--version ") printf 'gh version $1 (2025-01-01)\nhttps://github.com/cli/cli/releases/tag/v$1\n' ;;
+  "auth status") exit $2 ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$bootstrap_bin/gh"
+}
+write_gh_stub 2.45.0 1
 chmod +x "$bootstrap_bin/corepack" "$bootstrap_bin/pnpm"
 set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
@@ -571,5 +727,103 @@ set -e
 [[ "$status" -eq 1 ]] || fail "fixture doctor returned $status instead of reporting its expected gaps"
 [[ -z $(find "$corepack_cache" -mindepth 1 -print -quit) ]] \
   || fail "check-only pnpm probe invoked the Corepack shim and populated its cache"
+grep -q '^\[missing\]  GitHub CLI: gh 2\.45\.0 is below the required 2\.94\.0' "$temp_dir/bootstrap-check.out" \
+  || fail "outdated gh 2.45.0 was not reported as a missing gap naming 2.94.0"
+
+write_gh_stub 2.100.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-ok.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was not accepted as satisfying >= 2.94.0"
+! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "gh 2.100.0 was reported as a missing gap"
+
+write_gh_stub 2.94.0 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-min.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.94\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-min.out" \
+  || fail "gh 2.94.0 (exact minimum) was not accepted as satisfying >= 2.94.0"
+
+write_gh_stub 2.94.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-rc.out" 2>&1
+set -e
+grep -q '^\[missing\]  GitHub CLI: gh 2\.94\.0-rc\.1 is below the required 2\.94\.0' "$temp_dir/bootstrap-check-gh-rc.out" \
+  || fail "prerelease gh 2.94.0-rc.1 was not reported as a missing gap below 2.94.0"
+
+write_gh_stub 2.95.0-rc.1 0
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-next-rc.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-next-rc.out" \
+  || fail "prerelease gh 2.95.0-rc.1 of a newer release was not accepted as satisfying >= 2.94.0"
+
+# install_gh on macOS: exercise the function alone with a stubbed uname/brew/gh.
+bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$bootstrap_root/scripts/bootstrap-dev-host.sh" >"$bootstrap_funcs"
+grep -q '^install_gh() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_gh fixture"
+! grep -q '^install_gh$' "$bootstrap_funcs" || fail "bootstrap function extraction kept the main install flow"
+brew_bin="$temp_dir/brew-bin"
+mkdir -p "$brew_bin"
+printf '#!/usr/bin/env bash\nprintf "Darwin\\n"\n' >"$brew_bin/uname"
+cat >"$brew_bin/brew" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$BREW_LOG"
+case "$*" in
+  "list --versions gh") [[ "$BREW_OWNS_GH" == 1 ]] ;;
+  "install gh"|"upgrade gh") [[ -n "${BREW_GH_RESULT:-}" ]] && "$BREW_WRITE_GH_STUB" "$BREW_GH_RESULT" 0; exit 0 ;;
+  *) exit 2 ;;
+esac
+SH
+cat >"$brew_bin/write-gh-stub" <<SH
+#!/usr/bin/env bash
+bootstrap_bin="$bootstrap_bin"
+$(declare -f write_gh_stub)
+write_gh_stub "\$@"
+SH
+chmod +x "$brew_bin/uname" "$brew_bin/brew" "$brew_bin/write-gh-stub"
+run_install_gh() {
+  BREW_LOG="$temp_dir/brew.log" BREW_OWNS_GH="$1" BREW_GH_RESULT="${2:-}" BREW_WRITE_GH_STUB="$brew_bin/write-gh-stub" \
+    PATH="$brew_bin:$bootstrap_bin:$PATH" \
+    bash -c 'funcs=$1; set --; source "$funcs"; install_gh' bash "$bootstrap_funcs" >"$temp_dir/install-gh.out" 2>&1
+}
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew install produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'install gh' "$temp_dir/brew.log" || fail "a gh not owned by Homebrew did not trigger brew install gh"
+! grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "brew upgrade gh ran for a gh the gh formula does not own"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 1 2.100.0
+status=$?
+set -e
+[[ "$status" -eq 0 ]] || fail "install_gh failed ($status) when brew upgrade produced a current gh: $(cat "$temp_dir/install-gh.out")"
+grep -qx 'upgrade gh' "$temp_dir/brew.log" || fail "a Homebrew-owned gh did not trigger brew upgrade gh"
+! grep -qx 'install gh' "$temp_dir/brew.log" || fail "brew install gh ran for a gh the gh formula already owns"
+
+write_gh_stub 2.45.0 0
+: >"$temp_dir/brew.log"
+set +e
+run_install_gh 0
+status=$?
+set -e
+[[ "$status" -eq 1 ]] || fail "install_gh returned $status instead of 1 when a stale gh kept shadowing the installed one"
+grep -q "^ERROR: gh 2\.45\.0 ($bootstrap_bin/gh) is still below 2\.94\.0 after install\." "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not name the stale binary and version: $(cat "$temp_dir/install-gh.out")"
+grep -q 'shadows the new one.*https://github.com/cli/cli#installation' "$temp_dir/install-gh.out" \
+  || fail "shadowed gh error did not explain PATH shadowing with the install URL"
 
 echo "dev-sandbox tests passed (daemon, cargo, and pnpm behavior stubbed)"
