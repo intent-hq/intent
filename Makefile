@@ -109,14 +109,24 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 docs-check: ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
 
-# Release tracking: which cloudlands-releases alpha first carries a merged
-# commit. The script exits 3 for "not shipped yet" and 4 for a transient
-# GitHub failure (rate limit, 5xx, network) worth retrying (make reports them
-# as `Error 3` / `Error 4`); background hooks should invoke
-# scripts/shipped-in.sh directly so they can branch on those codes. `LIMIT=N`
-# widens the scan window past the newest 10 releases.
-shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit> (script exit 3 = not yet, 4 = transient gh failure)
-	@scripts/shipped-in.sh "$(COMPONENT)" "$(SHA)" $(if $(LIMIT),--limit "$(LIMIT)",)
+# Release tracking: which cloudlands-releases alpha first carries one or more
+# merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
+# PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
+# tokens, forwarded as positional pairs; the tag must carry every pair). The
+# script exits 3 for "not shipped yet" and 4 for a transient GitHub failure
+# (rate limit, 5xx, network) worth retrying (make reports them as `Error 3` /
+# `Error 4`); background hooks should invoke scripts/shipped-in.sh directly so
+# they can branch on those codes. `LIMIT=N` widens the scan window past the
+# newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 4 = transient gh failure)
+	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
+	for pair in $(PAIRS); do \
+		case "$$pair" in \
+			*:*) set -- "$$@" "$${pair%%:*}" "$${pair#*:}" ;; \
+			*) echo "shipped-in: PAIRS entries must be <component>:<sha>, got '$$pair'" >&2; exit 2 ;; \
+		esac; \
+	done; \
+	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
@@ -149,8 +159,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd test-changed coverage-e2e coverage-all: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy build-intentd test test-intentd test-changed coverage-e2e coverage-all: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+# Pagers on the same targets. A saved-script PTY has no keyboard, so any
+# git/gh step that pages to `less` stalls forever waiting for a keypress.
+# nextest ignores PAGER (only --no-pager / user config disable its paging),
+# hence the explicit --no-pager on list-tests.
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -166,9 +182,10 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 FE_BUILD_HEAP_MB ?= 16384
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-changed coverage-e2e coverage-all \
-	fmt clippy check clean clean-dev \
+	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
+	fmt clippy lint-repo-slug check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -185,6 +202,17 @@ doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 
 bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
 	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
+
+# Frontend-toolchain preflight for the targets that shell out to
+# `corepack pnpm`. Fails fast with doctor's [missing] wording plus
+# `run: make bootstrap-dev-host` instead of a mid-run "corepack: command not
+# found". Port-independent like doctor: it must never expand DEV_PORT. It reads
+# the frontend package.json for the pinned pnpm version, so it must not race
+# the submodule checkout under `make -j`: order it after ensure-fe-submodule
+# rather than relying on the sibling prerequisite lists, which make is free to
+# run in parallel.
+ensure-fe-toolchain: ensure-fe-submodule
+	@scripts/bootstrap-dev-host.sh --check-frontend
 
 # The iOS submodule is private and marked `update = none` in .gitmodules, so
 # the generic `git submodule update --init` would silently skip it while
@@ -327,9 +355,15 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
-check: fmt clippy ## fmt + clippy
+# Source lint: fails naming file:line wherever repository owner/name identity
+# is case-folded or compared outside intent_core::RepoRef. Mirrors the intentd
+# `check` CI job so local gates match CI.
+lint-repo-slug: ensure-intentd-submodule ## Lint raw repo-slug folding outside RepoRef (intent-core repo_slug_fold_lint)
+	cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs $(BUILD_JOBS)
 
-gate: check ## Run all local Rust gates (fmt, clippy, then nextest)
+check: fmt clippy lint-repo-slug ## fmt + clippy + repo-slug fold lint
+
+gate: check ## Run all local Rust gates (fmt, clippy, repo-slug lint, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
@@ -378,6 +412,15 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 	fi; \
 	echo "[test-changed] falling back to the full 'make test'"; \
 	exec $(MAKE) --no-print-directory test
+
+# nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
+# export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.
+list-tests: ensure-intentd-submodule ## List nextest tests without a pager (ARGS="-p <crate>" to narrow)
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[list-tests] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	cd $(INTENTD_DIR) && cargo nextest list --no-pager $(ARGS)
 
 # Local reproduction of the CI coverage jobs (packages/intentd
 # .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
@@ -498,7 +541,7 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
 	@$(MAKE) release-daemon
 
-dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
+dev-ui: ensure-fe-submodule ensure-fe-toolchain ## Run the fast browser-only frontend UI preview
 	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
 		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
@@ -511,20 +554,20 @@ dev-ui: ensure-fe-submodule ## Run the fast browser-only frontend UI preview
 	fi; \
 	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
 
-dev-sandbox-ui: ensure-fe-submodule ## UI preview sandbox on this worktree's derived DEV_PORT
+dev-sandbox-ui: ensure-fe-submodule ensure-fe-toolchain ## UI preview sandbox on this worktree's derived DEV_PORT
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
 
-dev-sandbox-app: ensure-fe-submodule ## Web renderer sandbox connected to the installed intentd
+dev-sandbox-app: ensure-fe-submodule ensure-fe-toolchain ## Web renderer sandbox connected to the installed intentd
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
 		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
 		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
 
-dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
+dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ensure-fe-toolchain ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
 	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
 		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \

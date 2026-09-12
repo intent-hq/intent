@@ -182,6 +182,8 @@ cloudlands-fe stable promotion is followed by a website release notes PR on
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
   distribution repo (same tag) — cloudlands-fe source-repo releases carry no assets.
   `scripts/shipped-in.sh intentd <sha>` (`make shipped-in`) performs this lookup and
-  prints the first cloudlands-releases tag whose pin carries the commit.
+  prints the first cloudlands-releases tag whose pin carries the commit; given several
+  `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
+  it prints the first tag carrying all of them.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).

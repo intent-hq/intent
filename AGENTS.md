@@ -31,7 +31,9 @@ and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodu
 off its pin), and branch PR checks when `gh` is authenticated.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
-system packages may require privilege. Do not discover prerequisites during a build.
+system packages may require privilege. Do not discover prerequisites during a build: the
+dev and sandbox targets preflight the frontend toolchain and exit naming the missing item
+and `make bootstrap-dev-host`.
 
 ### Act
 
@@ -247,7 +249,7 @@ with no rollback.
 
 - `make gate` runs `make check` and then the full nextest suite. `make test` remains
   the test-only entry point. Resume records apply only to nextest; `make gate` always
-  reruns fmt and clippy.
+  reruns fmt, clippy, and the repo-slug fold lint.
 - After a harness or terminal interruption, rerun `make test RESUME=1`. It skips
   only tests recorded as passed for the identical tracked and untracked worktree,
   submodule pointers, Rust toolchain, lockfile, and nextest configuration. Records
@@ -261,9 +263,10 @@ with no rollback.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`);
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
-  are PTY-backed, so use the `make` targets — they set `NEXTEST_SHOW_PROGRESS=none` and
-  `CARGO_TERM_PROGRESS_WHEN=never`; a raw `cargo nextest run` / `cargo build` must pass
-  the same or its progress-bar redraws flood the output buffer.
+  are PTY-backed with no keyboard, so use the `make` targets — they disable progress bars
+  and pagers (`make list-tests` for nextest discovery, which ignores `PAGER`); a raw
+  `cargo nextest` / `cargo build` / `git` / `gh` must pass `--no-pager` / the same env or
+  it floods the buffer or stalls on `less`.
 
 ## Release Process
 
@@ -281,18 +284,18 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
   in [docs/RELEASING.md](./docs/RELEASING.md).
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
-  done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
-  then update the final workspace status message with the carrying version (e.g.
-  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). intentd-only changes ride the chained
-  cloudlands-fe alpha too, so the version to report is always the cloudlands-fe tag.
-  `scripts/shipped-in.sh <intentd|cloudlands-fe> <squash-commit-sha>` (or
-  `make shipped-in COMPONENT=... SHA=...`) is the canonical detector: it prints the
+  done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
+  set the final workspace status message to the carrying version (e.g. "Shipped in
+  cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
+  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
+  `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
-  tag carrying the commit (for intentd, via the `intentdVersion` pin in that tag's
-  `release-manifest.json`), exits 3 while nothing carries it yet, and exits 4 on a
-  transient GitHub failure (rate limit, 5xx, network) that the next poll should
-  simply retry. Never block a turn polling — schedule this hook after replacing
-  the placeholders:
+  tag carrying every listed commit (for intentd, via the `intentdVersion` pin in that
+  tag's `release-manifest.json`), exits 3 while any is still uncarried, and exits 4 on a
+  transient GitHub failure (rate limit, 5xx, network) the next poll should simply retry.
+  Never block a turn polling — schedule this hook after replacing the placeholders
+  (drop the pair for a component you did not change):
 
   ```javascript
   await ws.hook.schedule({
@@ -300,7 +303,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
     delayMs: 600_000,
     ttlMs: 21_600_000,
     code: `const run = await ws.host.exec({
-    command: "scripts/shipped-in.sh", args: ["<COMPONENT>", "<SHA>"], timeoutMs: 120_000,
+    command: "scripts/shipped-in.sh", args: ["intentd", "<INTENTD_SHA>", "cloudlands-fe", "<FE_SHA>"], timeoutMs: 120_000,
   });
   if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
   if (run.exitCode === 3 || run.exitCode === 4) return { dispatch: false };

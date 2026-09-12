@@ -1,0 +1,80 @@
+# Runs scripts/bootstrap-dev-host.sh in install mode on a clean ubuntu:24.04
+# container and asserts that the follow-up --check passes. The hermetic
+# shell-tests job in ci.yml stubs every installer, so an install_* regression
+# (a Node major node-gyp rejects, a renamed apt package, a dead upstream URL —
+# intent-hq/intent#4669) only surfaced on a developer's host. This job
+# executes the real apt / NodeSource / cli.github.com / rustup / nexte.st
+# paths instead.
+#
+# A separate workflow rather than a ci.yml job: `paths` filters and `schedule`
+# are workflow-level, and this run is minutes-long, so it is gated to the
+# files that can change the installer's behavior plus a weekly cron that
+# catches upstream repository drift. It is not a required check.
+#
+# The Rust toolchain pin (packages/intentd/rust-toolchain.toml) and the
+# frontend packageManager (packages/cloudlands-fe/package.json) live inside
+# submodules, so a monorepo PR never diffs them: it moves the gitlink. The
+# filter therefore lists the gitlink paths, which means every submodule bump
+# PR runs this job (~2 min) and a bump that changes either pin is exercised.
+name: bootstrap-install
+on:
+  pull_request:
+    paths:
+      - scripts/bootstrap-dev-host.sh
+      - scripts/bootstrap-dev-host.test.sh
+      - packages/intentd
+      - packages/cloudlands-fe
+      - .gitmodules
+      - .github/workflows/bootstrap-install.yml
+  schedule:
+    # Mondays 06:17 UTC — upstream repo drift backstop (NodeSource, cli.github.com).
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-install:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    timeout-minutes: 30
+    # Inside the container the runner falls back to `sh -e`; the assert step
+    # needs bash for pipefail.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The image has no git, so checkout needs this much before it can run.
+      # Everything the script is responsible for (python3, pkg-config,
+      # libssl-dev, node, gh, jq, rustup) is deliberately left uninstalled.
+      # The container runs as root, which as_root short-circuits — no sudo.
+      - name: Prepare container
+        run: |
+          apt-get update
+          apt-get install -y git curl ca-certificates
+          git config --global --add safe.directory '*'
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: git submodule update --init --depth=1 packages/intentd packages/cloudlands-fe
+      - name: Install mode
+        run: BOOTSTRAP_YES=1 scripts/bootstrap-dev-host.sh --yes </dev/null
+      - name: Assert --check passes
+        run: |
+          set -o pipefail
+          scripts/bootstrap-dev-host.sh --check | tee check.log
+          grep -F 'Doctor passed' check.log
+          for prefix in \
+            'rustup:' \
+            'cargo:' \
+            'Rust toolchain:' \
+            'cargo-nextest:' \
+            'Node:' \
+            'Corepack:' \
+            'frontend package manager:' \
+            'frontend dependencies:' \
+            'GitHub CLI:' \
+            'jq:'; do
+            grep -F "[ok]       $prefix" check.log
+          done

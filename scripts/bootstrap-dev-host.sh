@@ -17,6 +17,10 @@ export CARGO_HOME PATH
 GH_MIN_VERSION="2.94.0"
 GH_INSTALL_URL="https://github.com/cli/cli#installation"
 
+# jq: the release-notifier test suites parse GitHub API fixtures with it
+# (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
+JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
+
 # Minimum Node: the frontend install builds node-pty (and cpu-features) with
 # node-gyp 13, whose engines.node is "^22.22.2 || ^24.15.0 || >=26.0.0"; its undici
 # dependency throws on Node 20 (intent-hq/intent#4669). fe CI runs Node 24.
@@ -46,14 +50,17 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--yes]"
-  echo "  --check  Report missing requirements without changing the host"
-  echo "  --yes    Install without prompting"
+  echo "Usage: $0 [--check] [--check-frontend] [--yes]"
+  echo "  --check            Report missing requirements without changing the host"
+  echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
+  echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --yes              Install without prompting"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
+    --check-frontend) MODE=check-frontend ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -277,8 +284,15 @@ corepack_home() {
 pnpm_ready() {
   [[ -n "$PNPM_VERSION" ]] || return 1
   command -v corepack >/dev/null 2>&1 || return 1
-  command -v pnpm >/dev/null 2>&1 || return 1
-  if [[ "$MODE" == check ]]; then
+  # The `pnpm` shim is required everywhere except check-frontend mode: the
+  # targets that mode guards run `corepack pnpm`, which resolves the pinned
+  # version straight from the Corepack cache, so a host with Corepack installed
+  # but never `corepack enable`d runs them fine. Doctor keeps requiring the shim
+  # for the bare-`pnpm` targets (fe-launch, dev, run-fe-local).
+  if [[ "$MODE" != check-frontend ]]; then
+    command -v pnpm >/dev/null 2>&1 || return 1
+  fi
+  if [[ "$MODE" == check || "$MODE" == check-frontend ]]; then
     local metadata
     for metadata in "$(corepack_home)"/v*/pnpm/"$PNPM_VERSION"/.corepack; do
       [[ -f "$metadata" ]] && return 0
@@ -323,6 +337,19 @@ gh_ready() {
   [[ "$version" == "$base" || "$base" != "$GH_MIN_VERSION" ]]
 }
 
+jq_version() {
+  command -v jq >/dev/null 2>&1 || return 1
+  local output
+  output=$(jq --version 2>/dev/null) || return 1
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+# A jq pathname on PATH is not enough: a broken or stale shim passes command -v
+# but cannot run, so require jq --version to succeed.
+jq_ready() {
+  jq_version >/dev/null
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -338,6 +365,48 @@ installable_gap_exists() {
   pnpm_ready || return 0
   frontend_dependencies_ready || return 0
   gh_ready || return 0
+  jq_ready || return 0
+  return 1
+}
+
+# Reports the Corepack and frontend-package-manager state shared by check_all
+# (doctor) and check_frontend (the dev/sandbox preflight), so the two modes have
+# a single wording source; scripts/dev-sandbox.test.sh guards them against
+# drift. With a non-empty $1 the [ok] lines are suppressed: the preflight is
+# silent when the toolchain is ready.
+report_frontend_toolchain() {
+  local quiet=${1:-}
+
+  if ! command -v corepack >/dev/null 2>&1; then
+    missing "Corepack: required to select the frontend pnpm version"
+  elif launcher_probe "$ROOT_DIR" corepack corepack --version; then
+    [[ -n "$quiet" ]] || ok "Corepack: $PROBE_OUTPUT"
+  else
+    missing "Corepack: $PROBE_ERROR"
+  fi
+
+  if [[ -z "$PACKAGE_MANAGER" ]]; then
+    missing "frontend packageManager: cannot read packages/cloudlands-fe/package.json"
+  elif pnpm_ready; then
+    [[ -n "$quiet" ]] || ok "frontend package manager: $PACKAGE_MANAGER via Corepack"
+  else
+    missing "frontend package manager: expected $PACKAGE_MANAGER via Corepack"
+  fi
+}
+
+# Preflight for the targets that shell out to `corepack pnpm` (dev-ui,
+# dev-sandbox-ui|app|stack). It reports the same lines check_all prints for
+# Corepack and the pinned package manager, never invokes the pnpm shim, and
+# never populates the Corepack cache. node_modules is deliberately not checked:
+# the targets install it themselves.
+check_frontend() {
+  FAILURES=0
+  load_versions
+
+  report_frontend_toolchain quiet
+
+  [[ "$FAILURES" -eq 0 ]] && return 0
+  echo "run: make bootstrap-dev-host"
   return 1
 }
 
@@ -412,21 +481,7 @@ check_all() {
     missing "Node: $NODE_REQUIREMENT is required (node-gyp 13 builds the frontend native modules)"
   fi
 
-  if ! command -v corepack >/dev/null 2>&1; then
-    missing "Corepack: required to select the frontend pnpm version"
-  elif launcher_probe "$ROOT_DIR" corepack corepack --version; then
-    ok "Corepack: $PROBE_OUTPUT"
-  else
-    missing "Corepack: $PROBE_ERROR"
-  fi
-
-  if [[ -z "$PACKAGE_MANAGER" ]]; then
-    missing "frontend packageManager: cannot read packages/cloudlands-fe/package.json"
-  elif pnpm_ready; then
-    ok "frontend package manager: $PACKAGE_MANAGER via Corepack"
-  else
-    missing "frontend package manager: expected $PACKAGE_MANAGER via Corepack"
-  fi
+  report_frontend_toolchain
 
   if [[ ! -d "$FE_DIR/node_modules" ]]; then
     missing "frontend dependencies: run corepack pnpm install --frozen-lockfile in packages/cloudlands-fe"
@@ -452,6 +507,14 @@ check_all() {
       ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
       optional "GitHub CLI: not authenticated; PR reporting is disabled until gh auth login"
     fi
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    missing "jq: required by the release-notifier test suites (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit); run make bootstrap-dev-host"
+  elif ! jq_ready; then
+    missing "jq: $(command -v jq) is on PATH but jq --version fails; reinstall it (run make bootstrap-dev-host)"
+  else
+    ok "jq: $(jq_version)"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -520,8 +583,10 @@ install_native_build_dependencies() {
     return
   fi
   if [[ $(uname -s) == Linux ]] && command -v apt-get >/dev/null 2>&1; then
-    echo "[install] pkg-config and OpenSSL development headers"
-    as_root apt-get install -y libssl-dev pkg-config || exit 1
+    # build-essential supplies make and a C/C++ toolchain: node-gyp needs them
+    # to build node-pty, and cargo needs cc as its linker.
+    echo "[install] pkg-config, OpenSSL development headers and build-essential"
+    as_root apt-get install -y libssl-dev pkg-config build-essential || exit 1
     return
   fi
   echo "[manual] install pkg-config and OpenSSL development headers for your platform, then re-run make doctor"
@@ -678,6 +743,35 @@ install_gh() {
   exit 1
 }
 
+install_jq() {
+  if jq_ready; then
+    echo "[skip] jq $(jq_version) already installed"
+    return
+  fi
+
+  echo "[install] jq"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install jq on macOS; see $JQ_INSTALL_URL" >&2; exit 1; }
+      brew install jq || exit 1
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y jq || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y jq || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y jq || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install jq from $JQ_INSTALL_URL and re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install jq from $JQ_INSTALL_URL" >&2; exit 1 ;;
+  esac
+  hash -r
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -709,6 +803,11 @@ install_frontend() {
     fi
   fi
 }
+
+if [[ "$MODE" == check-frontend ]]; then
+  check_frontend
+  exit $?
+fi
 
 if [[ "$MODE" == check ]]; then
   check_all
@@ -744,6 +843,7 @@ install_rust
 install_node
 install_frontend
 install_gh
+install_jq
 
 echo
 check_all
