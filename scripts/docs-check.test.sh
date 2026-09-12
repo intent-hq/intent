@@ -28,7 +28,8 @@ run_check() {
 
 mkdir -p "$temp_dir/scripts" "$temp_dir/docs/fe" "$temp_dir/packages/cloudlands-fe"
 cp "$script" "$temp_dir/scripts/docs-check.sh"
-touch "$temp_dir/Makefile" "$temp_dir/README.md"
+touch "$temp_dir/README.md"
+printf 'real-target:\n\ttrue\n' >"$temp_dir/Makefile"
 
 cat >"$temp_dir/AGENTS.md" <<'EOF'
 ## Developing on a remote host
@@ -90,6 +91,51 @@ EOF
 if ! run_check; then
   fail "restored hydration expectation was rejected: $check_output"
 fi
+
+cat >"$temp_dir/README.md" <<'EOF'
+Dropping an import in one file can make an export in another unused.
+Run `make real-target` first.
+```bash
+make real-target
+```
+EOF
+if ! run_check; then
+  fail "prose make mention or valid code make target was rejected: $check_output"
+fi
+
+printf '%s\n' 'Then run `make missing-inline`.' >>"$temp_dir/README.md"
+if run_check; then
+  fail "backticked missing make target was accepted"
+fi
+grep -q "README.md:6: error: documented make target 'missing-inline' does not exist" <<<"$check_output" ||
+  fail "backticked missing make target failure did not name the target: $check_output"
+
+cat >"$temp_dir/README.md" <<'EOF'
+~~~
+make missing-fenced
+~~~
+EOF
+if run_check; then
+  fail "fenced missing make target was accepted"
+fi
+grep -q "README.md:2: error: documented make target 'missing-fenced' does not exist" <<<"$check_output" ||
+  fail "fenced missing make target failure did not name the target: $check_output"
+
+cat >"$temp_dir/README.md" <<'EOF'
+Run `npm run lint &&
+make missing-multiline` and then you can make an export.
+
+This paragraph can make an export too.
+EOF
+if run_check; then
+  fail "missing make target in a wrapped inline code span was accepted"
+fi
+grep -q "README.md:2: error: documented make target 'missing-multiline' does not exist" <<<"$check_output" ||
+  fail "wrapped inline span failure did not name the target: $check_output"
+grep -q "documented make target 'an'" <<<"$check_output" &&
+  fail "prose after a wrapped inline span was treated as code: $check_output"
+
+: >"$temp_dir/README.md"
 
 echo "docs-check tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${DOCS_CHECK_TEST_BASH:-}" ]] || exit 0
