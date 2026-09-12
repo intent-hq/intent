@@ -160,13 +160,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy build-intentd test test-intentd coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -185,7 +185,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd list-tests coverage-e2e coverage-all \
-	fmt clippy check clean clean-dev \
+	fmt clippy lint-repo-slug check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -355,9 +355,15 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
-check: fmt clippy ## fmt + clippy
+# Source lint: fails naming file:line wherever repository owner/name identity
+# is case-folded or compared outside intent_core::RepoRef. Mirrors the intentd
+# `check` CI job so local gates match CI.
+lint-repo-slug: ensure-intentd-submodule ## Lint raw repo-slug folding outside RepoRef (intent-core repo_slug_fold_lint)
+	cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs $(BUILD_JOBS)
 
-gate: check ## Run all local Rust gates (fmt, clippy, then nextest)
+check: fmt clippy lint-repo-slug ## fmt + clippy + repo-slug fold lint
+
+gate: check ## Run all local Rust gates (fmt, clippy, repo-slug lint, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)

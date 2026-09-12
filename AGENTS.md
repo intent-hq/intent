@@ -249,7 +249,7 @@ with no rollback.
 
 - `make gate` runs `make check` and then the full nextest suite. `make test` remains
   the test-only entry point. Resume records apply only to nextest; `make gate` always
-  reruns fmt and clippy.
+  reruns fmt, clippy, and the repo-slug fold lint.
 - After a harness or terminal interruption, rerun `make test RESUME=1`. It skips
   only tests recorded as passed for the identical tracked and untracked worktree,
   submodule pointers, Rust toolchain, lockfile, and nextest configuration. Records
