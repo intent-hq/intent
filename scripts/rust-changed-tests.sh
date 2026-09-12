@@ -134,14 +134,20 @@ classify() {
 }
 
 # Committed + staged + unstaged edits since the merge base, then untracked
-# files. Both are read NUL-delimited so paths arrive raw: line-oriented
-# porcelain output C-quotes names with spaces or non-ASCII characters.
+# files. Both are read NUL-delimited so paths arrive raw (line-oriented
+# porcelain output C-quotes names with spaces or non-ASCII characters) and
+# with rename detection off so both sides of a move count as changed. The
+# output goes through a file so a failing git command is not silently read
+# as an empty change set.
+changed_file=$(mktemp "${TMPDIR:-/tmp}/rust-changed-tests.XXXXXX")
+trap 'rm -f "$changed_file"' EXIT
+git diff --name-only -z --no-renames "$merge_base" -- >"$changed_file" ||
+  die 2 "git diff --name-only $merge_base failed in $display_dir (exit $?)"
+git ls-files -z --others --exclude-standard >>"$changed_file" ||
+  die 2 "git ls-files --others failed in $display_dir (exit $?)"
 while IFS= read -r -d '' path; do
   classify "$path"
-done < <(git diff --name-only -z "$merge_base" --)
-while IFS= read -r -d '' path; do
-  classify "$path"
-done < <(git ls-files -z --others --exclude-standard)
+done <"$changed_file"
 
 if [[ -n "$fallback" ]]; then
   echo "[test-changed] build-wide change(s) vs $base need the full suite -- run 'make test':" >&2

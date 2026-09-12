@@ -2,6 +2,10 @@
 
 set -euo pipefail
 
+# The caller's environment must not steer the script under test (a shell with
+# BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
+unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/rust-changed-tests.sh"
 # The interpreter that runs the script under test defaults to the one running
@@ -22,9 +26,22 @@ fail() {
   exit 1
 }
 
-for command in bash dirname git sort; do
+for command in bash dirname mktemp rm sort; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
+
+# git wrapper: the subcommand named by GIT_STUB_FAIL fails like a broken
+# checkout would; everything else reaches the real git.
+real_git=$(command -v git)
+cat >"$bin_dir/git" <<SH
+#!/usr/bin/env bash
+if [[ -n "\${GIT_STUB_FAIL-}" && "\${1-}" == "\$GIT_STUB_FAIL" ]]; then
+  echo "fatal: stubbed git \$1 failure" >&2
+  exit 128
+fi
+exec "$real_git" "\$@"
+SH
+chmod +x "$bin_dir/git"
 
 # Stub cargo: every invocation is appended to CARGO_TEST_LOG as "<cwd>: <argv>"
 # and exits with CARGO_STUB_EXIT (default 0). It drains stdin like a real
@@ -208,12 +225,23 @@ run_script
 expect_ok
 expect_cargo "-p alpha --tests"
 
-case_name="renamed integration test selects the new name"
+# Both sides of a rename count as changed (rename detection is off), so a
+# moved test is a deleted one plus a new one.
+case_name="renamed integration test counts the old and new path"
 reset_repo
 g mv crates/alpha/tests/one.rs crates/alpha/tests/moved.rs
 run_script
 expect_ok
-expect_cargo "-p alpha --test moved"
+expect_cargo "-p alpha --tests"
+
+case_name="file moved from src into tests keeps the src selection"
+reset_repo
+g mv crates/alpha/src/util/mod.rs crates/alpha/tests/old.rs
+run_script
+expect_ok
+expect_plan "-p alpha --lib --bins --tests"
+expect_cargo "-p alpha --lib --bins --tests"
+[[ "$stdout" == *"note: crates/alpha/src changed"* ]] || fail "$case_name: no src note: $stdout"
 
 case_name="deleted integration test falls back to --tests"
 reset_repo
@@ -354,6 +382,26 @@ write .cargo/audit.toml
 DRY_RUN=1 run_script
 [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
 [[ "$stderr" == *"  .cargo/audit.toml"* ]] || fail "$case_name stderr: $stderr"
+case_name="renamed build-wide file still needs the full suite"
+reset_repo
+g mv Cargo.lock Cargo.lock.backup
+run_script
+[[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
+[[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
+[[ "$stderr" == *"  Cargo.lock"* ]] || fail "$case_name stderr: $stderr"
+[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+
+# A failing git command is an error, never an empty change set.
+for subcommand in diff ls-files; do
+  case_name="git $subcommand failure"
+  reset_repo
+  edit crates/alpha/tests/one.rs
+  GIT_STUB_FAIL=$subcommand run_script
+  [[ "$status" -eq 2 ]] || fail "$case_name exited $status (expected 2): $stderr"
+  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
+  [[ "$stderr" == "fatal: stubbed git $subcommand failure"$'\n'"[test-changed] git $subcommand "*" failed in $repo (exit 128)" ]] || fail "$case_name stderr: $stderr"
+  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+done
 
 case_name="unresolvable BASE"
 reset_repo
