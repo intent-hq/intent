@@ -672,6 +672,10 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
+Either re-home also **clears the moved tab's `displayed`** (the previous host's layout
+fact is no longer vouched for): the same `browser:tab-updated` carries `changes: {
+displayed: null }` when it was set, and the row reads with `displayed` absent until the
+new host reports it via `browser.upsertTab` / `browser.syncTabs`.
 Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
 another `hostClientId` for one of its tabs stops treating that tab as its own; the new
 host materialises it from the canonical row.
