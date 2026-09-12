@@ -583,8 +583,10 @@ install_native_build_dependencies() {
     return
   fi
   if [[ $(uname -s) == Linux ]] && command -v apt-get >/dev/null 2>&1; then
-    echo "[install] pkg-config and OpenSSL development headers"
-    as_root apt-get install -y libssl-dev pkg-config || exit 1
+    # build-essential supplies make and a C/C++ toolchain: node-gyp needs them
+    # to build node-pty, and cargo needs cc as its linker.
+    echo "[install] pkg-config, OpenSSL development headers and build-essential"
+    as_root apt-get install -y libssl-dev pkg-config build-essential || exit 1
     return
   fi
   echo "[manual] install pkg-config and OpenSSL development headers for your platform, then re-run make doctor"
