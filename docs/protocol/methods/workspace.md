@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; validated at the very top of the op, before any state change, so a bad reference rejects `-32602` without leaving a partially created workspace behind)*, fileBlocks? *(v6.12; same per-entry exactly-one-of-`data`/`attachmentId` validation as `agent.sendMessage`, `-32602` before any side effect — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; validated at the very top of the op, before any state change, so a bad reference rejects `-32602` without leaving a partially created workspace behind)*, fileBlocks? *(v6.12; same per-entry exactly-one-of-`data`/`attachmentId` validation as `agent.sendMessage`, `-32602` before any side effect — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -584,9 +584,31 @@ deferral and starts the watchers immediately (the user is in the workspace), so 
 still-running script's remaining churn surfaces from that point on.
 
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
-daemon minimally creates the agent session (honoring `name`/`model`/
-`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`metadata`) and
-delivers the resolved `prompt` (blank/whitespace-only prompts are a no-op, no session).
+daemon **always** creates and persists the agent session (honoring `name`/`model`/
+`specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`fileBlocks`/
+`metadata`), emits `agent:created` (after `workspace:created`), and returns it as the
+result's `initialAgent` — regardless of whether a prompt was supplied. Session creation
+is distinct from starting the first provider turn:
+
+- `prompt` is optional and is **trimmed**: an omitted, empty, or whitespace-only value
+  reads as absent (nothing is stamped on `metadata.initialMessage`, and any
+  caller-supplied `metadata.initialMessage` is dropped so a stale prompt cannot persist
+  for a no-prompt workspace).
+- The first turn starts when there is **content**: a non-empty trimmed `prompt`, OR
+  attachment blocks (`imageBlocks` / `fileBlocks`, top-level params winning over the
+  `metadata` copies — same harvest as `agent.create`). Attachment-only content —
+  blocks with no text — starts a turn whose message text is empty, consistent with
+  `agent.sendMessage` (§5.5).
+  `contextReferences` alone are not content: they are persisted and threaded into
+  the first turn, but do not start one by themselves.
+- With no content the agent is an **idle session**: the row exists and is returned,
+  no message is persisted (`agent.getConversation` is empty), and no `agent:stream:*`
+  frame is emitted. The client's first `agent.sendMessage` starts the turn — this is
+  the staged-attachment flow, where the FE creates the workspace prompt-less and sends
+  the held first message once uploads resolve.
+
+Regression coverage: `workspace_create_no_prompt_creates_agent_over_wss`
+(`crates/intentd/tests/e2e_wss_agent_lifecycle.rs`).
 An omitted `initialAgent.model` resolves through the same daemon-side creation-time
 default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution");
 a supplied one must be a **bare** model id — a compound `provider:model` value is rejected
@@ -608,7 +630,7 @@ fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected 
 effect** — no workspace row, worktree, spec seed, or `workspace:created` event is
 persisted.
 The result's `initialAgent` is the created session's full `AgentLite` projection (its
-server-minted id is `initialAgent.id`); the agent's turn starts
+server-minted id is `initialAgent.id`); when content is present the agent's turn starts
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result
 (carrying the originally minted `initialAgent.id`) without re-creating the
