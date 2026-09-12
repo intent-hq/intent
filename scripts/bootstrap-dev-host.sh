@@ -4,8 +4,8 @@ set -u
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
-INTENTD_DIR="$ROOT_DIR/packages/intentd"
-FE_DIR="$ROOT_DIR/packages/cloudlands-fe"
+INTENTD_DIR=${INTENTD_DIR:-"$ROOT_DIR/packages/intentd"}
+FE_DIR=${FE_DIR:-"$ROOT_DIR/packages/cloudlands-fe"}
 TOOLCHAIN_FILE="$INTENTD_DIR/rust-toolchain.toml"
 PACKAGE_FILE="$FE_DIR/package.json"
 CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
@@ -16,6 +16,19 @@ export CARGO_HOME PATH
 # the projectCards API deprecation both need this release or newer.
 GH_MIN_VERSION="2.94.0"
 GH_INSTALL_URL="https://github.com/cli/cli#installation"
+
+# Minimum Node: the frontend install builds node-pty (and cpu-features) with
+# node-gyp 13, whose engines.node is "^22.22.2 || ^24.15.0 || >=26.0.0"; its undici
+# dependency throws on Node 20 (intent-hq/intent#4669). fe CI runs Node 24.
+NODE_REQUIREMENT="22.22.2+, 24.15.0+ (recommended) or 26+"
+NODE_INSTALL_MAJOR=24
+
+# Corepack/pnpm launcher probes run under this bound (seconds) so a launcher that
+# re-invokes itself or stalls fails with a diagnosis instead of hanging the doctor
+# (intent-hq/intent#4635).
+PROBE_TIMEOUT=${BOOTSTRAP_PROBE_TIMEOUT:-20}
+PROBE_OUTPUT=""
+PROBE_ERROR=""
 
 MODE=install
 ASSUME_YES=${BOOTSTRAP_YES:-0}
@@ -92,15 +105,135 @@ active_toolchain_ready() {
   [[ $(rustup show active-toolchain 2>/dev/null) == "$TOOLCHAIN"-* ]]
 }
 
-node_ready() {
+node_version() {
   command -v node >/dev/null 2>&1 || return 1
-  local major
-  major=$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null) || return 1
-  [[ "$major" =~ ^[0-9]+$ && "$major" -ge 20 ]]
+  local line
+  line=$(node --version 2>/dev/null) || return 1
+  [[ "$line" =~ ^v?([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
+node_version_supported() {
+  case "${1%%.*}" in
+    22) version_ge "$1" "22.22.2" ;;
+    24) version_ge "$1" "24.15.0" ;;
+    *) [[ "${1%%.*}" -ge 26 ]] ;;
+  esac
+}
+
+node_ready() {
+  local version
+  version=$(node_version) || return 1
+  node_version_supported "$version"
 }
 
 python_ready() {
   command -v python3 >/dev/null 2>&1
+}
+
+kill_process_tree() {
+  local pid=$1 child
+  kill -STOP "$pid" 2>/dev/null
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_process_tree "$child"
+  done
+  kill -KILL "$pid" 2>/dev/null
+}
+
+# run_bounded <seconds> <dir> <command...>: runs the command in <dir> with stdin
+# closed, leaves its combined output in PROBE_OUTPUT and returns its status, or
+# 124 after killing its whole process tree once <seconds> have elapsed.
+run_bounded() {
+  local seconds=$1 dir=$2 output marker pid watchdog status
+  shift 2
+  output=$(mktemp "${TMPDIR:-/tmp}/bootstrap-probe.XXXXXX") || return 1
+  marker="$output.timeout"
+  (cd "$dir" && exec "$@") </dev/null >"$output" 2>&1 &
+  pid=$!
+  (
+    trap - EXIT
+    sleeper=""
+    trap 'kill "$sleeper" 2>/dev/null; exit 0' TERM
+    sleep "$seconds" &
+    sleeper=$!
+    wait "$sleeper"
+    : >"$marker"
+    kill_process_tree "$pid"
+  ) </dev/null >/dev/null 2>&1 &
+  watchdog=$!
+  wait "$pid" 2>/dev/null
+  status=$?
+  kill -TERM "$watchdog" 2>/dev/null
+  wait "$watchdog" 2>/dev/null
+  PROBE_OUTPUT=$(cat "$output" 2>/dev/null)
+  [[ -e "$marker" ]] && status=124
+  rm -f -- "$output" "$marker"
+  return "$status"
+}
+
+# launcher_probe <dir> <launcher> <args...>: runs a package-manager launcher under
+# PROBE_TIMEOUT. On success PROBE_OUTPUT holds its first output line; otherwise
+# PROBE_ERROR names the launcher path and what went wrong.
+launcher_probe() {
+  local dir=$1 launcher=$2 path status
+  shift 2
+  PROBE_OUTPUT=""
+  PROBE_ERROR=""
+  path=$(command -v "$launcher" 2>/dev/null) || { PROBE_ERROR="$launcher is not on PATH"; return 1; }
+  run_bounded "$PROBE_TIMEOUT" "$dir" "$@"
+  status=$?
+  case "$status" in
+    0)
+      PROBE_OUTPUT=$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)
+      return 0
+      ;;
+    124)
+      PROBE_ERROR="'$*' did not finish within ${PROBE_TIMEOUT}s: the launcher $path re-invokes itself or stalls. Inspect that file (a valid launcher execs Corepack's dist/corepack.js, never itself), restore it or reinstall Node, then re-run"
+      return 1
+      ;;
+    *)
+      PROBE_ERROR="'$*' failed with exit $status via $path: $(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)"
+      return 1
+      ;;
+  esac
+}
+
+host_platform() {
+  case "$(uname -s)" in
+    Darwin) echo darwin ;;
+    Linux) echo linux ;;
+    *) uname -s | tr '[:upper:]' '[:lower:]' ;;
+  esac
+}
+
+host_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) echo x64 ;;
+    arm64|aarch64) echo arm64 ;;
+    *) uname -m ;;
+  esac
+}
+
+# node-pty's loader (lib/utils.js) tries build/Release, build/Debug, then the
+# prebuild for this platform and architecture; node-pty is a Node-API addon, so
+# the same binary serves Node and Electron. An interrupted or script-less
+# install leaves node_modules without any of them.
+node_pty_binary() {
+  local dir="$FE_DIR/node_modules/node-pty" candidate
+  for candidate in \
+    "$dir/build/Release/pty.node" \
+    "$dir/build/Debug/pty.node" \
+    "$dir/prebuilds/$(host_platform)-$(host_arch)/pty.node"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+frontend_dependencies_ready() {
+  [[ -d "$FE_DIR/node_modules" ]] && node_pty_binary >/dev/null
 }
 
 corepack_home() {
@@ -126,9 +259,8 @@ pnpm_ready() {
     done
     return 1
   fi
-  local actual
-  actual=$(cd "$FE_DIR" && COREPACK_ENABLE_DOWNLOAD_PROMPT=0 pnpm --version 2>/dev/null) || return 1
-  [[ "$actual" == "$PNPM_VERSION" ]]
+  COREPACK_ENABLE_DOWNLOAD_PROMPT=0 launcher_probe "$FE_DIR" pnpm pnpm --version || return 1
+  [[ "$PROBE_OUTPUT" == "$PNPM_VERSION" ]]
 }
 
 openssl_dev_ready() {
@@ -178,7 +310,7 @@ installable_gap_exists() {
   node_ready || return 0
   command -v corepack >/dev/null 2>&1 || return 0
   pnpm_ready || return 0
-  [[ -d "$FE_DIR/node_modules" ]] || return 0
+  frontend_dependencies_ready || return 0
   gh_ready || return 0
   return 1
 }
@@ -245,16 +377,21 @@ check_all() {
     missing "cargo-nextest: required by make test"
   fi
 
+  local node_found
   if node_ready; then
-    ok "Node: $(node --version) (>= 20)"
+    ok "Node: v$(node_version) (supported: $NODE_REQUIREMENT)"
+  elif node_found=$(node_version); then
+    missing "Node: v$node_found is unsupported; the frontend native build (node-gyp 13) needs Node $NODE_REQUIREMENT"
   else
-    missing "Node: version 20 or newer is required"
+    missing "Node: $NODE_REQUIREMENT is required (node-gyp 13 builds the frontend native modules)"
   fi
 
-  if command -v corepack >/dev/null 2>&1; then
-    ok "Corepack: $(corepack --version 2>/dev/null)"
-  else
+  if ! command -v corepack >/dev/null 2>&1; then
     missing "Corepack: required to select the frontend pnpm version"
+  elif launcher_probe "$ROOT_DIR" corepack corepack --version; then
+    ok "Corepack: $PROBE_OUTPUT"
+  else
+    missing "Corepack: $PROBE_ERROR"
   fi
 
   if [[ -z "$PACKAGE_MANAGER" ]]; then
@@ -265,10 +402,12 @@ check_all() {
     missing "frontend package manager: expected $PACKAGE_MANAGER via Corepack"
   fi
 
-  if [[ -d "$FE_DIR/node_modules" ]]; then
-    ok "frontend dependencies: packages/cloudlands-fe/node_modules present"
+  if [[ ! -d "$FE_DIR/node_modules" ]]; then
+    missing "frontend dependencies: run corepack pnpm install --frozen-lockfile in packages/cloudlands-fe"
+  elif node_pty_binary >/dev/null; then
+    ok "frontend dependencies: packages/cloudlands-fe/node_modules with node-pty built for $(host_platform)-$(host_arch)"
   else
-    missing "frontend dependencies: run corepack pnpm install --frozen-lockfile"
+    missing "frontend dependencies: node-pty has no pty.node for $(host_platform)-$(host_arch) under packages/cloudlands-fe/node_modules (interrupted or script-less install); run corepack pnpm install --frozen-lockfile, then corepack pnpm rebuild node-pty if it is still missing"
   fi
 
   local gh_found
@@ -418,11 +557,11 @@ install_rust() {
 
 install_node() {
   if node_ready; then
-    echo "[skip] Node $(node --version) satisfies >= 20"
+    echo "[skip] Node v$(node_version) is supported ($NODE_REQUIREMENT)"
     return
   fi
 
-  echo "[install] Node >= 20"
+  echo "[install] Node $NODE_INSTALL_MAJOR (supported: $NODE_REQUIREMENT)"
   case "$(uname -s)" in
     Darwin)
       command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install Node on macOS" >&2; exit 1; }
@@ -432,19 +571,19 @@ install_node() {
       command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required to install Node" >&2; exit 1; }
       TEMP_FILE=$(mktemp "${TMPDIR:-/tmp}/nodesource.XXXXXX") || exit 1
       if command -v apt-get >/dev/null 2>&1; then
-        curl -fsSL https://deb.nodesource.com/setup_20.x -o "$TEMP_FILE" || exit 1
+        curl -fsSL "https://deb.nodesource.com/setup_$NODE_INSTALL_MAJOR.x" -o "$TEMP_FILE" || exit 1
         as_root bash "$TEMP_FILE" || exit 1
         as_root apt-get install -y nodejs || exit 1
       elif command -v dnf >/dev/null 2>&1; then
-        curl -fsSL https://rpm.nodesource.com/setup_20.x -o "$TEMP_FILE" || exit 1
+        curl -fsSL "https://rpm.nodesource.com/setup_$NODE_INSTALL_MAJOR.x" -o "$TEMP_FILE" || exit 1
         as_root bash "$TEMP_FILE" || exit 1
         as_root dnf install -y nodejs || exit 1
       elif command -v yum >/dev/null 2>&1; then
-        curl -fsSL https://rpm.nodesource.com/setup_20.x -o "$TEMP_FILE" || exit 1
+        curl -fsSL "https://rpm.nodesource.com/setup_$NODE_INSTALL_MAJOR.x" -o "$TEMP_FILE" || exit 1
         as_root bash "$TEMP_FILE" || exit 1
         as_root yum install -y nodejs || exit 1
       else
-        echo "ERROR: unsupported Linux package manager; install Node >= 20 and re-run" >&2
+        echo "ERROR: unsupported Linux package manager; install Node $NODE_REQUIREMENT and re-run" >&2
         exit 1
       fi
       rm -f -- "$TEMP_FILE"
@@ -518,6 +657,7 @@ install_frontend() {
     npm install --global corepack || as_root npm install --global corepack || exit 1
     hash -r
   fi
+  launcher_probe "$ROOT_DIR" corepack corepack --version || { echo "ERROR: Corepack: $PROBE_ERROR" >&2; exit 1; }
 
   if pnpm_ready; then
     echo "[skip] $PACKAGE_MANAGER already available via Corepack"
@@ -526,13 +666,18 @@ install_frontend() {
     corepack enable || as_root corepack enable || exit 1
     corepack install --global "$PACKAGE_MANAGER" || exit 1
     hash -r
+    pnpm_ready || { echo "ERROR: frontend package manager: expected $PACKAGE_MANAGER via Corepack${PROBE_ERROR:+; $PROBE_ERROR}" >&2; exit 1; }
   fi
 
-  if [[ -d "$FE_DIR/node_modules" ]]; then
+  if frontend_dependencies_ready; then
     echo "[skip] frontend dependencies already installed"
   else
     echo "[install] frontend dependencies"
     (cd "$FE_DIR" && corepack pnpm install --frozen-lockfile) || exit 1
+    if ! node_pty_binary >/dev/null; then
+      echo "[install] node-pty native module for $(host_platform)-$(host_arch)"
+      (cd "$FE_DIR" && corepack pnpm rebuild node-pty) || exit 1
+    fi
   fi
 }
 

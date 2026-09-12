@@ -6,7 +6,7 @@ This guide reflects the current Intent repository layout and APIs as of package 
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 24 (24.15.0+; 22.22.2+ and 26+ also work — node-gyp 13 builds node-pty during install and rejects older releases; `make doctor` checks this)
 - Corepack with the repository-pinned `pnpm` version
 - Git
 - Auggie CLI for the default ACP provider workflow
