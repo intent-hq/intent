@@ -277,18 +277,18 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
   in [docs/RELEASING.md](./docs/RELEASING.md).
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
-  done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha,
-  then update the final workspace status message with the carrying version (e.g.
-  "Shipped in cloudlands-fe vX.Y.Z (alpha)."). intentd-only changes ride the chained
-  cloudlands-fe alpha too, so the version to report is always the cloudlands-fe tag.
-  `scripts/shipped-in.sh <intentd|cloudlands-fe> <squash-commit-sha>` (or
-  `make shipped-in COMPONENT=... SHA=...`) is the canonical detector: it prints the
+  done when the PRs merge — monitor until the work ships in a cloudlands-fe alpha, then
+  set the final workspace status message to the carrying version (e.g. "Shipped in
+  cloudlands-fe vX.Y.Z (alpha)."; intentd-only changes ride the chained fe alpha, so the
+  version is always the cloudlands-fe tag). `scripts/shipped-in.sh <component> <sha>...`
+  (one or more pairs; or `make shipped-in COMPONENT=... SHA=...` /
+  `PAIRS="intentd:<sha> cloudlands-fe:<sha>"`) is the canonical detector: it prints the
   first [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases)
-  tag carrying the commit (for intentd, via the `intentdVersion` pin in that tag's
-  `release-manifest.json`), exits 3 while nothing carries it yet, and exits 4 on a
-  transient GitHub failure (rate limit, 5xx, network) that the next poll should
-  simply retry. Never block a turn polling — schedule this hook after replacing
-  the placeholders:
+  tag carrying every listed commit (for intentd, via the `intentdVersion` pin in that
+  tag's `release-manifest.json`), exits 3 while any is still uncarried, and exits 4 on a
+  transient GitHub failure (rate limit, 5xx, network) the next poll should simply retry.
+  Never block a turn polling — schedule this hook after replacing the placeholders
+  (drop the pair for a component you did not change):
 
   ```javascript
   await ws.hook.schedule({
@@ -296,7 +296,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
     delayMs: 600_000,
     ttlMs: 21_600_000,
     code: `const run = await ws.host.exec({
-    command: "scripts/shipped-in.sh", args: ["<COMPONENT>", "<SHA>"], timeoutMs: 120_000,
+    command: "scripts/shipped-in.sh", args: ["intentd", "<INTENTD_SHA>", "cloudlands-fe", "<FE_SHA>"], timeoutMs: 120_000,
   });
   if (run.exitCode === 0) return { dispatch: true, message: "Shipped in cloudlands-fe " + run.stdout.trim() };
   if (run.exitCode === 3 || run.exitCode === 4) return { dispatch: false };
