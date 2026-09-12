@@ -130,6 +130,29 @@ jobs:
           git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "$RUNNER_TEMP/branch-commit-messages"
           node scripts/check-breaking-token.mjs "$RUNNER_TEMP/branch-commit-messages"
 
+  # Submodule pins are advanced only by the auto-bump-submodules workflow
+  # (auto/submodule-bump). Reject gitlink changes in any other PR — a
+  # workspace branch that checked out a submodule feature branch can carry
+  # one unnoticed — unless the submodule-pin-intended label is applied.
+  submodule-pins:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-submodule-pins.test.mjs
+      - name: Check for manual submodule pin changes
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/check-submodule-pins.mjs --base "origin/${{ github.base_ref }}"
+
   # The issue-triage body parser (.github/scripts/issue-triage/) is also
   # zero-dependency Node with a fixture-driven node:test suite.
   triage-parser-test:

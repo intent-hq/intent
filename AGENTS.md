@@ -27,7 +27,8 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 ### Situate
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
-and health, both component branches, and branch PR checks when `gh` is authenticated.
+and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
+off its pin), and branch PR checks when `gh` is authenticated.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
 system packages may require privilege. Do not discover prerequisites during a build.
@@ -87,8 +88,9 @@ to the task note rather than relying on prose alone:
 
 ### Hand off
 
-Stop what you started, then rerun `STATUS_JSON=1 make status` to confirm no listener or
-state remains. Keep app and stack on loopback: their Vite origin exposes the full
+Stop what you started, then rerun `STATUS_JSON=1 make status` to confirm no listener,
+state, or `gitlinkDirty` submodule remains (`git submodule update --checkout <path>` resets
+one). Keep app and stack on loopback: their Vite origin exposes the full
 unauthenticated daemon API and is safe only through the client's authenticated tunnel.
 
 Remote browser sandboxes cannot exercise Electron main/preload, native dialogs, window
@@ -130,16 +132,14 @@ backstop; and manual `workflow_dispatch` is available for urgent bumps. The
 contents:write on `intent-hq/intent`), and are fail-soft: when the secret is absent
 the notify step logs a warning and skips, and the cron backstop still advances the pins.
 
-**Agents (and humans) must NOT file manual submodule bump PRs on the monorepo.** The
-workflow owns pin advancement. If an urgent bump is needed, dispatch the workflow
-manually instead of filing a PR:
+The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
+whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
+or it carries the `submodule-pin-intended` label. For an urgent bump, dispatch the
+workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml
 ```
-
-Regular monorepo PRs for actual content changes (docs, Makefile, CI, scripts) are
-unaffected and still follow the normal PR flow.
 
 The workflow authenticates with the `SUBMODULE_BUMP_TOKEN` secret — a fine-grained PAT
 with contents:read on `intent-hq/intentd`, `intent-hq/cloudlands-fe`, and
@@ -272,9 +272,8 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - The pipeline is fully automated and event-chained (intentd alpha publish →
   cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
   backstops when an event link is missed.
-- **Never file manual monorepo submodule-bump PRs or routine pin-bump PRs** — the
-  workflows own pin advancement. For an urgent monorepo bump, dispatch the workflow
-  instead (`gh workflow run auto-bump-submodules.yml`). The one sanctioned exception
+- **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
+  `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
   in [docs/RELEASING.md](./docs/RELEASING.md).
 - **Track shipped work**: a workspace that changed intentd and/or cloudlands-fe is NOT
