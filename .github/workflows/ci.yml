@@ -91,6 +91,7 @@ jobs:
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
           bash scripts/docs-check.test.sh
+          bash scripts/rust-changed-tests.test.sh
           bash scripts/shipped-in.test.sh
 
   # Agent-facing documentation links and root hygiene are checked without
