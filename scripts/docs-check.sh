@@ -20,12 +20,58 @@ fail() {
   failures=$((failures + 1))
 }
 
+# Emit `file:line:make <target>` for every mention that appears in code: lines
+# inside fenced code blocks and the contents of inline backtick spans. Prose
+# mentions such as "can make an export" are ignored.
+code_make_mentions() {
+  awk '
+    function emit(text,   rest) {
+      rest = text
+      while (match(rest, /make[[:space:]]+[A-Za-z0-9_-]+/)) {
+        print FILENAME ":" FNR ":" substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+    }
+    function fence_run(line,   run) {
+      if (match(line, /^[ \t]*(```+|~~~+)/)) {
+        run = substr(line, RSTART, RLENGTH)
+        sub(/^[ \t]+/, "", run)
+        return run
+      }
+      return ""
+    }
+    FNR == 1 { in_fence = 0 }
+    {
+      run = fence_run($0)
+      if (in_fence) {
+        if (run != "" && substr(run, 1, 1) == substr(fence, 1, 1) &&
+            length(run) >= length(fence) && $0 ~ /^[ \t]*(`+|~+)[ \t]*$/) {
+          in_fence = 0
+          next
+        }
+        emit($0)
+        next
+      }
+      if (run != "") { in_fence = 1; fence = run; next }
+      rest = $0
+      while (match(rest, /`+/)) {
+        tick = substr(rest, RSTART, RLENGTH)
+        rest = substr(rest, RSTART + RLENGTH)
+        close_pos = index(rest, tick)
+        if (close_pos == 0) break
+        emit(substr(rest, 1, close_pos - 1))
+        rest = substr(rest, close_pos + length(tick))
+      }
+    }
+  ' "${docs[@]}"
+}
+
 while IFS=: read -r file line mention; do
   read -r _ target <<<"$mention"
   if ! grep -Eq "^${target}[[:space:]]*:" Makefile; then
     fail "$file" "$line" "documented make target '$target' does not exist"
   fi
-done < <(grep -nHEo 'make[[:space:]]+[A-Za-z0-9_-]+' "${docs[@]}" || true)
+done < <(code_make_mentions)
 
 section_lines() {
   local file=$1 start=$2 stop=$3
