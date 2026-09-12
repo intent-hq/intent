@@ -22,7 +22,8 @@ fail() {
 
 # Emit `file:line:make <target>` for every mention that appears in code: lines
 # inside fenced code blocks and the contents of inline backtick spans. Prose
-# mentions such as "can make an export" are ignored.
+# mentions such as "can make an export" are ignored. An inline span may wrap
+# onto following lines within the same paragraph; a blank line ends it.
 code_make_mentions() {
   awk '
     function emit(text,   rest) {
@@ -40,7 +41,7 @@ code_make_mentions() {
       }
       return ""
     }
-    FNR == 1 { in_fence = 0 }
+    FNR == 1 { in_fence = 0; open_tick = "" }
     {
       run = fence_run($0)
       if (in_fence) {
@@ -52,13 +53,21 @@ code_make_mentions() {
         emit($0)
         next
       }
-      if (run != "") { in_fence = 1; fence = run; next }
+      if (run != "") { in_fence = 1; fence = run; open_tick = ""; next }
+      if ($0 ~ /^[ \t]*$/) open_tick = ""
       rest = $0
+      if (open_tick != "") {
+        close_pos = index(rest, open_tick)
+        if (close_pos == 0) { emit(rest); next }
+        emit(substr(rest, 1, close_pos - 1))
+        rest = substr(rest, close_pos + length(open_tick))
+        open_tick = ""
+      }
       while (match(rest, /`+/)) {
         tick = substr(rest, RSTART, RLENGTH)
         rest = substr(rest, RSTART + RLENGTH)
         close_pos = index(rest, tick)
-        if (close_pos == 0) break
+        if (close_pos == 0) { open_tick = tick; emit(rest); break }
         emit(substr(rest, 1, close_pos - 1))
         rest = substr(rest, close_pos + length(tick))
       }

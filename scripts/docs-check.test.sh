@@ -121,6 +121,20 @@ fi
 grep -q "README.md:2: error: documented make target 'missing-fenced' does not exist" <<<"$check_output" ||
   fail "fenced missing make target failure did not name the target: $check_output"
 
+cat >"$temp_dir/README.md" <<'EOF'
+Run `npm run lint &&
+make missing-multiline` and then you can make an export.
+
+This paragraph can make an export too.
+EOF
+if run_check; then
+  fail "missing make target in a wrapped inline code span was accepted"
+fi
+grep -q "README.md:2: error: documented make target 'missing-multiline' does not exist" <<<"$check_output" ||
+  fail "wrapped inline span failure did not name the target: $check_output"
+grep -q "documented make target 'an'" <<<"$check_output" &&
+  fail "prose after a wrapped inline span was treated as code: $check_output"
+
 : >"$temp_dir/README.md"
 
 echo "docs-check tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
