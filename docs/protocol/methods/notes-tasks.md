@@ -68,10 +68,11 @@ between makes the daemon re-fetch, re-merge against the new current and retry
 (bounded, 5 attempts) — only exhaustion surfaces `-32005`. The reduction guard is
 measured against the writer's base when one is recoverable (so a small edit on a
 note that another writer has since grown is not misread as a wipe) and against
-the current text otherwise. The content arm of `note.update` keeps the session-only
-`yrs` merge for now; the surgical mutations (`note.add`, `note.edit`,
-`note.editLines`, `note.restoreVersion`, `task.updateStatus`, `task.update`,
-`task.convertBlocks`, `comment.add`) write straight to storage.
+the current text otherwise. The content arm of `note.update` does not merge: it is a
+plain versioned write that keeps the `-32005` guard on a stale `expectedVersion`. The
+surgical mutations (`note.add`, `note.edit`, `note.editLines`, `note.restoreVersion`,
+`task.updateStatus`, `task.update`, `task.convertBlocks`, `comment.add`) write straight
+to storage.
 
 **Numbered `note.read` display rejected on content writes** (behavior only, no
 shape change — [intent-hq/intentd#1688](https://github.com/intent-hq/intentd/pull/1688),
