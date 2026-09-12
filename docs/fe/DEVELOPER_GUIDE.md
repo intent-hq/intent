@@ -140,14 +140,15 @@ available. The report is read-only, including stale sandbox state.
 
 `pnpm perf:chat-motion` (in `packages/cloudlands-fe`) records a CDP trace of the chat
 footer collapse/expand (`--scenario footer`, default) or context-well open/close
-(`--scenario context-well`) against a healthy `make dev-sandbox-app` or `dev-sandbox-stack`,
+(`--scenario context-well`) against a running `make dev-sandbox-app` / `dev-sandbox-stack`,
 then samples scroll geometry per animation frame. `--url` is a workspace page whose
-transcript is long enough to scroll; `--out` must not exist — an existing directory exits 2
-with `refusing to overwrite` and is left untouched. Optional: `--inflate <nodes>` (clone
-transcript rows until the DOM reaches this count, default 10000), `--frames` (40),
-`--scroll-up` (800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000),
-`--headed`. The run writes `trace.json`, `summary.json`, `samples.json`, and screenshots
-into `--out` and prints the summary:
+transcript is long enough to scroll; `--out` must not exist. Optional: `--inflate <nodes>`
+(clone transcript rows until the DOM reaches this count, 10000), `--frames` (40), `--scroll-up`
+(800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000), `--headed`
+(default headless). Exit 0 writes `trace.json`, `summary.json`, `samples.json`, and screenshots
+(`expanded.png` + `collapsed.png` for footer, `closed.png` + `opened.png` for context-well, plus
+`scrolled-up.png`) into `--out` and prints the summary; exit 1 is a runtime failure; exit 2 is a
+usage error, including an existing `--out` (`refusing to overwrite`, directory left untouched):
 
 ```bash
 pnpm perf:chat-motion --url http://127.0.0.1:<DEV_PORT>/workspace/<id> --out .demo-artifacts/perf/footer-1
@@ -155,19 +156,18 @@ pnpm perf:chat-motion --url http://127.0.0.1:<DEV_PORT>/workspace/<id> --out .de
 
 | Field | Meaning |
 |---|---|
-| `nodeCounts.total` / `.transcript` | DOM element counts after inflation |
-| `motions.<mark>` | Trace window after each user-timing mark (`collapse` / `expand` for footer, `open` / `close` for context-well): `taskCount`, `maxTaskMs`, `tasksOver16_7` (tasks over one 60 Hz frame), `maxUpdateLayoutTreeMs` / `maxUpdateLayoutTreeElements` (largest style recalc), `clicks`, `transitionFinishes` (offsets from the mark) |
-| `scroll.<label>` | Per-frame geometry for `pinned<Mark>`, `control`, `scrolledUp<Mark>` (e.g. `pinnedCollapse` / `scrolledUpExpand` for footer, `pinnedOpen` / `scrolledUpClose` for context-well): `beforeTop` / `afterTop`, `maxBottomGap`, `topRange`, `anchorDriftPx`, `anchorStayedConnected`, `toggled` (`true` for every toggle, `false` for `control`) |
+| `url`, `scenario`, `startedAt`, `nodeCounts.total` / `.transcript` | Run inputs, ISO start time, and DOM element counts after inflation |
+| `motions.<mark>` | Trace events in the `windowMs` (400) after each user-timing mark (`collapse` / `expand` for footer, `open` / `close` for context-well): `taskCount`, `maxTaskMs`, `tasksOver16_7` (tasks over one 60 Hz frame), `maxUpdateLayoutTreeMs` / `maxUpdateLayoutTreeElements` (largest style recalc), `clicks`, `transitionFinishes` (offsets from the mark) |
+| `scroll.<label>` | Per-frame geometry (`frames` sampled) for `pinned<Mark>`, `control`, `scrolledUp<Mark>` (e.g. `pinnedCollapse` / `scrolledUpExpand` for footer, `pinnedOpen` / `scrolledUpClose` for context-well): `beforeTop` / `afterTop`, `maxBottomGap`, `topRange`, `anchorDriftPx`, `anchorStayedConnected`, `toggled` (`true` for every toggle, `false` for `control`) |
 | `quiescence` | `preTraceWaitedMs` (before the traced motions) and `waitedMs` (before the scrolled-up samples) spent waiting for scroll geometry to stay unchanged for `quietMs` |
 
-Both quiescence waits and the no-toggle `control` exist because, during the
-[cloudlands-fe#2355](https://github.com/intent-hq/cloudlands-fe/pull/2355) verification,
-still-hydrating fixtures produced anchor drift and long tasks unrelated to the motion. The
-harness is report-only (no CI budget); judge against two clean runs taken the same way. To
-prove it still detects the #2355 regression class, inject a per-frame layout thrash locally
-(in the `disclosure-motion.ts` tick, ~50 style-write / `scrollHeight`-read pairs on the
-viewport; a single forced read is not enough), confirm `maxTaskMs` or `maxUpdateLayoutTreeMs`
-exceeds both clean runs, then revert before any gate. `.demo-artifacts/` is git-ignored.
+Both quiescence waits and the no-toggle `control` exist because still-hydrating fixtures
+produced anchor drift and long tasks unrelated to the motion during the
+[cloudlands-fe#2355](https://github.com/intent-hq/cloudlands-fe/pull/2355) verification. The
+harness is report-only; judge against two clean runs. To prove it still detects that regression
+class, inject a per-frame layout thrash locally (in the `disclosure-motion.ts` tick, ~50
+style-write / `scrollHeight`-read pairs on the viewport; one forced read is not enough), confirm
+`maxTaskMs` or `maxUpdateLayoutTreeMs` exceeds both clean runs, then revert before any gate.
 
 ## Fast UI Preview Workflow
 
