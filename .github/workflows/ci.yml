@@ -94,6 +94,23 @@ jobs:
           bash scripts/rust-changed-tests.test.sh
           bash scripts/shipped-in.test.sh
 
+  # Stock macOS /bin/bash is 3.2, and two Bash-3-only regressions shipped
+  # (intent-hq/intent#4706, intent-hq/intent#4759) because the ubuntu leg above
+  # only has Bash 5 and the suites' real Bash 3 rerun is skipped there. Run the
+  # two Bash-3-aware suites on macos-latest with REQUIRE_BASH3 set so a missing
+  # Bash 3 fails instead of skipping. `bash` on PATH may be a Homebrew Bash 5
+  # there; the suites then rerun under /bin/bash 3.2 via find_bash3.
+  shell-tests-bash3:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: |
+          /bin/bash --version
+          REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
+          REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
+
   # Agent-facing documentation links and root hygiene are checked without
   # dependencies or initialized submodules, directly on GitHub hosting.
   repo-hygiene:
