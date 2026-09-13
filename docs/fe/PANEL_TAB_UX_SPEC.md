@@ -9,8 +9,8 @@ A comprehensive guide to implementing a powerful, intuitive panel and tab manage
 ### Layout Model
 - **Panels**: Containers that hold one or more tabs
 - **Tabs**: Individual content views within a panel
-- **Splits**: Hierarchical divisions (horizontal/vertical) between panels
-- **Layout Tree**: Recursive structure where each node is either a panel or a split with children
+- **Splits**: Horizontal divisions between panels — the layout is a single row of 1–4 side-by-side columns; there are no vertical (top/bottom) splits
+- **Layout Tree**: With one column the root is the panel itself; with 2–4 columns the root is a single horizontal split whose children are panels (one per column)
 
 ---
 
@@ -57,24 +57,19 @@ A comprehensive guide to implementing a powerful, intuitive panel and tab manage
 When dragging a tab near a panel edge, show the relevant drop zone:
 
 ```
-┌─────────────────────────────┐
-│           TOP               │  ← Drop here: vertical split, new panel above
-├──────┬─────────────┬────────┤
+┌──────┬─────────────┬────────┐
 │      │             │        │
-│ LEFT │   CENTER    │ RIGHT  │  ← Left/Right: horizontal split
+│ LEFT │   CENTER    │ RIGHT  │  ← Left/Right: new column on that side (horizontal split)
 │      │             │        │
-├──────┴─────────────┴────────┤
-│          BOTTOM             │  ← Drop here: vertical split, new panel below
-└─────────────────────────────┘
+└──────┴─────────────┴────────┘
 ```
 
-- **Edge zones**: ~20% of panel width/height from each edge. left/right drop zones override top/bottom zones
+- **Edge zones**: ~20% of panel width from the left and right edges. There are no top/bottom zones — the layout only splits horizontally, up to 4 columns
 - **Center zone**: Move tab to this panel (no split)
 - **Visual feedback**: Highlight the target zone with overlay. animate the overlay between states.
 
 #### Via Panel Menu
-- "Split Right" → Horizontal split, empty panel on right
-- "Split Down" → Vertical split, empty panel below
+- "Split Right" → Horizontal split, empty panel on right (disabled in the menu once 4 columns exist)
 - "Duplicate Tab in Split" → Split + clone current tab
 
 #### Via Keyboard
@@ -269,11 +264,11 @@ Like tmux's `Ctrl+B`, entering the leader key activates "panel mode" for the nex
 
 | Shortcut | Action | Inspired By |
 |----------|--------|-------------|
-| `Cmd+\` | Split right (horizontal) | VS Code |
-| `Cmd+; Cmd+\` | Split down (vertical) | VS Code |
+| `Cmd+\` | Split right (new column, max 4) | VS Code |
 | `Cmd+; %` | Split right | tmux `Ctrl+B %` |
-| `Cmd+; "` | Split down | tmux `Ctrl+B "` |
 | `Cmd+; !` | Move current tab to new panel | tmux `Ctrl+B !` (pane→window) |
+
+The layout is horizontal-only (1–4 columns). The former `Cmd+; "` "split down" chord requested a vertical split the reducer rejects, so it is removed in [cloudlands-fe#2202](https://github.com/intent-hq/cloudlands-fe/pull/2202).
 
 ### Panel Resizing
 
@@ -350,9 +345,9 @@ Like tmux's `Ctrl+B`, entering the leader key activates "panel mode" for the nex
 │  NAVIGATE          SPLIT             RESIZE          TABS       │
 │  ─────────         ─────             ──────          ────       │
 │  h/j/k/l  focus    Cmd+\   right     H/J/K/L  edges  Cmd+1-9    │
-│  o        cycle    Cmd+; \ down      =        equal  Cmd+Shift+]│
-│  1-9      index    %       right     z        zoom   Cmd+W close│
-│  Cmd+;    last     "       down      _/|      max    Cmd+Shift+T│
+│  o        cycle    %       right     =        equal  Cmd+Shift+]│
+│  1-9      index                      z        zoom   Cmd+W close│
+│  Cmd+;    last                       _/|      max    Cmd+Shift+T│
 │                                                       reopen    │
 ├─────────────────────────────────────────────────────────────────┤
 │  x  close panel    {/}  swap    Space  cycle layouts    q  show#│
@@ -367,7 +362,7 @@ Like tmux's `Ctrl+B`, entering the leader key activates "panel mode" for the nex
 |-----------|------|-----|---------|---------|
 | **Prefix/Leader** | `Ctrl+B` | `Ctrl+W` | — | `Cmd+;` |
 | **Split horizontal** | `Ctrl+B %` | `:vsplit` | `Cmd+\` | `Cmd+\` or `Cmd+; %` |
-| **Split vertical** | `Ctrl+B "` | `:split` | `Cmd+K Cmd+\` | `Cmd+; "` |
+| **Split vertical** | `Ctrl+B "` | `:split` | `Cmd+K Cmd+\` | — (horizontal-only layout) |
 | **Navigate left** | `Ctrl+B ←` | `Ctrl+W h` | `Cmd+K ←` | `Cmd+; h` |
 | **Navigate right** | `Ctrl+B →` | `Ctrl+W l` | `Cmd+K →` | `Cmd+; l` |
 | **Navigate up** | `Ctrl+B ↑` | `Ctrl+W k` | `Cmd+K ↑` | `Cmd+; k` |
@@ -390,7 +385,6 @@ For users who prefer iTerm2's approach:
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+D` | Split right |
-| `Cmd+Shift+D` | Split down |
 | `Cmd+]` | Next panel |
 | `Cmd+[` | Previous panel |
 | `Cmd+Option+Arrow` | Navigate to panel in direction |

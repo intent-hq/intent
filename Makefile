@@ -1,26 +1,66 @@
 # Intent Monorepo Makefile
 #
-# Three postures for local work:
+# Four postures for local work:
 #   1. `make dev-daemon` — default dev seat. intentd on an isolated data dir,
 #      serving UDS + insecure TCP (`--insecure`) bound on 0.0.0.0:$(DEV_TCP_PORT)
-#      (reachable from loopback and LAN). Pairs with `make run-fe` (whose dev default
-#      is `ws://127.0.0.1:5181/ws`) and with the iOS app (`make ios-info`).
+#      (reachable from loopback and LAN). Pairs with `make dev-fe` (which pins
+#      the FE to the dev seat's UDS socket) and with the iOS app (`make ios-info`).
 #   2. `make release-daemon` — occasional "debug the release app with its own
 #      state" seat. intentd on the real data dir, UDS-always and no
 #      `--insecure`. No TCP port is bound unless the persisted
 #      `server.wsApi.enabled` setting is true, in which case the secure WSS
-#      listener binds `server.wsApi.port` (default 5181 — the same as
-#      $(DEV_TCP_PORT)); if the dev seat already holds it, the bind failure
+#      listener binds `server.wsApi.port` (default 5181, outside the derived
+#      $(DEV_TCP_PORT) range); if another process holds it, the bind failure
 #      is non-fatal and UDS keeps serving.
-#   3. `make run-fe` / `make ios-open` / `make ios-info` — clients pointed at
+#   3. `make dev-fe` / `make ios-open` / `make ios-info` — clients pointed at
 #      the dev daemon.
+#   4. `make dev-prod` — FE dev build connected to the already-running packaged
+#      app daemon, showing the same workspaces and agents without starting a
+#      second daemon against production state.
 #
 # `make help` lists every documented target (any recipe whose header ends in
 # `## <description>`).
 
+.DEFAULT_GOAL := all
+
 INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
+
+# FE dependency freshness guard shared by every target that needs an installed
+# frontend tree. pnpm writes the lockfile it installed from to
+# node_modules/.pnpm/lock.yaml, so the tree is stale when that copy is missing
+# or no longer byte-identical to pnpm-lock.yaml. Use as `$(FE_DEPS_FRESH) || (...)`.
+FE_DEPS_FRESH = [ -f $(FE_DIR)/node_modules/.pnpm/lock.yaml ] && cmp -s $(FE_DIR)/pnpm-lock.yaml $(FE_DIR)/node_modules/.pnpm/lock.yaml
+FE_DEPS_INSTALL_MSG = installing/refreshing FE deps (lockfile changed or node_modules missing)
+
+# cargo install may place subcommands outside PATH when cargo itself comes from
+# a distro package. Make every recipe discover the effective install bin dir.
+CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
+# Route every Rust recipe through the rustup toolchain pinned by
+# packages/intentd/rust-toolchain.toml, even when another cargo (Homebrew,
+# distro) is first on the caller's PATH. `rustup which` resolves the pin from
+# $(INTENTD_DIR) without triggering a toolchain download (RUSTUP_AUTO_INSTALL=0
+# guards rustup >= 1.28 auto-install). When rustup or the toolchain is absent
+# this expands to empty and behavior is unchanged. cargo-nextest and other
+# installed subcommands stay discoverable via $(CARGO_BIN_DIR).
+#
+# Resolution is deferred (recursive `=`), not parse-time (`:=`): on a fresh
+# clone $(INTENTD_DIR) is an empty submodule dir until
+# `ensure-intentd-submodule` runs, so a parse-time probe leaves the FIRST
+# fmt/clippy/check of a clone unpinned. Make rebuilds the exported environment
+# per recipe, so a deferred probe runs after prerequisites and sees the
+# populated submodule. The probe requires rust-toolchain.toml to be readable —
+# without it `rustup which` silently answers with the caller's DEFAULT
+# toolchain, which is exactly the unpinned cargo this export exists to bypass.
+# ORIG_PATH snapshots the caller's PATH so the recursive export never
+# references itself, and $(addsuffix) keeps the export to a single
+# $(RUSTUP_CARGO) expansion — one ~10ms `rustup which` per recipe, which no
+# cargo invocation notices. An $(eval) memo does not help: an assignment made
+# while make builds a recipe's environment does not outlive that expansion.
+ORIG_PATH := $(PATH)
+RUSTUP_CARGO = $(shell cd $(INTENTD_DIR) 2>/dev/null && [ -r rust-toolchain.toml ] && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+export PATH = $(addsuffix :,$(dir $(RUSTUP_CARGO)))$(CARGO_BIN_DIR):$(ORIG_PATH)
 
 # `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
 # any that are missing. The FE and iOS submodules are heavy and not needed for
@@ -36,10 +76,13 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # seat never touches the packaged app's real data dir (Config::resolve in
 # packages/intentd/crates/intent-core/src/config.rs honours INTENTD_DATA_DIR).
 #
-# DEV_TCP_PORT is the intentd TCP/WebSocket base port. 5181 matches the FE's
-# built-in dev default (`DEFAULT_DEV_WS_URL = ws://127.0.0.1:5181/ws` in
-# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts), so
-# `make dev-daemon` + `make run-fe` connect with no env overrides. The daemon
+# DEV_TCP_PORT is the intentd TCP/WebSocket base port for the dev seat's
+# insecure plain-ws:// listener. It serves the iOS app (`make ios-info`) and
+# any client pointed at it explicitly via INTENTD_WS_URL — not the FE's
+# default: the FE's zero-config default is UDS at the platform data-dir
+# socket, honoring INTENTD_DATA_DIR (resolveBackendConfig in
+# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts),
+# and `make dev-fe` pins the FE to the dev seat's UDS socket. The daemon
 # reads it via the INTENTD_TCP_PORT env seam (ws_options_from_env in
 # packages/intentd/crates/intentd/src/main.rs).
 #
@@ -49,31 +92,112 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
-DEV_TCP_PORT ?= 5181
-DEV_PORT ?= 5190
-# Export DEV_PORT so `make run-fe` (and any recipe that shells out to the FE)
-# actually sees the default/override in the child environment.
-export DEV_PORT
-
+# Resolve one stable, free port block for this worktree when a target first
+# expands a port variable. The memoized result keeps non-listener targets such
+# as doctor, bootstrap-dev-host, and sandbox-stop independent of port tooling
+# and availability. The `?=` assignments preserve exact overrides.
+DEV_PORT_VALUES =
+resolve_dev_ports = $(if $(strip $(DEV_PORT_VALUES)),,$(eval DEV_PORT_VALUES := $(shell DEV_PORT= DEV_TCP_PORT= BRIDGE_PORT= CDP_PORT= scripts/dev-ports.sh || printf '__DEV_PORTS_ERROR__=1\n')))$(if $(filter __DEV_PORTS_ERROR__=1,$(DEV_PORT_VALUES)),$(error Could not resolve development ports; see the dev-ports error above))
+dev_port_value = $(call resolve_dev_ports)$(patsubst $(1)=%,%,$(filter $(1)=%,$(DEV_PORT_VALUES)))
+DEV_PORT ?= $(call dev_port_value,DEV_PORT)
+DEV_TCP_PORT ?= $(call dev_port_value,DEV_TCP_PORT)
+SANDBOX_READY_TIMEOUT ?= 60
+SANDBOX_WARM_TIMEOUT ?= 60
+INTENTD_PROFILE ?= dev
+# Injectable platform seam for dev-prod's packaged-daemon socket default.
+# An explicit INTENTD_SOCKET always takes precedence.
+DEV_PROD_PLATFORM ?= $(shell uname -s)
 # BRIDGE_PORT is the loopback port for `make uds-to-unauthed-wss-bridge` — the
 # source-only dev shim that exposes the installed daemon's UDS socket as an
-# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. 51337 stays clear of 5181
-# (held by the daemon's authed WSS for iOS). Overridable, e.g.
+# UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1. Its derived default stays
+# clear of 5181 (held by the daemon's authed WSS for iOS). Overridable, e.g.
 # `make uds-to-unauthed-wss-bridge BRIDGE_PORT=5182`.
-BRIDGE_PORT ?= 51337
+BRIDGE_PORT ?= $(call dev_port_value,BRIDGE_PORT)
+CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # Injectable platform seam for the bridge's installed-daemon socket default.
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
+
+.PHONY: ports status docs-check shipped-in rpc
+ports: ## Print this worktree's resolved development ports
+	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
+		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
+	fi
+	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
+
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
+		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
+
+docs-check: ## Check documented development targets, knobs, and remote-host guidance
+	@scripts/docs-check.sh
+
+# Release tracking: which cloudlands-releases alpha first carries one or more
+# merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
+# PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
+# tokens, forwarded as positional pairs; the tag must carry every pair). The
+# script exits 3 for "not shipped yet", 5 when additionally the newest
+# cloudlands-fe Release Alpha run looks stalled (a job queued longer than
+# SHIPPED_IN_STALL_MINUTES, default 30; 0 disables the probe), and 4 for a
+# transient GitHub failure (rate limit, 5xx, network) worth retrying (make
+# reports them as `Error 3` / `Error 5` / `Error 4`); background hooks should
+# invoke scripts/shipped-in.sh directly so they can branch on those codes.
+# `LIMIT=N` widens the scan window past the newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 5 = not yet and Release Alpha run stalled, 4 = transient gh failure)
+	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
+	for pair in $(PAIRS); do \
+		case "$$pair" in \
+			*:*) set -- "$$@" "$${pair%%:*}" "$${pair#*:}" ;; \
+			*) echo "shipped-in: PAIRS entries must be <component>:<sha>, got '$$pair'" >&2; exit 2 ;; \
+		esac; \
+	done; \
+	scripts/shipped-in.sh "$$@" $(if $(LIMIT),--limit "$(LIMIT)",)
 
 # Build-artifact GC (cargo-sweep). Rust target/ dirs grow without bound as
 # deps and toolchains churn; `sweep` prunes artifacts older than SWEEP_DAYS
 # days in this worktree's intentd, and `sweep-all` does the same across every
 # sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
 # live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
-# (`cargo install cargo-sweep`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
+# (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
 # or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
+
+# Parallelism caps shared by the Rust build/test/coverage targets
+# (build-intentd, clippy, test-intentd, test-changed, coverage-e2e, coverage-all).
+# Negative values mean "logical CPUs minus N" (clamped to at least 1):
+# cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
+# --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
+# verified with the pinned cargo 1.96.0 (packages/intentd/rust-toolchain.toml)
+# and nextest 0.9.143. The -2 defaults leave two
+# cores of headroom so local runs do not saturate a laptop; override for
+# full speed, e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`
+# or `make coverage-all TEST_THREADS=num-cpus BUILD_JOBS=default`.
+TEST_THREADS ?= -2
+BUILD_JOBS ?= -2
+
+# Progress rendering for the Rust gate targets. Agents run these as saved
+# command-mode ws.script entries, which are PTY-backed, so nextest and cargo
+# see an interactive stderr and redraw their progress bars into the captured
+# buffer (one full-suite run produced ~530 KB of cursor-control sequences
+# and overflowed an agent's context). Default to line-oriented output; a
+# human at a terminal can restore the bars with
+# `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
+# CI already sets CI=true, under which both tools are non-interactive anyway.
+gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+# Pagers on the same targets. A saved-script PTY has no keyboard, so any
+# git/gh step that pages to `less` stalls forever waiting for a keypress.
+# nextest ignores PAGER (only --no-pager / user config disable its paging),
+# hence the explicit --no-pager on list-tests.
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+
+# Resumable local test runs are opt-in. Records are keyed by the complete
+# monorepo + intentd worktree state and kept outside the checkout.
+RESUME ?= 0
+GATE_FORCE ?= 0
+GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
 # OOMs at Node's default heap (~2-4 GB) and often still OOMs at 8 GB on this
@@ -82,16 +206,38 @@ SWEEP_DAYS ?= 3
 # make dist-mac FE_BUILD_HEAP_MB=24576.
 FE_BUILD_HEAP_MB ?= 16384
 
-.PHONY: all help ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+.PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
+	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar test test-intentd fmt clippy check clean clean-dev \
+	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
+	fmt clippy lint-repo-slug check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
-	run-intentd run-fe run-fe-local uds-to-unauthed-wss-bridge dev ios-open ios-info dist-mac
+	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
+	sandbox-status sandbox-stop \
+	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
+	ios-open ios-info ios-build-ios ios-build-visionos ios-test dist-mac
 
 all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+doctor: ## Report missing intentd + cloudlands-fe development prerequisites
+	@scripts/bootstrap-dev-host.sh --check
+
+bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
+	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
+
+# Frontend-toolchain preflight for the targets that shell out to
+# `corepack pnpm`. Fails fast with doctor's [missing] wording plus
+# `run: make bootstrap-dev-host` instead of a mid-run "corepack: command not
+# found". Port-independent like doctor: it must never expand DEV_PORT. It reads
+# the frontend package.json for the pinned pnpm version, so it must not race
+# the submodule checkout under `make -j`: order it after ensure-fe-submodule
+# rather than relying on the sibling prerequisite lists, which make is free to
+# run in parallel.
+ensure-fe-toolchain: ensure-fe-submodule
+	@scripts/bootstrap-dev-host.sh --check-frontend
 
 # The iOS submodule is private and marked `update = none` in .gitmodules, so
 # the generic `git submodule update --init` would silently skip it while
@@ -128,7 +274,7 @@ ensure-intentd-submodule:
 	fi
 
 # On-demand init for the FE submodule — pulled in only by targets that need it
-# (`run-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
+# (`dev-fe`, `build-sidecar`, `dev`), so backend-only workflows stay fast.
 ensure-fe-submodule:
 	@if [ ! -e "$(FE_DIR)/.git" ]; then \
 		echo "[ensure-fe-submodule] initializing $(FE_DIR)"; \
@@ -226,28 +372,99 @@ update: ## git pull --rebase monorepo + each submodule onto its .gitmodules bran
 build: build-intentd ## Build the Rust workspace (packages/intentd)
 
 build-intentd: ensure-intentd-submodule
-	cd $(INTENTD_DIR) && cargo build --workspace
+	cd $(INTENTD_DIR) && cargo build --workspace --jobs $(BUILD_JOBS)
 
 fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets -- -D warnings
+	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
-check: fmt clippy ## fmt + clippy
+# Source lint: fails naming file:line wherever repository owner/name identity
+# is case-folded or compared outside intent_core::RepoRef. Mirrors the intentd
+# `check` CI job so local gates match CI.
+lint-repo-slug: ensure-intentd-submodule ## Lint raw repo-slug folding outside RepoRef (intent-core repo_slug_fold_lint)
+	cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs $(BUILD_JOBS)
 
-test: test-intentd ## Run the Rust test suite (cargo nextest; needs cargo-nextest)
+check: fmt clippy lint-repo-slug ## fmt + clippy + repo-slug fold lint
+
+gate: check ## Run all local Rust gates (fmt, clippy, repo-slug lint, then nextest)
+	@$(MAKE) --no-print-directory test
+
+test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
 # retries, slow-timeout). nextest does not run doctests; the workspace has
 # none, so nothing is lost.
+# Capped to $(TEST_THREADS) test threads / $(BUILD_JOBS) build jobs (CPUs-2
+# by default) so a local run leaves CPU headroom; override for full speed,
+# e.g. `make test TEST_THREADS=num-cpus BUILD_JOBS=default`. Progress bars
+# are off by default (see NEXTEST_SHOW_PROGRESS / CARGO_TERM_PROGRESS_WHEN
+# above); `make test NEXTEST_SHOW_PROGRESS=bar` restores nextest's.
 test-intentd: ensure-intentd-submodule
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-intentd] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
-	cd $(INTENTD_DIR) && cargo nextest run --workspace
+	@python3 scripts/resumable_nextest.py \
+		--repo-root "$(CURDIR)" \
+		--intentd-dir "$(INTENTD_DIR)" \
+		--cache-dir "$(GATE_CACHE_DIR)" \
+		--resume "$(RESUME)" \
+		--force "$(GATE_FORCE)" \
+		--build-jobs "$(BUILD_JOBS)" \
+		--test-threads "$(TEST_THREADS)"
+
+# Pre-queue gate when the full suite is impractical: runs only the nextest
+# targets the intentd checkout changed vs BASE (default origin/main), mapped
+# per crate by scripts/rust-changed-tests.sh (see its header). Reverse
+# dependencies are not propagated, so `make test` stays the complete gate.
+# The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
+# config, toolchain) changed; the target then announces the fallback and runs
+# the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE (DRY_RUN=1 prints the plan)
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
+		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		scripts/rust-changed-tests.sh; status=$$?; \
+	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
+	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
+		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
+	fi; \
+	echo "[test-changed] falling back to the full 'make test'"; \
+	exec $(MAKE) --no-print-directory test
+
+# nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
+# export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.
+list-tests: ensure-intentd-submodule ## List nextest tests without a pager (ARGS="-p <crate>" to narrow)
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[list-tests] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	cd $(INTENTD_DIR) && cargo nextest list --no-pager $(ARGS)
+
+# Local reproduction of the CI coverage jobs (packages/intentd
+# .github/workflows/ci.yml: coverage-e2e / coverage-all), wrapping the same
+# scripts CI runs. These are instrumented (cargo-llvm-cov) full-suite runs —
+# slow, and deliberately NOT part of `make test`. The scripts install
+# cargo-llvm-cov / cargo-nextest / llvm-tools if missing.
+# NEXTEST_TEST_THREADS / CARGO_BUILD_JOBS carry the $(TEST_THREADS) /
+# $(BUILD_JOBS) caps into the scripts so local coverage runs also leave CPU
+# headroom by default (override e.g. TEST_THREADS=num-cpus BUILD_JOBS=default).
+# Optional COVERAGE_FLOOR passes the scripts' positional fail-under-lines
+# floor (CI uses 40), e.g. `make coverage-e2e COVERAGE_FLOOR=40`; when unset
+# it expands to nothing and no floor is enforced locally.
+coverage-e2e: ensure-intentd-submodule ## Reproduce CI e2e coverage locally (slow, instrumented; not part of make test)
+	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
+		./scripts/coverage-e2e.sh $(COVERAGE_FLOOR)
+
+coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage locally (slow, instrumented; not part of make test)
+	cd $(INTENTD_DIR) && NEXTEST_TEST_THREADS=$(TEST_THREADS) CARGO_BUILD_JOBS=$(BUILD_JOBS) \
+		./scripts/coverage-all.sh $(COVERAGE_FLOOR)
 
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
@@ -260,7 +477,7 @@ clean-dev: ## Wipe the dev-seat state dir (.dev/)
 # would be overkill, so it short-circuits with a friendly no-op instead.
 sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs cargo-sweep)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
 	@if [ -d "$(INTENTD_DIR)/target" ]; then \
@@ -271,10 +488,10 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
 	@cargo sweep --version >/dev/null 2>&1 || { \
-		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep'"; \
+		echo "[sweep-all] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
-	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR); do \
+	@for dir in $(WORKSPACES_DIR)/*/monorepo/$(INTENTD_DIR) $(WORKSPACES_DIR)/*/intent/$(INTENTD_DIR); do \
 		[ -d "$$dir" ] || continue; \
 		if [ -d "$$dir/target" ]; then \
 			echo "[sweep-all] sweeping $$dir"; \
@@ -311,11 +528,9 @@ seed-dev-workspaces: ensure-intentd-submodule ## Seed workspace rows from packag
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 			cargo run -q -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- doctor >/dev/null; \
 	fi
-	@if [ "$(SEED_INCLUDE_ARCHIVED)" = "1" ]; then \
-			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" --include-archived; \
-		else \
-			python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)"; \
-		fi
+	@python3 scripts/seed_dev_workspaces.py --dev-data-dir "$(DEV_DATA_DIR)" \
+		$(if $(filter 1,$(SEED_INCLUDE_ARCHIVED)),--include-archived) \
+		$(if $(SEED_SOURCE_DB),--source "$(SEED_SOURCE_DB)")
 
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
@@ -323,8 +538,9 @@ dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, 
 	@echo "[dev-daemon] INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--insecure` serves the local UDS socket AND a plain ws:// listener on
-	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — matches
-	# the FE's dev default and the iOS simulator/hardware seat.
+	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — serves
+	# the iOS simulator/hardware seat and any explicit INTENTD_WS_URL client;
+	# the FE pairs over UDS via `make dev-fe`.
 	# The daemon fails fast if $(DEV_TCP_PORT) is already bound.
 	# INTENTD_LEGACY_IMPORT_ROOTS="" disables the legacy import hook: the dev
 	# seat starts with a fresh $(DEV_DATA_DIR) DB, so first boot would otherwise
@@ -350,23 +566,86 @@ run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
 	@$(MAKE) release-daemon
 
-run-fe: ensure-fe-submodule ## Run the Electron + SvelteKit FE (pairs with dev-daemon out of the box)
-	# Launches only the FE dev stack (vite + Electron). The FE does NOT spawn
-	# intentd; pair this with `make dev-daemon` (default) — the FE's dev build
-	# defaults to `ws://127.0.0.1:5181/ws` (DEFAULT_DEV_WS_URL in
-	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts),
-	# which matches dev-daemon's DEV_TCP_PORT. Overrides:
-	#   INTENTD_SOCKET=/path/to.sock  → UDS (highest precedence; e.g. point at
-	#                                    release-daemon's default socket).
-	#   INTENTD_WS_URL=ws://host:port → plain WebSocket to a specific URL.
-	#   `make run-fe-local`           → shorthand that resolves INTENTD_SOCKET to
-	#                                    the installed daemon's default UDS path.
+dev-ui: ensure-fe-submodule ensure-fe-toolchain ## Run the fast browser-only frontend UI preview
+	@$(FE_DEPS_FRESH) || (echo "[dev-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@script=$$(node -e 'const scripts = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).scripts || {}; if (scripts["dev:ui"]) process.stdout.write("dev:ui"); else if (scripts["dev:web"]) process.stdout.write("dev:web"); else process.exit(1)' "$(FE_DIR)/package.json") || { \
+		echo "[dev-ui] ERROR: frontend package.json defines neither dev:ui nor dev:web"; \
+		exit 1; \
+	}; \
+	if [ "$$script" = "dev:ui" ]; then \
+		echo "[dev-ui] using optimized browser-only dev:ui preview"; \
+	else \
+		echo "[dev-ui] dev:ui is unavailable on this frontend pin; falling back to browser-only dev:web"; \
+	fi; \
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" corepack pnpm run "$$script"
+
+dev-sandbox-ui: ensure-fe-submodule ensure-fe-toolchain ## UI preview sandbox on this worktree's derived DEV_PORT
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-ui] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
+		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh ui
+
+dev-sandbox-app: ensure-fe-submodule ensure-fe-toolchain ## Web renderer sandbox connected to the installed intentd
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-app] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" \
+		FE_DIR="$(CURDIR)/$(FE_DIR)" exec scripts/dev-sandbox.sh app
+
+dev-sandbox-stack: ensure-intentd-submodule ensure-fe-submodule ensure-fe-toolchain ## Dev-profile intentd + renderer (INTENTD_PROFILE=release or INTENTD_BIN=/path)
+	@$(FE_DEPS_FRESH) || (echo "[dev-sandbox-stack] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && corepack pnpm install --frozen-lockfile)
+	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" DEV_DATA_DIR="$(DEV_DATA_DIR)" \
+		DEV_PORT_ORIGIN="$(origin DEV_PORT)" DEV_TCP_PORT_ORIGIN="$(origin DEV_TCP_PORT)" \
+		SANDBOX_TCP="$(SANDBOX_TCP)" SANDBOX_READY_TIMEOUT="$(SANDBOX_READY_TIMEOUT)" \
+		SANDBOX_WARM_TIMEOUT="$(SANDBOX_WARM_TIMEOUT)" BUILD_JOBS="$(BUILD_JOBS)" \
+		INTENTD_PROFILE="$(INTENTD_PROFILE)" INTENTD_BIN="$(INTENTD_BIN)" \
+		INTENTD_DIR="$(CURDIR)/$(INTENTD_DIR)" FE_DIR="$(CURDIR)/$(FE_DIR)" \
+		exec scripts/dev-sandbox.sh stack
+
+sandbox-status: ## Show live sandbox state (SANDBOX_JSON=1 for JSON)
+	@SANDBOX_JSON="$(SANDBOX_JSON)" scripts/dev-sandbox.sh status
+
+sandbox-stop: ## Stop sandboxes in this worktree (optionally MODE=ui|app|stack)
+	@MODE="$(MODE)" scripts/dev-sandbox.sh stop
+
+dev-fe: ensure-fe-submodule ## Run the FE dev stack against dev-daemon's UDS socket (two-terminal pair)
+	# Two-terminal counterpart of `make dev-daemon`: launches only the FE dev
+	# stack (vite + Electron) pinned to the dev seat's isolated daemon via
+	# INTENTD_SOCKET=$(DEV_DATA_DIR)/intentd.sock — the highest-precedence
+	# transport override (resolveBackendConfig in
+	# packages/cloudlands-fe/src/features/backend/main/backend-connection.ts).
+	# The pin is needed because the FE's zero-config default is UDS at the
+	# PLATFORM data-dir socket (honoring INTENTD_DATA_DIR) — i.e. the installed
+	# daemon, not the dev seat. The FE does NOT spawn intentd; start
+	# `make dev-daemon` in another terminal first, or use `make dev` for the
+	# one-command sidecar mode. Other clients:
+	#   `make run-fe-local` → dev FE against the installed daemon's UDS socket.
+	#   `make dev-prod`     → same, with the packaged app's live daemon.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
-	cd $(FE_DIR) && pnpm run dev
+	# The -S pre-check is skipped on Windows (MSYS/MINGW/CYGWIN), where the
+	# daemon socket path is not a filesystem entry — the win32 FE derives a
+	# named pipe from it and reports the connection failure itself (same
+	# rationale as run-fe-local's is_windows guard below).
+	@is_windows=0; \
+	case "$$(uname -s)" in \
+		MINGW*|MSYS*|CYGWIN*) is_windows=1 ;; \
+	esac; \
+	if [ "$$is_windows" -eq 0 ] && [ ! -S "$(DEV_DATA_DIR)/intentd.sock" ]; then \
+		echo "[dev-fe] ERROR: no dev daemon socket at $(DEV_DATA_DIR)/intentd.sock"; \
+		echo "[dev-fe] Start the dev seat first in another terminal: make dev-daemon"; \
+		exit 1; \
+	fi
+	@INTENTD_SOCKET="$(DEV_DATA_DIR)/intentd.sock" $(MAKE) fe-launch
+
+# Internal FE-launch helper shared by dev-fe and dev-prod (not listed in
+# `make help`): FE_DEPS_FRESH install guard + `pnpm run dev`, inheriting the
+# caller's INTENTD_SOCKET and resolving DEV_PORT only when the launcher runs.
+fe-launch: ensure-fe-submodule
+	@$(FE_DEPS_FRESH) || (echo "[fe-launch] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" pnpm run dev
 
 run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED intentd's UDS socket
-	# Like `run-fe`, but points the FE at the installed Intent daemon's default
+	# Like `dev-fe`, but points the FE at the installed Intent daemon's default
 	# socket path (<data_dir>/intentd.sock, per directories::ProjectDirs):
 	#   macOS   → $$HOME/Library/Application Support/intentd/intentd.sock
 	#   Linux   → $${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock
@@ -384,7 +663,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 	# (intentd-spawn-policy.ts) — so only the daemon connection changes; the
 	# dev FE keeps its own DEV_PORT-namespaced userData dir.
 	# Long-running; does not exit until you stop it (Ctrl-C).
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[run-fe-local] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[run-fe-local] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@sock="$$INTENTD_SOCKET"; \
 	is_windows=0; \
 	case "$$(uname -s)" in \
@@ -398,7 +677,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 			Linux) sock="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
 			MINGW*|MSYS*|CYGWIN*) sock="$$APPDATA/intentd/data/intentd.sock" ;; \
 			*) echo "[run-fe-local] ERROR: unsupported platform $$(uname -s) — no known installed-daemon socket path."; \
-			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: INTENTD_WS_URL=ws://host:5181/ws make run-fe"; \
+			   echo "[run-fe-local] Point the FE at a reachable daemon instead, e.g.: cd $(FE_DIR) && INTENTD_WS_URL=ws://host:5181/ws pnpm run dev"; \
 			   exit 1 ;; \
 		esac; \
 	fi; \
@@ -407,7 +686,7 @@ run-fe-local: ensure-fe-submodule ## Run the FE against the locally INSTALLED in
 		exit 1; \
 	fi; \
 	echo "[run-fe-local] INTENTD_SOCKET=$$sock"; \
-	cd $(FE_DIR) && INTENTD_SOCKET="$$sock" pnpm run dev
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SOCKET="$$sock" pnpm run dev
 
 uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHENTICATED plain ws:// endpoint on 127.0.0.1:$(BRIDGE_PORT)
 	# Runs scripts/uds-ws-bridge.mjs (zero-dependency, Node >= 20): each WS
@@ -442,6 +721,32 @@ uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHEN
 		echo "[uds-to-unauthed-wss-bridge] WARNING: this exposes the FULL UNAUTHENTICATED daemon API as plain ws:// on 127.0.0.1:$(BRIDGE_PORT) — no TLS, no auth. Loopback-only by design; any process on this machine can drive the daemon while the bridge runs."; \
 		INTENTD_SOCKET="$$socket" BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs
 
+# One-shot JSON-RPC probe of a running intentd via scripts/uds-rpc.mjs
+# (zero-dependency, Node >= 20). Prints each received frame as one JSON line;
+# default mode exits when the response matching the request id arrives
+# (nonzero if it is a JSON-RPC error), SUBSCRIBE=1 keeps the connection open
+# until MAX_FRAMES frames printed or TIMEOUT_MS elapses. Socket resolution is
+# left to the script: an explicit INTENTD_SOCKET always takes precedence, then
+# an INTENTD_DATA_DIR-derived path, then the platform default. PARAMS is read
+# from the recipe's environment (make exports command-line variables) so its
+# JSON quoting survives expansion.
+rpc: ## Send one JSON-RPC request to the running intentd: make rpc METHOD=workspace.list [PARAMS='{...}'] [SUBSCRIBE=1] [MAX_FRAMES=N] [TIMEOUT_MS=MS]
+	@if [ -z "$(METHOD)" ]; then \
+		echo "[rpc] ERROR: METHOD is required."; \
+		echo "[rpc] usage: make rpc METHOD=<jsonrpc-method> [PARAMS='{...}'] [SUBSCRIBE=1] [MAX_FRAMES=N] [TIMEOUT_MS=MS]"; \
+		exit 1; \
+	fi; \
+	set -- "$(METHOD)"; \
+	if [ -n "$$PARAMS" ]; then set -- "$$@" "$$PARAMS"; fi; \
+	if [ -n "$(filter 1 yes true,$(SUBSCRIBE))" ]; then set -- "$$@" --subscribe; fi; \
+	if [ -n "$(MAX_FRAMES)" ]; then set -- "$$@" --max-frames "$(MAX_FRAMES)"; fi; \
+	if [ -n "$(TIMEOUT_MS)" ]; then set -- "$$@" --timeout "$(TIMEOUT_MS)"; fi; \
+	node scripts/uds-rpc.mjs "$$@"
+
+dev-web-live: ## DEPRECATED alias for dev-sandbox-app
+	@echo "[dev-web-live] DEPRECATED: use 'make dev-sandbox-app'."
+	@$(MAKE) dev-sandbox-app
+
 build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd release + stage the sidecar binary for FE packaging
 	# Builds the intentd release binary (may take several minutes on first build) and
 	# runs the FE copy-sidecar script to stage it for electron-builder. This is the
@@ -450,7 +755,7 @@ build-sidecar: ensure-intentd-submodule ensure-fe-submodule ## Build intentd rel
 	# staging helper (or a future copy-sidecar dep) expects an installed tree —
 	# and so `dist-mac` (which depends on this target) does not install after
 	# the sidecar step.
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[build-sidecar] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[build-sidecar] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[build-sidecar] Building intentd release binary..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@echo "[build-sidecar] Staging sidecar binary for FE packaging..."
@@ -493,7 +798,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	# Always runs the intentd release build first so the sidecar reflects the
 	# current sources; cargo's freshness check makes it a fast no-op when nothing
 	# changed. This is an alternative to the two-terminal flow (dev-daemon +
-	# run-fe); use whichever fits your workflow.
+	# dev-fe); use whichever fits your workflow.
 	# Long-running; does not exit until you stop it (Ctrl-C).
 	#
 	# Pins the sidecar to two absolute paths so it does not depend on Electron's cwd:
@@ -507,7 +812,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	#   INTENTD_LEGACY_IMPORT_ROOTS="" — disables the legacy import hook: the dev
 	#     seat starts with a fresh $(DEV_DATA_DIR) DB, so the sidecar's first boot
 	#     would otherwise scan the shared ~/intent/workspaces root.
-	@[ -d $(FE_DIR)/node_modules ] || (echo "[dev] installing FE deps (pnpm install)" && cd $(FE_DIR) && pnpm install)
+	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
 	@mkdir -p "$(DEV_DATA_DIR)"
@@ -515,11 +820,29 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
 	@echo "[dev]   INTENTD_DATA_DIR=$(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock)"
 	@echo "[dev]   INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
-	cd $(FE_DIR) && INTENTD_SIDECAR=1 \
+	cd $(FE_DIR) && DEV_PORT="$(DEV_PORT)" INTENTD_SIDECAR=1 \
 		INTENTD_BIN="$(CURDIR)/$(INTENTD_DIR)/target/release/intentd" \
 		INTENTD_DATA_DIR="$(DEV_DATA_DIR)" \
 		INTENTD_LEGACY_IMPORT_ROOTS="" \
 		pnpm run dev
+
+dev-prod: ensure-fe-submodule ## Run the dev FE against the packaged app's live daemon and production state
+	@socket="$$INTENTD_SOCKET"; \
+		if [ -z "$$socket" ]; then \
+			case "$(DEV_PROD_PLATFORM)" in \
+				Darwin) socket="$$HOME/Library/Application Support/intentd/intentd.sock" ;; \
+				Linux) socket="$${XDG_DATA_HOME:-$$HOME/.local/share}/intentd/intentd.sock" ;; \
+				*) echo "[dev-prod] ERROR: unsupported platform '$(DEV_PROD_PLATFORM)'; set INTENTD_SOCKET explicitly."; \
+				   exit 1 ;; \
+			esac; \
+		fi; \
+		if [ ! -S "$$socket" ]; then \
+			echo "[dev-prod] ERROR: production daemon socket not found at $$socket"; \
+			echo "[dev-prod] Start the packaged app first, or set INTENTD_SOCKET to its socket path."; \
+			exit 1; \
+		fi; \
+		echo "[dev-prod] Launching dev FE against production daemon: $$socket"; \
+		INTENTD_SOCKET="$$socket" $(MAKE) fe-launch
 
 ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Intent.xcodeproj)
 	@if [ "$$(uname -s)" != "Darwin" ]; then \
@@ -527,6 +850,60 @@ ios-open: ensure-ios-submodule ## Open the iOS Xcode project (packages/ios/Inten
 		exit 1; \
 	fi
 	open "$(IOS_DIR)/Intent.xcodeproj"
+
+# Blessed xcodebuild wrappers — every iOS build/test runs through the ios
+# repo's single entry point (scripts/xcodebuild.sh, from intent-hq/ios#219) so
+# destinations, signing flags, and SDK selection cannot diverge. The
+# missing-script guard covers a recorded iOS pin that still predates that PR:
+# `ensure-ios-submodule` only initializes the submodule at the recorded pin,
+# it does not advance it.
+ios-build-ios: ensure-ios-submodule ## Build the iOS app for the iOS Simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-build-ios] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-build-ios] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-build-ios] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh build-ios
+
+ios-build-visionos: ensure-ios-submodule ## Build the iOS app for the visionOS Simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-build-visionos] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-build-visionos] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-build-visionos] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh build-visionos
+
+ios-test: ensure-ios-submodule ## Run the iOS unit tests on a simulator (blessed xcodebuild entry point)
+	@if [ "$$(uname -s)" != "Darwin" ]; then \
+		echo "[ios-test] ERROR: requires macOS (xcodebuild). Detected $$(uname -s)."; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+		if [ -e "$(IOS_DIR)/scripts/xcodebuild.sh" ]; then \
+			echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh exists but is not executable — fix with: chmod +x $(IOS_DIR)/scripts/xcodebuild.sh"; \
+		else \
+			echo "[ios-test] ERROR: $(IOS_DIR)/scripts/xcodebuild.sh not found — the recorded iOS pin predates intent-hq/ios#219."; \
+			echo "[ios-test] Wait for auto-bump-submodules to advance the pin, or check out a newer ios ref: git -C $(IOS_DIR) fetch origin && git -C $(IOS_DIR) checkout origin/main"; \
+		fi; \
+		exit 1; \
+	fi
+	cd $(IOS_DIR) && scripts/xcodebuild.sh test-ios
 
 ios-info: ## Print how to point the iOS app at the local dev daemon
 	@if [ "$$(uname -s)" != "Darwin" ]; then \

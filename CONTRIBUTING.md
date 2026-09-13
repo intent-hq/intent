@@ -13,8 +13,8 @@ driven by AI agents working against a shared workflow. At launch, the public
 repository is a **read-only snapshot mirror** of that development.
 
 - **Bug reports and feature requests are very welcome.** Please file them via
-  the [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose) on
-  [intent-hq/monorepo](https://github.com/intent-hq/monorepo/issues), the single
+  the [issue forms](https://github.com/intent-hq/intent/issues/new/choose) on
+  [intent-hq/intent](https://github.com/intent-hq/intent/issues), the single
   tracker for all components.
 - **External pull requests are not being accepted yet.** PRs will be closed
   with thanks. We expect this posture to change post-launch as the project
@@ -40,7 +40,7 @@ recursive clones and submodule updates skip it by default; internal developers
 with access initialize it via `make ensure-ios-submodule`.
 
 The durable engineering docs live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-(backend architecture) and [docs/PROTOCOL.md](docs/PROTOCOL.md) (the canonical
+(backend architecture) and [docs/protocol/](docs/protocol/README.md) (the canonical
 wire contract); see [docs/README.md](docs/README.md) for the docs index.
 
 ## Two-phase change workflow
@@ -78,21 +78,25 @@ conventional commit before pushing.
 
 Keep the relevant checks green before opening a PR:
 
-- **intentd**: `cargo fmt --check`, `cargo clippy -- -D warnings`, and
-  `cargo build` — the monorepo-root `Makefile` wraps these as `make check`
-  (fmt + clippy) and `make build`; run `make test` for the test suite.
+- **intentd**: `cargo fmt --check`, `cargo clippy -- -D warnings`, the
+  repo-slug fold lint, and `cargo build` — the monorepo-root `Makefile` wraps
+  these as `make check` (fmt + clippy + repo-slug fold lint) and `make build`;
+  run `make test` for the test suite.
 - **cloudlands-fe**: `pnpm run check` and `pnpm vitest run`.
 - **ios**: build + test targets passing.
 
 ## Filing issues
 
-- Use the [issue forms](https://github.com/intent-hq/monorepo/issues/new/choose)
-  (bug report / feature request) and pick the affected component(s).
+- Use the [issue forms](https://github.com/intent-hq/intent/issues/new/choose)
+  (bug report / feature request) and pick the affected component(s). The forms
+  set the issue **Type** (Bug / Feature / Task) — that field is the
+  classification; do not add a `bug` or `enhancement` label.
 - **Search first** — check existing open *and* closed issues and comment on or
   link an existing issue instead of filing a duplicate.
-- Issues are triaged with `component:*` labels and a severity taxonomy
-  (P0 crash/data-loss, P1 broken feature, P2 papercut) described in
-  [docs/README.md](docs/README.md).
+- Issues are triaged with `component:*` labels, the issue **Type** field, and a
+  severity taxonomy that maps onto the issue **Priority** field (Urgent
+  crash/data-loss, High broken feature, Medium degraded behavior, Low papercut)
+  described in [docs/README.md](docs/README.md).
 
 ## Local setup
 

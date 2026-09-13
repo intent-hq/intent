@@ -8,15 +8,23 @@ Index of the `docs/` tree for the Intent monorepo.
 `intentd` Rust backend: system overview, crate layout and dependency rules,
 persistence, transports, and the ACP agent runtime.
 
-## Wire Contract — `PROTOCOL.md`
+## Wire Contract — `protocol/`
 
-**[PROTOCOL.md](./PROTOCOL.md)** is the **canonical, versioned wire contract** between
-Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`). It
-is the living protocol v2.0 specification, covering transport, authentication,
-JSON-RPC 2.0 envelope rules, the complete method catalog, event
-subscriptions, and error codes. The detailed wire contract from the porting era has been
-merged in, making this the single canonical spec. The method surface is enforced by
-golden tests in the `intent-transport` crate.
+**[protocol/](./protocol/README.md)** is the **canonical, versioned wire contract**
+between Intent clients (desktop, iOS, CLI) and the Intent backend daemon (`intentd`):
+a living specification covering transport, authentication, JSON-RPC 2.0 envelope
+rules, the complete method catalog, event subscriptions, agent streaming, the
+permission flow, error codes, and thin-client guidance. It is split into per-section
+files with § numbering preserved; [protocol/README.md](./protocol/README.md) carries
+the § → file map, and the version history + compatibility policy live in
+[protocol/versioning.md](./protocol/versioning.md). The method surface is enforced by
+golden tests in the `intent-transport` crate. [PROTOCOL.md](./PROTOCOL.md) remains as
+a redirect stub so legacy "PROTOCOL.md §N.M" citations stay meaningful.
+
+To debug live daemon state against this contract, `scripts/uds-rpc.mjs` (wrapped as
+`make rpc METHOD=... [PARAMS='{...}'] [SUBSCRIBE=1]`) sends a one-shot JSON-RPC
+request — or holds a subscription open — on the running daemon's UDS socket and
+prints each received frame as a JSON line.
 
 ## Harness Versioning — `HARNESS.md`
 
@@ -75,8 +83,8 @@ with the reference app (`augmentcode/intent`), and development has since moved o
 Intent stack (`intentd` + `cloudlands-fe`) itself. The porting chronicle (implementation
 spec, porting-era protocol, breadcrumbs log, and supporting notes) has been removed from
 the tree; its durable content lives on in [ARCHITECTURE.md](./ARCHITECTURE.md) and
-[PROTOCOL.md](./PROTOCOL.md), and the original documents remain available in git
-history.
+the [protocol docs](./protocol/README.md), and the original documents remain available
+in git history.
 
 ## `01_stabilizing/` — **CONCLUDED**
 
@@ -84,15 +92,19 @@ The **stabilization and hardening phase** ran post-initial-port as file-based is
 tracking (`STABILIZATION.md` + `KNOWN_ISSUES.md`) while development moved onto the
 self-hosted Intent stack (`intentd` + `cloudlands-fe`). The phase concluded on
 2026-07-22: all open items were migrated to
-[GitHub issues](https://github.com/intent-hq/monorepo/issues) and the directory was
-removed. Bugs are now filed directly as GitHub issues on `intent-hq/monorepo`.
+[GitHub issues](https://github.com/intent-hq/intent/issues) and the directory was
+removed. Bugs are now filed directly as GitHub issues on `intent-hq/intent`.
 
 Durable conventions carried forward from that phase:
 
-- **Severity taxonomy** for triage:
-  - **P0** — crash, data-loss, or corruption; blocks shipping to external users
-  - **P1** — broken feature; app still usable but with significant workaround required
-  - **P2** — papercut; annoying but does not block workflows
+- **Classification** is the issue **Type** field (Bug / Feature / Task), not a
+  label — the `bug` / `enhancement` type labels are retired.
+- **Severity taxonomy** for triage (maps 1:1 onto the issue **Priority** field —
+  Urgent / High / Medium / Low, formerly P0–P3):
+  - **Urgent** — crash, data loss, or corruption; blocks shipping to external users
+  - **High** — broken feature; app still usable but with significant workaround required
+  - **Medium** — degraded behavior; should be fixed, but impact is limited
+  - **Low** — papercut; annoying but does not block workflows
 - **Regression coverage** expected with each fix:
   - **intentd**: `make check` + `make test` green
   - **cloudlands-fe**: `pnpm run check` + `pnpm vitest run` green
@@ -102,4 +114,4 @@ Durable conventions carried forward from that phase:
 
 For the agent commit/PR workflow and issue tracking, see the root
 [AGENTS.md](../AGENTS.md). Bugs and open work are tracked as
-[GitHub issues](https://github.com/intent-hq/monorepo/issues).
+[GitHub issues](https://github.com/intent-hq/intent/issues).

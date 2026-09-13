@@ -6,32 +6,223 @@ This guide reflects the current Intent repository layout and APIs as of package 
 
 ### Prerequisites
 
-- Node.js 18+
-- `pnpm`
+- Node.js 24 (24.15.0+; 22.22.2+ and 26+ also work — node-gyp 13 builds node-pty during install and rejects older releases; `make doctor` checks this)
+- Corepack with the repository-pinned `pnpm` version
 - Git
 - Auggie CLI for the default ACP provider workflow
 
 ### Install and Run
 
-```bash
-pnpm install
+Agents on a remote daemon host should follow the root
+[situate → act → observe → prove → hand-off loop](../../AGENTS.md#developing-on-a-remote-host).
+The root section is the canonical operational recipe and health-hook source. This guide
+documents frontend-specific behavior and implementation detail.
 
-# Start the Electron app with the Chrome DevTools Protocol flow enabled
-pnpm run dev:cdp
+From the monorepo root, inspect the free port block the next sandbox start will use, then
+start the fast component preview. The target installs locked frontend dependencies when
+`node_modules` is missing or its installed lockfile no longer matches `pnpm-lock.yaml`.
+
+```bash
+make ports
+make dev-sandbox-ui
 ```
+
+`make ports` prints the free per-worktree `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` block for the next start. Once a sandbox is running, its listener can move the
+next free block; read the running port from `make sandbox-status` or
+`.dev/sandbox/<mode>.json`. The sandbox passes the derived `DEV_PORT` to Vite, avoiding
+collisions between concurrent workspaces. An explicit override remains available when needed:
+
+```bash
+make dev-sandbox-ui DEV_PORT=5291
+```
+
+From `packages/cloudlands-fe`, the equivalent fresh setup is:
+
+```bash
+corepack pnpm install --frozen-lockfile
+DEV_PORT=5291 corepack pnpm run dev:ui
+```
+
+Choose the smallest launcher that includes the behavior under test:
+
+- `dev:ui` starts the fast named-state component preview. It does not start Electron,
+  native helpers, the daemon, or production application sagas.
+- `dev:web` starts the complete browser renderer. Use it for browser behavior that needs
+  the mock client or a daemon connection but does not need Electron APIs.
+- `dev:cdp` starts the Electron development stack with Chrome DevTools Protocol support.
+  Use it for main-process, preload, native, window, or Electron-shell work.
+- `dev` starts the standard Electron development stack without the explicit CDP flow.
 
 ### Common Commands
 
 ```bash
-pnpm run dev           # Standard development launcher
-pnpm run dev:cdp       # Development launcher with CDP support
-pnpm run build         # Production build
-pnpm run check         # Svelte + TypeScript checks
-pnpm run lint          # ESLint
-pnpm run format        # Prettier write pass
-pnpm run test:unit     # Vitest suite
-pnpm run test:playwright
+corepack pnpm run dev:ui        # Fast named-state UI preview
+corepack pnpm run dev:web       # Complete plain-browser renderer
+corepack pnpm run dev           # Standard Electron launcher
+corepack pnpm run dev:cdp       # Electron launcher with CDP support
+corepack pnpm run build         # Production build
+corepack pnpm run check         # Svelte + TypeScript checks
+corepack pnpm run lint          # ESLint
+corepack pnpm run format        # Prettier write pass
+corepack pnpm run test:unit     # Vitest suite
+corepack pnpm run test:playwright
 ```
+
+For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
+`make dev-sandbox-stack` for an isolated intentd plus renderer. The first tunneled
+hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
+load. Follow the root health wait and keep waiting if the splash remains.
+
+### Remote Sandbox Internals
+
+`scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port
+blocks beginning at 5200. The block assigns `DEV_PORT`, `DEV_TCP_PORT`, `BRIDGE_PORT`, and
+`CDP_PORT` in order. If any derived port is busy, it selects the next completely free
+block and prints the replacement; explicit overrides are validated and never remapped.
+
+On readiness, each launcher atomically writes `.dev/sandbox/<mode>.json` with this schema:
+
+| Field | Meaning |
+|---|---|
+| `mode`, `pid` | `ui`, `app`, or `stack`, and the owning sandbox process |
+| `pidStartTime`, `pidCommandLine` | Process identity used to reject stale files after PID reuse |
+| `devPort`, `tcpPort` | Resolved renderer and daemon TCP ports |
+| `url`, `daemonLocalhostUrl` | Host-loopback URL and embedded-browser URL |
+| `socket`, `intentdSource` | Daemon socket and `installed`, `bin`, `dev`, `release`, or `none` |
+| `startedAt`, `readyAt` | UTC lifecycle timestamps |
+| `warm` | `{ok, ms}` readiness-gate result and duration |
+| `supervisor` | Supervisor metadata when available; currently `null` |
+
+The filename is keyed only by mode, not port or agent. A worktree can therefore track one
+sandbox of each mode; starting a second same-mode sandbox overwrites that mode's identity.
+Run `make sandbox-status` first and coordinate with the recorded owner, or use a separate
+worktree.
+
+Readiness also records `.dev/sandbox/<mode>.port` (`DEV_PORT=` and `DEV_TCP_PORT=` lines).
+Unlike the state file, it survives every exit, so a supervised restart that starts with the
+Makefile-derived ports reuses the recorded port when it is free and the tunnel URL stays
+valid; an explicit `DEV_PORT=` override always wins, and `make sandbox-stop` forgets the
+record. The port probe sets `SO_REUSEADDR` and treats only a live listener as busy —
+`TIME_WAIT`/`CLOSE_WAIT` leftovers from a just-stopped sandbox are free — and a busy
+explicit port is reported with the owning PID when it is visible.
+
+`make sandbox-status` verifies recorded PIDs, removes stale files, and exits nonzero when
+nothing is running; `SANDBOX_JSON=1 make sandbox-status` emits the live array. A clean exit
+removes the owned file. `make sandbox-stop MODE=<mode>` owns unmanaged process trees and
+uses TERM followed by KILL escalation. For a workspace service, use `ws.script.stop(id)`;
+otherwise the external supervisor may restart the process.
+
+App and stack enable the dev-only same-origin bridge. `GET /__sandbox/health` accepts only
+loopback, same-origin requests and returns 200 only when `ok` is true, otherwise 503:
+
+| Object | Fields |
+|---|---|
+| root | `ok` |
+| `vite` | `ready` |
+| `daemon` | `socket`, `reachable`, and optional `error` |
+| `warm` | `moduleGraph`, `entriesWarm` |
+| `git` | `sha`, `branch` |
+
+The endpoint makes a bounded UDS connection. Before answering, it waits for Vite's active
+warm-up requests to become idle and verifies the configured entries are in the client
+module graph: the root layout, app page, and named-preview page. This endpoint is installed
+only by the dev-server plugin, not production builds. The sandbox prints its single ready
+line and writes state only after this gate succeeds; older frontend branches fall back to
+socket and HTTP readiness probes.
+
+`STATUS_JSON=1 make status` consumes these files and health responses into
+`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
+submodule HEAD has moved off it, and optional PR/check summaries when GitHub
+authentication is available. The report is read-only, including stale sandbox state.
+
+### Chat-motion performance traces
+
+`pnpm perf:chat-motion` (in `packages/cloudlands-fe`) records a CDP trace of the chat
+footer collapse/expand (`--scenario footer`, default) or context-well open/close
+(`--scenario context-well`) against a running `make dev-sandbox-app` / `dev-sandbox-stack`,
+then samples scroll geometry per animation frame. `--url` is a workspace page whose transcript
+scrolls and whose footer shows its disclosure header (footer; agent-only event subscriptions render
+no header and fail fast) or has a context well (context-well); `--out` must not exist. Optional: `--inflate <nodes>` (clone transcript rows
+until the DOM reaches this count, 10000; donor rows need more than 20 descendants and under 2000 px
+height, so a transcript rendering as one tall row fails — pass `--inflate 0` to skip), `--frames` (40),
+`--scroll-up` (800 px), `--quiet-ms` (750), `--quiet-timeout` (15000), `--timeout` (180000), `--headed`
+(default headless). Exit 0 writes `trace.json`, `summary.json`, `samples.json`, and screenshots
+(`expanded.png` + `collapsed.png` for footer, `closed.png` + `opened.png` for context-well, plus
+`scrolled-up.png`) into `--out` and prints the summary; exit 1 is a runtime failure; exit 2 is a
+usage error, including an existing `--out` (`refusing to overwrite`, directory left untouched):
+
+```bash
+pnpm perf:chat-motion --url http://127.0.0.1:<DEV_PORT>/workspace/<id> --out .demo-artifacts/perf/footer-1
+```
+
+| Field | Meaning |
+|---|---|
+| `url`, `scenario`, `startedAt`, `nodeCounts.total` / `.transcript` | Run inputs, ISO start time, and DOM element counts after inflation |
+| `motions.<mark>` | Trace events in the `windowMs` (400) after each user-timing mark (`collapse` / `expand` for footer, `open` / `close` for context-well): `taskCount`, `maxTaskMs`, `tasksOver16_7` (tasks over one 60 Hz frame), `maxUpdateLayoutTreeMs` / `maxUpdateLayoutTreeElements` (largest style recalc), `clicks`, `transitionFinishes` (offsets from the mark) |
+| `scroll.<label>` | Per-frame geometry (`frames` sampled) for `pinned<Mark>`, `control`, `scrolledUp<Mark>` (e.g. `pinnedCollapse` / `scrolledUpExpand` for footer, `pinnedOpen` / `scrolledUpClose` for context-well): `beforeTop` / `afterTop`, `maxBottomGap`, `topRange`, `anchorDriftPx`, `anchorStayedConnected`, `toggled` (`true` for every toggle, `false` for `control`) |
+| `quiescence` | `preTraceWaitedMs` (before the traced motions) and `waitedMs` (before the scrolled-up samples) spent waiting for scroll geometry to stay unchanged for `quietMs` |
+
+Both quiescence waits and the no-toggle `control` exist because still-hydrating fixtures caused anchor
+drift and unrelated long tasks in the [cloudlands-fe#2355](https://github.com/intent-hq/cloudlands-fe/pull/2355)
+verification. The harness is report-only; judge against two clean runs. Negative control: inject a per-frame
+layout thrash in the `disclosure-motion.ts` tick (~50 style-write / `scrollHeight`-read pairs; one forced read
+is not enough), confirm `maxTaskMs` or `maxUpdateLayoutTreeMs` exceeds both clean runs, then revert before any gate.
+
+## Fast UI Preview Workflow
+
+After `make dev-sandbox-ui` prints `Sandbox ready:`, read its `devPort` from
+`make sandbox-status` or `.dev/sandbox/ui.json` and open a named preview. `make ports`
+shows the block the next start will use and may differ while this sandbox is running.
+The examples below use `<DEV_PORT>` as the recorded running value:
+
+```text
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=default&theme=system&width=420&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=loading&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=disabled&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/button?state=destructive&theme=dark&width=960&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=idle&theme=light&width=320&motion=full
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=waiting&theme=dark&width=420&motion=reduced
+http://127.0.0.1:<DEV_PORT>/sandbox/mention-agent-avatar?state=error&theme=system&width=420&motion=full
+```
+
+`theme` accepts `system`, `light`, or `dark`. `width` accepts an integer from 240 to
+1600 pixels. `motion` accepts `full` or `reduced`. Keep the URL stable while you edit;
+Vite hot module replacement updates the same tab.
+
+The sandbox installs a small browser API. Run these expressions in the page:
+
+```javascript
+window.__INTENT_PREVIEW__.list();
+await window.__INTENT_PREVIEW__.states("button");
+window.__INTENT_PREVIEW__.current();
+```
+
+`list()` returns preview IDs. `states(id)` returns the named states for one preview.
+`current()` returns the ready preview's slug, state, width, and status, or `null` while
+no named preview is ready. Wait for `[data-preview-ready=true]` before inspection or
+capture.
+
+For a cold renderer launch, use the [self-checking readiness hook](https://github.com/intent-hq/cloudlands-fe/blob/main/.agents/skills/electron/SKILL.md#wait-for-renderer-readiness) instead of polling or rescheduling an expired hook.
+
+For an agent, run the long-lived command through a workspace service script. Call
+`ws.browser.listTabs` before opening the URL and reuse a matching tab. A new
+`ws.browser.openTab` tab is hidden by default, but DOM, accessibility, evaluation, and
+screenshot actions still work. Keep that hidden tab open during edits so Vite HMR can
+update it. Call `ws.browser.showTab` only when a person wants to see it; pass
+`focus: true` when it must also receive focus. Use
+`http://daemon.localhost:<DEV_PORT>` in `ws.browser` URLs so the browser tool can
+resolve a local or remote daemon correctly.
+
+Run the focused avatar component test from `packages/cloudlands-fe`:
+
+```bash
+corepack pnpm run test:ct -- src/features/agent/components/agent-avatar/__tests__/agent-avatar-waiting.ct.spec.ts
+```
+
+The component-test harness defaults to port 3100; set `CT_PORT` to override it. If the
+chosen port is occupied, stop the process that owns it before rerunning the command.
 
 ## Project Structure
 
@@ -70,14 +261,14 @@ When updating docs or adding features, verify which side of the app owns the beh
 Use `agentFactory.createAgent(...)` for agent creation. The factory is the supported public entry point and normalizes agent config before backend creation.
 
 ```typescript
-import { agentFactory } from '$features/agent/services/agent-factory';
+import { agentFactory } from "$features/agent/services/agent-factory";
 
 const result = await agentFactory.createAgent(workspace, {
-  name: 'Review Changes',
-  agentType: 'task-loop',
-  model: 'haiku4.5',
-  initialMessage: 'Review the current diff and summarize the risks.',
-  source: 'workspace-initializer',
+  name: "Review Changes",
+  agentType: "task-loop",
+  model: "haiku4.5",
+  initialMessage: "Review the current diff and summarize the risks.",
+  source: "workspace-initializer",
 });
 ```
 
@@ -166,7 +357,7 @@ That allows the app to preserve different background-agent model preferences for
 
 ## Provider System
 
-ACP provider metadata is served by the daemon's `providers.catalog` RPC (monorepo `docs/PROTOCOL.md` §5.38) — the single source of truth for provider identity, display names, CLI commands, default models, model tiers, and env-var/feature-code gating. There is no static provider table in the renderer.
+ACP provider metadata is served by the daemon's `providers.catalog` RPC (monorepo [docs/protocol/methods/models-providers.md](../protocol/methods/models-providers.md) §5.38) — the single source of truth for provider identity, display names, CLI commands, default models, model tiers, and env-var/feature-code gating. There is no static provider table in the renderer.
 
 At connect time the catalog is hydrated into the `providerCatalog` Redux slice (`src/store/renderer/slices/provider-catalog/`); renderer code reads it through the slice's selectors. Main-process call sites that cannot import the renderer store use the cached catalog accessor in `src/main/utils/provider-catalog-accessor.ts`.
 

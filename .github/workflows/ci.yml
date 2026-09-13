@@ -1,5 +1,7 @@
 name: CI
-on: pull_request
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -50,16 +52,138 @@ jobs:
             ci
             perf
 
-  # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) is zero-dependency
-  # Node, so its node:test suite is also seconds-long and runs directly on a
-  # GitHub-hosted runner — no tinybox routing, no submodules needed.
+  # The UDS→WS bridge shim (scripts/uds-ws-bridge.mjs) and the UDS JSON-RPC
+  # probe (scripts/uds-rpc.mjs) are zero-dependency Node, so their node:test
+  # suites are also seconds-long and run directly on a GitHub-hosted runner —
+  # no tinybox routing, no submodules needed.
   bridge-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: node --test scripts/uds-ws-bridge.test.mjs
+      - run: node --test scripts/uds-rpc.test.mjs
+
+  # Documentation invariants include the public frontend agent guide and the
+  # browser-tab contract surfaces in cloudlands-fe and intentd. Initialize only
+  # those submodules; packages/ios is private and intentionally untouched.
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
+      - run: make docs-check
+
+  # Hermetic shell suites stub daemon, cargo, and pnpm behavior where needed.
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: |
+          echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
+          bash scripts/bootstrap-dev-host.test.sh
+          bash scripts/dev-ports.test.sh
+          bash scripts/dev-sandbox.test.sh
+          bash scripts/dev-status.test.sh
+          bash scripts/docs-check.test.sh
+          bash scripts/rust-changed-tests.test.sh
+          bash scripts/shipped-in.test.sh
+
+  # Stock macOS /bin/bash is 3.2, and two Bash-3-only regressions shipped
+  # (intent-hq/intent#4706, intent-hq/intent#4759) because the ubuntu leg above
+  # only has Bash 5 and the suites' real Bash 3 rerun is skipped there. Run the
+  # two Bash-3-aware suites on macos-latest with REQUIRE_BASH3 set so a missing
+  # Bash 3 fails instead of skipping. `bash` on PATH may be a Homebrew Bash 5
+  # there; the suites then rerun under /bin/bash 3.2 via find_bash3.
+  shell-tests-bash3:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - run: |
+          /bin/bash --version
+          REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
+          REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
+
+  # Agent-facing documentation links and root hygiene are checked without
+  # dependencies or initialized submodules, directly on GitHub hosting.
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-doc-links.test.mjs
+      - run: node scripts/check-doc-links.mjs
+      - run: node --test scripts/check-root-hygiene.test.mjs
+      - run: node scripts/check-root-hygiene.mjs
+
+  # Guard release footer tokens in PR prose and branch commit messages unless
+  # the release impact is explicitly acknowledged with a label.
+  breaking-token:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-breaking-token.test.mjs
+      - name: Check pull request and commit messages
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "$RUNNER_TEMP/branch-commit-messages"
+          node scripts/check-breaking-token.mjs "$RUNNER_TEMP/branch-commit-messages"
+
+  # Submodule pins are advanced only by the auto-bump-submodules workflow
+  # (auto/submodule-bump). Reject gitlink changes in any other PR — a
+  # workspace branch that checked out a submodule feature branch can carry
+  # one unnoticed — unless the submodule-pin-intended label is applied.
+  submodule-pins:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-submodule-pins.test.mjs
+      - name: Check for manual submodule pin changes
+        env:
+          PR_HEAD_REF: ${{ github.head_ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: node scripts/check-submodule-pins.mjs --base "origin/${{ github.base_ref }}"
+
+  # The issue-triage body parser (.github/scripts/issue-triage/) is also
+  # zero-dependency Node with a fixture-driven node:test suite.
+  triage-parser-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test .github/scripts/issue-triage/parse-issue.test.js .github/scripts/issue-triage/needs-info.test.js .github/scripts/issue-triage/agentic-triage.test.js

@@ -93,7 +93,6 @@ These are the IDs returned by `getAvailableInstructionIds()` or exported from `i
 | `task-debug` | Debugging agent for task flows |
 | `task-focused` | Focused on one assigned task |
 | `task-loop` | Iterative task agent using a task note |
-| `ralph-loop` | Coordinator-style planning/delegation loop |
 | `workspace-agent` | Manages workspace operations via MCP |
 | `notes-system-guide` | Documentation-oriented instruction about the notes system |
 
@@ -120,7 +119,6 @@ These are the IDs returned by `getAvailableInstructionIds()` or exported from `i
 - `task-debug`
 - `task-focused`
 - `task-loop`
-- `ralph-loop`
 - `workspace-agent`
 - `code-review`
 - `commit-message`

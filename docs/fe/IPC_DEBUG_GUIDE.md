@@ -131,7 +131,7 @@ setupMyFeatureIPC();
 
 ### Step 3: Regenerate the Preload Allowlist
 
-The preload channel allowlist (`ALLOWED_CHANNELS` in `src/preload/index.ts`) is generated — do not hand-edit it. After registering the channel, regenerate:
+The preload channel allowlist (`ALLOWED_CHANNELS`) lives in the untracked, generated `src/preload/index.ts`, so never edit it by hand. The generator builds the allowlist from `src/shared/ipc-registry.ts` — a new channel must be added there, or the preload keeps blocking it; `src/preload/index.template.ts` only supplies the surrounding bridge code. `dev` and `build` regenerate the file; after registering the channel, regenerate it directly with:
 
 ```bash
 pnpm run generate:ipc-channels

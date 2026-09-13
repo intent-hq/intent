@@ -17,7 +17,8 @@ requests, scripts, terminals, files, and events.
 
 The daemon embeds:
 
-- A **JSON-RPC router** serving the full method catalog (see `PROTOCOL.md`),
+- A **JSON-RPC router** serving the full method catalog (see the
+  [protocol docs](./protocol/README.md)),
   reusing one set of **service** implementations across every transport.
 - An **ACP client** that spawns provider CLIs (auggie, claude-code, codex, … —
   see the `intent-providers` registry for the full set) over piped stdio and
@@ -320,6 +321,30 @@ Wire contract: PROTOCOL.md §5.5 ("Creation-time default-model resolution") and
   mutation path). Bundled specialists carry no frontmatter `model` and inherit
   the user's configured default (or the provider CLI default).
 
+## Settings state reconciliation
+
+The daemon is the authority for backend-owned settings. Each committed mutation is an
+atomic state transition identified by the process-local `revision` described in protocol
+§5.12. A provider/model default selection that crosses providers is therefore one batch:
+`providers.active` and the complete `model.providerDefaults` map are written together.
+Frontend code must not persist those paths independently or treat the map as a patch.
+
+Each client connection maintains a highest-applied settings revision. A numbered
+`settings.list` snapshot, mutation result, or `settings:changed` event is applied only when
+its revision is at least that watermark; lower revisions are stale. Equal revisions are
+the response/event views of one commit and must be harmless to apply more than once. This
+ordering rule lets optimistic UI survive delayed snapshots while still converging on the
+daemon's committed state. A rejected batch leaves both authoritative state and the
+watermark unchanged; the client rolls back or rehydrates instead of synthesizing a partial
+success.
+
+The watermark belongs to a backend connection generation, not to durable frontend state.
+On disconnect, reconnect, or backend/daemon switch, invalidate in-flight work from the old
+generation, clear the watermark, and hydrate from a fresh `settings.list` before accepting
+that generation's events. This is required because a restarted daemon begins again at
+revision `0`. For compatibility with older daemons, an absent revision selects the legacy
+arrival-order path; it is never coerced to `0` or compared with a numbered watermark.
+
 ## Local models: the unsloth provider
 
 The `unsloth` provider runs Unsloth GGUF models fully locally. It has no agent
@@ -366,7 +391,7 @@ credential injection (§5.6). One token, three consumption paths, one trust
 boundary:
 
 - **One stored token.** The GitHub token lands in the file-backed secrets
-  store (`~/intent/secrets.json`, `0600`) under account
+  store (`~/intent/.secrets.json`, `0600`) under account
   `sourceControl.github.token`, written by the daemon-owned OAuth device flow
   (`github.connect`) and deleted by `github.revoke`. Every consumer resolves
   it through one chain (`intent_sourcecontrol::token::resolve`, per
@@ -476,7 +501,7 @@ polling. The subsystem lives in `intent-services`
   a `None`-caller cancel wakes the owner with a notice
   ([intent-hq/intentd#953](https://github.com/intent-hq/intentd/pull/953)).
 - **Owner wakes** go through the automatic-delivery `agent.sendMessage` path
-  — queued behind an in-flight turn, question hold respected — and are
+  — queued behind an in-flight turn, archived-workspace park respected — and are
   best-effort (a delivery failure is logged, never propagated).
 - **Persistence & rehydration.** Schedules persist in the SQLite `hook`
   table (migrations `0075_hook.sql` + `0076_hook_last_logs.sql` +
@@ -500,8 +525,26 @@ lives in `intent-services` (`services::pr_monitor`): agents register monitors
 via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `ws.hook.schedule`; the FE wire surface is `prMonitor.list` / `cancel` /
 `flush`), and **one shared daemon loop** (`spawn_pr_monitor_loop`, wired in
-`main.rs` beside the PR-refresh sweep) polls every active monitor on the live
-`prMonitor.pollSeconds` cadence, diffs the merge-requirements checklist
+`main.rs` beside the PR-refresh sweep) ticks on the live
+`prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
+becomes due after an effective interval (the minimum time between two polls of
+one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
+up to the next `pollSeconds` tick) stretched so the loop is modelled to spend at most
+the live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
+minimum 60, maximum 5000; each PR poll costed at 3 REST calls — a cadence
+**cost model**, not a hard ceiling: no request is counted or blocked against
+it, and actual spend can differ — the 3-call unit is a single-page estimate,
+so paginated review lists and degraded-path REST fallbacks cost more, while
+GraphQL reads ride their own quota), fetching a capped oldest-first subset per tick so
+a large monitor set is spread across ticks instead of burst-fetched, and
+honouring the global forge rate-limit gate (`services::rate_limit`,
+monorepo#2961) shared with the PR-refresh and git-root sweeps: a
+quota-exhausted forge read — the PR read itself or any secondary checklist /
+comment read — pauses all PR-monitor polling until the window resets,
+recording the pause as `lastError` on the affected monitors, and the gate
+is re-consulted before every fetch within a sweep so a pause opened by a
+sibling sweep stops the in-flight sweep too — diffs the
+merge-requirements checklist
 (checks, reviews, threads, mergeability, branch rules — composed in
 `pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
 the monitor's persisted **emit baseline** (the PR state as of the last
@@ -613,16 +656,24 @@ the in-memory watch registry loads.
 
 ## Agent feature toggles (`[agentFeatures]`)
 
-Wire contract: PROTOCOL.md §5.12 (settings catalog). Eleven booleans under the
+Wire contract: PROTOCOL.md §5.12 (settings catalog). Booleans under the
 `[agentFeatures]` config.toml table — `backgroundHooks`, `hostExec`, `scripts`,
 `terminalAccess`, `browserAutomation`, `richChatBlocks`, `structuredQuestions`,
-`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`. The first ten
-default `true`; `taskGraph` is opt-in and defaults `false`. Each toggle removes
+`attentionRequests`, `stateSnapshot`, `prMonitor`, `taskGraph`, `peerAgents`,
+`mcpTools`. All default `true` except the opt-in `peerAgents` (default
+`false`). Each toggle removes
 an agent-exposed feature from the agent's system prompt, its MCP tool surface,
 or (for `stateSnapshot`) its per-turn prompt decoration. `taskGraph` is a
 docs/prompt-only gate: it never dispatch-denies `tasks` or `greedy`, and its
 unblocked-wake teaching uses the value captured when the parent session is
-created rather than the live setting at wake delivery.
+created rather than the live setting at wake delivery. `mcpTools` gates the
+`ws.mcp.*` namespace (external MCP server tool forwarding,
+[intentd#1483](https://github.com/intent-hq/intentd/pull/1483)) and is both
+captured at bridge creation like the other toggles AND enforced live
+server-side on every forwarded call in the services layer — which also honors
+the `mcp.enableUserServers` master switch and the per-server disabled state
+(`enabled: false` / `mcp.disabledServers`) — so the bridge-creation capture is
+defense in depth for that toggle.
 
 - **Three MCP gating layers per feature** (defense in depth): (a) the
   `workspace_api` **tool description** is assembled from per-namespace segments
@@ -702,10 +753,13 @@ created rather than the live setting at wake delivery.
   gates neither a prompt section nor a tool: it governs only the
   `current ws.agent.snapshot() => {…}` line that
   `AgentManager::build_turn_prompt` prefixes to outbound turn prompts
-  (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is read
-  **live** in `Services::agent_state_snapshot_line`, so a flip takes effect on
-  the next turn of every session, existing ones included — unlike the other
-  nine. The `ws.agent.snapshot()` MCP binding is deliberately never gated (no
+  (PROTOCOL §5.5 "Per-turn agent state snapshot"). `stateSnapshot` is resolved
+  in `Services::agent_state_snapshot_line` from the session's captured harness
+  feature snapshot (`Services::session_agent_features`) like every other
+  toggle ([intentd#1273](https://github.com/intent-hq/intentd/pull/1273)), so
+  a flip applies to new sessions only; a legacy NULL-snapshot row falls back
+  to the live settings until its first-activation freeze. The
+  `ws.agent.snapshot()` MCP binding is deliberately never gated (no
   description/prelude/dispatch pruning), so the tool stays callable either way.
   The line is rebuilt per turn from live sources (hook store, watch registry,
   queue registry, event subscriptions, unsettled-children aggregate, pending
@@ -713,14 +767,14 @@ created rather than the live setting at wake delivery.
   trivial, and never persisted — the transcript row keeps the undecorated
   content, and all three skip paths (toggle off, trivial snapshot, build
   failure) leave the prompt byte-identical to pre-feature output.
-- **New sessions only (except the live-read toggles).** Flags are captured once
+- **New sessions only (except the live services-layer checks).** Flags are captured once
   at agent-session creation (the assembled system prompt is persisted
   per-session) and at per-agent MCP bridge creation — never live-read per call
   (deliberately unlike `workspaceApi.toonOutput`) — so a settings change
   applies only to sessions created afterwards; existing sessions keep the
   surface they were created with. The two exceptions above (`hook.schedule`'s
-  services-layer check, `stateSnapshot`'s per-turn read) act on existing
-  sessions immediately.
+  `backgroundHooks` check and the per-call `mcpTools` check on forwarded
+  `ws.mcp.*` calls) act on existing sessions immediately.
 
 ## Agent process-tree memory: characteristics & tuning knobs
 
@@ -899,6 +953,156 @@ anyone who wants the old behaviour — with the caveat above that `0` stops the
 sweep, not every path that can reclaim an idle tree. A seat still hitting the
 accumulation path should reach for `idleReapMinutes` first, then
 `memoryBudgetMb`.
+
+## File watching: shared OS watchers & Linux host limits
+
+Wire contract: PROTOCOL.md §5 (`system.status` — file-watch coverage fields).
+File events (`file:*`, plus the skills/specialists rescans) come from recursive
+`notify` watchers over watch roots. Watchers are **shared streams**: one OS
+watcher serves many roots, with a demux narrowing each event to the
+subscriber's own root. Grouping is per platform — on macOS (FSEvents) roots
+group per parent directory; on **Linux (inotify) ALL roots share a single
+global stream** ([intent-hq/intentd#1550](https://github.com/intent-hq/intentd/pull/1550)).
+That matters because every `notify` watcher costs one inotify **instance**
+(one fd, capped by `fs.inotify.max_user_instances`, default 128): the earlier
+per-parent-directory grouping made the instance count scale with the workspace
+count and exhausted the cap on multi-workspace hosts
+([intent-hq/intent#3708](https://github.com/intent-hq/intent/issues/3708));
+the single global stream keeps it at one instance total.
+
+Recursive **watches** still scale with directory count: on Linux each watched
+directory consumes one slot of `fs.inotify.max_user_watches` (default 8192 on
+many distros, 65536 on newer kernels) regardless of how streams are grouped,
+so a host with many or large checkouts can exhaust the watch cap even with a
+single inotify instance.
+
+**Tuning a multi-workspace Linux host:**
+
+- Raise `fs.inotify.max_user_watches` — e.g. `1048576` (each slot costs ~1 KB
+  of kernel memory only while in use):
+
+  ```bash
+  sudo sysctl fs.inotify.max_user_watches=1048576
+  echo fs.inotify.max_user_watches=1048576 | sudo tee /etc/sysctl.d/60-inotify.conf
+  ```
+
+- Check the daemon's open-file limit (`ulimit -n` / `nofile`): the global
+  watch group holds inotify instances at one, but sockets, PTYs, and child
+  pipes still consume fds — a low `nofile` (1024 on some distros) surfaces as
+  the same class of resource failures on busy multi-workspace hosts.
+
+**Symptoms of exhausted limits.** Watch-coverage degradation is WARN-logged;
+the creation/registration WARNs carry the live `/proc/sys/fs/inotify` limits
+(as `os_watch_limits: inotify max_user_instances=… max_user_watches=…`) so an
+operator can judge at a glance whether a failure is cap exhaustion:
+
+- `"shared watcher creation failed; roots in this group are unwatched until a
+  retry succeeds"` — the OS watcher itself could not be created (e.g. inotify
+  instance exhaustion). Creation is retried with capped exponential backoff
+  (about once a minute at the cap), and the group's roots are re-registered
+  once it succeeds.
+- `"shared watch registration failed"` — one root's recursive registration
+  failed (e.g. `ENOSPC` watch-slot exhaustion, or the directory vanished).
+- `"shared watcher callback error; events may be missed"` — the live watcher
+  reported an error on its event stream (e.g. `notify`'s "OS file watch limit
+  reached").
+
+The same degradation is surfaced on the wire as the `system.status`
+`fileWatch` object (`failedRoots > 0`, or `activeStreams` below the expected
+count — `0` while `totalRoots > 0` under creation failure), so coverage loss
+is visible to clients, not just in the daemon log.
+
+## Tool payload storage, replay & retention
+
+Multi-MB `tool_result.output` / `tool_use.input` bodies do not live in the
+`agent_message.content` JSON column. The message write path extracts any
+such body over a 4 KiB inline ceiling into the `agent_message_payload` side
+table (migration 0108, intent-hq/intent#3884; zlib-compressed when that is
+smaller; one row per `(message, block_ordinal, kind)`, `kind` =
+`tool_use_input` / `tool_result_output`) and leaves the slim-projection
+preview plus the `inputTruncated` / `outputTruncated` (+ `*Bytes`) flags in
+the field's position — the same transform the serve-time slim projection
+applies, so a slim page read (`agent.getConversation`) serves straight from
+the content column with **no side-table access**. Full-fidelity reads
+(`agent.getMessageBlock`) splice the original body back before the content
+leaves the store, and legacy rows with inline bodies hydrate as no-ops:
+splicing is driven purely by side-row presence.
+(`intent-store/src/message_payload.rs`.)
+
+Three mechanisms sit on top of that table
+([intent-hq/intentd#1757](https://github.com/intent-hq/intentd/pull/1757)):
+
+**Bounded replay.** When a lost ACP session is rebuilt, the recovery replay
+(`intent-services/src/history_xml.rs`) renders each `tool_use` input and
+`tool_result` output middle-truncated to `agents.historyReplayToolContentChars`
+(default `4000`, `500..=100000`, read live from the settings snapshot at
+replay time — previously a hard-coded constant). The store's replay read
+(`Store::get_agent_messages_for_replay`) never materializes a whole
+transcript's full bodies: side rows are paged by rowid in small batches and
+each full body is decoded → stringified → truncated as soon as it is read,
+then spliced in as the **replay-preview block contract**
+(`intent-core/src/replay_preview.rs`: the heavy field becomes the truncated
+preview string, plus the additive `inputReplayOriginalChars` /
+`outputReplayOriginalChars` count). The formatter renders such a block
+exactly as it would render the full body at the current cap — if the live
+cap is smaller than the stored preview it re-truncates, and it never expands.
+
+**Retention sweep.** `agents.toolPayloadRetentionDays` (default `0` =
+disabled, max `3650`) is enforced by the existing stream-retention loop
+(`spawn_stream_retention_loop` in the `intentd` binary crate — the loop
+keeps ticking, hourly at most, even when the event sweep is disabled). On
+each tick, with the setting non-zero, `Store::compact_tool_payloads_before`
+compacts every **full-body** side row whose owning message `created_at` is
+older than the window into its `*_replay` kind (`tool_use_input_replay` /
+`tool_result_output_replay`) holding exactly the replay-shaped preview at the
+current cap (`{"text": <preview>, "originalChars": N}`, `encoding` none|zlib
+and transfer handling exactly like every other side row), and **deletes the
+full row — irreversibly**: setting the window back to `0` stops further
+compaction but restores nothing, and raising the replay cap afterwards
+cannot recover characters already deleted. Bodies already under the cap are
+converted too, so every pruned block has one shape. Work is chunked (≤ 500 rows per scan plus
+one write transaction per chunk; the CPU-bound decode/truncate runs on a
+blocking thread before the transaction opens) so the sweep never holds the
+write lock for long; delete + insert in one transaction keep the
+`conversation_bytes` triggers balanced; a re-run finds nothing left to
+convert (idempotent); the join on `agent_message` means 0109 staged rows and
+thumbnails rows are never touched. Both settings are read live from the
+settings snapshot per tick, so a value set from the Settings UI takes effect
+on the next tick without a restart.
+
+**What a pruned block serves.** Two preview shapes coexist and serve
+different readers: the **write-time slim preview** (the head of the body
+left inline in `agent_message.content` with the `*Truncated` / `*Bytes`
+flags — what `agent.getConversation` pages and, once pruned,
+`agent.getMessageBlock` return) and the **replay preview** (the head/tail
+middle-truncated string + original char count in the `*_replay` side row —
+consumed only by the recovery replay, never returned over the wire). Normal
+hydration ignores replay kinds, so a pruned block keeps serving its inline
+slim preview + flags — the `agent.getConversation` page is byte-identical
+before and after the sweep, and so is the recovery replay at the cap in
+effect at compaction (`splice_replay_preview` emits the same block contract
+from a full row or a replay row). That equivalence is cap-relative: a later
+**smaller** cap re-truncates a compacted preview exactly as it would a full
+body, but a later **larger** cap renders a longer preview from a full row
+while a `*_replay` row cannot expand past the characters it kept. The one
+visible change is `agent.getMessageBlock`: the full
+body no longer exists, so the block is served as the stored slim preview,
+flags intact, plus the additive `inputPruned: true` / `outputPruned: true`.
+Compaction is durable across transcript edits: `agent.editAndRegenerate`
+truncates suffix-only (`Store::truncate_agent_messages_from` deletes rows at
+`seq >=` the edited message in one write transaction, cascading only the
+dropped rows' side rows through the 0109 trigger), so the kept prefix keeps
+its ids, `seq` and every side row — full and `*_replay` alike — untouched
+and a pruned block stays pruned (flags and replay preview intact) rather
+than degrading to the inline head preview. The FE-driven
+`agent.replaceMessages` swap still remints the whole transcript. That flag is decided from
+store-side compaction metadata read from the **same snapshot** as the body
+(`Store::get_agent_message_by_id_with_pruned` — a sweep committing between
+two separate reads would otherwise stamp a just-served full body as pruned),
+never inferred from surviving `*Truncated` flags: a retained full row that
+fails to decode, or a body that arrived pre-flagged and was never
+externalized, is served as before and never flagged. With the sweep disabled
+the served block is exactly what it was before the sweep existed.
 
 ## Read-path performance principles
 

@@ -4,7 +4,7 @@ This document describes the end-to-end release process for Intent (cloudlands-fe
 
 ## Overview
 
-Releases are built and published by the **Release Beta** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
+Releases are built and published by the **Release Alpha** workflow in GitHub Actions. The `intentd` sidecar is **not built from source** — it is downloaded from the pinned `intent-hq/intentd` GitHub Release recorded in the `intentd.version` file (intentd releases on its own cycle). The workflow:
 
 1. Reads the pinned intentd version from `intentd.version` and fetches the matching release asset via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/intentd`); it fails fast if the pinned release or its assets don't exist
 2. Builds the app for all four platforms in parallel jobs — macOS (arm64), Windows (x64), Linux (x64), Linux (arm64) — each with its staged `intentd` sidecar
@@ -44,11 +44,11 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
 
 1. **Merge the release-please Release PR**
 
-   The **Release Beta** workflow triggers automatically when a `v*.*.*` tag is pushed. Tags are created by release-please when its Release PR (which bumps `package.json` and updates the changelog) is merged — releasing is a matter of merging that PR, not typing a version.
+   The **Release Alpha** workflow triggers automatically when a `v*.*.*` tag is pushed. Tags are created by release-please when its Release PR (which bumps `package.json` and updates the changelog) is merged — releasing is a matter of merging that PR, not typing a version.
 
    The workflow validates the tag format, verifies the tag matches the `package.json` version at the tagged commit, and fails if a `v{version}` release already exists on `intent-hq/cloudlands-releases`.
 
-   To rebuild an **existing** tag (e.g., after a transient build failure), use the `workflow_dispatch` fallback: go to [Actions > Release Beta](https://github.com/intent-hq/cloudlands-fe/actions/workflows/release-beta.yml), click "Run workflow", and enter the existing tag (e.g., `v2.1.0`). Note the duplicate-release guard: delete the failed `v{version}` release on `cloudlands-releases` first if it was partially published.
+   To rebuild an **existing** tag (e.g., after a transient build failure), use the `workflow_dispatch` fallback: go to [Actions > Release Alpha](https://github.com/intent-hq/cloudlands-fe/actions/workflows/release-alpha.yml), click "Run workflow", and enter the existing tag (e.g., `v2.1.0`). Note the duplicate-release guard: delete the failed `v{version}` release on `cloudlands-releases` first if it was partially published.
 
    The bundled intentd version comes from the `intentd.version` pin at the tagged commit — there are no intentd-related workflow inputs. Make sure the pinned release exists on `intent-hq/intentd` (with assets for the build targets) before releasing, or the workflow will fail fast at the fetch step.
 
@@ -83,9 +83,9 @@ The following secrets must be configured in the `intent-hq/cloudlands-fe` reposi
    ```
 
 4. **Verify the rolling beta channel**
-   
+
    The workflow also updates the rolling `beta` release tag:
-   
+
    ```bash
    # Check the beta feeds (latest-mac.yml shown; repeat for latest.yml,
    # latest-linux.yml, latest-linux-arm64.yml)
@@ -104,10 +104,12 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    - Exist as a published versioned release (`v{VERSION}`) on `intent-hq/cloudlands-releases`
    - Use stable semver format (`X.Y.Z` only — no prerelease or build suffixes)
    - Be greater than the current stable version (or be the first promotion)
+   - Not be ahead of the current beta channel version (beta-first guard, see below)
 
 2. **What the workflow does**
 
    The workflow automatically:
+   - **Beta-first guard**: checks the current beta channel version (read from the `beta` release's `latest-mac.yml` feed) is >= the promoted version — the invariant is that beta can never be behind stable — and fails fast **before any asset is downloaded or uploaded** when the beta feed is missing or unparseable or the beta version is behind the promoted one. For an emergency promotion that must bypass the guard, re-run the workflow with the `skip_beta_check` input checked (default off) — the bypass is logged as a warning
    - Downloads all assets from the versioned release `v{VERSION}`
    - Uploads new assets to the rolling `stable` release tag with `--clobber` (versioned assets first, then `latest-mac.yml` last for atomic feed switch)
    - Deletes old versioned assets from the previous stable promotion (only after new assets are uploaded and live)
@@ -142,6 +144,48 @@ After verifying a beta release, promote it to the stable channel using the **Rel
    # View aggregated release notes
    gh release view stable --repo intent-hq/cloudlands-releases
    ```
+
+4. **Propose the website release notes PR**
+
+   Once the stable feed is verified, update the Updates section of the website docs at `src/pages/docs.astro` in [intent-hq/intentapp.dev](https://github.com/intent-hq/intentapp.dev). The section is made of `<section id="latest-release">` (Latest Release) and `<section id="release-history">` (Release History). Work on a feature branch and open a PR for review; do not merge it (a human merges it).
+
+   1. **Gather inputs.** You need the previous stable version, the newly promoted version, and the aggregated notes body. The notes on the rolling `stable` release of `intent-hq/cloudlands-releases` already span `(prevStable, VERSION]`, including the intentd delta:
+
+      ```bash
+      gh release view stable --repo intent-hq/cloudlands-releases --json body --jq .body
+      ```
+
+   2. **Generate the copy.** The prompt below carries no release context on its own and is not sufficient by itself: supply it together with the inputs from the previous step (the previous stable version, the promoted version, and the aggregated notes body). The copy must be grounded in those notes only; anything not in them is out of scope. Use this prompt:
+
+      ```text
+      What major updates went out from the last stable release to this current one?
+
+      Respond with accessible, concise, and clear copy for the latest release section of the Intent Website docs.
+
+      1. Match the writing style and formatting of the rest of the Intent docs
+      2. Don't include emojis
+      3. Don't ever use em-dashes
+      4. Don't use staccato pairs (short clipped two-part rhythms like "Not bigger. Better." or "It's fast. It's simple.")
+      5. Don't use antithesis reframe / negative parallelism ("It's not about X, it's about Y" or "This isn't a bug, it's a feature")
+      6. Don't use isocolon metaphor-pairs (two parallel-structured metaphor clauses like "Data is the new oil, and attention is the new currency")
+
+      Replace the latest release section of the Intent docs on the Website with this one.
+      Move the previous Latest release notes into the archive with the release version and date as a subhead.
+      ```
+
+   3. **Apply the edit.** Replace the body of the Latest Release section with the new copy, keeping the existing HTML structure: a leading `<p><strong>vX.Y.Z.</strong> ...</p>`, `<p class="body-subheadline">` subheads, and `<ul>` lists. Move the previous Latest Release body into the Release History section, directly below its intro paragraph and above any older entries, under a subhead `<p class="body-subheadline">vA.B.C (YYYY-MM-DD)</p>`. The date is the day that version's `vA.B.C` release was published on `intent-hq/cloudlands-releases`, which is its alpha release date, since a promotion does not create a new release. This prints it as `YYYY-MM-DD` directly:
+
+      ```bash
+      gh release view vA.B.C --repo intent-hq/cloudlands-releases --json publishedAt --jq '.publishedAt[0:10]'
+      ```
+
+      Release History keeps the newest entry first.
+
+   4. **Open the PR** with a conventional-commit title (e.g. `docs: release notes for vX.Y.Z`), request review, and leave the merge to a human.
+
+   Keep at most one open site release-notes PR at a time, and always branch from the current `main` of `intent-hq/intentapp.dev`. Before opening a new one, check for an open release-notes PR on that repo (`gh pr list --repo intent-hq/intentapp.dev --search "release notes"`). If one exists, either update it instead of opening a second (rebase it on `main`, make the newest stable the Latest Release, and archive every intermediate stable in Release History, newest first) or close it as superseded and open a fresh PR from `main`. The site must never end up showing an older release as Latest.
+
+   The site PR is review-only and independent of the release pipeline: a delayed or missing site PR never blocks or reverts a promotion.
 
 ## Troubleshooting
 
@@ -251,6 +295,8 @@ If the automated **Release Stable** workflow fails and cannot be fixed by re-run
    ```bash
    gh release edit stable --repo intent-hq/cloudlands-releases --notes-file aggregated-notes.md
    ```
+
+After a manual promotion, step 4 of [Promoting to Stable](#promoting-to-stable) (the website release notes PR) still applies.
 
 ## Channel Switching in the App
 
