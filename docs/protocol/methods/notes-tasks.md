@@ -57,9 +57,13 @@ once; hunks from both sides that overlap the same base span form one conflicting
 cluster rendered as the *current* variant immediately followed by the *incoming*
 variant (`WaWb`) — nothing is dropped and no markers are inserted. The one
 exception is a conflicting span inside a checkbox marker: it collapses to the
-*current* stored side's marker (never a doubled marker such as `[/x]`), and on
-lines linked to a task note materialization then re-projects the task's status.
-When no snapshot survives for the stale rev (pruned past the 50-version cap or predating
+*current* stored side's marker (never a doubled marker such as `[/x]`), so the
+line stays parseable. The merge write itself does not re-materialize a
+task-linked line — the current marker is materialization's last projection of
+the linked task's status, and the next task write (`task.updateStatus`,
+`task.update`, `task.updateNoteStatus`, `task.markAsTask`, `task.assignAgent`)
+re-projects it. When no
+snapshot survives for the stale rev (pruned past the 50-version cap or predating
 the note's version history) the write degrades to honest last-writer-wins:
 `content` lands verbatim. An absent `expectedVersion`, or one equal to the current
 `rev`, skips the merge and replaces the note as-is. An `expectedVersion` **above**
