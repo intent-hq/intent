@@ -185,7 +185,7 @@ cloudlands-fe stable promotion is followed by a website release notes PR on
   prints the first cloudlands-releases tag whose pin carries the commit; given several
   `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
   it prints the first tag carrying all of them. It exits 3 while a commit is uncarried,
-  4 on a transient GitHub failure, and 5 when the newest cloudlands-fe Release Alpha run
+  4 on a transient GitHub failure, and 5 when the active cloudlands-fe Release Alpha run
   has a job queued longer than 30 min (`SHIPPED_IN_STALL_MINUTES` overrides the
   threshold; `0` disables the probe) — a human must cancel and re-run the workflow run
   named on stderr.

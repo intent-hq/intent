@@ -17,7 +17,7 @@
 #
 # Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
 # pair yet (stdout empty; stderr names the pairs the newest scanned release
-# misses); 5 = same, but the newest Release Alpha run on intent-hq/cloudlands-fe
+# misses); 5 = same, but the active Release Alpha run on intent-hq/cloudlands-fe
 # looks stalled (a job queued longer than SHIPPED_IN_STALL_MINUTES, default 30;
 # 0 disables the probe) -- stderr names the run, job and queue age; 4 =
 # transient GitHub failure (rate limit, 5xx, network) -- retry later; 2 = usage
@@ -203,7 +203,7 @@ for tag in "${tags[@]}"; do
 done
 
 # Best-effort stall probe for the exit-3 path: intentd-only changes ride the
-# cloudlands-fe Release Alpha run too, so its newest run tells "not cut yet"
+# cloudlands-fe Release Alpha run too, so its active run tells "not cut yet"
 # apart from "stalled" (a job still queued past the threshold, e.g. a runner
 # label nobody serves). Any probe failure keeps the plain exit 3.
 probe_skipped() {
@@ -214,23 +214,25 @@ probe_skipped() {
 }
 
 release_alpha_stalled() {
-  local run run_id run_status run_url jobs stalled age name since
+  local run run_id run_url jobs stalled age name since
   ((stall_minutes > 0)) || return 0
-  run=$(gh run list --repo "$fe_repo" --workflow "Release Alpha" --limit 1 \
-    --json databaseId,status,url,displayTitle 2>"$gh_err") ||
+  run=$(gh run list --repo "$fe_repo" --workflow "Release Alpha" --limit 5 \
+    --json databaseId,status,url,displayTitle,createdAt 2>"$gh_err") ||
     { probe_skipped "gh run list on $fe_repo failed"; return 0; }
+  # Release Alpha runs share the `cloudlands-release` concurrency group without
+  # cancel-in-progress, so a newer run sits fully queued behind the one holding
+  # the group for as long as that one takes: only the oldest active run can be
+  # stalled. Run-level status is not filtered further -- a run reads `queued`
+  # while its jobs are already in progress.
   run=$(printf '%s\n' "$run" | python3 -c '
 import json, sys
-runs = json.load(sys.stdin)
+runs = [run for run in json.load(sys.stdin) if run["status"] != "completed"]
 if runs:
-    print(runs[0]["databaseId"], runs[0]["status"], runs[0]["url"])
-' 2>"$gh_err") || { probe_skipped "could not read the newest Release Alpha run on $fe_repo"; return 0; }
+    run = min(runs, key=lambda run: run["createdAt"])
+    print(run["databaseId"], run["url"])
+' 2>"$gh_err") || { probe_skipped "could not read the active Release Alpha runs on $fe_repo"; return 0; }
   [[ -n "$run" ]] || return 0
-  read -r run_id run_status run_url <<<"$run"
-  case "$run_status" in
-    queued | in_progress) ;;
-    *) return 0 ;;
-  esac
+  read -r run_id run_url <<<"$run"
   # The REST jobs payload carries created_at; `gh run view --json jobs` does
   # not. --paginate emits one JSON object per page, back to back.
   jobs=$(gh api "repos/$fe_repo/actions/runs/$run_id/jobs" --paginate 2>"$gh_err") ||

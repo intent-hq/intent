@@ -290,7 +290,7 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
   tag carrying every listed commit (for intentd, via the `intentdVersion` pin in that
   tag's `release-manifest.json`); exits 3 while any is uncarried; exits 4 on a transient
   GitHub failure (rate limit, 5xx, network) the next poll simply retries; and exits 5
-  when the newest cloudlands-fe Release Alpha run has a job queued longer than 30 min
+  when the active cloudlands-fe Release Alpha run has a job queued longer than 30 min
   (`SHIPPED_IN_STALL_MINUTES` overrides; `0` disables the probe) — a stalled runner pool
   needs a human to cancel and re-run the workflow run named on stderr (run 34716428577
   sat queued ~5.5 h, delaying the release by as much). Never block a turn polling —
