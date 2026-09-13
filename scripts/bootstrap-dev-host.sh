@@ -9,6 +9,20 @@ FE_DIR=${FE_DIR:-"$ROOT_DIR/packages/cloudlands-fe"}
 TOOLCHAIN_FILE="$INTENTD_DIR/rust-toolchain.toml"
 PACKAGE_FILE="$FE_DIR/package.json"
 CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
+# Caller-visible cargo, resolved BEFORE this script's own PATH prepend below.
+# Under make (MAKELEVEL set) the Makefile has already prepended the pinned
+# rustup toolchain dir and CARGO_BIN_DIR (see the PATH export in the Makefile);
+# strip that exact prefix so the shadowing-cargo check still sees what a plain
+# `cargo` resolves to in the caller's shell.
+CALLER_PATH="$PATH"
+if [[ -n ${MAKELEVEL:-} ]]; then
+  make_rustup_cargo=$(cd "${INTENTD_DIR}" 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+  make_prefix="${make_rustup_cargo:+${make_rustup_cargo%cargo}:}${CARGO_INSTALL_ROOT:-$CARGO_HOME}/bin:"
+  while [[ "$CALLER_PATH" == "$make_prefix"* ]]; do
+    CALLER_PATH=${CALLER_PATH#"$make_prefix"}
+  done
+fi
+CALLER_CARGO=$( (PATH="$CALLER_PATH"; command -v cargo) 2>/dev/null ) || CALLER_CARGO=""
 PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_HOME PATH
 
@@ -81,6 +95,10 @@ optional() {
   printf '[optional] %s\n' "$1"
 }
 
+warn() {
+  printf '[warn]     %s\n' "$1"
+}
+
 load_versions() {
   if [[ -f "$TOOLCHAIN_FILE" ]]; then
     TOOLCHAIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOOLCHAIN_FILE")
@@ -110,6 +128,21 @@ active_toolchain_ready() {
   [[ -n "$TOOLCHAIN" ]] || return 1
   command -v rustup >/dev/null 2>&1 || return 1
   [[ $(rustup show active-toolchain 2>/dev/null) == "$TOOLCHAIN"-* ]]
+}
+
+# The make targets prepend the pinned rustup toolchain to PATH, so only raw
+# `cargo` outside make is exposed: a non-rustup cargo earlier on the caller's
+# PATH (e.g. Homebrew's) ignores the rust-toolchain.toml pin. Advisory only —
+# never counts toward FAILURES. Absence of any cargo stays covered by the
+# existing checks.
+report_shadowing_cargo() {
+  [[ -n "$TOOLCHAIN" && -n "$CALLER_CARGO" ]] || return 0
+  local line version
+  line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" RUSTUP_AUTO_INSTALL=0 "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
+  version=${line#cargo }
+  version=${version%% *}
+  [[ "$version" == "$TOOLCHAIN" ]] && return 0
+  warn "cargo: plain cargo is $CALLER_CARGO (${version:-version unknown}), not the pinned Rust $TOOLCHAIN; put rustup's proxy directory first on PATH, or rely on the make targets, which pin the toolchain"
 }
 
 node_version() {
@@ -441,6 +474,7 @@ check_all() {
   else
     missing "cargo: installed with rustup"
   fi
+  report_shadowing_cargo
 
   if python_ready; then
     ok "Python: $(python3 --version 2>&1)"
