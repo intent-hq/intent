@@ -184,6 +184,10 @@ cloudlands-fe stable promotion is followed by a website release notes PR on
   `scripts/shipped-in.sh intentd <sha>` (`make shipped-in`) performs this lookup and
   prints the first cloudlands-releases tag whose pin carries the commit; given several
   `<component> <sha>` pairs (`make shipped-in PAIRS="intentd:<sha> cloudlands-fe:<sha>"`)
-  it prints the first tag carrying all of them.
+  it prints the first tag carrying all of them. It exits 3 while a commit is uncarried,
+  4 on a transient GitHub failure, and 5 when the newest cloudlands-fe Release Alpha run
+  has a job queued longer than 30 min (`SHIPPED_IN_STALL_MINUTES` overrides the
+  threshold; `0` disables the probe) — a human must cancel and re-run the workflow run
+  named on stderr.
 - Commits merged after the release PR was cut ride the next release PR (e.g. intentd#517
   landed via follow-up release PR intentd#520).
