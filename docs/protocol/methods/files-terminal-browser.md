@@ -16,11 +16,11 @@
 | file.delete | path (req) | { ok, path, deleted } |
 | file.mkdir | path (req) | { ok, path, created? |
 | file.rename | oldPath (req), newPath (req) | { ok, oldPath, newPath } |
-| file.placeAttachment | fileName (req), data? (base64), sourcePath? (absolute host path) — exactly one of data/sourcePath; mimeType? (v6.12) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt } — `path` is workspace-relative under `.intent/attachments/`, `size` is the placed byte length (v6.5; monorepo#1948). `attachmentId` / `mimeType?` / `uploadedAt` (v6.12) are the additive attachment-registry fields (presence-detected; pre-6.12 daemons omit them): the daemon-minted UUID the placement was registered under, the client-supplied MIME type echoed back (omitted when not supplied), and the ISO registration timestamp |
-| file.getAttachmentInfo | attachmentId (req) | { attachmentId, fileName, mimeType?, size, uploadedAt, path, exists } — attachment-registry metadata lookup (v6.12): `path` is the stored workspace-relative path (under `.intent/attachments/`) and `exists` reflects whether the file is still on disk at read time (the registry row survives an out-of-band delete). Unknown id → -32602 naming the id ("unknown attachment id") |
-| file.attachmentUpload.begin *(v6.16)* | fileName (req), sizeBytes (req; positive, ≤ 1 GiB), sha256 (req; 64-hex of the complete payload), mimeType? | { uploadId, maxChunkBytes } — opens a staged chunked attachment upload session (16 MiB decoded per chunk); the workspace must exist, `fileName` must pass the same basename sanitization placement applies (fail-early: a name commit would reject fails here, before any bytes are staged), and validation failures are -32602 naming the specifics. A workspace holds at most **4** live sessions (monorepo#2275): a begin at the cap is -32602 naming the live count ("commit or abort one before beginning another"), and every begin first sweeps idle-expired sessions (15-minute idle TTL — see the session-bounds block below) so expired sessions never hold cap slots |
+| file.placeAttachment | fileName (req), data? (base64), sourcePath? (absolute host path) — exactly one of data/sourcePath; mimeType? (v6.12); idempotencyKey? (v9.13; 1–128 chars, no surrounding whitespace; non-string → -32602) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — `path` is workspace-relative under `.intent/attachments/`, `size` is the placed byte length (v6.5; monorepo#1948). `attachmentId` / `mimeType?` / `uploadedAt` (v6.12) are the additive attachment-registry fields (presence-detected; pre-6.12 daemons omit them): the daemon-minted UUID the placement was registered under, the client-supplied MIME type echoed back (omitted when not supplied), and the ISO registration timestamp. With `idempotencyKey` (v9.13; see the idempotent-placement block below) a same-key retry whose payload identity matches the bound placement answers the ORIGINAL result plus `replayed: true` (presence-detected; never present on a first placement or an unkeyed call) and places nothing; a same-key call with a different payload identity is -32602 ("idempotencyKey already used with a different payload") |
+| file.getAttachmentInfo | attachmentId? — or — workspaceId + idempotencyKey? (v9.13): exactly one selector | { attachmentId, fileName, mimeType?, size, uploadedAt, path, exists } — attachment-registry metadata lookup (v6.12): `path` is the stored workspace-relative path (under `.intent/attachments/`) and `exists` reflects whether the file is still on disk at read time (the registry row survives an out-of-band delete). Unknown id → -32602 naming the id ("unknown attachment id"). The key arm (v9.13) resolves a live idempotency-key binding of that workspace to the same row shape; a key that was never bound in the workspace, belongs to another workspace, or is past the 7-day retention → -32602 ("unknown idempotency key"); both selectors, neither, or a key without `workspaceId` → -32602 |
+| file.attachmentUpload.begin *(v6.16)* | fileName (req), sizeBytes (req; positive, ≤ 1 GiB), sha256 (req; 64-hex of the complete payload), mimeType?, idempotencyKey? (v9.13) | { uploadId, maxChunkBytes, replayed? } — opens a staged chunked attachment upload session (16 MiB decoded per chunk); the workspace must exist, `fileName` must pass the same basename sanitization placement applies (fail-early: a name commit would reject fails here, before any bytes are staged), and validation failures are -32602 naming the specifics. A workspace holds at most **4** live sessions (monorepo#2275): a begin at the cap is -32602 naming the live count ("commit or abort one before beginning another"), and every begin first sweeps idle-expired sessions (15-minute idle TTL — see the session-bounds block below) so expired sessions never hold cap slots. With `idempotencyKey` (v9.13): a same-key begin with the same `(fileName, sizeBytes, sha256)` while that session is still live answers the SAME `uploadId` plus `replayed: true` (a lost begin reply) instead of opening a second session; a key already bound to a committed attachment is -32602 ("already committed; look it up via file.getAttachmentInfo { workspaceId, idempotencyKey }") — begin stays shape-stable and the client recovers through the lookup; either case with a different payload identity is -32602 ("idempotencyKey already used with a different payload") |
 | file.attachmentUpload.chunk *(v6.16)* | uploadId (req), seq (req; 0-based), data (req; base64) | { uploadId, seq, receivedBytes } — stages one seq-numbered slice; per-seq retry is idempotent (the same seq overwrites the same chunk file; only new bytes count against the declared total) and chunks may arrive in any order. Over-cap chunks and totals beyond `sizeBytes` are -32602; unknown uploadId → -32602 ("no attachment upload in progress"); a chunk on an idle-expired session is -32602 ("expired after Ns of inactivity — begin a new upload", monorepo#2275) |
-| file.attachmentUpload.commit *(v6.16)* | uploadId (req) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt } — byte-shape-identical to a successful file.placeAttachment result: verifies staged bytes = sizeBytes with gap-free seqs from 0 and a matching SHA-256, then places through the same collision-safe placement + attachment-registry path. A failed commit leaves the session alive for retry or abort (and refreshes the idle clock, monorepo#2275); incomplete/gapped/mismatched payloads are -32602. A commit on an idle-expired session is -32602 ("expired … — begin a new upload"), and a commit racing an in-flight chunk (the pipelined chunk+commit race) is -32602 advising to wait for the chunk call to return and retry — the reserved-but-unwritten guise was formerly -32603 Internal; the partially-written guise was already -32602 and gains the retry advice (monorepo#2275) |
+| file.attachmentUpload.commit *(v6.16)* | uploadId (req) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — byte-shape-identical to a successful file.placeAttachment result: verifies staged bytes = sizeBytes with gap-free seqs from 0 and a matching SHA-256, then places through the same collision-safe placement + attachment-registry path. A failed commit leaves the session alive for retry or abort (and refreshes the idle clock, monorepo#2275); incomplete/gapped/mismatched payloads are -32602. A commit on an idle-expired session is -32602 ("expired … — begin a new upload"), and a commit racing an in-flight chunk (the pipelined chunk+commit race) is -32602 advising to wait for the chunk call to return and retry — the reserved-but-unwritten guise was formerly -32603 Internal; the partially-written guise was already -32602 and gains the retry advice (monorepo#2275). A session opened with an `idempotencyKey` (v9.13) binds the key to the committed attachment in the same store transaction as the registry row, so a lost commit reply is recovered through `file.getAttachmentInfo { workspaceId, idempotencyKey }` (the session itself is retired, so a second commit stays the pre-9.13 unknown-uploadId -32602). The commit runs the same keyed replay/conflict check as `file.placeAttachment`: when the key was meanwhile bound on another surface with a matching fingerprint (a same-key single-shot placement that landed first), the commit places nothing, retires the session, and answers that original placement's result plus the presence-detected `replayed: true`; a mismatched fingerprint is the `-32602` conflict and leaves the session alive |
 | file.attachmentUpload.abort *(v6.16)* | uploadId (req) | { uploadId, aborted } — drops the session and its staging directory; idempotent (an unknown id returns `aborted: false` instead of erroring) |
 
 ```json
@@ -70,6 +70,51 @@
 > original `fileName` + `uploadedAt` and instructs the model to continue without the
 > file). The registry id is what the v6.12 attachment-reference file blocks (§5.5) carry
 > in place of inline base64 `data`.
+
+> **Idempotent placement (v9.13; [intent-hq/intent#4691](https://github.com/intent-hq/intent/issues/4691)).**
+> A `file.placeAttachment` or `file.attachmentUpload.commit` whose reply is lost (a
+> dropped connection between the daemon's write and the client's read) used to leave
+> the client unable to tell whether the file was placed, and a blind retry placed a
+> collision-suffixed second copy that no attachment reference would ever point at. The
+> optional client-minted `idempotencyKey` (an opaque 1–128 character token, a UUID
+> recommended; absent ⇒ byte-identical to pre-9.13 behavior) on `file.placeAttachment`
+> and `file.attachmentUpload.begin` closes that gap. **Binding:** a successful keyed
+> placement records `(workspaceId, key) → attachmentId` plus a **payload fingerprint**
+> in the daemon's SQLite `attachment_idempotency_keys` table — written in the **same
+> transaction** as the `attachments` registry row, so a key is never bound to a row that
+> does not exist and a row is never registered under a key that failed to bind. The
+> fingerprint is `(fileName, size, sha256)` for the base64 `data` arm and the chunked
+> arm (the requested `fileName` as sent, pre-sanitization, pre-collision-suffix; the
+> lowercase-hex SHA-256 of the placed bytes — for the chunked arm the verified declared
+> `sha256`) and `(fileName, size)` for the `sourcePath` arm (a possibly huge local file
+> is not re-read for a hash — two same-size files under one key replay). **Replay:** a
+> keyed `file.placeAttachment` whose key is already bound with a matching fingerprint
+> answers the original placement's `{ ok, path, fileName, size, attachmentId,
+> mimeType?, uploadedAt }` rebuilt from the registry row plus the presence-detected
+> `replayed: true` marker, placing nothing and touching no row (the disk is not
+> re-probed — `file.getAttachmentInfo.exists` is the disk signal). A matching-key
+> `file.attachmentUpload.begin` replays a still-live session's `{ uploadId,
+> maxChunkBytes, replayed: true }` (a lost begin reply), and after commit is rejected
+> `-32602` — `idempotencyKey "<key>" already committed; look it up via
+> file.getAttachmentInfo { workspaceId, idempotencyKey }` — so `begin` stays
+> shape-stable and the client recovers through the lookup arm. **Conflict:** a bound key
+> presented with a different fingerprint (different bytes, size, or `fileName`) is
+> `-32602` `idempotencyKey already used with a different payload` on every surface;
+> nothing is placed. **Concurrency:** keyed placements of one `(workspaceId, key)` are
+> serialized by a per-key in-flight guard, so concurrent same-key callers yield exactly
+> one file and one registry row — one caller places, the rest replay; the table's
+> primary key is the last line of defence. **Scope + retention:** bindings are
+> per-workspace (the same key in two workspaces is two independent bindings) and
+> **retained 7 days** from the placement: past that the key reads as unknown (lookup →
+> `-32602 unknown idempotency key`; a keyed retry places afresh and rebinds the key to
+> the new row) and the binding is removed by a lazy sweep that runs at daemon boot and
+> on every keyed placement / `begin` — the attachment row and the file are never swept.
+> Bindings survive a daemon restart. **Lookup:** `file.getAttachmentInfo` takes exactly
+> one of `attachmentId` | `{ workspaceId, idempotencyKey }` (both, neither, or a key
+> without a workspace → `-32602`); the key arm serves the same row shape as the id arm.
+> A non-string `idempotencyKey` is `-32602` (`idempotencyKey must be a string`) rather
+> than silently read as absent — dropping a key would defeat the guarantee; an explicit
+> `null` is the unkeyed path.
 
 > **MCP `ws.file.getAttachment(attachmentId, destDir?)` (v6.12).** MCP-only (no wire
 > method, per the §6.8 principle); requires an agent caller context. `attachmentId`
