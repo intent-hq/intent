@@ -55,8 +55,11 @@ character merge (Myers hunks per Unicode scalar value, so a merge never splits a
 code point). Non-overlapping hunks from either side apply; identical edits apply
 once; hunks from both sides that overlap the same base span form one conflicting
 cluster rendered as the *current* variant immediately followed by the *incoming*
-variant (`WaWb`) — nothing is dropped and no markers are inserted. When no
-snapshot survives for the stale rev (pruned past the 50-version cap or predating
+variant (`WaWb`) — nothing is dropped and no markers are inserted. The one
+exception is a conflicting span inside a checkbox marker: it collapses to the
+*current* stored side's marker (never a doubled marker such as `[/x]`), and on
+lines linked to a task note materialization then re-projects the task's status.
+When no snapshot survives for the stale rev (pruned past the 50-version cap or predating
 the note's version history) the write degrades to honest last-writer-wins:
 `content` lands verbatim. An absent `expectedVersion`, or one equal to the current
 `rev`, skips the merge and replaces the note as-is. An `expectedVersion` **above**
