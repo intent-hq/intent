@@ -24,7 +24,7 @@ export const USAGE = `usage: node scripts/uds-rpc.mjs <method> [json-params] [--
   [json-params]   optional params as a JSON object or array
   --subscribe     keep the connection open, printing every frame, until
                   --max-frames frames printed or --timeout elapses (exit 0)
-  --max-frames N  stop after printing N frames (with --subscribe)
+  --max-frames N  stop after printing N frames (requires --subscribe)
   --timeout MS    overall timeout in ms (default 30000); an error in default
                   mode, a normal exit with --subscribe
 
@@ -36,7 +36,10 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eat = (name) => {
-      if (arg === `--${name}`) return argv[++i];
+      if (arg === `--${name}`) {
+        if (i + 1 >= argv.length) throw new Error(`missing value for --${name}`);
+        return argv[++i];
+      }
       if (arg.startsWith(`--${name}=`)) return arg.slice(name.length + 3);
       return undefined;
     };
@@ -82,6 +85,9 @@ export function parseArgs(argv) {
   }
   if (out.maxFrames !== undefined && (!Number.isInteger(out.maxFrames) || out.maxFrames < 1)) {
     throw new Error(`invalid --max-frames: ${out.maxFrames}`);
+  }
+  if (out.maxFrames !== undefined && !out.subscribe) {
+    throw new Error('--max-frames requires --subscribe');
   }
   if (!Number.isInteger(out.timeout) || out.timeout < 1) {
     throw new Error(`invalid --timeout: ${out.timeout}`);
@@ -182,7 +188,11 @@ function main() {
     console.error('[uds-rpc] start intentd or point INTENTD_SOCKET/--socket at its socket.');
     process.exit(1);
   }
-  runProbe({ ...args, socketPath }).then((code) => process.exit(code));
+  // Set exitCode instead of calling process.exit() so stdout drains fully
+  // before the process ends (large frames can otherwise be truncated on pipes).
+  runProbe({ ...args, socketPath }).then((code) => {
+    process.exitCode = code;
+  });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

@@ -64,11 +64,11 @@ test('parseArgs: JSON params object and array are accepted', () => {
 });
 
 test('parseArgs: flags accept both "--flag v" and "--flag=v"', () => {
-  const spaced = parseArgs(['m', '--max-frames', '3', '--timeout', '500', '--socket', '/tmp/x.sock']);
+  const spaced = parseArgs(['m', '--subscribe', '--max-frames', '3', '--timeout', '500', '--socket', '/tmp/x.sock']);
   assert.equal(spaced.maxFrames, 3);
   assert.equal(spaced.timeout, 500);
   assert.equal(spaced.socketPath, '/tmp/x.sock');
-  const eq = parseArgs(['m', '--max-frames=3', '--timeout=500', '--socket=/tmp/x.sock']);
+  const eq = parseArgs(['m', '--subscribe', '--max-frames=3', '--timeout=500', '--socket=/tmp/x.sock']);
   assert.deepEqual(eq, spaced);
 });
 
@@ -84,8 +84,18 @@ test('parseArgs: bad inputs are rejected', () => {
   assert.throws(() => parseArgs(['m', '"str"']), /must be a JSON object or array/);
   assert.throws(() => parseArgs(['m', '{}', 'extra']), /unexpected argument/);
   assert.throws(() => parseArgs(['m', '--bogus']), /unknown argument/);
-  assert.throws(() => parseArgs(['m', '--max-frames', '0']), /invalid --max-frames/);
+  assert.throws(() => parseArgs(['m', '--subscribe', '--max-frames', '0']), /invalid --max-frames/);
   assert.throws(() => parseArgs(['m', '--timeout', 'abc']), /invalid --timeout/);
+});
+
+test('parseArgs: a flag without a value reports the missing value, not unknown argument', () => {
+  assert.throws(() => parseArgs(['m', '--max-frames']), /missing value for --max-frames/);
+  assert.throws(() => parseArgs(['m', '--timeout']), /missing value for --timeout/);
+  assert.throws(() => parseArgs(['m', '--socket']), /missing value for --socket/);
+});
+
+test('parseArgs: --max-frames without --subscribe is rejected', () => {
+  assert.throws(() => parseArgs(['m', '--max-frames', '3']), /--max-frames requires --subscribe/);
 });
 
 // --- runProbe against a fake UDS server ---
@@ -113,6 +123,44 @@ test('one-shot round-trip: correct framed request, prints response, exit 0', asy
   assert.equal(code, 0);
   assert.equal(received, '{"jsonrpc":"2.0","id":1,"method":"workspace.list","params":{"a":1}}\n');
   assert.deepEqual(JSON.parse(stdout.text), { jsonrpc: '2.0', id: 1, result: { ok: true } });
+});
+
+test('response split across multiple socket writes is reassembled', async (t) => {
+  const frame = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true, pad: 'x'.repeat(64) } }) + '\n';
+  let sent = false;
+  const uds = await startUds((c) => {
+    c.on('data', () => {
+      if (sent) return;
+      sent = true;
+      c.write(frame.slice(0, 10));
+      setTimeout(() => c.write(frame.slice(10, 25)), 10);
+      setTimeout(() => c.write(frame.slice(25)), 20);
+    });
+  });
+  t.after(() => uds.close());
+  const stdout = sink();
+  const code = await runProbe({ method: 'x', socketPath: uds.socketPath, stdout, stderr: sink() });
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(stdout.text), JSON.parse(frame));
+});
+
+test('default mode: non-matching frames are printed but only the matching id ends the run', async (t) => {
+  const uds = await startUds((c) => {
+    c.on('data', () => {
+      c.write(JSON.stringify({ jsonrpc: '2.0', method: 'event.note', params: { n: 1 } }) + '\n');
+      c.write(JSON.stringify({ jsonrpc: '2.0', id: 99, result: 'other' }) + '\n');
+      c.write(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { ok: true } }) + '\n');
+    });
+  });
+  t.after(() => uds.close());
+  const stdout = sink();
+  const code = await runProbe({ method: 'x', socketPath: uds.socketPath, stdout, stderr: sink() });
+  assert.equal(code, 0);
+  const lines = stdout.text.trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0].method, 'event.note');
+  assert.equal(lines[1].id, 99);
+  assert.deepEqual(lines[2], { jsonrpc: '2.0', id: 1, result: { ok: true } });
 });
 
 test('JSON-RPC error response yields nonzero exit', async (t) => {
