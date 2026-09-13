@@ -238,7 +238,12 @@
 >   (`"mine"` / `"unclaimed"` / `"all"`, default `all`; any other value ⇒ `-32602`),
 >   each entry in the FE's field names (`tabId`, `workspaceId`, `url`, `requestedUrl?`,
 >   `title?`, `ownerAgentId` — `null` when unowned —, `ownerAgentName?`,
->   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`)
+>   `mode: "native" | "emulated"` with `width` / `height` when emulated, `visibility`,
+>   `displayed?` — the host-reported layout fact as the host last reported it, omitted
+>   whenever the daemon holds **no current report** for it (not yet reported, cleared
+>   by a later report that omitted it, or lost to a daemon restart) — *unknown*,
+>   never a default `false`; within v9.12,
+>   [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835))
 >   **plus** `hostClientId`, `hostName?` (the host's hello `name` while it is live) and
 >   `hostConnected` (whether the host currently has a live hello'd connection). A
 >   `listTabs` batch must contain **only** `listTabs` actions (`-32602` otherwise); its
@@ -303,12 +308,19 @@
 >   info, **sizing info**: `mode: 'native' | 'emulated'` and, when emulated, the
 >   current `width` / `height` — so an agent can see a tab's current size before
 >   deciding to claim or resize — and **`visibility: 'visible' | 'hidden'`** plus
->   **`displayed: boolean`** (unconditional on every listed tab) — a **layout
->   contract**, not a paint guarantee: true when the tab is not hidden AND is the
->   active tab of the panel that holds it in the workspace's saved layout; hidden
->   tabs are always `displayed: false`. A `displayed: true` tab paints only while
->   the workspace is in view and its panel is not hidden (e.g. by zoom)
->   (monorepo#3045, see the hidden-by-default block below).
+>   **`displayed?: boolean`** — a **layout contract**, not a paint guarantee: true
+>   when the tab is not hidden AND is the active tab of the panel that holds it in
+>   the workspace's saved layout; hidden tabs are `displayed: false` whenever the
+>   field is present. The field is **present only while the daemon holds a current
+>   host report** for it (the daemon answers `listTabs` from the registry, §5.45, and
+>   keeps `displayed` process-local): it is absent before the host first reports it,
+>   after a later upsert / sync that omitted it cleared it, and after a daemon
+>   restart until the host's connect-time `browser.syncTabs` re-reports it — absent
+>   means *unknown*, never `false`, and says nothing about whether the field was
+>   ever reported; the caller re-reads with `listTabs`
+>   ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
+>   What a `displayed: true` tab can actually paint is stated once in the
+>   **capture ops and workspace visibility** contract below (monorepo#3045).
 > - **Structured ownership errors** — `not-owner` (an op on a tab the caller does not
 >   own — another agent's tab, or an unowned tab the caller has not claimed) and
 >   `already-claimed` (a claim lost to an earlier claim) surface as **action-result
@@ -372,11 +384,11 @@
 >   tab): with `focus: false` it is a no-op success; with `focus: true` it still
 >   focuses its panel. `visibility: 'visible'` alone does not mean displayed: a
 >   visible tab that is not its panel's active tab is in the layout but sits behind
->   another tab and does not paint (`visibility: 'visible', displayed: false`), and
+>   another tab and is not painted on screen (`visibility: 'visible', displayed:
+>   false`; a capture op may still mount it on demand, see below), and
 >   `showTab` on it (default `focus: false`) brings it to the front without moving
->   focus. `displayed: true` is a layout state, not a paint guarantee — the tab
->   paints only while the workspace is in view and its panel is not hidden (e.g.
->   by zoom); see the workspace-inactive semantics below. `showTab` succeeds only
+>   focus. `displayed: true` is a layout state, not a paint guarantee — see the
+>   capture-ops contract below. `showTab` succeeds only
 >   once a fresh tab list confirms the tab as not hidden **and** its panel's active
 >   tab; otherwise it fails as an action-result error.
 >   An unknown `tabId` fails as an **action-result error** (the per-action
@@ -385,37 +397,82 @@
 > - **`focusTab` is unchanged for visible tabs** (activate + focus the panel). On a
 >   **hidden** tab it fails with an action-result error directing the caller to
 >   `showTab` — there is no focusTab overload that reveals a hidden tab.
-> - **`screenshot` on a non-painting visible tab** — a visible tab paints only while
->   it is on screen (its panel's active tab, workspace in view, panel not hidden by
->   zoom); hidden tabs always paint offscreen via emulation. A capture of a visible
->   tab whose surface has not painted (`displayed: false`, or `displayed: true` in a
->   workspace not in view) fails as an **action-result error** (the per-action
->   `{ action, success: false, error }` envelope, never a JSON-RPC-level error)
->   whose human-readable `error` names the not-painting cause and directs the
->   caller to `showTab` (activate without moving focus) or `focusTab` (activate and
->   focus) before capturing again. The error text is FE-served prose, not a
->   structured code.
 >
-> **Workspace-inactive semantics (monorepo#3045).** Agent tab operations do **not**
-> require the tab's workspace to be currently open/visible in the FE: every action
-> (`openTab` hidden or visible, `closeTab`, `showTab`, `evaluate`, `screenshot`, …)
-> works regardless of workspace visibility — webviews spin up in the background as
-> needed. Visibility/activation effects apply to the **persisted layout state**:
-> `showTab` activates the tab in a visible panel of the workspace's layout (and with
-> `focus: true`, also focuses it) so the layout is correct when the user next opens
-> the workspace, and `displayed` reports that persisted layout state — it can be
-> `true` for a tab in a workspace that is not currently in view (the tab then
-> paints once the workspace is shown). When the
-> workspace is **not** currently visible in the UI, no actual UI focus/activation
-> side effect is attempted: `showTab { focus: true }`, `focusTab`, and
-> `openTab { visible: true }` **succeed**, apply their state effects, **skip the UI
-> focus attempt**, and the action's `result` payload carries an **additive
-> human-readable `warning` string** stating that the workspace is not visible so no
-> UI focus was attempted — the same additive-`warning` channel as the bare-loopback
-> rewrite warning above (monorepo#2323). The per-action
-> `{ action, success, result?, error? }` envelope is unchanged: the warning never
-> rides `error` and never fails the action, and the field is absent when the
-> workspace is visible.
+> **Capture ops and workspace visibility — one contract (monorepo#3045,
+> [intent-hq/intent#4103](https://github.com/intent-hq/intent/issues/4103),
+> [intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).**
+> Agent tab operations do **not** require the tab's workspace to be currently
+> open/visible in the FE. Layout-only actions (`openTab` hidden or visible,
+> `closeTab`, `showTab`, `focusTab`, `claimTab`, `resizeTab`, …) apply their effects
+> to the **persisted layout state** so the layout is correct when the user next
+> opens the workspace, and `displayed` reports that persisted state — it can be
+> `true` for a tab in a workspace that is not currently in view. When the workspace
+> is **not** visible in the UI, no actual UI focus/activation side effect is
+> attempted: `showTab { focus: true }`, `focusTab`, and `openTab { visible: true }`
+> **succeed**, skip the UI focus attempt, and the action's `result` carries an
+> **additive human-readable `warning` string** saying the workspace is not visible
+> so no UI focus was attempted — the same additive-`warning` channel as the
+> bare-loopback rewrite warning above (monorepo#2323). The warning never rides
+> `error`, never fails the action, and is absent when the workspace is visible.
+>
+> **Capture ops** (`screenshot`, `getAccessibilityTree`, `evaluate`) and `navigate`
+> (which runs through `evaluate`) need a **mounted webview**. A tab whose webview is
+> not mounted — typically a **visible** tab whose workspace is not in view or that
+> sits behind another tab in its panel, but also a tab opened while its workspace
+> was not in view, whatever its `visibility` — is **mounted on demand** by the op
+> itself: the FE hydrates the workspace layout and waits for the offscreen host to
+> register the tab. For the three capture ops the whole pipeline — mount, a wait
+> for the guest to finish loading, then the capture — is bounded by **one request
+> deadline** (the reverse-RPC timeout minus a transport margin; each stage gets the
+> lesser of its own cap and the budget remaining), so a capture op is designed not
+> to outlive the daemon's reverse request. `navigate` runs only the mount step: it
+> passes no deadline (its mount wait is bounded by that stage's own cap alone), does
+> not wait for the guest to settle, and performs no origin check. `snapshot` does
+> not go through the mount path at all. A mount on demand against a not-in-view
+> workspace succeeds with the same additive `warning` string as above; a hidden tab
+> in a displayed workspace mounts with no warning.
+>
+> When a mount, settle, or paint cannot happen, the op fails as an **action-result
+> error** (the per-action `{ action, success: false, error }` envelope) whose
+> human-readable `error` names the cause and remedy, and which carries an
+> **additive structured `errorCode`** when the cause is one of:
+>
+> - `workspace-not-visible` — the tab could not be mounted on demand while the
+>   workspace is not **displayed** in any window: either no window hosts the
+>   workspace at all (the hydration nudge reaches no renderer, so the op fails fast
+>   instead of waiting), or a background window does host it but the offscreen
+>   registration wait ran out at its own cap. Retry shortly or `listTabs` to confirm
+>   the tab still exists; if the workspace is open nowhere, open it in a window and
+>   retry.
+> - `deadline-exhausted` — (capture ops only) the request deadline ran out at a
+>   named stage (before or during the mount, the load settle, or the capture
+>   itself); retry the capture.
+> - `still-loading` — (capture ops only) the guest was still loading after the
+>   bounded settle wait; retry, or `snapshot` with `waitFor: { networkIdle }` first.
+> - `navigated-away` — (capture ops only, and **only after a mount on demand**) the
+>   freshly mounted guest shows a different **origin** than the tab list recorded
+>   for the tab; same-origin URL drift is not reported, and origin drift on an
+>   already-mounted guest is not checked. The remedy is `navigate` back, or
+>   `listTabs` to re-check the tab.
+> - `not-painting` — (capture ops only) the webview is mounted but its surface has
+>   not painted, detected either way: `capturePage` did not return within the
+>   capture stage's **own** cap (when that cap, not the request deadline, is the
+>   binding bound), **or** it returned an empty / empty-encoded image, which is
+>   reported as soon as it is observed (e.g. a `displayed: false` tab behind a
+>   sibling, or a `displayed: true` tab whose panel is hidden by zoom); the remedy
+>   is `showTab` (activate without moving focus) or `focusTab` (activate and
+>   focus), then capture again.
+>
+> Other failures (unknown tab, a CDP error outside these stages) carry no
+> `errorCode`; ownership failures keep their own `not-owner` / `already-claimed`
+> codes. One exception to the action-result rule: should a batch still not have
+> settled shortly **after** the request deadline (a stage that takes no deadline,
+> such as `navigate`'s mount or its evaluate), the FE's executor backstop answers
+> with the **top-level** failure envelope (`success: false`, `results: []`, `error`
+> naming the "action execution" stage, no per-action `errorCode`) before the daemon
+> gives up — which the daemon maps to `-32603` as above. `displayed: true` never
+> guarantees a paint by itself; it says the tab is the active tab of its panel in
+> the saved layout, and the op supplies the mount when the workspace is not in view.
 >
 > **Viewport sizing invariant.** Every tab has a persisted viewport mode. **Fit panel**
 > is the default: a visible tab follows the panel's webview area with no fixed frame or
@@ -537,7 +594,7 @@ connection's `client.hello` identity, never by a wire parameter.
 | Method | Params | Result |
 | --- | --- | --- |
 | browser.listTabs *(v9.10)* | workspaceId (req) | { tabs: (BrowserTab & { hostConnected: boolean, hostName? })[] } — every **open** registry tab of the workspace, oldest first (`createdAt`, then `tabId`), any client may call it. `hostConnected` is whether the tab's host has a live hello'd connection right now; `hostName` is that host's hello `name` (omitted while the host is offline or nameless). Tombstoned rows (see `browser.closeTab`) are excluded. -32602 on a missing/empty `workspaceId`. |
-| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object; `tabId` missing, non-string or empty; `url` missing or non-string — an **empty** `url` string is accepted; a wrong-typed optional field; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
+| browser.upsertTab *(v9.10)* | workspaceId (req), tab (req): BrowserTabInput | { tab: BrowserTab } — **host-only** report of an opened / navigated / re-titled / re-owned / shown-hidden / displayed-or-not / resized tab. The caller's `client.hello` `clientId` is the host (-32602 `browser.upsertTab: client.hello is required before hosting tabs` on an un-hello'd connection); the envelope `workspaceId` is required and is **injected into** `tab` before parsing (so `tab.workspaceId` may be omitted and is overridden when present). Unknown `tabId` ⇒ new row (`browser:tab-opened`); known row of this host ⇒ the host-reported fields are replaced and, when anything differed, `browser:tab-updated { changes }` is emitted (an identical report writes nothing and emits nothing). -32602 when the tab is hosted by **another** client (`browser tab <id> is hosted by client <clientId>`), when it is **tombstoned** (`… was closed by the daemon; drop it (browser.syncTabs reports it in drop)`), when the report names another `workspaceId` for a known tab (`tabs do not move between workspaces`), or on a malformed `tab` (non-object; `tabId` missing, non-string or empty; `url` missing or non-string — an **empty** `url` string is accepted; a wrong-typed optional field; the remaining `BrowserTabInput` fields are optional and `visibility` defaults). |
 | browser.removeTab *(v9.10)* | tabId (req) | { ok: true } — **host-only** report that the tab is gone. Deletes the row (an open row emits `browser:tab-closed`; a tombstone is purged silently — the host has acknowledged the daemon-side close). Unknown ids are an idempotent no-op. -32602 on an un-hello'd connection or a tab hosted by another client. |
 | browser.syncTabs *(v9.10)* | tabs (req): BrowserTabInput[] | { drop: tabId[] } — **host-only** full-snapshot reconciliation of the host's tab set **across all workspaces** (each entry carries its own `workspaceId`; duplicate ids after the first are ignored), one transaction — nothing is written when any entry is rejected. Per entry: unknown ⇒ created (`browser:tab-opened`); open and hosted by this host ⇒ refreshed (`browser:tab-updated { changes }` when anything differed; another `workspaceId` for a known tab rejects the **whole** snapshot with -32602); tombstoned or hosted **elsewhere** ⇒ untouched and listed in `drop` (a tab has exactly one host; the tombstone is retained, so a repeated stale snapshot keeps answering `drop` instead of reviving the tab). Every row of this host **absent** from the snapshot is deleted — open rows emit `browser:tab-closed`, tombstones are purged silently. Hosts send it on connect / reconnect and after a `client:disconnected`-worthy gap. -32602 on an un-hello'd connection, a non-array `tabs`, or a malformed entry (non-object; `tabId` / `workspaceId` missing, non-string or empty — here `workspaceId` **is** required per entry, there being no envelope value to inject; `url` missing or non-string, an empty `url` being accepted). |
 | browser.navigateTab *(v9.11)* | tabId (req), url (req) | the routed `navigate` action's `{ action, success, result?, error? }` envelope — any client. The daemon looks the tab up (-32602 `browser.navigateTab: tab not found: <tabId>` for an unknown or tombstoned id) and dispatches a reverse `browser.exec { workspaceId, tabId, actions: [{ action: "navigate", tabId, url }] }` to the tab's **routing target**: a **claimed** tab (`ownerAgentId` set) goes to its workspace's driving client (§5.9 REV-2 rules), an **unclaimed** one to its physical host. The host then reports the resulting navigation via `browser.upsertTab` and every client follows the canonical row. -32603 `browser.navigateTab: browser client "<name>" (<clientId>) for this workspace is not connected` when the target is offline; `browser.navigateTab: no client connected` when no eligible client exists at all. |
@@ -559,8 +616,12 @@ interface BrowserTabInput {            // host-reported fields
   visibility?: "visible" | "hidden";   // default "visible" when omitted; null is REJECTED (-32602);
                                        // §5.9 hidden-by-default block
   emulatedSize?: { width: number, height: number } | null;   // omitted / null = native viewport
+  displayed?: boolean | null;          // §5.9 layout fact: not hidden AND the active tab of its
+                                       // panel in the workspace's saved layout; omitted / null =
+                                       // no value, clears a previously reported one
+                                       // (within v9.12, intent-hq/intent#4835)
 }
-// Input nullability: the five nullable report fields above accept an explicit null
+// Input nullability: the six nullable report fields above accept an explicit null
 // (≡ omitted). The canonical BrowserTab row (below, list results, event `tab`) never
 // carries null — a cleared field is omitted; only the browser:tab-updated `changes`
 // diff uses explicit null to signal a clear.
@@ -575,6 +636,9 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
   ownerAgentName?: string;
   visibility: "visible" | "hidden";    // always present on read
   emulatedSize?: { width: number, height: number };
+  displayed?: boolean;                 // as the host last reported it; omitted = no current report
+                                       // (unknown — NOT a default false; detect by presence, and do
+                                       // not infer report history from absence)
   createdAt: string;                   // ISO-8601
   updatedAt: string;
 }
@@ -584,7 +648,23 @@ interface BrowserTab {                 // canonical row — non-null; cleared fi
 with `hostConnected` / `hostName?`, the `browser.listTabs` entry. The agent-facing
 `listTabs` action (§5.9) projects the same rows into the FE's field names instead
 (`mode` + `width` / `height` in place of `emulatedSize`, `ownerAgentId: null` when
-unowned) plus `hostClientId` / `hostName?` / `hostConnected`.
+unowned) plus `hostClientId` / `hostName?` / `hostConnected`; `displayed?` rides both
+projections unchanged.
+
+**`displayed` is process-local, not persisted** ([intent-hq/intent#4835](https://github.com/intent-hq/intent/issues/4835)).
+Every other host-reported field is a `browser_tab` column; `displayed` is a layout fact of
+the live host process, so the daemon keeps it in a process-local overlay keyed by `tabId`
+rather than a column — no schema migration. It is diffed, applied and read back exactly
+like the other fields (an identical report is still a no-op; a later upsert / sync that
+omits or nulls it **clears** it within the same daemon lifetime, `changes: { displayed:
+null }`, and the row reads with `displayed` absent again), and it does not survive a daemon
+restart: after a restart every row reads with `displayed` **absent** until its host
+re-reports it — which the host's connect-time `browser.syncTabs` does for its whole tab
+set, so the fact is truthful again as soon as the host reconnects. Absence therefore always
+means "no current report" (unknown), whatever the cause; clients see that rather than a
+value the daemon can no longer vouch for, and must not read report history into it. Hosts MUST include
+`displayed` on every upsert / sync entry they can compute it for and re-report whenever
+the layout fact changes (panel active tab, visibility, workspace layout).
 
 **Host vs. driving client.** A tab's **host** is the physical client rendering it — set
 at creation from the reporting connection and only ever changed by the daemon: an agent's
@@ -592,6 +672,10 @@ successful `claimTab` re-homes the row to the workspace's **driving client** (§
 REV-2 rule order; `browser:tab-updated { changes: { hostClientId, ownerAgentId } }`), and
 `workspace.setBrowserClient` (§5.1) moves **every claimed tab** of the workspace to the
 new pin (`changes: { hostClientId }` per moved tab; clearing the pin moves nothing).
+Either re-home also **clears the moved tab's `displayed`** (the previous host's layout
+fact is no longer vouched for): the same `browser:tab-updated` carries `changes: {
+displayed: null }` when it was set, and the row reads with `displayed` absent until the
+new host reports it via `browser.upsertTab` / `browser.syncTabs`.
 Unclaimed (user) tabs never move. A host that receives a `browser:tab-updated` naming
 another `hostClientId` for one of its tabs stops treating that tab as its own; the new
 host materialises it from the canonical row.
@@ -599,8 +683,8 @@ host materialises it from the canonical row.
 **Events (§6.5).** `browser:tab-opened` / `browser:tab-closed` carry `data: { tab }`;
 `browser:tab-updated` carries `data: { tab, changes }` where `changes` is the
 **field-wise diff** — the host-reported fields that differed (`url`, `requestedUrl`,
-`title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`; a cleared
-optional field appears as an explicit `null`) or, for daemon-side re-homing,
+`title`, `ownerAgentId`, `ownerAgentName`, `visibility`, `emulatedSize`, `displayed`; a
+cleared optional field appears as an explicit `null`) or, for daemon-side re-homing,
 `hostClientId` / `ownerAgentId`. All three are **workspace-scoped** (the tab's
 `workspaceId`) with actor `{ type: "user", id: <hostClientId> }` — the reporting host —
 and are tailed by an ordinary `events.subscribe` on the workspace. A report that changes
@@ -612,7 +696,7 @@ nothing emits nothing.
   "params":{ "workspaceId":"ws-abc","tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
     "url":"http://127.0.0.1:5173/","requestedUrl":"http://daemon.localhost:5173/",
     "title":"Dev server","ownerAgentId":"agent-1","ownerAgentName":"Implementor",
-    "visibility":"hidden","emulatedSize":{ "width":1280,"height":800 } } } }
+    "visibility":"hidden","emulatedSize":{ "width":1280,"height":800 },"displayed":false } } }
 // ← { "jsonrpc":"2.0","id":80,"result":{ "tab":{ "tabId":"tab-3","workspaceId":"ws-abc",
 //      "hostClientId":"cli-7f3a","url":"http://127.0.0.1:5173/", ..., "createdAt":"…","updatedAt":"…" } } }
 // ← every workspace subscriber: browser:tab-opened { tab }
