@@ -95,7 +95,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check shipped-in
+.PHONY: ports status docs-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -673,6 +673,28 @@ uds-to-unauthed-wss-bridge: ## Expose the installed intentd's UDS as an UNAUTHEN
 		echo "[uds-to-unauthed-wss-bridge] Bridging installed daemon socket: $$socket"; \
 		echo "[uds-to-unauthed-wss-bridge] WARNING: this exposes the FULL UNAUTHENTICATED daemon API as plain ws:// on 127.0.0.1:$(BRIDGE_PORT) — no TLS, no auth. Loopback-only by design; any process on this machine can drive the daemon while the bridge runs."; \
 		INTENTD_SOCKET="$$socket" BRIDGE_PORT=$(BRIDGE_PORT) node scripts/uds-ws-bridge.mjs
+
+# One-shot JSON-RPC probe of a running intentd via scripts/uds-rpc.mjs
+# (zero-dependency, Node >= 20). Prints each received frame as one JSON line;
+# default mode exits when the response matching the request id arrives
+# (nonzero if it is a JSON-RPC error), SUBSCRIBE=1 keeps the connection open
+# until MAX_FRAMES frames printed or TIMEOUT_MS elapses. Socket resolution is
+# left to the script: an explicit INTENTD_SOCKET always takes precedence, then
+# an INTENTD_DATA_DIR-derived path, then the platform default. PARAMS is read
+# from the recipe's environment (make exports command-line variables) so its
+# JSON quoting survives expansion.
+rpc: ## Send one JSON-RPC request to the running intentd: make rpc METHOD=workspace.list [PARAMS='{...}'] [SUBSCRIBE=1] [MAX_FRAMES=N] [TIMEOUT_MS=MS]
+	@if [ -z "$(METHOD)" ]; then \
+		echo "[rpc] ERROR: METHOD is required."; \
+		echo "[rpc] usage: make rpc METHOD=<jsonrpc-method> [PARAMS='{...}'] [SUBSCRIBE=1] [MAX_FRAMES=N] [TIMEOUT_MS=MS]"; \
+		exit 1; \
+	fi; \
+	set -- "$(METHOD)"; \
+	if [ -n "$$PARAMS" ]; then set -- "$$@" "$$PARAMS"; fi; \
+	if [ -n "$(filter 1 yes true,$(SUBSCRIBE))" ]; then set -- "$$@" --subscribe; fi; \
+	if [ -n "$(MAX_FRAMES)" ]; then set -- "$$@" --max-frames "$(MAX_FRAMES)"; fi; \
+	if [ -n "$(TIMEOUT_MS)" ]; then set -- "$$@" --timeout "$(TIMEOUT_MS)"; fi; \
+	node scripts/uds-rpc.mjs "$$@"
 
 dev-web-live: ## DEPRECATED alias for dev-sandbox-app
 	@echo "[dev-web-live] DEPRECATED: use 'make dev-sandbox-app'."
