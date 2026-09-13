@@ -21,10 +21,14 @@ GH_INSTALL_URL="https://github.com/cli/cli#installation"
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 
-# Minimum Node: the frontend install builds node-pty (and cpu-features) with
-# node-gyp 13, whose engines.node is "^22.22.2 || ^24.15.0 || >=26.0.0"; its undici
-# dependency throws on Node 20 (intent-hq/intent#4669). fe CI runs Node 24.
-NODE_REQUIREMENT="22.22.2+, 24.15.0+ (recommended) or 26+"
+# Supported Node: read from packages/cloudlands-fe/package.json engines.node by
+# load_versions, so the frontend owns the range (its install builds node-pty
+# with node-gyp 13, whose undici dependency throws on Node 20,
+# intent-hq/intent#4669). The default serves a checkout without the submodule
+# or the field. fe CI runs Node 24.
+NODE_RANGE_DEFAULT="^22.22.2 || ^24.15.0 || >=26"
+NODE_FLOORS=""
+NODE_REQUIREMENT=""
 NODE_INSTALL_MAJOR=24
 
 # Corepack/pnpm launcher probes run under this bound (seconds) so a launcher that
@@ -85,13 +89,44 @@ load_versions() {
   if [[ -f "$TOOLCHAIN_FILE" ]]; then
     TOOLCHAIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOOLCHAIN_FILE")
   fi
+  local node_range=""
   if [[ -f "$PACKAGE_FILE" ]]; then
     PACKAGE_MANAGER=$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PACKAGE_FILE" | head -n 1)
+    node_range=$(sed -n '/"engines"[[:space:]]*:/,/}/{s/.*"node"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p;}' "$PACKAGE_FILE" | head -n 1)
   fi
   case "$PACKAGE_MANAGER" in
     pnpm@*) PNPM_VERSION=${PACKAGE_MANAGER#pnpm@} ;;
     *) PNPM_VERSION="" ;;
   esac
+  set_node_range "$node_range" || set_node_range "$NODE_RANGE_DEFAULT"
+}
+
+# node_range_floors <range>: prints one "<op> <version>" line per ||-separated
+# clause of an engines.node range, or fails when the range is empty or a clause
+# is neither ^X.Y.Z (same major, at least that release) nor >=X[.Y[.Z]].
+node_range_floors() {
+  local clause count=0 re='^(\^|>=)([0-9]+(\.[0-9]+){0,2})$'
+  local -a clauses
+  IFS='|' read -r -a clauses <<<"${1//[[:space:]]/}"
+  for clause in "${clauses[@]}"; do
+    [[ -n "$clause" ]] || continue
+    [[ "$clause" =~ $re ]] || return 1
+    printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    count=$((count + 1))
+  done
+  [[ "$count" -gt 0 ]]
+}
+
+# set_node_range <range>: adopts a valid range, its parsed clauses as
+# NODE_FLOORS and its normalized "a || b" form as NODE_REQUIREMENT.
+set_node_range() {
+  local floors op floor
+  floors=$(node_range_floors "$1") || return 1
+  NODE_FLOORS=$floors
+  NODE_REQUIREMENT=""
+  while read -r op floor; do
+    NODE_REQUIREMENT="${NODE_REQUIREMENT:+$NODE_REQUIREMENT || }$op$floor"
+  done <<<"$NODE_FLOORS"
 }
 
 required_submodules_ready() {
@@ -121,11 +156,15 @@ node_version() {
 }
 
 node_version_supported() {
-  case "${1%%.*}" in
-    22) version_ge "$1" "22.22.2" ;;
-    24) version_ge "$1" "24.15.0" ;;
-    *) [[ "${1%%.*}" -ge 26 ]] ;;
-  esac
+  local op floor
+  while read -r op floor; do
+    [[ -n "$floor" ]] || continue
+    if [[ "$op" == '^' && "${1%%.*}" != "${floor%%.*}" ]]; then
+      continue
+    fi
+    version_ge "$1" "$floor" && return 0
+  done <<<"$NODE_FLOORS"
+  return 1
 }
 
 node_ready() {

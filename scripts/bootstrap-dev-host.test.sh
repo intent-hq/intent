@@ -32,7 +32,26 @@ done
 
 : >"$intentd_dir/.git"
 : >"$fe_dir/.git"
-printf '{"packageManager": "pnpm@10.30.3"}\n' >"$fe_dir/package.json"
+
+# write_package_json [engines.node]: a prettier-shaped package.json with the
+# pinned packageManager and, when given, an engines block declaring the range.
+write_package_json() {
+  {
+    echo '{'
+    echo '  "name": "cloudlands-fe",'
+    echo '  "packageManager": "pnpm@10.30.3",'
+    if [[ $# -gt 0 ]]; then
+      echo '  "engines": {'
+      printf '    "node": "%s"\n' "$1"
+      echo '  },'
+    fi
+    echo '  "devDependencies": {'
+    echo '    "@types/node": "^24.10.0"'
+    echo '  }'
+    echo '}'
+  } >"$fe_dir/package.json"
+}
+write_package_json
 
 write_launcher() {
   printf '#!/usr/bin/env bash\n%s\n' "$2" >"$bin_dir/$1"
@@ -206,21 +225,58 @@ run_doctor
 expect_line "[missing]  frontend dependencies: run corepack pnpm install --frozen-lockfile in packages/cloudlands-fe"
 mv "$temp_dir/node_modules.bak" "$fe_dir/node_modules"
 
-# Node floor follows node-gyp 13's engines: ^22.22.2 || ^24.15.0 || >=26.0.0.
-for version in 20.20.2 22.20.0 24.14.9 25.1.0; do
+# The Node range comes from the frontend's engines.node; each ^X.Y.Z clause
+# keeps its major and >=X is open-ended.
+default_range="^22.22.2 || ^24.15.0 || >=26"
+write_package_json "$default_range"
+for version in 22.22.1 23.0.0 24.14.9 25.0.0; do
   set_node_version "$version"
   run_doctor
-  expect_line "[missing]  Node: v$version is unsupported; the frontend native build (node-gyp 13) needs Node 22.22.2+, 24.15.0+ (recommended) or 26+"
+  expect_line "[missing]  Node: v$version is unsupported; the frontend native build (node-gyp 13) needs Node $default_range"
 done
 for version in 22.22.2 24.15.0 26.0.0; do
   set_node_version "$version"
   run_doctor
-  expect_line "[ok]       Node: v$version (supported: 22.22.2+, 24.15.0+ (recommended) or 26+)"
+  expect_line "[ok]       Node: v$version (supported: $default_range)"
 done
+
+# A different declared range moves the floors and the printed requirement.
+write_package_json "^20.19.0 || >=23.1"
+set_node_version 20.19.0
+run_doctor
+expect_line "[ok]       Node: v20.19.0 (supported: ^20.19.0 || >=23.1)"
+set_node_version 22.22.2
+run_doctor
+expect_line "[missing]  Node: v22.22.2 is unsupported; the frontend native build (node-gyp 13) needs Node ^20.19.0 || >=23.1"
+set_node_version 23.1.0
+run_doctor
+expect_line "[ok]       Node: v23.1.0 (supported: ^20.19.0 || >=23.1)"
+
+# Without an engines.node field, or with a clause the parser does not know,
+# the built-in range applies.
+set_node_version 24.15.0
+write_package_json
+run_doctor
+expect_line "[ok]       Node: v24.15.0 (supported: $default_range)"
+write_package_json ">=22 <25"
+run_doctor
+expect_line "[ok]       Node: v24.15.0 (supported: $default_range)"
+set_node_version 24.14.9
+run_doctor
+expect_line "[missing]  Node: v24.14.9 is unsupported; the frontend native build (node-gyp 13) needs Node $default_range"
+
+# A missing package.json (submodule not initialized) keeps the Node check working.
+mv "$fe_dir/package.json" "$temp_dir/package.json.bak"
+set_node_version 24.15.0
+run_doctor
+expect_line "[missing]  frontend packageManager: cannot read packages/cloudlands-fe/package.json"
+expect_line "[ok]       Node: v24.15.0 (supported: $default_range)"
+mv "$temp_dir/package.json.bak" "$fe_dir/package.json"
+write_package_json "$default_range"
 
 rm -f "$bin_dir/node"
 run_doctor
-expect_line "[missing]  Node: 22.22.2+, 24.15.0+ (recommended) or 26+ is required"
+expect_line "[missing]  Node: $default_range is required"
 
 # jq is required; without it the doctor names the suites that need it.
 expect_line "[missing]  jq: required by the release-notifier test suites"
