@@ -220,11 +220,24 @@ browser_fe_tokens() {
   ' "$file"
 }
 
+browser_fe_executor_start='^[[:space:]]*errorCode[?]:'
+browser_fe_cdp_start='^export type CaptureErrorCode ='
+
+# The declared fe tokens, one per line: only the `errorCode?:` union and the
+# CaptureErrorCode alias count, so a runtime `errorCode: 'x'` literal elsewhere
+# in the file cannot stand in for a removed union member.
+browser_fe_declared=$(
+  [[ -f "$browser_fe_executor" ]] && browser_fe_tokens "$browser_fe_executor" "$browser_fe_executor_start"
+  [[ -f "$browser_fe_cdp" ]] && browser_fe_tokens "$browser_fe_cdp" "$browser_fe_cdp_start"
+  true
+)
+browser_fe_declared=$(printf '%s\n' "$browser_fe_declared" | cut -d: -f2- | sort -u)
+
 browser_token_count=0
 while IFS=: read -r line token; do
   browser_token_count=$((browser_token_count + 1))
-  if ((${#browser_fe_files[@]} > 0)) && ! grep -Fq "'$token'" "${browser_fe_files[@]}"; then
-    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not a quoted literal in ${browser_fe_files[*]}"
+  if ((${#browser_fe_files[@]} > 0)) && ! grep -Fxq "$token" <<<"$browser_fe_declared"; then
+    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not declared in the errorCode union / CaptureErrorCode alias in ${browser_fe_files[*]}"
   fi
   if ((browser_intentd_ok)) && ! grep -Fq "\`$token\`" "$browser_intentd_overview"; then
     fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not documented in $browser_intentd_overview"
@@ -249,8 +262,8 @@ browser_fe_reverse() {
     fail "$file" 1 "expected quoted errorCode literals in the declaration matching /$start/; found none"
   fi
 }
-[[ -f "$browser_fe_executor" ]] && browser_fe_reverse "$browser_fe_executor" '^[[:space:]]*errorCode[?]:'
-[[ -f "$browser_fe_cdp" ]] && browser_fe_reverse "$browser_fe_cdp" '^export type CaptureErrorCode ='
+[[ -f "$browser_fe_executor" ]] && browser_fe_reverse "$browser_fe_executor" "$browser_fe_executor_start"
+[[ -f "$browser_fe_cdp" ]] && browser_fe_reverse "$browser_fe_cdp" "$browser_fe_cdp_start"
 
 browser_displayed_files=("$browser_protocol_doc")
 ((browser_intentd_ok)) && browser_displayed_files+=("$browser_intentd_overview")

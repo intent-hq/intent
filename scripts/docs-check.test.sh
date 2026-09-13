@@ -78,6 +78,7 @@ EOF
 write_fe_executor() {
   cat >"$temp_dir/$fe_executor" <<'EOF'
   const code = (error as { errorCode?: unknown } | null)?.errorCode;
+  return { success: false, error: 'still loading', errorCode: 'still-loading' };
   displayed?: boolean;
   errorCode?:
     | 'not-owner'
@@ -87,6 +88,7 @@ write_fe_executor() {
     | 'navigated-away'
     | CaptureErrorCode;
   ownerAgentId?: string | null;
+  return { errorCode: 'deadline-exhausted' as const };
 EOF
 }
 
@@ -207,14 +209,28 @@ grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not d
   fail "missing intentd overview token failure did not name the token and file: $check_output"
 write_intentd_overview
 
-grep -v "'still-loading'" "$temp_dir/$fe_executor" >"$temp_dir/$fe_executor.tmp"
+# Remove only the union member; the runtime `errorCode: 'still-loading'`
+# literal outside the declaration stays and must not mask the removal.
+grep -v "^    | 'still-loading'$" "$temp_dir/$fe_executor" >"$temp_dir/$fe_executor.tmp"
 mv "$temp_dir/$fe_executor.tmp" "$temp_dir/$fe_executor"
+grep -q "errorCode: 'still-loading'" "$temp_dir/$fe_executor" ||
+  fail "fixture lost its runtime still-loading literal"
 if run_check; then
   fail "errorCode token missing from the fe union was accepted"
 fi
-grep -q "$protocol_doc:7: error: browser errorCode 'still-loading' is not a quoted literal in $fe_executor $fe_cdp" <<<"$check_output" ||
+grep -q "$protocol_doc:7: error: browser errorCode 'still-loading' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
   fail "missing fe union token failure did not name the token and files: $check_output"
 write_fe_executor
+
+# Same for the alias: the executor's runtime `'deadline-exhausted'` literal
+# must not stand in for a removed CaptureErrorCode member.
+printf '%s\n' "export type CaptureErrorCode = 'not-painting';" >"$temp_dir/$fe_cdp"
+if run_check; then
+  fail "errorCode token missing from the CaptureErrorCode alias was accepted"
+fi
+grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
+  fail "missing CaptureErrorCode member failure did not name the token and files: $check_output"
+write_fe_cdp
 
 sed -i.bak "s/    | 'navigated-away'/    | 'navigated-away'\\
     | 'tab-crashed'/" "$temp_dir/$fe_executor"
@@ -222,9 +238,9 @@ rm -f "$temp_dir/$fe_executor.bak"
 if run_check; then
   fail "fe errorCode literal absent from the protocol doc was accepted"
 fi
-grep -q "$fe_executor:9: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc" <<<"$check_output" ||
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc" <<<"$check_output" ||
   fail "undocumented fe literal failure did not name the token and file: $check_output"
-grep -q "$fe_executor:9: error: browser errorCode 'tab-crashed' is not documented in $intentd_overview" <<<"$check_output" ||
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $intentd_overview" <<<"$check_output" ||
   fail "undocumented fe literal failure did not name the intentd overview: $check_output"
 write_fe_executor
 
