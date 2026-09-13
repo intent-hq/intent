@@ -37,7 +37,15 @@ FE_DEPS_INSTALL_MSG = installing/refreshing FE deps (lockfile changed or node_mo
 # cargo install may place subcommands outside PATH when cargo itself comes from
 # a distro package. Make every recipe discover the effective install bin dir.
 CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
-export PATH := $(CARGO_BIN_DIR):$(PATH)
+# Route every Rust recipe through the rustup toolchain pinned by
+# packages/intentd/rust-toolchain.toml, even when another cargo (Homebrew,
+# distro) is first on the caller's PATH. `rustup which` resolves the pin from
+# $(INTENTD_DIR) without triggering a toolchain download (RUSTUP_AUTO_INSTALL=0
+# guards rustup >= 1.28 auto-install). When rustup or the toolchain is absent
+# this expands to empty and behavior is unchanged. cargo-nextest and other
+# installed subcommands stay discoverable via $(CARGO_BIN_DIR).
+RUSTUP_CARGO := $(shell cd $(INTENTD_DIR) 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+export PATH := $(if $(RUSTUP_CARGO),$(dir $(RUSTUP_CARGO)):)$(CARGO_BIN_DIR):$(PATH)
 
 # `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
 # any that are missing. The FE and iOS submodules are heavy and not needed for
