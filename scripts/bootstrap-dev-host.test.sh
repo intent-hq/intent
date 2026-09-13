@@ -275,6 +275,32 @@ PATH="$make_path" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_d
   CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= \
   BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
 reject_line "[warn]     cargo:"
+
+# A caller-exported CARGO_BIN_DIR overrides the Makefile's default bin dir; the
+# strip must honor it, or the make-injected prefix survives and the check goes
+# silent on the pinned toolchain cargo instead of warning on the caller's.
+custom_cargo_bin="$temp_dir/custom-cargo-bin"
+mkdir -p "$custom_cargo_bin"
+PATH="$toolchain_bin/:$custom_cargo_bin:$bin_dir" HOME="$temp_dir/home" \
+  INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL=1 \
+  CARGO_BIN_DIR="$custom_cargo_bin" \
+  BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
 rm -f "$bin_dir/rustup" "$bin_dir/cargo"
+
+# A non-exact channel pin (named or partial) is not comparable to
+# `cargo --version` output: the check skips silently instead of warning
+# permanently on a pin-honoring rustup proxy.
+write_launcher cargo 'echo "cargo 1.98.0 (0123abcd 2026-01-01) (Homebrew)"'
+for channel in stable 1.96; do
+  printf '[toolchain]\nchannel = "%s"\ncomponents = ["rustfmt", "clippy"]\n' "$channel" >"$intentd_dir/rust-toolchain.toml"
+  run_doctor
+  reject_line "[warn]     cargo:"
+done
+printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
+run_doctor
+expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
+rm -f "$bin_dir/cargo"
 
 echo "bootstrap-dev-host tests passed"

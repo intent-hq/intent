@@ -13,11 +13,13 @@ CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
 # Under make (MAKELEVEL set) the Makefile has already prepended the pinned
 # rustup toolchain dir and CARGO_BIN_DIR (see the PATH export in the Makefile);
 # strip that exact prefix so the shadowing-cargo check still sees what a plain
-# `cargo` resolves to in the caller's shell.
+# `cargo` resolves to in the caller's shell. A caller-exported CARGO_BIN_DIR
+# overrides the Makefile's ?= default, so honor it here too; a `make
+# CARGO_BIN_DIR=...` command-line override is not exported and stays invisible.
 CALLER_PATH="$PATH"
 if [[ -n ${MAKELEVEL:-} ]]; then
   make_rustup_cargo=$(cd "${INTENTD_DIR}" 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
-  make_prefix="${make_rustup_cargo:+${make_rustup_cargo%cargo}:}${CARGO_INSTALL_ROOT:-$CARGO_HOME}/bin:"
+  make_prefix="${make_rustup_cargo:+${make_rustup_cargo%cargo}:}${CARGO_BIN_DIR:-${CARGO_INSTALL_ROOT:-$CARGO_HOME}/bin}:"
   while [[ "$CALLER_PATH" == "$make_prefix"* ]]; do
     CALLER_PATH=${CALLER_PATH#"$make_prefix"}
   done
@@ -137,6 +139,10 @@ active_toolchain_ready() {
 # existing checks.
 report_shadowing_cargo() {
   [[ -n "$TOOLCHAIN" && -n "$CALLER_CARGO" ]] || return 0
+  # `cargo --version` prints an exact X.Y.Z, so only an exact pin is
+  # comparable; a named (stable) or partial (1.96) channel would warn
+  # permanently even for a pin-honoring rustup proxy. Skip silently.
+  [[ "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
   local line version
   line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" RUSTUP_AUTO_INSTALL=0 "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
   version=${line#cargo }
