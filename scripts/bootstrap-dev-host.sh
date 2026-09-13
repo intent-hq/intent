@@ -102,18 +102,18 @@ load_versions() {
 }
 
 # node_range_floors <range>: prints one "<op> <version>" line per ||-separated
-# clause of an engines.node range, or fails when the range is empty or a clause
-# is neither ^X.Y.Z (same major, at least that release) nor >=X[.Y[.Z]].
+# clause of an engines.node range, or fails when the range is empty, a clause
+# is empty (leading, trailing, or doubled separator; a single | is not a
+# separator), or a clause is neither ^X.Y.Z (same major, at least that
+# release) nor >=X[.Y[.Z]].
 node_range_floors() {
   local clause count=0 re='^(\^|>=)([0-9]+(\.[0-9]+){0,2})$'
-  local -a clauses
-  IFS='|' read -r -a clauses <<<"${1//[[:space:]]/}"
-  for clause in "${clauses[@]}"; do
-    [[ -n "$clause" ]] || continue
+  local range=${1//[[:space:]]/}
+  while IFS= read -r clause; do
     [[ "$clause" =~ $re ]] || return 1
     printf '%s %s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
     count=$((count + 1))
-  done
+  done <<<"${range//"||"/$'\n'}"
   [[ "$count" -gt 0 ]]
 }
 

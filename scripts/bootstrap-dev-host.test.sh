@@ -265,6 +265,20 @@ set_node_version 24.14.9
 run_doctor
 expect_line "[missing]  Node: v24.14.9 is unsupported; the frontend native build (node-gyp 13) needs Node $default_range"
 
+# Only the two-character || separates clauses: a single pipe, a trailing
+# separator, or an empty clause makes the range unparseable and falls back to
+# the built-in range instead of being silently normalized.
+for range in "^20.19.0|>=23.1" "^22.22.2 ||" "^22.22.2 || || >=26"; do
+  write_package_json "$range"
+  set_node_version 24.14.9
+  run_doctor
+  expect_line "[missing]  Node: v24.14.9 is unsupported; the frontend native build (node-gyp 13) needs Node $default_range"
+  reject_line "supported: $range"
+  set_node_version 24.15.0
+  run_doctor
+  expect_line "[ok]       Node: v24.15.0 (supported: $default_range)"
+done
+
 # A missing package.json (submodule not initialized) keeps the Node check working.
 mv "$fe_dir/package.json" "$temp_dir/package.json.bak"
 set_node_version 24.15.0
