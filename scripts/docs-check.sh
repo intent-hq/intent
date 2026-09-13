@@ -163,6 +163,115 @@ for file in "${hydration_docs[@]}"; do
   fi
 done
 
+# The browser-tab action-result contract is mirrored on three surfaces: the
+# protocol doc's errorCode bullet list (canonical), the cloudlands-fe executor's
+# `errorCode?:` union plus its CaptureErrorCode alias, and intentd's
+# ws.browser.docs("overview") text. A token (or the `displayed` field) present
+# on one surface but not the others is drift (intent-hq/intent#4835, #4867).
+browser_protocol_doc=docs/protocol/methods/files-terminal-browser.md
+browser_fe_executor=packages/cloudlands-fe/src/features/browser/main/browser-action-executor.ts
+browser_fe_cdp=packages/cloudlands-fe/src/features/browser/main/embedded-browser-cdp-service.ts
+browser_intentd_overview=packages/intentd/crates/intent-acp/src/mcp_server/bindings/browser_docs/overview.md
+
+browser_fe_files=()
+for file in "$browser_fe_executor" "$browser_fe_cdp"; do
+  if [[ -f "$file" ]]; then
+    browser_fe_files+=("$file")
+  else
+    printf 'skipped: %s (submodule not initialized)\n' "$file"
+  fi
+done
+browser_intentd_ok=0
+if [[ -f "$browser_intentd_overview" ]]; then
+  browser_intentd_ok=1
+else
+  printf 'skipped: %s (submodule not initialized)\n' "$browser_intentd_overview"
+fi
+
+# Emit `line:token` for each `> - `token`` bullet of the protocol doc's
+# errorCode list; the list ends at the first non-bullet, non-continuation line.
+browser_protocol_tokens() {
+  awk '
+    /additive structured `errorCode`.*when the cause is one of:/ { active = 1; next }
+    active && /^> - `[a-z][a-z-]*`/ {
+      match($0, /`[a-z][a-z-]*`/)
+      print FNR ":" substr($0, RSTART + 1, RLENGTH - 2)
+      seen = 1
+      next
+    }
+    active && seen && !/^>   / { exit }
+  ' "$browser_protocol_doc"
+}
+
+# Emit `line:token` for every single-quoted kebab-case literal from the first
+# line matching `start` through the line that closes the declaration with `;`.
+browser_fe_tokens() {
+  local file=$1 start=$2
+  awk -v start="$start" -v q="'" '
+    !active && $0 ~ start { active = 1 }
+    active {
+      rest = $0
+      while (match(rest, q "[a-z][a-z-]*" q)) {
+        print FNR ":" substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      if ($0 ~ /;[[:space:]]*$/) exit
+    }
+  ' "$file"
+}
+
+browser_fe_executor_start='^[[:space:]]*errorCode[?]:'
+browser_fe_cdp_start='^export type CaptureErrorCode ='
+
+# The declared fe tokens, one per line: only the `errorCode?:` union and the
+# CaptureErrorCode alias count, so a runtime `errorCode: 'x'` literal elsewhere
+# in the file cannot stand in for a removed union member.
+browser_fe_declared=$(
+  [[ -f "$browser_fe_executor" ]] && browser_fe_tokens "$browser_fe_executor" "$browser_fe_executor_start"
+  [[ -f "$browser_fe_cdp" ]] && browser_fe_tokens "$browser_fe_cdp" "$browser_fe_cdp_start"
+  true
+)
+browser_fe_declared=$(printf '%s\n' "$browser_fe_declared" | cut -d: -f2- | sort -u)
+
+browser_token_count=0
+while IFS=: read -r line token; do
+  browser_token_count=$((browser_token_count + 1))
+  if ((${#browser_fe_files[@]} > 0)) && ! grep -Fxq "$token" <<<"$browser_fe_declared"; then
+    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not declared in the errorCode union / CaptureErrorCode alias in ${browser_fe_files[*]}"
+  fi
+  if ((browser_intentd_ok)) && ! grep -Fq "\`$token\`" "$browser_intentd_overview"; then
+    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not documented in $browser_intentd_overview"
+  fi
+done < <(browser_protocol_tokens)
+if ((browser_token_count == 0)); then
+  fail "$browser_protocol_doc" 1 'expected a backticked errorCode bullet list after "additive structured `errorCode` when the cause is one of:"; found none'
+fi
+
+browser_fe_reverse() {
+  local file=$1 start=$2 count=0 line token
+  while IFS=: read -r line token; do
+    count=$((count + 1))
+    if ! grep -Fq "\`$token\`" "$browser_protocol_doc"; then
+      fail "$file" "$line" "browser errorCode '$token' is not documented in $browser_protocol_doc"
+    fi
+    if ((browser_intentd_ok)) && ! grep -Fq "\`$token\`" "$browser_intentd_overview"; then
+      fail "$file" "$line" "browser errorCode '$token' is not documented in $browser_intentd_overview"
+    fi
+  done < <(browser_fe_tokens "$file" "$start")
+  if ((count == 0)); then
+    fail "$file" 1 "expected quoted errorCode literals in the declaration matching /$start/; found none"
+  fi
+}
+[[ -f "$browser_fe_executor" ]] && browser_fe_reverse "$browser_fe_executor" "$browser_fe_executor_start"
+[[ -f "$browser_fe_cdp" ]] && browser_fe_reverse "$browser_fe_cdp" "$browser_fe_cdp_start"
+
+browser_displayed_files=("$browser_protocol_doc")
+((browser_intentd_ok)) && browser_displayed_files+=("$browser_intentd_overview")
+[[ -f "$browser_fe_executor" ]] && browser_displayed_files+=("$browser_fe_executor")
+for file in "${browser_displayed_files[@]}"; do
+  grep -Fq displayed "$file" || fail "$file" 1 "browser tab field 'displayed' is not mentioned"
+done
+
 if ((failures > 0)); then
   printf 'docs-check: %d error(s)\n' "$failures" >&2
   exit 1

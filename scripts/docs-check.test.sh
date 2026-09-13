@@ -50,6 +50,65 @@ Do not link a client-local capture.
 ### Next
 EOF
 
+# Browser-tab contract surfaces: protocol doc (canonical), fe executor union +
+# CaptureErrorCode alias, and the intentd overview text.
+protocol_doc=docs/protocol/methods/files-terminal-browser.md
+fe_executor=packages/cloudlands-fe/src/features/browser/main/browser-action-executor.ts
+fe_cdp=packages/cloudlands-fe/src/features/browser/main/embedded-browser-cdp-service.ts
+intentd_overview=packages/intentd/crates/intent-acp/src/mcp_server/bindings/browser_docs/overview.md
+mkdir -p "$temp_dir/$(dirname "$protocol_doc")" "$temp_dir/$(dirname "$fe_executor")" \
+  "$temp_dir/$(dirname "$intentd_overview")"
+
+write_protocol_doc() {
+  cat >"$temp_dir/$protocol_doc" <<'EOF'
+> The op fails as an action-result error which carries an
+> **additive structured `errorCode`** when the cause is one of:
+>
+> - `workspace-not-visible` — the tab could not be mounted while the workspace
+>   is not **displayed** in any window.
+> - `deadline-exhausted` — the request deadline ran out.
+> - `still-loading` — the guest was still loading.
+> - `navigated-away` — the guest shows a different origin.
+> - `not-painting` — the surface has not painted.
+>
+> Ownership failures keep their own `not-owner` / `already-claimed` codes.
+EOF
+}
+
+write_fe_executor() {
+  cat >"$temp_dir/$fe_executor" <<'EOF'
+  const code = (error as { errorCode?: unknown } | null)?.errorCode;
+  return { success: false, error: 'still loading', errorCode: 'still-loading' };
+  displayed?: boolean;
+  errorCode?:
+    | 'not-owner'
+    | 'already-claimed'
+    | 'workspace-not-visible'
+    | 'still-loading'
+    | 'navigated-away'
+    | CaptureErrorCode;
+  ownerAgentId?: string | null;
+  return { errorCode: 'deadline-exhausted' as const };
+EOF
+}
+
+write_fe_cdp() {
+  printf '%s\n' "export type CaptureErrorCode = 'not-painting' | 'deadline-exhausted';" >"$temp_dir/$fe_cdp"
+}
+
+write_intentd_overview() {
+  cat >"$temp_dir/$intentd_overview" <<'EOF'
+Ownership: `not-owner` / `already-claimed`. `displayed` is a layout fact.
+Capture ops fail with `workspace-not-visible`, `deadline-exhausted`,
+`still-loading`, `navigated-away`, or `not-painting`.
+EOF
+}
+
+write_protocol_doc
+write_fe_executor
+write_fe_cdp
+write_intentd_overview
+
 if ! run_check; then
   fail "client-local capture guidance was rejected: $check_output"
 fi
@@ -136,6 +195,85 @@ grep -q "documented make target 'an'" <<<"$check_output" &&
   fail "prose after a wrapped inline span was treated as code: $check_output"
 
 : >"$temp_dir/README.md"
+
+if ! run_check; then
+  fail "browser contract surfaces in sync were rejected: $check_output"
+fi
+
+sed -i.bak 's/`deadline-exhausted`/`deadline-exhaust`/' "$temp_dir/$intentd_overview"
+rm -f "$temp_dir/$intentd_overview.bak"
+if run_check; then
+  fail "errorCode token missing from the intentd overview was accepted"
+fi
+grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not documented in $intentd_overview" <<<"$check_output" ||
+  fail "missing intentd overview token failure did not name the token and file: $check_output"
+write_intentd_overview
+
+# Remove only the union member; the runtime `errorCode: 'still-loading'`
+# literal outside the declaration stays and must not mask the removal.
+grep -v "^    | 'still-loading'$" "$temp_dir/$fe_executor" >"$temp_dir/$fe_executor.tmp"
+mv "$temp_dir/$fe_executor.tmp" "$temp_dir/$fe_executor"
+grep -q "errorCode: 'still-loading'" "$temp_dir/$fe_executor" ||
+  fail "fixture lost its runtime still-loading literal"
+if run_check; then
+  fail "errorCode token missing from the fe union was accepted"
+fi
+grep -q "$protocol_doc:7: error: browser errorCode 'still-loading' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
+  fail "missing fe union token failure did not name the token and files: $check_output"
+write_fe_executor
+
+# Same for the alias: the executor's runtime `'deadline-exhausted'` literal
+# must not stand in for a removed CaptureErrorCode member.
+printf '%s\n' "export type CaptureErrorCode = 'not-painting';" >"$temp_dir/$fe_cdp"
+if run_check; then
+  fail "errorCode token missing from the CaptureErrorCode alias was accepted"
+fi
+grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
+  fail "missing CaptureErrorCode member failure did not name the token and files: $check_output"
+write_fe_cdp
+
+sed -i.bak "s/    | 'navigated-away'/    | 'navigated-away'\\
+    | 'tab-crashed'/" "$temp_dir/$fe_executor"
+rm -f "$temp_dir/$fe_executor.bak"
+if run_check; then
+  fail "fe errorCode literal absent from the protocol doc was accepted"
+fi
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc" <<<"$check_output" ||
+  fail "undocumented fe literal failure did not name the token and file: $check_output"
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $intentd_overview" <<<"$check_output" ||
+  fail "undocumented fe literal failure did not name the intentd overview: $check_output"
+write_fe_executor
+
+rm -rf "$temp_dir/packages/intentd"
+if ! run_check; then
+  fail "missing intentd submodule was not skipped: $check_output"
+fi
+grep -q "skipped: $intentd_overview (submodule not initialized)" <<<"$check_output" ||
+  fail "missing intentd submodule did not print the skipped line: $check_output"
+mkdir -p "$temp_dir/$(dirname "$intentd_overview")"
+write_intentd_overview
+
+grep -v '^> - ' "$temp_dir/$protocol_doc" >"$temp_dir/$protocol_doc.tmp"
+mv "$temp_dir/$protocol_doc.tmp" "$temp_dir/$protocol_doc"
+if run_check; then
+  fail "empty protocol errorCode bullet list was accepted"
+fi
+grep -q "$protocol_doc:1: error: expected a backticked errorCode bullet list" <<<"$check_output" ||
+  fail "empty bullet list failure was not reported: $check_output"
+write_protocol_doc
+
+grep -v 'displayed' "$temp_dir/$fe_executor" >"$temp_dir/$fe_executor.tmp"
+mv "$temp_dir/$fe_executor.tmp" "$temp_dir/$fe_executor"
+if run_check; then
+  fail "fe executor without the displayed field was accepted"
+fi
+grep -q "$fe_executor:1: error: browser tab field 'displayed' is not mentioned" <<<"$check_output" ||
+  fail "missing displayed field failure was not reported: $check_output"
+write_fe_executor
+
+if ! run_check; then
+  fail "restored browser contract surfaces were rejected: $check_output"
+fi
 
 echo "docs-check tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${DOCS_CHECK_TEST_BASH:-}" ]] || exit 0
