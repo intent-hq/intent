@@ -591,7 +591,9 @@ echo "shipped-in tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSIO
 # then rerun the fixtures under a real Bash 3 when one can be found:
 # BASH3_BIN, a bash3 on PATH, Homebrew bash@3, or a 3.x /bin/bash. The
 # pattern gate is a best-effort guard for hosts without a Bash 3; the real
-# Bash 3 fixture run is the authoritative check.
+# Bash 3 fixture run is the authoritative check. A missing Bash 3 is a skip
+# notice by default; set REQUIRE_BASH3 to a non-empty value (CI) to make it
+# a failure instead.
 bash -n "$script" || fail "shipped-in.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "shipped-in.test.sh does not parse"
 bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
@@ -668,6 +670,8 @@ if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
 elif bash3=$(find_bash3); then
   SHIPPED_IN_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
+elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
   echo "shipped-in tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
 fi
