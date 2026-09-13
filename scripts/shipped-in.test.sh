@@ -25,10 +25,12 @@ done
 
 # Stub gh: releases from $GH_STUB_DIR/releases, compare statuses from
 # $GH_STUB_DIR/compare/<owner>__<repo>/<base>...<head>, manifests from
-# $GH_STUB_DIR/manifest/<tag>.json. Every invocation is appended to GH_TEST_LOG.
+# $GH_STUB_DIR/manifest/<tag>.json, the cloudlands-fe Release Alpha run list
+# from $GH_STUB_DIR/runs.json and its jobs from $GH_STUB_DIR/jobs/<run id>.json.
+# Every invocation is appended to GH_TEST_LOG.
 # GH_STUB_FAIL selects a failure mode (1 = generic, or one of the gh error
 # texts below); GH_STUB_FAIL_ON narrows it to one subcommand ("release list",
-# "api", "release download"), default every call.
+# "api", "release download", "run list"), default every call.
 cat >"$bin_dir/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
@@ -52,10 +54,20 @@ case "$1 $2" in
     [[ -f "$GH_STUB_DIR/releases.fail" ]] && { echo "stub: release list truncated" >&2; exit 1; }
     exit 0 ;;
   "api repos/"*)
-    path=${2#repos/}; repo=${path%%/compare/*}; range=${path##*/compare/}
-    file="$GH_STUB_DIR/compare/${repo/\//__}/$range"
+    path=${2#repos/}
+    if [[ "$path" == */actions/runs/*/jobs ]]; then
+      [[ "$*" == *" --paginate"* ]] || { echo "stub: jobs fetched without --paginate" >&2; exit 1; }
+      run_id=${path%/jobs}; run_id=${run_id##*/}
+      file="$GH_STUB_DIR/jobs/$run_id.json"
+    else
+      repo=${path%%/compare/*}; range=${path##*/compare/}
+      file="$GH_STUB_DIR/compare/${repo/\//__}/$range"
+    fi
     [[ -f "$file" ]] || { echo "stub: 404 $2" >&2; exit 1; }
     cat "$file" ;;
+  "run list")
+    [[ "$*" == "run list --repo intent-hq/cloudlands-fe --workflow Release Alpha --limit 1 --json databaseId,status,url,displayTitle" ]] || { echo "stub: unexpected run list args: $*" >&2; exit 1; }
+    cat "$GH_STUB_DIR/runs.json" ;;
   "release download")
     [[ "$*" == *"--repo intent-hq/cloudlands-releases"*"--pattern release-manifest.json"*"--output -"* ]] || exit 1
     [[ -f "$GH_STUB_DIR/manifest/$3.json" ]] || { echo "stub: no manifest $3" >&2; exit 1; }
@@ -77,6 +89,7 @@ reset_stub() {
   for tag in v2.3.0 v2.2.0 v2.1.0; do
     printf '{"version":"%s","intentdVersion":"0.9.%s"}\n' "${tag#v}" "${tag##*.}" >"$manifest_dir/$tag.json"
   done
+  echo '[]' >"$stub_dir/runs.json"
   : >"$temp_dir/gh.log"
 }
 
@@ -98,6 +111,7 @@ run_script cloudlands-fe "$sha"
 [[ "$status" -eq 0 ]] || fail "newest-tag hit exited $status: $stderr"
 [[ "$stdout" == "v2.3.0 intentdVersion=0.9.0" ]] || fail "newest-tag hit printed '$stdout'"
 grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 20 ' "$temp_dir/gh.log" || fail "default limit 10 was not over-fetched as 20"
+! grep -q '^run list' "$temp_dir/gh.log" || fail "carried sha probed the Release Alpha run"
 
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"
@@ -317,6 +331,163 @@ grep -q -- '^release list --repo intent-hq/cloudlands-releases --limit 12 ' "$te
 ! grep -q 'v2.1.0' "$temp_dir/gh.log" || fail "multi-pair --limit 2 inspected v2.1.0"
 run_script cloudlands-fe "$sha" --limit=2 intentd "$sha2"
 [[ "$status" -eq 0 && "$stdout" == "v2.3.0 intentdVersion=0.9.5" ]] || fail "--limit between pairs exited $status with '$stdout': $stderr"
+
+# Stall detection: on the exit-3 path the newest cloudlands-fe Release Alpha
+# run is probed and a job queued past SHIPPED_IN_STALL_MINUTES turns exit 3
+# into exit 5 (intent-hq/cloudlands-fe run 34716428577 sat queued for hours
+# on an unserved runner label while hooks kept reporting "not cut yet").
+run_id=34716428577
+run_url="https://github.com/intent-hq/cloudlands-fe/actions/runs/$run_id"
+stalled_job='build-linux (arm64, gh-linux-arm64-8x)'
+jobs_call="api repos/intent-hq/cloudlands-fe/actions/runs/$run_id/jobs --paginate"
+not_carried_line="shipped-in: $sha is not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)"
+
+set_uncarried_fe() {
+  echo behind >"$fe_compare/$sha...v2.3.0"
+  echo behind >"$fe_compare/$sha...v2.2.0"
+  echo behind >"$fe_compare/$sha...v2.1.0"
+}
+set_release_run() {
+  printf '[{"databaseId":%s,"status":"%s","url":"%s","displayTitle":"Release Alpha"}]\n' "$run_id" "$1" "$run_url" >"$stub_dir/runs.json"
+}
+minutes_ago() {
+  python3 -c 'import datetime, sys; print((datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=int(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$1"
+}
+# One REST jobs page from "<name>|<status>|<minutes ago>" specs.
+jobs_page() {
+  local jobs="" spec name job_status
+  for spec in "$@"; do
+    name=${spec%%|*}; spec=${spec#*|}; job_status=${spec%%|*}
+    jobs+=$(printf '%s{"name":"%s","status":"%s","created_at":"%s"}' "${jobs:+,}" "$name" "$job_status" "$(minutes_ago "${spec#*|}")")
+  done
+  printf '{"total_count":%d,"jobs":[%s]}\n' "$#" "$jobs"
+}
+set_release_jobs() {
+  mkdir -p "$stub_dir/jobs"
+  jobs_page "$@" >"$stub_dir/jobs/$run_id.json"
+}
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+set_release_jobs "build-macos|completed|45" "$stalled_job|queued|45" "publish|queued|2"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 5 ]] || fail "stalled Release Alpha run exited $status (expected 5): $stderr"
+[[ -z "$stdout" ]] || fail "stalled Release Alpha run printed '$stdout'"
+since=$(python3 -c 'import json, sys; print([j for j in json.load(sys.stdin)["jobs"] if j["name"] == sys.argv[1]][0]["created_at"])' "$stalled_job" <"$stub_dir/jobs/$run_id.json")
+[[ "$stderr" == "$not_carried_line"$'\n'"shipped-in: Release Alpha run $run_url stalled: job \"$stalled_job\" queued for 45 min (since $since)" ]] || fail "stalled Release Alpha run message: $stderr"
+grep -q "^$jobs_call\$" "$temp_dir/gh.log" || fail "jobs were not fetched via the paginated REST endpoint"
+
+# A queued run (no job started yet) is probed the same way.
+reset_stub
+set_uncarried_fe
+set_release_run queued
+set_release_jobs "$stalled_job|queued|31"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 5 ]] || fail "queued Release Alpha run with a stalled job exited $status (expected 5): $stderr"
+[[ "$stderr" == *"stalled: job \"$stalled_job\" queued for 31 min"* ]] || fail "queued Release Alpha run message: $stderr"
+
+# --paginate emits one JSON object per page; a stalled job on a later page
+# still counts.
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+mkdir -p "$stub_dir/jobs"
+{ jobs_page "build-macos|in_progress|40"; jobs_page "$stalled_job|queued|40"; } >"$stub_dir/jobs/$run_id.json"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 5 ]] || fail "stalled job on the second jobs page exited $status (expected 5): $stderr"
+[[ "$stderr" == *"job \"$stalled_job\" queued for 40 min"* ]] || fail "second-page stall message: $stderr"
+
+# intentd-only changes ride the same fe Release Alpha run.
+reset_stub
+echo behind >"$intentd_compare/$sha2...v0.9.0"
+set_release_run in_progress
+set_release_jobs "$stalled_job|queued|45"
+run_script intentd "$sha2"
+[[ "$status" -eq 5 ]] || fail "stalled run for an intentd pair exited $status (expected 5): $stderr"
+[[ "$stderr" == *"$sha2 is not carried by"*$'\n'*"Release Alpha run $run_url stalled"* ]] || fail "intentd stall message: $stderr"
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+set_release_jobs "build-macos|completed|20" "$stalled_job|queued|10" "publish|queued|1"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "queued job under the threshold exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line" ]] || fail "queued job under the threshold changed stderr: $stderr"
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+set_release_jobs "build-macos|completed|90" "$stalled_job|in_progress|90" "publish|queued|0"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "in-progress jobs exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line" ]] || fail "in-progress jobs changed stderr: $stderr"
+
+reset_stub
+set_uncarried_fe
+set_release_run completed
+set_release_jobs "$stalled_job|queued|500"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "completed newest run exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line" ]] || fail "completed newest run changed stderr: $stderr"
+grep -q '^run list ' "$temp_dir/gh.log" || fail "completed newest run was not listed"
+! grep -q '^api repos/intent-hq/cloudlands-fe/actions/runs/' "$temp_dir/gh.log" || fail "completed newest run had its jobs fetched"
+
+reset_stub
+set_uncarried_fe
+echo '[]' >"$stub_dir/runs.json"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "no Release Alpha run exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line" ]] || fail "no Release Alpha run changed stderr: $stderr"
+! grep -q '^api repos/intent-hq/cloudlands-fe/actions/runs/' "$temp_dir/gh.log" || fail "no Release Alpha run still fetched jobs"
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+set_release_jobs "$stalled_job|queued|10"
+SHIPPED_IN_STALL_MINUTES=5 run_script cloudlands-fe "$sha"
+[[ "$status" -eq 5 ]] || fail "SHIPPED_IN_STALL_MINUTES=5 with a 10 min queue exited $status (expected 5): $stderr"
+[[ "$stderr" == *"queued for 10 min"* ]] || fail "SHIPPED_IN_STALL_MINUTES=5 message: $stderr"
+SHIPPED_IN_STALL_MINUTES=11 run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "SHIPPED_IN_STALL_MINUTES=11 with a 10 min queue exited $status (expected 3): $stderr"
+: >"$temp_dir/gh.log"
+SHIPPED_IN_STALL_MINUTES=0 run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "SHIPPED_IN_STALL_MINUTES=0 exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line" ]] || fail "SHIPPED_IN_STALL_MINUTES=0 changed stderr: $stderr"
+! grep -q '^run list' "$temp_dir/gh.log" || fail "SHIPPED_IN_STALL_MINUTES=0 still listed Release Alpha runs"
+SHIPPED_IN_STALL_MINUTES=soon run_script cloudlands-fe "$sha"
+[[ "$status" -eq 2 ]] || fail "non-numeric SHIPPED_IN_STALL_MINUTES exited $status (expected 2)"
+[[ "$stderr" == *"SHIPPED_IN_STALL_MINUTES must be a non-negative integer"* ]] || fail "non-numeric SHIPPED_IN_STALL_MINUTES message: $stderr"
+
+# The probe is best-effort: its failures never turn exit 3 into 1/4/5.
+for mode in 1 ratelimit; do
+  reset_stub
+  set_uncarried_fe
+  set_release_run in_progress
+  set_release_jobs "$stalled_job|queued|500"
+  GH_STUB_FAIL=$mode GH_STUB_FAIL_ON="run list" run_script cloudlands-fe "$sha"
+  [[ "$status" -eq 3 ]] || fail "run list failure ($mode) exited $status (expected 3): $stderr"
+  [[ -z "$stdout" ]] || fail "run list failure ($mode) printed '$stdout'"
+  [[ "$stderr" == "$not_carried_line"$'\n'"shipped-in: Release Alpha stall probe skipped: gh run list on intent-hq/cloudlands-fe failed: "* ]] || fail "run list failure ($mode) message: $stderr"
+done
+[[ "$stderr" == *"gh: API rate limit exceeded for user ID 526899."* ]] || fail "run list failure hid gh stderr: $stderr"
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+set_release_jobs "$stalled_job|queued|500"
+GH_STUB_FAIL=5xx GH_STUB_FAIL_ON="api repos/intent-hq/cloudlands-fe/actions/runs/$run_id/jobs" run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "jobs failure exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line"$'\n'"shipped-in: Release Alpha stall probe skipped: gh api jobs for Release Alpha run $run_id on intent-hq/cloudlands-fe failed: gh: Server Error (HTTP 502)" ]] || fail "jobs failure message: $stderr"
+
+reset_stub
+set_uncarried_fe
+set_release_run in_progress
+mkdir -p "$stub_dir/jobs"
+echo '{"jobs": [' >"$stub_dir/jobs/$run_id.json"
+run_script cloudlands-fe "$sha"
+[[ "$status" -eq 3 ]] || fail "malformed jobs payload exited $status (expected 3): $stderr"
+[[ "$stderr" == "$not_carried_line"$'\n'"shipped-in: Release Alpha stall probe skipped: could not read the jobs of Release Alpha run $run_id on intent-hq/cloudlands-fe: "* ]] || fail "malformed jobs payload message: $stderr"
 
 reset_stub
 run_script cloudlands-fe "$sha" intentd

@@ -113,12 +113,14 @@ docs-check: ## Check documented development targets, knobs, and remote-host guid
 # merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
 # PAIRS="intentd:<sha> cloudlands-fe:<sha>" (space-separated component:sha
 # tokens, forwarded as positional pairs; the tag must carry every pair). The
-# script exits 3 for "not shipped yet" and 4 for a transient GitHub failure
-# (rate limit, 5xx, network) worth retrying (make reports them as `Error 3` /
-# `Error 4`); background hooks should invoke scripts/shipped-in.sh directly so
-# they can branch on those codes. `LIMIT=N` widens the scan window past the
-# newest 10 releases.
-shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 4 = transient gh failure)
+# script exits 3 for "not shipped yet", 5 when additionally the newest
+# cloudlands-fe Release Alpha run looks stalled (a job queued longer than
+# SHIPPED_IN_STALL_MINUTES, default 30; 0 disables the probe), and 4 for a
+# transient GitHub failure (rate limit, 5xx, network) worth retrying (make
+# reports them as `Error 3` / `Error 5` / `Error 4`); background hooks should
+# invoke scripts/shipped-in.sh directly so they can branch on those codes.
+# `LIMIT=N` widens the scan window past the newest 10 releases.
+shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intentd|cloudlands-fe SHA=<commit>, or every pair in PAIRS="intentd:<sha> cloudlands-fe:<sha>" (script exit 3 = not yet, 5 = not yet and Release Alpha run stalled, 4 = transient gh failure)
 	@set -- $(if $(COMPONENT)$(SHA),"$(COMPONENT)" "$(SHA)",); \
 	for pair in $(PAIRS); do \
 		case "$$pair" in \
