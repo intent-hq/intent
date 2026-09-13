@@ -77,6 +77,8 @@ if [[ ! "$stall_minutes" =~ ^[0-9]+$ ]]; then
   echo "shipped-in: SHIPPED_IN_STALL_MINUTES must be a non-negative integer, got '$stall_minutes'" >&2
   exit 2
 fi
+# Force base 10 so a leading zero ("08") is not read as octal.
+stall_minutes=$((10#$stall_minutes))
 
 fail() {
   echo "shipped-in: $*" >&2
