@@ -256,6 +256,10 @@ with no rollback.
   live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
   `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
   a matching record and run the complete suite.
+- When the full suite is impractical, run `make test-changed` before entering the
+  merge queue: it diffs the intentd checkout against `origin/main` (override with
+  `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the
+  full suite on manifest, lockfile, or nextest-config changes; `DRY_RUN=1` prints the plan.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`);
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts

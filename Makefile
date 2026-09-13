@@ -139,7 +139,7 @@ WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, coverage-e2e, coverage-all).
+# (build-intentd, clippy, test-intentd, test-changed, coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
 # --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
@@ -159,14 +159,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-repo-slug build-intentd test test-intentd coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -184,7 +184,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd list-tests coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
 	fmt clippy lint-repo-slug check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -390,6 +390,28 @@ test-intentd: ensure-intentd-submodule
 		--force "$(GATE_FORCE)" \
 		--build-jobs "$(BUILD_JOBS)" \
 		--test-threads "$(TEST_THREADS)"
+
+# Pre-queue gate when the full suite is impractical: runs only the nextest
+# targets the intentd checkout changed vs BASE (default origin/main), mapped
+# per crate by scripts/rust-changed-tests.sh (see its header). Reverse
+# dependencies are not propagated, so `make test` stays the complete gate.
+# The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
+# config, toolchain) changed; the target then announces the fallback and runs
+# the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE (DRY_RUN=1 prints the plan)
+	@cargo nextest --version >/dev/null 2>&1 || { \
+		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+		exit 1; \
+	}
+	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
+		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		scripts/rust-changed-tests.sh; status=$$?; \
+	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
+	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
+		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
+	fi; \
+	echo "[test-changed] falling back to the full 'make test'"; \
+	exec $(MAKE) --no-print-directory test
 
 # nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
 # export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.
