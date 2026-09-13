@@ -143,7 +143,10 @@ echo "docs-check tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSIO
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4759). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
 # then rerun the fixtures under a real Bash 3 when one can be found (same
-# lookup as shipped-in.test.sh) and require a byte-identical transcript.
+# lookup as shipped-in.test.sh: BASH3_BIN, bash3, Homebrew bash@3, 3.x
+# /bin/bash) and require a byte-identical transcript. A missing Bash 3 is a
+# skip notice by default; set REQUIRE_BASH3 to a non-empty value (CI) to make
+# it a failure instead.
 bash -n "$script" || fail "docs-check.sh does not parse"
 bash -n "${BASH_SOURCE[0]}" || fail "docs-check.test.sh does not parse"
 bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
@@ -195,6 +198,8 @@ elif bash3=$(find_bash3); then
   cmp -s "$transcript" "$bash3_transcript" ||
     fail "docs-check.sh output differs between bash $BASH_VERSION and $bash3:"$'\n'"$(diff "$transcript" "$bash3_transcript" || true)"
   echo "docs-check.sh output is identical under bash $BASH_VERSION and $bash3"
+elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
   echo "docs-check tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
 fi
