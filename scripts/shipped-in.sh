@@ -17,9 +17,13 @@
 #
 # Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
 # pair yet (stdout empty; stderr names the pairs the newest scanned release
-# misses); 4 = transient GitHub failure (rate limit, 5xx, network) -- retry
-# later; 2 = usage error; 1 = any other gh/API or manifest failure. gh's own
-# error text is appended to the message on 1 and 4.
+# misses); 5 = same, but the active Release Alpha run on intent-hq/cloudlands-fe
+# looks stalled (a job queued longer than SHIPPED_IN_STALL_MINUTES, default 30;
+# 0 disables the probe) -- stderr names the run, job and queue age; 4 =
+# transient GitHub failure (rate limit, 5xx, network) -- retry later; 2 = usage
+# error; 1 = any other gh/API or manifest failure. gh's own error text is
+# appended to the message on 1 and 4. The stall probe is best-effort: when it
+# fails the script still exits 3 and notes why on stderr.
 
 set -euo pipefail
 
@@ -67,6 +71,14 @@ for ((i = 0; i < pair_count; i++)); do
   esac
   [[ "${shas[i]}" =~ ^[0-9a-fA-F]{7,40}$ ]] || usage
 done
+
+stall_minutes=${SHIPPED_IN_STALL_MINUTES:-30}
+if [[ ! "$stall_minutes" =~ ^[0-9]+$ ]]; then
+  echo "shipped-in: SHIPPED_IN_STALL_MINUTES must be a non-negative integer, got '$stall_minutes'" >&2
+  exit 2
+fi
+# Force base 10 so a leading zero ("08") is not read as octal.
+stall_minutes=$((10#$stall_minutes))
 
 fail() {
   echo "shipped-in: $*" >&2
@@ -190,10 +202,78 @@ for tag in "${tags[@]}"; do
   fi
 done
 
+# Best-effort stall probe for the exit-3 path: intentd-only changes ride the
+# cloudlands-fe Release Alpha run too, so its active run tells "not cut yet"
+# apart from "stalled" (a job still queued past the threshold, e.g. a runner
+# label nobody serves). Any probe failure keeps the plain exit 3.
+probe_skipped() {
+  local detail
+  detail=$(<"$gh_err")
+  detail=${detail//$'\n'/ }
+  echo "shipped-in: Release Alpha stall probe skipped: $*${detail:+: $detail}" >&2
+}
+
+release_alpha_stalled() {
+  local run run_id run_url jobs stalled age name since
+  ((stall_minutes > 0)) || return 0
+  run=$(gh run list --repo "$fe_repo" --workflow "Release Alpha" --limit 5 \
+    --json databaseId,status,url,displayTitle,createdAt 2>"$gh_err") ||
+    { probe_skipped "gh run list on $fe_repo failed"; return 0; }
+  # Release Alpha runs share the `cloudlands-release` concurrency group without
+  # cancel-in-progress, so a newer run sits fully queued behind the one holding
+  # the group for as long as that one takes: only the oldest active run can be
+  # stalled. Run-level status is not filtered further -- a run reads `queued`
+  # while its jobs are already in progress.
+  run=$(printf '%s\n' "$run" | python3 -c '
+import json, sys
+runs = [run for run in json.load(sys.stdin) if run["status"] != "completed"]
+if runs:
+    run = min(runs, key=lambda run: run["createdAt"])
+    print(run["databaseId"], run["url"])
+' 2>"$gh_err") || { probe_skipped "could not read the active Release Alpha runs on $fe_repo"; return 0; }
+  [[ -n "$run" ]] || return 0
+  read -r run_id run_url <<<"$run"
+  # The REST jobs payload carries created_at; `gh run view --json jobs` does
+  # not. --paginate emits one JSON object per page, back to back.
+  jobs=$(gh api "repos/$fe_repo/actions/runs/$run_id/jobs" --paginate 2>"$gh_err") ||
+    { probe_skipped "gh api jobs for Release Alpha run $run_id on $fe_repo failed"; return 0; }
+  stalled=$(printf '%s\n' "$jobs" | python3 -c '
+import datetime, json, sys
+threshold = int(sys.argv[1]) * 60
+text = sys.stdin.read()
+decoder = json.JSONDecoder()
+pos, jobs = 0, []
+while True:
+    while pos < len(text) and text[pos].isspace():
+        pos += 1
+    if pos >= len(text):
+        break
+    page, pos = decoder.raw_decode(text, pos)
+    jobs.extend(page.get("jobs", []))
+now = datetime.datetime.now(datetime.timezone.utc)
+worst = None
+for job in jobs:
+    if job.get("status") != "queued" or not job.get("created_at"):
+        continue
+    created = datetime.datetime.fromisoformat(job["created_at"].replace("Z", "+00:00"))
+    age = int((now - created).total_seconds())
+    if age > threshold and (worst is None or age > worst[0]):
+        worst = (age, job.get("name", ""), job["created_at"])
+if worst:
+    print("%d\t%s\t%s" % (worst[0] // 60, worst[1], worst[2]))
+' "$stall_minutes" 2>"$gh_err") ||
+    { probe_skipped "could not read the jobs of Release Alpha run $run_id on $fe_repo"; return 0; }
+  [[ -n "$stalled" ]] || return 0
+  IFS=$'\t' read -r age name since <<<"$stalled"
+  echo "shipped-in: Release Alpha run $run_url stalled: job \"$name\" queued for $age min (since $since)" >&2
+  exit 5
+}
+
 if [[ -z "$first_hit" ]]; then
   verb=is
   [[ "$newest_uncarried" != *", "* ]] || verb=are
   echo "shipped-in: $newest_uncarried $verb not carried by the newest ${#tags[@]} release(s) on $releases_repo (newest ${tags[0]})" >&2
+  release_alpha_stalled
   exit 3
 fi
 
