@@ -261,7 +261,11 @@ with no rollback.
   `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the
   full suite on manifest, lockfile, or nextest-config changes; `DRY_RUN=1` prints the plan.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
-  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`);
+  self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
+  The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
+  on "not running": `starting` is a live state, and treating anything but a recorded
+  exit as finished fired a false wake on the hook's validation run
+  ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
   are PTY-backed with no keyboard, so use the `make` targets — they disable progress bars
   and pagers (`make list-tests` for nextest discovery, which ignores `PAGER`); a raw
