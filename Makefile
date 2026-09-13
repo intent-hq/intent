@@ -44,8 +44,23 @@ CARGO_BIN_DIR ?= $(or $(CARGO_INSTALL_ROOT),$(CARGO_HOME),$(HOME)/.cargo)/bin
 # guards rustup >= 1.28 auto-install). When rustup or the toolchain is absent
 # this expands to empty and behavior is unchanged. cargo-nextest and other
 # installed subcommands stay discoverable via $(CARGO_BIN_DIR).
-RUSTUP_CARGO := $(shell cd $(INTENTD_DIR) 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
-export PATH := $(if $(RUSTUP_CARGO),$(dir $(RUSTUP_CARGO)):)$(CARGO_BIN_DIR):$(PATH)
+#
+# Resolution is deferred (recursive `=`), not parse-time (`:=`): on a fresh
+# clone $(INTENTD_DIR) is an empty submodule dir until
+# `ensure-intentd-submodule` runs, so a parse-time probe leaves the FIRST
+# fmt/clippy/check of a clone unpinned. Make rebuilds the exported environment
+# per recipe, so a deferred probe runs after prerequisites and sees the
+# populated submodule. The probe requires rust-toolchain.toml to be readable —
+# without it `rustup which` silently answers with the caller's DEFAULT
+# toolchain, which is exactly the unpinned cargo this export exists to bypass.
+# ORIG_PATH snapshots the caller's PATH so the recursive export never
+# references itself, and $(addsuffix) keeps the export to a single
+# $(RUSTUP_CARGO) expansion — one ~10ms `rustup which` per recipe, which no
+# cargo invocation notices. An $(eval) memo does not help: an assignment made
+# while make builds a recipe's environment does not outlive that expansion.
+ORIG_PATH := $(PATH)
+RUSTUP_CARGO = $(shell cd $(INTENTD_DIR) 2>/dev/null && [ -r rust-toolchain.toml ] && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+export PATH = $(addsuffix :,$(dir $(RUSTUP_CARGO)))$(CARGO_BIN_DIR):$(ORIG_PATH)
 
 # `ensure-submodules` covers ALL submodules (intentd + FE + iOS), initializing
 # any that are missing. The FE and iOS submodules are heavy and not needed for
