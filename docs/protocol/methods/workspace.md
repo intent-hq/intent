@@ -1140,18 +1140,36 @@ known to the workspace's PR monitors (entries synthesized as `PullRequestInfo` f
 excluded — the same visibility rule as `prMonitor.list`; a snapshotless monitor synthesizes
 URL/title from its repo identity, and a completed monitor without a snapshot verdict maps
 to `closed`, never `merged`). **Dedup is by PR `url`, first-wins by source precedence**
-(workspace stored list > git-root > monitor-derived) — one entry per URL, **no recency
-comparison**: a URL already carried by the workspace's stored list wins outright even when
-a git-root or monitor entry for the same PR is fresher. One exception: a lower-priority
-duplicate whose `status` sits higher on the lifecycle ladder (`Open`/`Draft` < `Closed` <
-`Merged`) upgrades the winning entry's `status` + `updatedAt` + `isDraft` in place, so a
-stale stored/git-root entry never shadows a monitor that already saw the PR merge
-(monorepo#3127). Status only ever moves up the ladder: `Merged` is irreversible and wins
-over everything (including a stale `Closed`), while `Closed` — the snapshotless
-completed-monitor fallback among others — never downgrades a `Merged` verdict, and
-reopened-after-close is left to the sweep re-fetch. `isDraft` moves with `status` so an
-upgraded entry never reads merged/closed while still claiming draft.
-Identity and all other fields still come from the higher-priority source. Entries can therefore be
+(workspace stored list > git-root > monitor-derived) — one entry per URL: identity and all
+other fields come from the higher-priority source (a URL already carried by the workspace's
+stored list keeps that entry's identity even when a git-root or monitor entry for the same
+PR is fresher). The **lifecycle** of a duplicate follows its source:
+
+- A **git-root** duplicate takes the same **same-url canonicalization** the `displayStatus`
+  derivation folds git-root PRs with (§5.1 "Git-root PR fold"; behavior only, within 10.1):
+  among every copy of the URL — the linked `activePullRequest`, the stored `pullRequests`
+  entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
+  is selected (`Open`/`Draft` < `Closed` < `Merged`, then the latest `updatedAt` among equal
+  ranks; `Merged` is irreversible) and its `status`, `updatedAt`, `isDraft`, `mergeable`
+  and `mergeableState` are written together, as one coherent snapshot, onto **both** the
+  emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
+  URL. The served PR fields therefore never disagree with `displayStatus` on a PR's
+  lifecycle: a merged root copy lifts a stale `open` linked copy beside `pr_merged` (never
+  `activePullRequest: open` next to `displayStatus: pr_merged`), a newer clean `open` root
+  copy lifts an older `draft` pooled copy beside `pr_ready` (never `draft` next to
+  `pr_ready`), and the result is independent of git-root order.
+- A **monitor-derived** duplicate upgrades only when its `status` sits **strictly higher**
+  on the lifecycle ladder, moving `status` + `updatedAt` + `isDraft` in place, so a stale
+  stored/git-root entry never shadows a monitor that already saw the PR merge
+  (monorepo#3127). Status only ever moves up the ladder: `Merged` wins over everything
+  (including a stale `Closed`), while `Closed` — the snapshotless completed-monitor fallback
+  among others — never downgrades a `Merged` verdict, and reopened-after-close is left to the
+  sweep re-fetch. `isDraft` moves with `status` so an upgraded entry never reads
+  merged/closed while still claiming draft; a monitor entry's `updatedAt` is the monitor
+  row's, not the PR's, and it carries no `mergeableState`, so it never takes the equal-rank
+  tie-break.
+
+Entries can therefore be
 **cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
 repository): the entry's `url` is authoritative for which repo it belongs to. The merge is
 computed on emit from already-persisted rows — plain column reads plus an in-memory merge,
@@ -1161,12 +1179,16 @@ serialization untouched (an absent stored `pullRequests` stays omitted); a row t
 always serializes a plain array. The merge runs **after** the `displayStatus`
 enrichment, but the derivation below sees the same external inputs on its own terms: the
 git-root PRs feed its PR rungs directly (as a same-rung input to the stored list — §5.1
-step 4, the git-root fold) and the monitored PRs feed them through the monitor signals
+step 4, the git-root fold, which also canonicalizes the row's own `activePullRequest` /
+`pullRequests` copies in place on every surface that derives `displayStatus`, `workspace.get`
+included) and the monitored PRs feed them through the monitor signals
 (intentd#1329), so the emitted `pullRequests` array and `displayStatus` agree on what the
 workspace's PRs are. Everything else is unchanged: the stored `workspace.pull_requests` column
 keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
 explicit-null clear below still targets only the stored value), `workspace.get` and the
-write-path responses carry the unmerged workspace-level list, and the `pr:*` event
+write-path responses carry the unmerged workspace-level list (no git-root or monitor entries
+are appended there — only the same-url canonicalization of the workspace's own copies
+applies), and the `pr:*` event
 payloads (§6.5) are untouched.
 
 **Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
@@ -1492,7 +1514,16 @@ degrades to the previous derivation (no signal, never an error). It is applied i
 on **every** surface that derives `displayStatus`: `workspace.list` and the lite
 `workspace.subscribe` seq-0 snapshot (which reuse the list's single bulk git-root read),
 `workspace.get` (one scoped read), and the `workspace:displayStatus-changed` recompute
-(§6.5), so the three read surfaces and the transition event always agree.
+(§6.5), so the three read surfaces and the transition event always agree. **The served PR
+fields carry the same canonical lifecycle**: on each of those read surfaces the emitted
+`activePullRequest` and the workspace-owned `pullRequests` entries are canonicalized in
+place with the very same same-url rule (the copy selected by (rank, `updatedAt`) — one
+coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` snapshot,
+identity fields untouched, nothing persisted), so no response pairs
+`activePullRequest: open` with `displayStatus: pr_merged`, or a `draft` pooled copy with
+`pr_ready`; the list emit merge above applies the identical rule when it appends the
+git-root entries themselves. The `workspace:displayStatus-changed` payload carries no PR
+fields.
 
 The dismissible `unread` workspace attention flag (the server-owned turn-end blue dot,
 §5.1 `attention`) **never feeds the derivation** — the intentd#945 step-6 unread
