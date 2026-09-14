@@ -1150,11 +1150,14 @@ PR is fresher). The **lifecycle** of a duplicate follows its source:
   among every copy of the URL — the linked `activePullRequest`, the stored `pullRequests`
   entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
   is selected — the maximum of the **same-url tie key** (lifecycle rank: `Open`/`Draft` <
-  `Closed` < `Merged`; `updatedAt`; readiness rank: queued 5 > `mergeableState: clean` 4 >
-  `mergeable: true` with any other state 3 > `mergeable` unknown 2 > `mergeable: false` 1,
-  drafts never queued/ready, mirroring step 4; non-draft over draft; `mergeableState`;
-  `mergeable`; `isDraft`; `status`), compared lexicographically in that order, which is total
-  over every lifecycle field; `Merged` is irreversible — and its `status`, `updatedAt`,
+  `Closed` < `Merged`; `updatedAt`; readiness rank, with *draft* meaning `status: draft` or
+  `isDraft: true`: non-draft `mergeableState: queued` 5 > non-draft `mergeable: true` and
+  `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
+  `mergeable: false` 1, mirroring step 4; non-draft over draft; `mergeableState`; `mergeable`;
+  `isDraft`; `status` — the trailing raw fields ordered unknown < set, `false` < `true`,
+  strings lexicographic, and `open` over `draft`, the only equal-rank statuses), compared
+  lexicographically in that order, which is total over every lifecycle field; `Merged` is
+  irreversible — and its `status`, `updatedAt`,
   `isDraft`, `mergeable`
   and `mergeableState` are written together, as one coherent snapshot, onto **both** the
   emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
@@ -1508,12 +1511,15 @@ lexicographically in this order:
 
 1. lifecycle rank — `Open`/`Draft` < `Closed` < `Merged`;
 2. `updatedAt` — the latest among equal ranks;
-3. readiness rank — queued 5 > `mergeableState: clean` 4 > `mergeable: true` with any other
-   state 3 > `mergeable` unknown 2 > `mergeable: false` 1 (drafts are never queued or ready),
-   the step-4 precedence;
+3. readiness rank, the step-4 precedence, where *draft* means `status: draft` or
+   `isDraft: true` — non-draft `mergeableState: queued` 5 > non-draft `mergeable: true` and
+   `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
+   `mergeable: false` 1;
 4. non-draft over draft;
-5. `mergeableState`, 6. `mergeable`, 7. `isDraft`, 8. `status` — raw field values, so the
-   order is total over every lifecycle field and equal keys are identical snapshots.
+5. `mergeableState`, 6. `mergeable`, 7. `isDraft`, 8. `status` — raw field values compared
+   as unknown < set, `false` < `true`, strings lexicographic, and `open` over `draft` (the
+   only statuses sharing a lifecycle rank), so the order is total over every lifecycle field
+   and equal keys are identical snapshots.
 
 Two same-instant reads of one open PR therefore converge on the readier copy rather than the
 first root visited; `isDraft`, `mergeable` and `mergeableState` move with `status`, so the
