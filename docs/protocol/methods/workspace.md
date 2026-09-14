@@ -1150,7 +1150,9 @@ PR is fresher). The **lifecycle** of a duplicate follows its source:
   among every copy of the URL — the linked `activePullRequest`, the stored `pullRequests`
   entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
   is selected (`Open`/`Draft` < `Closed` < `Merged`, then the latest `updatedAt` among equal
-  ranks; `Merged` is irreversible) and its `status`, `updatedAt`, `isDraft`, `mergeable`
+  ranks; ties on (rank, `updatedAt`) resolve by readiness — queued > ready > open, mirroring
+  step 4, non-draft over draft — then `mergeableState`, so the pick is total; `Merged` is
+  irreversible) and its `status`, `updatedAt`, `isDraft`, `mergeable`
   and `mergeableState` are written together, as one coherent snapshot, onto **both** the
   emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
   URL. The served PR fields therefore never disagree with `displayStatus` on a PR's
@@ -1499,7 +1501,10 @@ same lifecycle-ladder upgrade the emitted-`pullRequests` merge above applies: a 
 workspace already carries (linked `activePullRequest` or a `pullRequests` entry) keeps its
 identity fields, and every copy of that URL — linked, pooled, git-root — is canonicalized to
 the **highest** lifecycle among them (`Open`/`Draft` < `Closed` < `Merged`, then the
-latest `updatedAt` among equal ranks; `isDraft`, `mergeable` and `mergeableState` move
+latest `updatedAt` among equal ranks; ties on (rank, `updatedAt`) resolve by readiness —
+queued > ready > open, the step-4 precedence, non-draft over draft — then `mergeableState`,
+so two same-instant reads of one open PR converge on the readier copy rather than the first
+root visited; `isDraft`, `mergeable` and `mergeableState` move
 with `status`, so the selected copy is one coherent snapshot), so a stale open
 duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
 stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
@@ -1517,7 +1522,8 @@ on **every** surface that derives `displayStatus`: `workspace.list` and the lite
 (§6.5), so the three read surfaces and the transition event always agree. **The served PR
 fields carry the same canonical lifecycle**: on each of those read surfaces the emitted
 `activePullRequest` and the workspace-owned `pullRequests` entries are canonicalized in
-place with the very same same-url rule (the copy selected by (rank, `updatedAt`) — one
+place with the very same same-url rule (the copy selected by (rank, `updatedAt`), ties by
+readiness then `mergeableState` — one
 coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` snapshot,
 identity fields untouched, nothing persisted), so no response pairs
 `activePullRequest: open` with `displayStatus: pr_merged`, or a `draft` pooled copy with
