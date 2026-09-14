@@ -2,25 +2,26 @@
 
 ## 5. Method Catalog
 
-The API exposes **355 dispatchable method names** across the following categories:
+The API exposes **366 dispatchable method names** across the following categories:
 
-- **Router methods:** 304 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 315 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 49 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 355 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 366 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 355 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 366 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (304 total)
+### Router methods by namespace (315 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
+| accept-changes | 5 | addRemote, execute, getStatus, mergePR, prepare — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
 | agent | 46 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
@@ -28,6 +29,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
 | event | 3 | agentActivity, query, workspaceSummary |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
+| file-tracking | 6 | getAgentLocks, getChanges, getLineStats, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
 | github | 26 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
@@ -552,7 +554,7 @@ Of these 5 method names, `browser.exec` and `host.openInEditor` are **client-cal
 
 > **Internal, not wire (Integrations & Ops).** Token/credit **usage accounting** runs **inside the daemon**: usage is tallied **live** at ACP turn end from `PromptResponse.usage`, with a periodic **reconciliation scan** as fallback (§5.23); clients never trigger either — they read the result via `workspace.getTokenUsage` (§5.23) and are pushed `workspace:tokenUsage-changed`. **Observability** (tracing, structured logs, log files) is likewise daemon-internal: there is **no** `logging.*` / `telemetry.*` wire surface. See §6.8.
 
-> Deprecated aliases. agent.subscribe/agent.unsubscribe and event.subscribe/event.unsubscribe exist in the method map but are not the canonical WebSocket subscription surface. For live event streaming use the bridge methods events.subscribe / events.unsubscribe (note the plural events.), handled directly by the server before the dispatcher — see §6. The agent./event.* variants create internal/agent-style subscriptions and do not wire a WebSocket client up to events.event notifications. (A bare `{ workspaceId }` `agent.subscribe` frame instead routes to the agent collection channel — see §6.9.)
+> Deprecated aliases. agent.subscribe/agent.unsubscribe exist in the method map but are not the canonical WebSocket subscription surface. For live event streaming use the bridge methods events.subscribe / events.unsubscribe (note the plural events.), handled directly by the server before the dispatcher — see §6. The agent.* variants create internal/agent-style subscriptions and do not wire a WebSocket client up to events.event notifications. The singular event.subscribe / event.unsubscribe spellings are no longer routable (`-32601`); the equivalent functionality is MCP-only (`ws.event.subscribe` / `ws.event.unsubscribe`, §5.10). (A bare `{ workspaceId }` `agent.subscribe` frame instead routes to the agent collection channel — see §6.9.)
 
 Conventions used below: parameters marked **(req)** are required (a missing/`null` value yields`-32602 "Missing required parameter: <name>"`). Unless stated otherwise, every method also requires`workspaceId` (see §3.6) and may return `-32603 Internal error` if the underlying service throws.
 
