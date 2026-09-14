@@ -454,6 +454,9 @@ expect_runner --repo-root "/tmp/reviewer's repo" --cache-dir "/tmp/reviewer's ga
 # the way the script does and records the words (nested quotes used to make
 # the recipe itself fail to parse with exit 2 here). make -n cannot check this:
 # the recipe's logical line contains $(MAKE), so -n executes it anyway.
+# The Makefile prepends CARGO_BIN_DIR (default ~/.cargo/bin) to every recipe's
+# PATH, so a host cargo would outrank the stub; pointing CARGO_BIN_DIR at the
+# stub dir keeps the recipe's `cargo nextest --version` preflight hermetic.
 make_bin=$(command -v make 2>/dev/null) || make_bin=""
 if [[ -n "$make_bin" ]]; then
   case_name="Makefile test-changed recipe survives an apostrophe in GATE_CACHE_DIR"
@@ -467,13 +470,18 @@ eval "set -- $NEXTEST_RUNNER"
 SH
   chmod +x "$mk/scripts/rust-changed-tests.sh"
   : >"$temp_dir/runner.log"
+  : >"$temp_dir/cargo.log"
   set +e
   PATH="$bin_dir" RUNNER_TEST_LOG="$temp_dir/runner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
-    "$make_bin" -C "$mk" --no-print-directory test-changed GATE_CACHE_DIR="$mk/gate runs" RESUME=1 \
+    "$make_bin" -C "$mk" --no-print-directory test-changed CARGO_BIN_DIR="$bin_dir" \
+    GATE_CACHE_DIR="$mk/gate runs" RESUME=1 \
     >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
   status=$?
   set -e
   [[ "$status" -eq 0 ]] || fail "$case_name: make exited $status: $(<"$temp_dir/stderr")"
+  cargo_log=$(<"$temp_dir/cargo.log")
+  [[ "$cargo_log" == *": nextest --version" ]] \
+    || fail "$case_name: stub cargo did not serve the preflight; cargo log: '$cargo_log'"
   runner_log=$(<"$temp_dir/runner.log")
   expected="call:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"
   [[ "$runner_log" == "$expected" ]] || fail "$case_name: runner argv was"$'\n'"$runner_log"$'\n'"expected"$'\n'"$expected"
