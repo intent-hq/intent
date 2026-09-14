@@ -14,6 +14,9 @@
 # intent-hq/intentd reports `ahead` or `identical`. `behind` and `diverged`
 # never count. The newest N releases are scanned (default 10) and the oldest
 # tag carrying EVERY pair is printed as `<tag> intentdVersion=<version>`.
+# Carriage is monotonic across versioned tags (a commit carried by a tag is
+# carried by every newer one), so the scan stops at the newest tag when it
+# misses any pair; older tags are only inspected to find the oldest carrier.
 #
 # Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
 # pair yet (stdout empty; stderr names the pairs the newest scanned release
@@ -198,7 +201,9 @@ for tag in "${tags[@]}"; do
   if [[ -z "$uncarried" ]]; then
     first_hit=$tag
   elif [[ "$tag" == "${tags[0]}" ]]; then
+    # No older tag can carry what the newest one misses.
     newest_uncarried=$uncarried
+    break
   fi
 done
 

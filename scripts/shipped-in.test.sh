@@ -141,6 +141,9 @@ run_script cloudlands-fe "$sha"
 [[ "$status" -eq 3 ]] || fail "no-hit exited $status (expected 3): $stderr"
 [[ -z "$stdout" ]] || fail "no-hit printed '$stdout'"
 ! grep -q '^release download' "$temp_dir/gh.log" || fail "no-hit downloaded a manifest"
+# Carriage is monotonic across tags: once the newest tag misses the pair no
+# older tag can carry it, so the scan stops there.
+! grep -qE "^api repos/intent-hq/cloudlands-fe/compare/$sha\.\.\.v2\.[21]\.0 " "$temp_dir/gh.log" || fail "no-hit compared against older tags after the newest tag missed"
 
 reset_stub
 echo diverged >"$fe_compare/$sha...v2.3.0"
@@ -280,6 +283,10 @@ run_script cloudlands-fe "$sha" intentd "$sha2"
 [[ "$status" -eq 3 ]] || fail "uncarried intentd pair exited $status (expected 3): $stderr"
 [[ -z "$stdout" ]] || fail "uncarried intentd pair printed '$stdout'"
 [[ "$stderr" == "shipped-in: intentd $sha2 is not carried by the newest 3 release(s) on intent-hq/cloudlands-releases (newest v2.3.0)" ]] || fail "uncarried intentd pair message: $stderr"
+[[ "$(grep -c '^release download ' "$temp_dir/gh.log")" -eq 1 ]] || fail "uncarried intentd pair downloaded manifests beyond the newest tag"
+! grep -q '^release download v2\.[21]\.0 ' "$temp_dir/gh.log" || fail "uncarried intentd pair downloaded an older tag's manifest"
+! grep -q "^api repos/intent-hq/intentd/compare/$sha2...v0.9.4 " "$temp_dir/gh.log" || fail "uncarried intentd pair compared against an older pinned intentd version"
+! grep -qE "^api repos/intent-hq/cloudlands-fe/compare/$sha\.\.\.v2\.[21]\.0 " "$temp_dir/gh.log" || fail "uncarried intentd pair compared fe against older tags"
 
 reset_stub
 echo behind >"$fe_compare/$sha...v2.3.0"
