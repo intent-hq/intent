@@ -217,8 +217,12 @@ with no rollback.
   branch to be up to date first, and there is no update-branch/re-check treadmill.
   In intentd and cloudlands-fe the queue runs CI on the actual merged tree
   (`merge_group` runs of the same required check) before landing; the monorepo
-  ruleset has no required status checks, so its queue serializes merges but gates on
-  nothing and lands entries without a CI run.
+  ruleset has no required status checks, so its queue serializes merges but lands
+  entries without a check run. A monorepo PR still cannot enter the queue while any
+  review thread is unresolved (`required_review_thread_resolution` on the `main`
+  ruleset): auto-merge arms but the PR stays BLOCKED outside the queue
+  ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)), so
+  confirm `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
   `--auto` remains useful to enqueue once still-pending PR checks pass — with a
   queue enabled, `gh pr merge --squash --auto` prints "The merge strategy for main is
   set by the merge queue"; that is informational (the queue's own squash method
