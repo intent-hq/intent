@@ -454,9 +454,10 @@ expect_runner --repo-root "/tmp/reviewer's repo" --cache-dir "/tmp/reviewer's ga
 # the way the script does and records the words (nested quotes used to make
 # the recipe itself fail to parse with exit 2 here). make -n cannot check this:
 # the recipe's logical line contains $(MAKE), so -n executes it anyway.
-# The Makefile prepends CARGO_BIN_DIR (default ~/.cargo/bin) to every recipe's
-# PATH, so a host cargo would outrank the stub; pointing CARGO_BIN_DIR at the
-# stub dir keeps the recipe's `cargo nextest --version` preflight hermetic.
+# The Makefile prepends the rustup-pinned cargo dir and CARGO_BIN_DIR (default
+# ~/.cargo/bin) to every recipe's PATH, so a host cargo would outrank the stub;
+# pointing CARGO_BIN_DIR at the stub dir and blanking RUSTUP_CARGO keeps the
+# recipe's `cargo nextest --version` preflight hermetic on any host.
 make_bin=$(command -v make 2>/dev/null) || make_bin=""
 if [[ -n "$make_bin" ]]; then
   case_name="Makefile test-changed recipe survives an apostrophe in GATE_CACHE_DIR"
@@ -473,7 +474,7 @@ SH
   : >"$temp_dir/cargo.log"
   set +e
   PATH="$bin_dir" RUNNER_TEST_LOG="$temp_dir/runner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
-    "$make_bin" -C "$mk" --no-print-directory test-changed CARGO_BIN_DIR="$bin_dir" \
+    "$make_bin" -C "$mk" --no-print-directory test-changed CARGO_BIN_DIR="$bin_dir" RUSTUP_CARGO= \
     GATE_CACHE_DIR="$mk/gate runs" RESUME=1 \
     >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
   status=$?
