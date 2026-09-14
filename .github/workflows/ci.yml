@@ -68,17 +68,24 @@ jobs:
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
 
-  # Documentation invariants include the public frontend agent guide and the
-  # browser-tab contract surfaces in cloudlands-fe and intentd. Initialize only
-  # those submodules; packages/ios is private and intentionally untouched.
+  # Documentation invariants include the public frontend agent guide, the
+  # browser-tab contract surfaces in cloudlands-fe and intentd, and the
+  # protocol method catalog (docs/protocol/05-method-catalog.md ↔ methods/*.md
+  # ↔ intentd's catalog.rs). Initialize only those submodules; packages/ios is
+  # private and intentionally untouched.
   docs-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
       - run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
       - run: make docs-check
+      - run: node --test scripts/check-protocol-catalog.test.mjs
+      - run: make check-protocol-catalog
 
   # Hermetic shell suites stub daemon, cargo, and pnpm behavior where needed.
   shell-tests:

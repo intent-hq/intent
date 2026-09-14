@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check shipped-in rpc
+.PHONY: ports status docs-check check-protocol-catalog shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -131,6 +131,9 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 
 docs-check: ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
+
+check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
+	@node scripts/check-protocol-catalog.mjs
 
 # Release tracking: which cloudlands-releases alpha first carries one or more
 # merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
