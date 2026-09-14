@@ -125,6 +125,16 @@ export function splitMethodName(name) {
   return { ns: name.slice(0, dot), suffix: name.slice(dot + 1) };
 }
 
+const SUFFIX_TOKEN_RE = /^[A-Za-z0-9_.-]+$/;
+
+/** Split a router-row Methods cell into its suffix tokens: the text before the first " — " (or the whole cell), comma-separated. */
+export function tokenizeRowSuffixes(cell) {
+  const dash = cell.indexOf(' — ');
+  const list = dash === -1 ? cell : cell.slice(0, dash);
+  const tokens = list.split(',').map((s) => s.trim());
+  return { tokens, invalid: tokens.filter((t) => !SUFFIX_TOKEN_RE.test(t)) };
+}
+
 /** Where a method name is present in the parsed catalog, or null. */
 export function findInCatalog(catalog, name) {
   const { ns, suffix } = splitMethodName(name);
@@ -205,8 +215,10 @@ export function extractRustCatalog(text) {
   return result;
 }
 
-const ORPHAN_HINT =
-  'is listed in the catalog but not in the pinned intentd catalog.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run';
+const REBASE_HINT =
+  'if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run';
+const ORPHAN_HINT = `is listed in the catalog but not in the pinned intentd catalog.rs — ${REBASE_HINT}`;
+const ORPHAN_HINT_TAIL = `is not a router method in the pinned intentd catalog.rs — ${REBASE_HINT}`;
 
 /** Layer 1: methods/*.md coverage, section counts, summary formula. `docs` is `[{ file, methods: [{ name, line }] }]`. */
 export function checkLayer1(catalog, docs, { catalogPath = CATALOG_PATH, allowlist = DOCUMENTED_NOT_DISPATCHABLE } = {}) {
@@ -277,6 +289,15 @@ export function checkLayer2(catalog, rust, docs, { catalogPath = CATALOG_PATH, r
       if (!cellHasSuffix(row.cell, splitMethodName(name).suffix)) err(catalogPath, row.line, `${name} is in ${rustPath} ROUTER_METHODS but missing from the ${ns} row`);
     }
     if (row.count !== names.length) err(catalogPath, row.line, `${ns} row says ${row.count} methods but ${rustPath} ROUTER_METHODS has ${names.length}`);
+    const { tokens, invalid } = tokenizeRowSuffixes(row.cell);
+    if (invalid.length) {
+      for (const t of invalid) err(catalogPath, row.line, `${ns} row method list contains "${t}", which is not a method suffix — list the suffixes first, comma-separated, and put prose after " — "`);
+      continue;
+    }
+    if (tokens.length !== row.count) err(catalogPath, row.line, `${ns} row says ${row.count} methods but lists ${tokens.length} (${tokens.join(', ')})`);
+    for (const t of tokens) {
+      if (!names.includes(`${ns}.${t}`)) err(catalogPath, row.line, `${ns}.${t} is listed in the ${ns} row but ${ORPHAN_HINT_TAIL}`);
+    }
   }
   for (const row of catalog.routerRows) {
     if (!byNs.has(row.ns)) err(catalogPath, row.line, `router namespace ${row.ns} ${ORPHAN_HINT}`);

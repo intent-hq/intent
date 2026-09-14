@@ -15,6 +15,7 @@ import {
   methodNamesInFirstCell,
   parseCatalog,
   runChecks,
+  tokenizeRowSuffixes,
 } from './check-protocol-catalog.mjs';
 
 const CATALOG = `> Part of the protocol docs — §5 Method Catalog.
@@ -31,7 +32,7 @@ The API exposes **10 dispatchable method names** across the following categories
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
-| agent | 3 | create, list — live agents (§5.5; \`workspaceId\` req), stop |
+| agent | 3 | create, list, stop — live agents (§5.5; \`workspaceId\` req) |
 | github | 2 | pulls.list, relatedRepos.list |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId |
 
@@ -185,16 +186,18 @@ test('Layer 2: a router method in catalog.rs missing from its namespace row fail
   assert.deepEqual(messages(result), [
     `docs/protocol/methods/agents.md:8: error: github.relatedRepos.list is documented here but missing from docs/protocol/05-method-catalog.md`,
     `docs/protocol/05-method-catalog.md:${line}: error: github.relatedRepos.list is in ${INTENTD_CATALOG_PATH} ROUTER_METHODS but missing from the github row`,
+    `docs/protocol/05-method-catalog.md:${line}: error: github row says 2 methods but lists 1 (pulls.list)`,
   ]);
 });
 
 test('Layer 2: a row Count that disagrees with catalog.rs fails', async () => {
   const rust = RUST.replace('    "agent.stop",\n', '');
-  const catalog = CATALOG.replace('create, list — live agents (§5.5; `workspaceId` req), stop', 'create, list — live agents (§5.5; `workspaceId` req)');
+  const catalog = CATALOG.replace('create, list, stop — live agents', 'create, list — live agents');
   const result = await runChecks(await makeRoot({ catalog, rust, methods: { 'agents.md': METHODS_DOC.replace('| agent.stop | agentId (req) | { ok } |\n', '') } }));
   const line = catalog.split('\n').findIndex((l) => l.startsWith('| agent |')) + 1;
   assert.deepEqual(messages(result), [
     `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but ${INTENTD_CATALOG_PATH} ROUTER_METHODS has 2`,
+    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but lists 2 (create, list)`,
   ]);
 });
 
@@ -202,10 +205,46 @@ test('Layer 2: catalog entries absent from catalog.rs are orphans with the rebas
   const rust = RUST.replace('    "github.relatedRepos.list",\n', '').replace('    "client.hello",\n', '');
   const result = await runChecks(await makeRoot({ rust }));
   const msgs = messages(result);
-  assert.equal(msgs.length, 3, msgs.join('\n'));
+  assert.equal(msgs.length, 4, msgs.join('\n'));
   assert.match(msgs[0], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github row says 2 methods but .* has 1$/);
-  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
-  assert.match(msgs[2], /client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs/);
+  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the github row but is not a router method in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
+  assert.match(msgs[2], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
+  assert.match(msgs[3], /client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs/);
+});
+
+test('Layer 2: a fake suffix in a row whose Count still matches catalog.rs fails naming it', async () => {
+  const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 2 | pulls.list, relatedRepos.list, fake |');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
+  assert.deepEqual(messages(result), [
+    `docs/protocol/05-method-catalog.md:${line}: error: github row says 2 methods but lists 3 (pulls.list, relatedRepos.list, fake)`,
+    `docs/protocol/05-method-catalog.md:${line}: error: github.fake is listed in the github row but is not a router method in the pinned intentd catalog.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run`,
+  ]);
+});
+
+test('Layer 2: a row whose token count disagrees with its Count fails even when catalog.rs agrees with Count', async () => {
+  const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 2 | pulls.list, relatedRepos.list, pulls.list |');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
+  assert.deepEqual(messages(result), [
+    `docs/protocol/05-method-catalog.md:${line}: error: github row says 2 methods but lists 3 (pulls.list, relatedRepos.list, pulls.list)`,
+  ]);
+});
+
+test('Layer 2: prose inside the method list (before the em dash) is rejected naming the offending token', async () => {
+  const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 2 | pulls.list (§5.11; v2.1), relatedRepos.list |');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
+  assert.deepEqual(messages(result), [
+    `docs/protocol/05-method-catalog.md:${line}: error: github row method list contains "pulls.list (§5.11; v2.1)", which is not a method suffix — list the suffixes first, comma-separated, and put prose after " — "`,
+  ]);
+});
+
+test('tokenizeRowSuffixes stops at the first em dash and tolerates surrounding whitespace', () => {
+  assert.deepEqual(tokenizeRowSuffixes('create, list, stop — live agents (§5.5; `workspaceId` req) — more'), { tokens: ['create', 'list', 'stop'], invalid: [] });
+  assert.deepEqual(tokenizeRowSuffixes('  pulls.list ,relatedRepos.list  '), { tokens: ['pulls.list', 'relatedRepos.list'], invalid: [] });
+  assert.deepEqual(tokenizeRowSuffixes('capabilities — machine-level capabilities, no workspaceId'), { tokens: ['capabilities'], invalid: [] });
+  assert.deepEqual(tokenizeRowSuffixes('a, b (x), c'), { tokens: ['a', 'b (x)', 'c'], invalid: ['b (x)'] });
 });
 
 test('Layer 2: a whole documented namespace absent from catalog.rs is an orphan row', async () => {

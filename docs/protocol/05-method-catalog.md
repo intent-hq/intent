@@ -53,12 +53,12 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
 | specialist | 5 | create, delete, edit, get, list |
-| stats | 2 | getRateHistory (§5.39; v2.9, daemon-global — no `workspaceId`), getUsage |
+| stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 15 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, setRelations, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
-| voice | 2 | getWorkspaceVocabulary — the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req), transcribe — daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
+| voice | 2 | getWorkspaceVocabulary, transcribe — `getWorkspaceVocabulary` is the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req); `transcribe` is daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
 | workspace | 39 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
