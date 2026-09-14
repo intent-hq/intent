@@ -418,18 +418,22 @@ test-intentd: ensure-intentd-submodule
 
 # Pre-queue gate when the full suite is impractical: runs only the nextest
 # targets the intentd checkout changed vs BASE (default origin/main), mapped
-# per crate by scripts/rust-changed-tests.sh (see its header). Reverse
+# per crate by scripts/rust-changed-tests.sh (see its header) and executed
+# through scripts/resumable_nextest.py, so the run writes the same gate-run
+# record as `make test` (junit, summary, run.json under GATE_CACHE_DIR, path
+# printed on exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse
 # dependencies are not propagated, so `make test` stays the complete gate.
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
-test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE (DRY_RUN=1 prints the plan)
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, DRY_RUN=1 prints the plan)
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$(CURDIR)" --intentd-dir "$(INTENTD_DIR)" --cache-dir "$(GATE_CACHE_DIR)" --resume "$(RESUME)" --force "$(GATE_FORCE)"' \
 		scripts/rust-changed-tests.sh; status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \

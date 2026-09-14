@@ -5,6 +5,7 @@ set -euo pipefail
 # The caller's environment must not steer the script under test (a shell with
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
+unset NEXTEST_RUNNER RESUME GATE_FORCE GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/rust-changed-tests.sh"
@@ -29,6 +30,10 @@ fail() {
 for command in bash dirname mktemp rm sort; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
+# python3 runs the real record-writing runner in the end-to-end cases below;
+# those are skipped when it is missing.
+python3=$(command -v python3 2>/dev/null) || python3=""
+[[ -z "$python3" ]] || ln -s "$python3" "$bin_dir/python3"
 
 # git wrapper: the subcommand named by GIT_STUB_FAIL fails like a broken
 # checkout would; everything else reaches the real git.
@@ -53,6 +58,15 @@ while IFS= read -r _; do :; done
 exit "${CARGO_STUB_EXIT:-0}"
 SH
 chmod +x "$bin_dir/cargo"
+
+# Stub runner: appends "call:" plus one line per argv word to RUNNER_TEST_LOG
+# and exits with RUNNER_STUB_EXIT (default 0).
+cat >"$bin_dir/runner" <<'SH'
+#!/usr/bin/env bash
+{ echo "call:"; printf '%s\n' "$@"; } >>"$RUNNER_TEST_LOG"
+exit "${RUNNER_STUB_EXIT:-0}"
+SH
+chmod +x "$bin_dir/runner"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
@@ -104,6 +118,7 @@ reset_repo() {
   g reset -q --hard refs/remotes/origin/main
   g clean -fdq
   : >"$temp_dir/cargo.log"
+  : >"$temp_dir/runner.log"
 }
 
 edit() {
@@ -117,18 +132,20 @@ commit_all() {
 
 # Env prefixes on the call (DRY_RUN=1 run_script ...) reach the script; the
 # inputs it reads default to unset here so the suite's own environment cannot
-# leak into the expected argv.
+# leak into the expected argv. PATH_UNDER_TEST prepends extra stub directories.
 run_script() {
   set +e
-  PATH="$bin_dir" INTENTD_DIR="${INTENTD_DIR-$repo}" BASE="${BASE-}" \
+  PATH="${PATH_UNDER_TEST:+$PATH_UNDER_TEST:}$bin_dir" INTENTD_DIR="${INTENTD_DIR-$repo}" BASE="${BASE-}" \
     BUILD_JOBS="${BUILD_JOBS-}" TEST_THREADS="${TEST_THREADS-}" DRY_RUN="${DRY_RUN-}" \
-    CARGO_TEST_LOG="$temp_dir/cargo.log" \
+    NEXTEST_RUNNER="${NEXTEST_RUNNER-}" \
+    CARGO_TEST_LOG="$temp_dir/cargo.log" RUNNER_TEST_LOG="$temp_dir/runner.log" \
     "$script_bash" "${SCRIPT_UNDER_TEST:-$script}" "$@" >"$temp_dir/stdout" 2>"$temp_dir/stderr"
   status=$?
   set -e
   stdout=$(<"$temp_dir/stdout")
   stderr=$(<"$temp_dir/stderr")
   cargo_log=$(<"$temp_dir/cargo.log")
+  runner_log=$(<"$temp_dir/runner.log")
 }
 
 expect_cargo() {
@@ -360,6 +377,64 @@ CARGO_STUB_EXIT=100 run_script
 expect_cargo "-p alpha --test one"
 [[ "$stderr" == "[test-changed] cargo nextest run -p alpha --test one exited 100" ]] || fail "$case_name stderr: $stderr"
 
+# With a runner the script plans as usual, then hands every plan to one
+# runner invocation instead of calling cargo itself.
+expect_runner() {
+  local expected="call:"$'\n' word
+  for word in "$@"; do
+    expected+="$word"$'\n'
+  done
+  [[ "$runner_log" == "${expected%$'\n'}" ]] || fail "$case_name: runner argv was"$'\n'"$runner_log"$'\n'"expected"$'\n'"${expected%$'\n'}"
+  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo alongside the runner: $cargo_log"
+}
+
+case_name="runner receives every plan in one invocation"
+reset_repo
+edit crates/alpha/tests/one.rs
+write crates/gamma/tests/fresh.rs
+NEXTEST_RUNNER="$bin_dir/runner" BUILD_JOBS=-2 TEST_THREADS=4 run_script
+expect_ok
+expect_plan "-p alpha --test one --build-jobs -2 --test-threads 4" "-p gamma --test fresh --build-jobs -2 --test-threads 4"
+expect_runner --plan "-p alpha --test one" --plan "-p gamma --test fresh" \
+  --base origin/main --label test-changed --build-jobs -2 --test-threads 4
+[[ "$(grep -c '^call:$' <<<"$runner_log")" -eq 1 ]] || fail "$case_name: runner called more than once: $runner_log"
+
+case_name="runner command line is shell-quoted and gets the explicit BASE"
+reset_repo
+edit crates/alpha/tests/one.rs
+commit_all
+g branch -q -f other HEAD
+edit crates/gamma/tests/smoke.rs
+run_script --base other --runner "'$bin_dir/runner' --cache-dir '/tmp/gate runs'"
+expect_ok
+expect_runner --cache-dir "/tmp/gate runs" --plan "-p gamma --test smoke" --base other --label test-changed
+
+case_name="runner failure propagates its exit code"
+reset_repo
+edit crates/alpha/tests/one.rs
+NEXTEST_RUNNER="$bin_dir/runner" RUNNER_STUB_EXIT=7 run_script
+[[ "$status" -eq 7 ]] || fail "$case_name exited $status (expected 7): $stderr"
+[[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
+expect_runner --plan "-p alpha --test one" --base origin/main --label test-changed
+
+case_name="runner is not invoked for a dry run, an empty plan or a fallback"
+reset_repo
+edit crates/alpha/tests/one.rs
+NEXTEST_RUNNER="$bin_dir/runner" DRY_RUN=1 run_script
+expect_ok
+expect_plan "-p alpha --test one"
+[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (dry run) invoked: $runner_log$cargo_log"
+reset_repo
+NEXTEST_RUNNER="$bin_dir/runner" run_script
+expect_ok
+[[ "$stdout" == *"nothing to test"* ]] || fail "$case_name (empty) printed '$stdout'"
+[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (empty) invoked: $runner_log$cargo_log"
+reset_repo
+edit Cargo.lock
+NEXTEST_RUNNER="$bin_dir/runner" run_script
+[[ "$status" -eq 3 ]] || fail "$case_name (fallback) exited $status (expected 3): $stderr"
+[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (fallback) invoked: $runner_log$cargo_log"
+
 # Build-wide files make the subset unreliable: exit 3 names them and defers to
 # the full `make test` (the Makefile target turns 3 into that run).
 for path in Cargo.toml Cargo.lock rust-toolchain.toml .config/nextest.toml .cargo/config.toml \
@@ -473,13 +548,116 @@ expect_plan "-p alpha --test one"
 case_name="usage errors"
 reset_repo
 edit crates/alpha/tests/one.rs
-for args in --bogus "--base" "--build-jobs" "extra"; do
+for args in --bogus "--base" "--build-jobs" "--runner" "extra"; do
   # shellcheck disable=SC2086
   run_script $args
   [[ "$status" -eq 2 ]] || fail "$case_name '$args' exited $status (expected 2): $stderr"
   [[ "$stderr" == "Usage: "* ]] || fail "$case_name '$args' stderr: $stderr"
 done
 [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
+
+# End to end with the real record-writing runner: a fake cargo answers
+# `nextest list` with a canned suite listing and `nextest run` with libtest
+# `test ok` events for those tests (after checking the --tool-config-file the
+# runner wrote exists); rustc/cargo version stubs feed the tree key. The
+# fixture monorepo carries packages/intentd as a symlink to $repo so the
+# runner's --intentd-dir resolves as the Makefile passes it.
+if [[ -z "$python3" ]]; then
+  echo "rust-changed-tests tests: python3 not found; record/resume end-to-end cases skipped"
+else
+  e2e_bin="$temp_dir/e2e-bin"
+  mono="$temp_dir/mono"
+  cache="$temp_dir/gate runs"
+  mkdir -p "$e2e_bin" "$mono/packages"
+  ln -s "$repo" "$mono/packages/intentd"
+  printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
+  git -C "$mono" init -q
+  git -C "$mono" add -A
+  git -C "$mono" commit -q -m mono
+  printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{},"also_passes":{}}}}}' >"$temp_dir/listing.json"
+  printf '%s\n' '{"type":"suite","event":"started","test_count":2}' \
+    '{"type":"test","event":"started","name":"alpha::one$passes"}' \
+    '{"type":"test","event":"ok","name":"alpha::one$passes"}' \
+    '{"type":"test","event":"ok","name":"alpha::one$also_passes"}' \
+    '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0}' >"$temp_dir/events.jsonl"
+  export NEXTEST_STUB_LISTING="$temp_dir/listing.json" NEXTEST_STUB_EVENTS="$temp_dir/events.jsonl"
+  printf '#!/usr/bin/env bash\necho "rustc 1.99.0 (stub)"\n' >"$e2e_bin/rustc"
+  cat >"$e2e_bin/cargo" <<'SH'
+#!/usr/bin/env bash
+printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
+if [[ "$1" == -V ]]; then echo "cargo 1.99.0 (stub)"; exit 0; fi
+[[ "$1" == nextest ]] || { echo "cargo stub: unexpected argv: $*" >&2; exit 99; }
+case "$2" in
+  --version) echo "cargo-nextest 0.9.99 (stub)" ;;
+  list) while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
+  run)
+    config=""
+    for arg in "$@"; do
+      case "$arg" in intent-gate:*) config=${arg#intent-gate:} ;; esac
+    done
+    [[ -n "$config" && -f "$config" ]] || { echo "cargo stub: --tool-config-file is missing: '$config'" >&2; exit 98; }
+    while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_EVENTS"
+    ;;
+  *) echo "cargo stub: unexpected argv: $*" >&2; exit 99 ;;
+esac
+SH
+  chmod +x "$e2e_bin/rustc" "$e2e_bin/cargo"
+
+  # $1 = RESUME, $2 = GATE_FORCE; the runner line mirrors the Makefile's.
+  e2e_run() {
+    PATH_UNDER_TEST="$e2e_bin" BUILD_JOBS=2 TEST_THREADS=1 \
+      NEXTEST_RUNNER="python3 '$repo_root/scripts/resumable_nextest.py' --repo-root '$mono' --intentd-dir packages/intentd --cache-dir '$cache' --resume $1 --force $2" \
+      run_script
+  }
+  summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree)"
+  expect_recorded_run() {
+    expect_ok
+    [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one --build-jobs 2 --test-threads 1"$'\n'* ]] || fail "$case_name: plan line missing: $stdout"
+    [[ "$stdout" == *$'\n'"$summary_line"$'\n'"[test-changed] record: $cache/"* ]] || fail "$case_name: summary/record lines missing: $stdout"
+    record_dir=${stdout##*"[test-changed] record: "}
+    [[ "$record_dir" == "$cache"/*/changed/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>"
+    [[ "$cargo_log" == *"$repo: nextest list -p alpha --test one --build-jobs 2 --message-format json"$'\n'"$repo: nextest run -p alpha --test one --build-jobs 2 --test-threads 1 --tool-config-file intent-gate:$record_dir/nextest-1.toml --profile "*" --message-format libtest-json-plus --message-format-version 0.1"* ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"
+  }
+
+  case_name="end to end: first run writes the plan record"
+  reset_repo
+  edit crates/alpha/tests/one.rs
+  e2e_run 0 0
+  expect_recorded_run
+  for file in run.json summary.txt complete nextest-1.toml; do
+    [[ -f "$record_dir/$file" ]] || fail "$case_name: $record_dir/$file is missing"
+  done
+  grep -q '^path = "junit-1.xml"$' "$record_dir/nextest-1.toml" || fail "$case_name: junit-1.xml is not configured: $(<"$record_dir/nextest-1.toml")"
+  [[ "$(<"$record_dir/summary.txt")" == "$summary_line" ]] || fail "$case_name: summary.txt: $(<"$record_dir/summary.txt")"
+  for field in '"label": "test-changed"' '"base": "origin/main"' '"-p alpha --test one"' '"exit_code": 0' '"passed": 2'; do
+    grep -qF "$field" "$record_dir/run.json" || fail "$case_name: run.json lacks $field: $(<"$record_dir/run.json")"
+  done
+  tree_dir=${record_dir%/changed/*}
+  [[ ! -e "$tree_dir/complete" ]] || fail "$case_name: a planned run wrote the full-suite complete marker"
+  [[ "$(grep -c . "$tree_dir/passed.jsonl")" -eq 2 ]] || fail "$case_name: passed.jsonl: $(<"$tree_dir/passed.jsonl")"
+  first_record=$record_dir
+
+  case_name="end to end: RESUME=1 on the unchanged tree skips the run"
+  : >"$temp_dir/cargo.log"
+  e2e_run 1 0
+  expect_ok
+  [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree" ]] || fail "$case_name: stdout: $stdout"
+  [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: cargo was invoked: $cargo_log"
+
+  case_name="end to end: RESUME=1 after a tracked edit runs the plan again"
+  edit crates/alpha/tests/one.rs
+  e2e_run 1 0
+  expect_recorded_run
+  [[ "$stdout" == *"[test-changed] no passed-test record for this tree; running every planned test"* ]] || fail "$case_name: stdout: $stdout"
+  [[ "$record_dir" != "$first_record" ]] || fail "$case_name: the record dir did not change with the tree"
+  changed_record=$record_dir
+
+  case_name="end to end: GATE_FORCE=1 ignores the matching record"
+  e2e_run 1 1
+  expect_recorded_run
+  [[ "$stdout" == *"[test-changed] GATE_FORCE=1: running every planned test"* ]] || fail "$case_name: stdout: $stdout"
+  [[ "$record_dir" == "$changed_record" ]] || fail "$case_name: record dir moved on an unchanged tree: $record_dir"
+fi
 
 echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${RUST_CHANGED_TESTS_TEST_BASH:-}" ]] || exit 0

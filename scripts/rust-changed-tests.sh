@@ -3,11 +3,20 @@
 #
 #   scripts/rust-changed-tests.sh [--dry-run] [--base REF] [--intentd-dir DIR]
 #                                 [--build-jobs N] [--test-threads N]
+#                                 [--runner CMD]
 #
 # Each flag falls back to an environment variable: DRY_RUN=1, BASE (default
 # origin/main), INTENTD_DIR (default packages/intentd next to this script),
-# BUILD_JOBS, TEST_THREADS. NEXTEST_SHOW_PROGRESS / CARGO_TERM_PROGRESS_WHEN
-# are inherited as-is (the Makefile sets them).
+# BUILD_JOBS, TEST_THREADS, NEXTEST_RUNNER. NEXTEST_SHOW_PROGRESS /
+# CARGO_TERM_PROGRESS_WHEN are inherited as-is (the Makefile sets them).
+#
+# Without a runner every plan runs as its own `cargo nextest run` from
+# INTENTD_DIR. With one, the runner (a shell-quoted command line, exec'd once
+# from the caller's working directory) receives every plan instead:
+#   CMD --plan "<plan>"... --base REF --label test-changed
+#       [--build-jobs N] [--test-threads N]
+# and its exit status is the script's. `make test-changed` points it at
+# scripts/resumable_nextest.py so the run leaves a gate-run record.
 #
 # The changed set is `git diff --name-only $(git merge-base HEAD BASE)` inside
 # INTENTD_DIR (committed, staged and unstaged edits) plus the untracked files
@@ -36,19 +45,21 @@
 # Cargo.lock, crates/*/Cargo.toml, crates/*/build.rs, .config/nextest.toml,
 # rust-toolchain.toml, .cargo/**) or a non-inert path outside crates/ changed
 # -- run the full `make test` instead; any other code is the first failing
-# cargo invocation's exit code.
+# cargo invocation's (or the runner's) exit code.
 
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+caller_dir=$PWD
 intentd_dir=${INTENTD_DIR:-$repo_root/packages/intentd}
 base=${BASE:-origin/main}
 build_jobs=${BUILD_JOBS:-}
 test_threads=${TEST_THREADS:-}
 dry_run=${DRY_RUN:-}
+runner=${NEXTEST_RUNNER:-}
 
 usage() {
-  echo "Usage: $0 [--dry-run] [--base REF] [--intentd-dir DIR] [--build-jobs N] [--test-threads N]" >&2
+  echo "Usage: $0 [--dry-run] [--base REF] [--intentd-dir DIR] [--build-jobs N] [--test-threads N] [--runner CMD]" >&2
   exit 2
 }
 
@@ -59,13 +70,15 @@ while (($# > 0)); do
     --intentd-dir=*) intentd_dir=${1#--intentd-dir=} ;;
     --build-jobs=*) build_jobs=${1#--build-jobs=} ;;
     --test-threads=*) test_threads=${1#--test-threads=} ;;
-    --base | --intentd-dir | --build-jobs | --test-threads)
+    --runner=*) runner=${1#--runner=} ;;
+    --base | --intentd-dir | --build-jobs | --test-threads | --runner)
       [[ $# -ge 2 && -n "$2" ]] || usage
       case "$1" in
         --base) base=$2 ;;
         --intentd-dir) intentd_dir=$2 ;;
         --build-jobs) build_jobs=$2 ;;
         --test-threads) test_threads=$2 ;;
+        --runner) runner=$2 ;;
       esac
       shift
       ;;
@@ -247,6 +260,23 @@ while IFS= read -r plan; do
 done <<<"$plans"
 
 [[ -z "$dry_run" ]] || exit 0
+
+if [[ -n "$runner" ]]; then
+  # The runner takes over from here: exec drops the EXIT trap, so the scratch
+  # file goes first. The command line is shell-quoted (paths may be quoted in
+  # the Makefile); the plans and flags are appended as single words.
+  rm -f "$changed_file"
+  eval "set -- $runner"
+  while IFS= read -r plan; do
+    [[ -n "$plan" ]] || continue
+    set -- "$@" --plan "${plan% }"
+  done <<<"$plans"
+  set -- "$@" --base "$base" --label test-changed
+  [[ -n "$build_jobs" ]] && set -- "$@" --build-jobs "$build_jobs"
+  [[ -n "$test_threads" ]] && set -- "$@" --test-threads "$test_threads"
+  cd "$caller_dir"
+  exec "$@"
+fi
 
 # The plans are read from fd 3 so cargo keeps the caller's stdin.
 while IFS= read -r -u 3 plan; do

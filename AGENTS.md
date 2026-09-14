@@ -254,16 +254,16 @@ with no rollback.
 - `make gate` runs `make check` and then the full nextest suite. `make test` remains
   the test-only entry point. Resume records apply only to nextest; `make gate` always
   reruns fmt, clippy, and the repo-slug fold lint.
-- After a harness or terminal interruption, rerun `make test RESUME=1`. It skips
-  only tests recorded as passed for the identical tracked and untracked worktree,
-  submodule pointers, Rust toolchain, lockfile, and nextest configuration. Records
-  live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
-  `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
-  a matching record and run the complete suite.
 - When the full suite is impractical, run `make test-changed` before entering the
   merge queue: it diffs the intentd checkout against `origin/main` (override with
   `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the
   full suite on manifest, lockfile, or nextest-config changes; `DRY_RUN=1` prints the plan.
+- Both `make test` and `make test-changed` write a resume record and print its
+  `record:` path on exit; after an interruption rerun with `RESUME=1` to skip tests
+  recorded as passed for the identical tracked and untracked worktree, submodule
+  pointers, Rust toolchain, lockfile, and nextest configuration (`GATE_FORCE=1`
+  ignores a matching record). Records live under `$HOME/.cache/intent/gate-runs`,
+  expire after seven days, and hold junit plus an incremental passed-test stream.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
   The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
