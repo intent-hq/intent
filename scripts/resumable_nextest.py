@@ -304,14 +304,21 @@ def terminate_on_signal():
         signal.signal(signal.SIGTERM, previous)
 
 
+HANDLED_ERROR_EXIT = 2
+
+
 def failure_exit_code(error: BaseException) -> int:
+    """The process exit code an exception escaping the nextest phase produces."""
     if isinstance(error, subprocess.CalledProcessError):
         return error.returncode
     if isinstance(error, KeyboardInterrupt):
         return 130
     if isinstance(error, Terminated):
         return 128 + error.signum
-    return 2
+    if isinstance(error, (OSError, RuntimeError)):
+        return HANDLED_ERROR_EXIT
+    # Anything else propagates unhandled, which exits the interpreter with 1.
+    return 1
 
 
 def run_nextest(args: argparse.Namespace) -> int:
@@ -480,8 +487,8 @@ def run_nextest(args: argparse.Namespace) -> int:
         exit_code = failure_exit_code(error)
         finalize(exit_code)
         return exit_code
-    except BaseException:
-        finalize(None)
+    except BaseException as error:
+        finalize(failure_exit_code(error))
         raise
     assert status is not None
     finalize(status)
@@ -513,7 +520,7 @@ def main() -> int:
         return run_nextest(args)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
-        return 2
+        return HANDLED_ERROR_EXIT
 
 
 if __name__ == "__main__":

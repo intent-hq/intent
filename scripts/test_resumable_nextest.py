@@ -711,6 +711,44 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
             )
 
+    def test_handled_runtime_error_records_the_cli_exit_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "beta::two$unlisted")], 0)])
+            argv = [
+                "resumable_nextest.py",
+                "--repo-root", str(root),
+                "--intentd-dir", "intentd",
+                "--cache-dir", str(root / "cache"),
+                "--build-jobs", "2",
+                "--test-threads", "1",
+                "--label", "test-changed",
+                "--plan", "-p alpha --test one",
+            ]
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=harness.fake_run
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=harness.fake_popen
+            ), mock.patch.object(gate.sys, "argv", argv), contextlib.redirect_stdout(
+                io.StringIO()
+            ) as stdout, contextlib.redirect_stderr(io.StringIO()) as stderr:
+                exit_code = gate.main()
+            self.assertEqual(exit_code, 2)
+            self.assertIn("ERROR: nextest test identifier was not listed", stderr.getvalue())
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], exit_code)
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertEqual(stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}")
+
+    def test_failure_exit_codes_match_main_and_interpreter(self):
+        self.assertEqual(gate.failure_exit_code(RuntimeError("x")), gate.HANDLED_ERROR_EXIT)
+        self.assertEqual(gate.failure_exit_code(OSError("x")), gate.HANDLED_ERROR_EXIT)
+        self.assertEqual(gate.failure_exit_code(subprocess.CalledProcessError(101, ["cargo"])), 101)
+        self.assertEqual(gate.failure_exit_code(KeyboardInterrupt()), 130)
+        self.assertEqual(gate.failure_exit_code(gate.Terminated(gate.signal.SIGTERM)), 143)
+        self.assertEqual(gate.failure_exit_code(AssertionError("x")), 1)
+
     def test_workspace_fast_path_still_requires_passed_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
