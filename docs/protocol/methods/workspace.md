@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v9.14 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; validated at the very top of the op, before any state change, so a bad reference rejects `-32602` without leaving a partially created workspace behind)*, fileBlocks? *(v6.12; same per-entry exactly-one-of-`data`/`attachmentId` validation as `agent.sendMessage`, `-32602` before any side effect — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v10.2 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -339,7 +339,7 @@ provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
 Toggling the setting later affects only subsequently created workspaces — existing
 checkouts are not converted.
 
-**Execution-environment selection (`workspace.create`, v9.14).** The optional
+**Execution-environment selection (`workspace.create`, v10.2).** The optional
 `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`) selects the
 workspace's execution environment explicitly, overriding the legacy
 `skipIsolation`/`workspace.cowIsolation` derivation. Validation runs up front (before any
@@ -392,7 +392,7 @@ log a warning and fall back to the shared workspace checkout (isolation is best-
 never spawn-blocking). Agents created before this behavior (no sandbox in a `cow`
 workspace) get their sandbox on their next spawn, cloned from the checkout's state at
 that point. Workspaces with `checkoutMode: "cow"` but **no persisted**
-`executionEnvironment` (rows created before v9.14 introduced the field) keep the
+`executionEnvironment` (rows created before v10.2 introduced the field) keep the
 delegate-only isolation model.
 The selection is persisted on the returned `Workspace` as `executionEnvironment`
 (lowercase on the wire, immutable like `checkoutMode`); when the param is **omitted**,
@@ -648,6 +648,19 @@ remaining churn. A `workspace.open` during the setup window likewise supersedes 
 deferral and starts the watchers immediately (the user is in the workspace), so a
 still-running script's remaining churn surfaces from that point on.
 
+**Pre-side-effect validation (`workspace.create`,
+[intent-hq/intentd#1882](https://github.com/intent-hq/intentd/pull/1882)).** Every
+`-32602` rejection of a `workspace.create` request — parse-time errors (including a
+client-supplied `initialAgent.agentId`), a compound `initialAgent.model`, `initialAgent`
+attachment blocks (`fileBlocks` / `imageBlocks` shape and attachment-reference checks),
+`initialAgent.specialist` canonicalization, the provider/model checks (unknown, disabled,
+or not-authenticated provider; no resolvable default provider; a bare model owned by
+another provider), the specialist- or model-option-derived reasoning-effort check, and
+`contextLinks` — is validated before any workspace row, worktree, spec seed,
+`workspace:created` event, or agent session is persisted, so a rejected create never
+leaves a partially created workspace behind. The per-field notes below inherit this
+invariant rather than restating it.
+
 **Initial-agent orchestration (`workspace.create`).** When `initialAgent` is supplied the
 daemon **always** creates and persists the agent session (honoring `name`/`model`/
 `specialist`/`provider`/`behaviorPrompt`/`agentType`/`imageBlocks`/`fileBlocks`/
@@ -681,8 +694,11 @@ Regression coverage: `workspace_create_no_prompt_creates_agent_over_wss`
 An omitted `initialAgent.model` resolves through the same daemon-side creation-time
 default-model chain as `agent.create` (§5.5 "Creation-time default-model resolution");
 a supplied one must be a **bare** model id — a compound `provider:model` value is rejected
-with `-32602` naming `initialAgent.model`, before any provisioning side effect
-([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
+with `-32602` naming `initialAgent.model`
+([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)). The
+specialist canonicalization and the provider/model/reasoning-effort checks that
+`agent.create` applies at session creation (§5.5) run here pre-side-effect, as part of
+the validation invariant above.
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
 project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
@@ -695,9 +711,7 @@ create — the name falls back to the generated `Agent {6-hex}` placeholder (not
 explicitly set).
 The agent's id is **server-assigned**: whenever a session is created the daemon mints a
 fresh `agent-{uuid}`, and a request carrying `initialAgent.agentId` is rejected with `-32602`
-("agent IDs are server-assigned and the field must be omitted") **before any side
-effect** — no workspace row, worktree, spec seed, or `workspace:created` event is
-persisted.
+("agent IDs are server-assigned and the field must be omitted").
 The result's `initialAgent` is the created session's full `AgentLite` projection (its
 server-minted id is `initialAgent.id`); when content is present the agent's turn starts
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
@@ -1016,11 +1030,10 @@ seed its layout from the linked pages. The param is `contextLinks?: ContextLink[
 `ContextLink = { kind: "issue" | "pr", url: string, owner: string, repo: string,
 number: number }` (`kind` lowercase on the wire; an unknown `kind` — or a negative or
 fractional `number`, which fails the unsigned-integer field type — rejects `-32602` at
-parse time with a generic deserialization message). Validated at the very top of the
-create op, before any state change, so a
-bad list rejects `-32602` without leaving a partially created workspace behind: at most
-**20** entries, `url`/`owner`/`repo` non-empty (whitespace-only counts as empty), and
-`number` non-zero — each of these post-parse errors names the offending entry
+parse time with a generic deserialization message). Post-parse validation (covered by
+the pre-side-effect invariant above) rejects `-32602` on: more than
+**20** entries, `url`/`owner`/`repo` empty (whitespace-only counts as empty), or
+`number` zero — each of these post-parse errors names the offending entry
 (`contextLinks[i].field`). Write-once at create: `workspace.update` does not accept the
 field, and the daemon never mutates it after insert. An empty list (and every workspace
 created without the param) persists as absent, so the wire shape **omits** the field
@@ -1118,12 +1131,12 @@ both **standalone** repositories: `workspace.delete` skips the worktree-registra
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
 
-**`executionEnvironment` (v9.14).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
+**`executionEnvironment` (v10.2).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
 on the wire) — the execution environment selected at creation (§5.1
 execution-environment selection): the explicit `workspace.create` `executionEnvironment`
 param when supplied, else derived from the legacy provisioning outcome (`worktree`/`cow`
 matching `checkoutMode` on provisioned rows). Persisted and immutable like
-`checkoutMode`; omitted for pre-existing rows created before v9.14 and for
+`checkoutMode`; omitted for pre-existing rows created before v10.2 and for
 legacy-path rows that skipped provisioning without an explicit selection. The persisted
 field is the **isolation authority** for every agent in the workspace (§5.5).
 
