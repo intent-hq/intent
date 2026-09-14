@@ -125,7 +125,13 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
   rows are evicted until the merged page fits, with `truncated`/`nextToken` re-minted at the
-  eviction boundary so the evicted rows stay reachable via `agent.getConversation`.
+  eviction boundary so the evicted rows stay reachable via `agent.getConversation`. Since v10.0
+  every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
+  (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
+  `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
+  file"` when `fileName` is missing or blank — the name is trimmed, and an empty result counts
+  as absent), bytes dropped, the block's `id` carried over when it has one — so no snapshot or
+  delta ever carries a `type: "file"` block with a `data` key.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
