@@ -895,7 +895,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
 
             planned = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
             self.assertEqual(planned.execute(make_args(root, resume="1", force="1")), 100)
-            self.assertTrue((run_dir / "complete").is_file())
+            self.assertFalse((run_dir / "complete").exists())
             self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")})
 
             resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
@@ -922,7 +922,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
 
             plan_a = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
             self.assertEqual(plan_a.execute(make_args(root, resume="1", force="1")), 100)
-            self.assertTrue((record_b / "complete").is_file())
+            self.assertFalse((record_b / "complete").exists())
 
             rerun = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
             self.assertEqual(rerun.execute(plan_b), 0)
@@ -943,6 +943,120 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(
                 skip.output_lines, ["resumed: skipped 2 tests already passed for this tree"]
             )
+
+    def test_invalidate_completion_markers_drops_tree_and_every_plan_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "complete").write_text("complete\n", encoding="utf-8")
+            for plan in ("aaaa", "bbbb"):
+                (run_dir / "changed" / plan).mkdir(parents=True)
+                (run_dir / "changed" / plan / "complete").write_text("complete\n", encoding="utf-8")
+                (run_dir / "changed" / plan / "run.json").write_text("{}\n", encoding="utf-8")
+            (run_dir / "passed.jsonl").write_text('{"binary_id":"x","test":"y"}\n', encoding="utf-8")
+            gate.invalidate_completion_markers(run_dir)
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertEqual(list((run_dir / "changed").glob("*/complete")), [])
+            self.assertTrue((run_dir / "changed" / "aaaa" / "run.json").is_file())
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), {("x", "y")})
+            gate.invalidate_completion_markers(run_dir / "missing")
+
+    def test_observed_failure_invalidates_markers_before_the_run_finishes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            plan_b = make_args(root, resume="1", plan=["-p alpha"])
+            record_b = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha"]))
+            all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
+            workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertTrue((run_dir / "complete").is_file())
+            self.assertTrue((record_b / "complete").is_file())
+
+            def lines():
+                yield event("failed", "alpha::one$fails")
+                raise KeyboardInterrupt
+
+            forced = PlannedRunHarness(root, [(lines(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 130)
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertFalse((record_b / "complete").exists())
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")})
+
+    def test_truncating_the_shared_journal_drops_every_completion_marker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            plan_b = make_args(root, resume="1", plan=["-p alpha"])
+            record_b = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha"]))
+            all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
+            workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertTrue((run_dir / "complete").is_file())
+            self.assertTrue((record_b / "complete").is_file())
+
+            def lines():
+                raise KeyboardInterrupt
+                yield
+
+            full = PlannedRunHarness(root, [(lines(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    full.execute(make_args(root, label=gate.DEFAULT_LABEL, plan=None, base=None)),
+                    130,
+                )
+            self.assertEqual(len(full.run_commands), 1)
+            self.assertEqual((run_dir / "passed.jsonl").read_text(), "")
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertFalse((record_b / "complete").exists())
+
+            rerun = PlannedRunHarness(root, [(all_pass, 0)])
+            self.assertEqual(rerun.execute(plan_b), 0)
+            self.assertEqual(len(rerun.run_commands), 1)
+            self.assertTrue((record_b / "complete").is_file())
+
+    def test_plan_marker_cannot_outlive_a_failure_erased_by_an_interrupted_full_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            plan_b = make_args(root, resume="1", plan=["-p alpha"])
+            record_b = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha"]))
+            all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertTrue((record_b / "complete").is_file())
+
+            plan_a = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(plan_a.execute(make_args(root, resume="1", force="1")), 100)
+            self.assertFalse((record_b / "complete").exists())
+            self.assertIn(("alpha::one", "fails"), gate.load_outcomes(run_dir / "passed.jsonl"))
+
+            def lines():
+                yield event("ok", "alpha::one$passes")
+                raise KeyboardInterrupt
+
+            full = PlannedRunHarness(root, [(lines(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(
+                    full.execute(make_args(root, label=gate.DEFAULT_LABEL, plan=None, base=None)),
+                    130,
+                )
+            self.assertEqual(gate.load_outcomes(run_dir / "passed.jsonl"), {("alpha::one", "passes"): "ok"})
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertFalse((record_b / "complete").exists())
+
+            resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(resumed.execute(plan_b), 100)
+            self.assertEqual(len(resumed.list_commands), 1)
+            self.assertEqual(len(resumed.run_commands), 1)
+            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            self.assertEqual(
+                profile["default-filter"],
+                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+            )
+            self.assertNotIn("resumed: skipped 2 tests already passed for this tree", resumed.output_lines)
+            self.assertFalse((record_b / "complete").exists())
 
 
 

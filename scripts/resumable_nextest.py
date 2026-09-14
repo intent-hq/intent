@@ -269,6 +269,21 @@ def nextest_env() -> dict[str, str]:
     return env
 
 
+def invalidate_completion_markers(run_dir: Path) -> None:
+    """Remove the tree-level `complete` and every planned `changed/*/complete`.
+
+    A marker only proves that the tests it covered passed on this tree as far as
+    the shared passed.jsonl records them. Once a failure is observed, or once the
+    journal is about to be truncated, that evidence is gone for every run on the
+    tree, so no marker may outlive it.
+    """
+    (run_dir / "complete").unlink(missing_ok=True)
+    changed = run_dir / "changed"
+    if changed.is_dir():
+        for marker in changed.glob("*/complete"):
+            marker.unlink(missing_ok=True)
+
+
 def stream_nextest(
     command: list[str],
     cwd: Path,
@@ -276,6 +291,7 @@ def stream_nextest(
     binary_ids: dict[tuple[str, str], str],
     descriptor: int,
     outcomes: dict[str, str],
+    run_dir: Path,
 ) -> int:
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
     assert process.stdout is not None
@@ -288,6 +304,11 @@ def stream_nextest(
                 outcomes[outcome[0]] = outcome[1]
             recorded = parse_recorded_event(line, binary_ids)
             if recorded is not None:
+                if recorded[2] != "ok":
+                    # Persist the invalidation at the moment of failure, before the
+                    # journal line, so an interrupt cannot leave a marker resting on
+                    # a pass this failure has just superseded.
+                    invalidate_completion_markers(run_dir)
                 os.write(descriptor, record_line(*recorded).encode())
         return process.wait()
     except BaseException:
@@ -466,6 +487,10 @@ def run_nextest(args: argparse.Namespace) -> int:
                 configs.append(config)
 
             if not resumed and not plans:
+                # Truncating the shared journal discards the passes every marker on
+                # this tree rests on; drop them first so an interrupted full run
+                # cannot leave a marker with no evidence behind it.
+                invalidate_completion_markers(run_dir)
                 record.write_text("", encoding="utf-8")
 
             if args.resume == "1" and args.force == "1":
@@ -497,7 +522,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                     status = None
                     try:
                         status = stream_nextest(
-                            command, intentd_dir, env, binary_ids, descriptor, outcomes
+                            command, intentd_dir, env, binary_ids, descriptor, outcomes, run_dir
                         )
                     finally:
                         result.update(tally(outcomes), exit_code=status)
