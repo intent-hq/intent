@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,88 @@ SPEC = importlib.util.spec_from_file_location("resumable_nextest", SCRIPT)
 gate = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(gate)
+
+KEY = "a" * 64
+LISTING = json.dumps(
+    {
+        "rust-suites": {
+            "alpha::one": {
+                "package-name": "alpha",
+                "binary-name": "one",
+                "binary-id": "alpha::one",
+                "testcases": {"passes": {}, "fails": {}, "skipped": {}},
+            }
+        }
+    }
+)
+
+
+def event(kind, name, **extra):
+    return json.dumps({"type": "test", "event": kind, "name": name, **extra}) + "\n"
+
+
+def make_args(root, **overrides):
+    values = dict(
+        repo_root=root,
+        intentd_dir="intentd",
+        cache_dir=root / "cache",
+        resume="0",
+        force="0",
+        build_jobs="2",
+        test_threads="1",
+        label="test-changed",
+        plan=["-p alpha --test one"],
+        base="origin/main",
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class FakeProcess:
+    def __init__(self, lines, status):
+        self.stdout = iter(lines)
+        self.status = status
+        self.terminated = False
+
+    def wait(self):
+        return self.status
+
+    def terminate(self):
+        self.terminated = True
+
+
+class PlannedRunHarness:
+    """Mocks `tree_key`, `run` and `subprocess.Popen` around `run_nextest`."""
+
+    def __init__(self, root, runs):
+        (root / "intentd").mkdir(exist_ok=True)
+        self.root = root
+        self.runs = list(runs)
+        self.list_commands = []
+        self.run_commands = []
+        self.stdout = io.StringIO()
+
+    def fake_run(self, command, cwd, env=None):
+        assert command[:3] == ["cargo", "nextest", "list"], command
+        self.list_commands.append(command)
+        return LISTING
+
+    def fake_popen(self, command, **kwargs):
+        self.run_commands.append(command)
+        lines, status = self.runs.pop(0)
+        return FakeProcess(lines, status)
+
+    def execute(self, args):
+        with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            gate, "run", side_effect=self.fake_run
+        ), mock.patch.object(
+            gate.subprocess, "Popen", side_effect=self.fake_popen
+        ), contextlib.redirect_stdout(self.stdout):
+            return gate.run_nextest(args)
+
+    @property
+    def output_lines(self):
+        return self.stdout.getvalue().splitlines()
 
 
 class ResumableNextestTests(unittest.TestCase):
@@ -190,19 +274,256 @@ class ResumableNextestTests(unittest.TestCase):
                 '{"binary_id":"binary","test":"test"}\n', encoding="utf-8"
             )
             (run_dir / "complete").write_text("complete\n", encoding="utf-8")
-            args = SimpleNamespace(
-                repo_root=root,
-                intentd_dir="intentd",
-                cache_dir=root / "cache",
-                resume="1",
-                force="0",
-                build_jobs="2",
-                test_threads="1",
+            args = make_args(
+                root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None
             )
             with mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
                 gate, "run", side_effect=AssertionError("cargo must not run")
-            ):
+            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
                 self.assertEqual(gate.run_nextest(args), 0)
+            self.assertEqual(
+                stdout.getvalue(),
+                "resumed: skipped 1 tests already passed for this tree\n",
+            )
+
+    def test_plans_are_split_with_shlex_and_keyed_in_order(self):
+        plans = gate.split_plans(["-p alpha --test one --test two", "-p 'beta' -p gamma --tests "])
+        self.assertEqual(
+            plans,
+            [["-p", "alpha", "--test", "one", "--test", "two"], ["-p", "beta", "-p", "gamma", "--tests"]],
+        )
+        self.assertEqual(gate.split_plans(None), [])
+        forward = gate.plan_key(plans)
+        self.assertRegex(forward, r"^[0-9a-f]{64}$")
+        self.assertEqual(forward, gate.plan_key(gate.split_plans(["-p alpha  --test one --test two", "-p beta -p gamma --tests"])))
+        self.assertNotEqual(forward, gate.plan_key(list(reversed(plans))))
+
+    def test_outcome_events_count_final_attempt_only(self):
+        self.assertEqual(
+            gate.test_outcome(event("failed", "alpha::one$fails#1")), ("alpha::one$fails", "failed")
+        )
+        self.assertIsNone(gate.test_outcome(event("started", "alpha::one$fails")))
+        self.assertIsNone(gate.test_outcome('{"type":"suite","event":"ok"}'))
+        self.assertIsNone(gate.test_outcome("not json"))
+        outcomes = {}
+        for line in (
+            event("failed", "alpha::one$flaky#1"),
+            event("ok", "alpha::one$flaky#2"),
+            event("ignored", "alpha::one$skipped"),
+            event("failed", "alpha::one$fails"),
+        ):
+            name, outcome = gate.test_outcome(line)
+            outcomes[name] = outcome
+        self.assertEqual(gate.tally(outcomes), {"passed": 1, "failed": 1, "ignored": 1})
+
+    def test_planned_run_writes_sub_record_and_never_tree_complete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plans = ["-p alpha --test one", "-p beta"]
+            harness = PlannedRunHarness(
+                root,
+                [
+                    ([event("ok", "alpha::one$passes"), event("ignored", "alpha::one$skipped")], 0),
+                    ([event("ok", "alpha::one$fails")], 0),
+                ],
+            )
+            self.assertEqual(harness.execute(make_args(root, plan=plans)), 0)
+
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertTrue((record_dir / "complete").is_file())
+            self.assertEqual(
+                [command[3:6] for command in harness.list_commands],
+                [["-p", "alpha", "--test"], ["-p", "beta", "--build-jobs"]],
+            )
+            self.assertEqual(harness.run_commands[0][3:7], ["-p", "alpha", "--test", "one"])
+            self.assertEqual(harness.run_commands[1][3:5], ["-p", "beta"])
+            self.assertNotIn("--workspace", harness.run_commands[0])
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+
+            for index in (1, 2):
+                config = tomllib.loads((record_dir / f"nextest-{index}.toml").read_text())
+                self.assertEqual(config["store"]["dir"], str(run_dir / "changed"))
+                profile = config["profile"][record_dir.name]
+                self.assertEqual(profile["junit"]["path"], f"junit-{index}.xml")
+                self.assertNotIn("default-filter", profile)
+                self.assertIn(
+                    f"--tool-config-file", harness.run_commands[index - 1]
+                )
+                self.assertIn(f"intent-gate:{record_dir / f'nextest-{index}.toml'}", harness.run_commands[index - 1])
+                self.assertIn(record_dir.name, harness.run_commands[index - 1])
+
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["label"], "test-changed")
+            self.assertEqual(run_record["base"], "origin/main")
+            self.assertEqual(run_record["plans"], plans)
+            self.assertEqual(run_record["tree_key"], KEY)
+            self.assertEqual(run_record["plan_key"], record_dir.name)
+            self.assertEqual(run_record["exit_code"], 0)
+            self.assertEqual(run_record["skipped_resumed"], 0)
+            self.assertEqual((run_record["passed"], run_record["failed"], run_record["ignored"]), (2, 0, 1))
+            self.assertRegex(run_record["started_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertRegex(run_record["finished_at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+            self.assertEqual(
+                run_record["results"],
+                [
+                    {"plan": plans[0], "passed": 1, "failed": 0, "ignored": 1, "exit_code": 0},
+                    {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
+                ],
+            )
+
+            summary = (
+                "[test-changed] summary: 2 passed, 0 failed, 1 skipped/ignored, 0 resumed "
+                "(tests already passed for this tree)"
+            )
+            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
+            self.assertEqual(
+                harness.output_lines[-2:], [summary, f"[test-changed] record: {record_dir}"]
+            )
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("alpha::one", "fails")},
+            )
+
+    def test_planned_run_appends_to_shared_record_and_resumes_in_plan_tests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            run_dir.mkdir(parents=True)
+            (run_dir / "passed.jsonl").write_text(
+                '{"binary_id":"alpha::one","test":"passes"}\n'
+                '{"binary_id":"other","test":"elsewhere"}\n',
+                encoding="utf-8",
+            )
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
+            self.assertEqual(harness.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(harness.run_commands[0][-2:], ["--no-tests", "pass"])
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            self.assertEqual(
+                profile["default-filter"],
+                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+            )
+            self.assertEqual(json.loads((record_dir / "run.json").read_text())["skipped_resumed"], 1)
+            self.assertIn("1 resumed", harness.output_lines[-2])
+            self.assertIn("resumed: skipped 1 tests already passed for this tree", harness.output_lines)
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("alpha::one", "fails"), ("other", "elsewhere")},
+            )
+
+    def test_planned_complete_marker_short_circuits_unless_forced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "intentd").mkdir()
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            record_dir.mkdir(parents=True)
+            (run_dir / "passed.jsonl").write_text(
+                '{"binary_id":"alpha::one","test":"passes"}\n', encoding="utf-8"
+            )
+            (record_dir / "complete").write_text("complete\n", encoding="utf-8")
+            (record_dir / "run.json").write_text(
+                json.dumps({"passed": 2, "skipped_resumed": 1}), encoding="utf-8"
+            )
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("cargo must not run")
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
+            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+            self.assertEqual(
+                stdout.getvalue(), "resumed: skipped 3 tests already passed for this tree\n"
+            )
+
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(make_args(root, resume="1", force="1")), 0)
+            self.assertEqual(len(harness.run_commands), 1)
+            self.assertNotIn("--no-tests", harness.run_commands[0])
+            self.assertIn("[test-changed] GATE_FORCE=1: running every planned test", harness.output_lines)
+            self.assertEqual(harness.output_lines[-2:][1], f"[test-changed] record: {record_dir}")
+
+    def test_failing_planned_run_records_exit_code_and_stops_at_first_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plans = ["-p alpha --test one", "-p beta"]
+            harness = PlannedRunHarness(
+                root,
+                [([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 100)],
+            )
+            self.assertEqual(harness.execute(make_args(root, plan=plans)), 100)
+            self.assertEqual(len(harness.run_commands), 1)
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertFalse((run_dir / "complete").exists())
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 100)
+            self.assertEqual(len(run_record["results"]), 1)
+            self.assertEqual(
+                harness.output_lines[-2:],
+                [
+                    "[test-changed] summary: 1 passed, 1 failed, 0 skipped/ignored, 0 resumed "
+                    "(tests already passed for this tree)",
+                    f"[test-changed] record: {record_dir}",
+                ],
+            )
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
+            )
+
+    def test_interrupted_run_terminates_cargo_and_still_prints_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def lines():
+                yield event("ok", "alpha::one$passes")
+                raise KeyboardInterrupt
+
+            harness = PlannedRunHarness(root, [(lines(), 0)])
+            with self.assertRaises(KeyboardInterrupt):
+                harness.execute(make_args(root))
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertIsNone(json.loads((record_dir / "run.json").read_text())["exit_code"])
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+            self.assertIn("1 passed, 0 failed", harness.output_lines[-2])
+
+    def test_workspace_run_keeps_default_layout_and_appends_trailing_lines(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(
+                root,
+                [([event("ok", "alpha::one$passes"), event("ignored", "alpha::one$skipped")], 0)],
+            )
+            args = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(harness.execute(args), 0)
+            run_dir = root / "cache" / KEY
+            self.assertEqual(harness.list_commands[0][3], "--workspace")
+            self.assertEqual(harness.run_commands[0][3], "--workspace")
+            self.assertIn(KEY, harness.run_commands[0])
+            self.assertTrue((run_dir / "complete").is_file())
+            self.assertFalse((run_dir / "changed").exists())
+            self.assertFalse((run_dir / "run.json").exists())
+            config = tomllib.loads((run_dir / "nextest.toml").read_text())
+            self.assertEqual(config["store"]["dir"], str(root / "cache"))
+            self.assertEqual(config["profile"][KEY]["junit"]["path"], "junit.xml")
+            summary = (
+                "[test-intentd] summary: 1 passed, 0 failed, 1 skipped/ignored, 0 resumed "
+                "(tests already passed for this tree)"
+            )
+            self.assertEqual(
+                harness.output_lines,
+                [
+                    "[test-intentd] no passed-test record for this tree; running the complete suite",
+                    event("ok", "alpha::one$passes").rstrip("\n"),
+                    event("ignored", "alpha::one$skipped").rstrip("\n"),
+                    summary,
+                    f"[test-intentd] record: {run_dir}",
+                ],
+            )
+            self.assertEqual((run_dir / "summary.txt").read_text(), summary + "\n")
 
 
 if __name__ == "__main__":

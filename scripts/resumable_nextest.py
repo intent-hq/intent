@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,6 +22,8 @@ MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
 RETRY_SUFFIX_RE = re.compile(r"#[0-9]+$")
+DEFAULT_LABEL = "test-intentd"
+TEST_OUTCOMES = ("ok", "failed", "ignored")
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -161,8 +165,60 @@ def parse_passed_event(
     return binary_id, test
 
 
+def test_outcome(line: str) -> tuple[str, str] | None:
+    """Return (test identifier without retry suffix, outcome) for a final test event."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "test":
+        return None
+    outcome = event.get("event")
+    if outcome not in TEST_OUTCOMES:
+        return None
+    return RETRY_SUFFIX_RE.sub("", event.get("name", "")), outcome
+
+
+def tally(outcomes: dict[str, str]) -> dict[str, int]:
+    counts = {"passed": 0, "failed": 0, "ignored": 0}
+    for outcome in outcomes.values():
+        counts["passed" if outcome == "ok" else outcome] += 1
+    return counts
+
+
+def split_plans(plans: list[str] | None) -> list[list[str]]:
+    return [shlex.split(plan) for plan in plans or []]
+
+
+def plan_key(plans: list[list[str]]) -> str:
+    encoded = json.dumps([" ".join(plan) for plan in plans]).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def summary_line(label: str, counts: dict[str, int], resumed: int) -> str:
+    return (
+        f"[{label}] summary: {counts['passed']} passed, {counts['failed']} failed, "
+        f"{counts['ignored']} skipped/ignored, {resumed} resumed "
+        "(tests already passed for this tree)"
+    )
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_atomic(path: Path, text: str) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
 def write_tool_config(
-    path: Path, cache_dir: Path, profile: str, passed: set[tuple[str, str]]
+    path: Path,
+    cache_dir: Path,
+    profile: str,
+    passed: set[tuple[str, str]],
+    junit: str = "junit.xml",
 ) -> None:
     lines = [
         "[store]",
@@ -172,10 +228,8 @@ def write_tool_config(
     ]
     if passed:
         lines.append(f"default-filter = {json.dumps(remaining_filter(passed))}")
-    lines.extend([f"[profile.{profile}.junit]", 'path = "junit.xml"', ""])
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text("\n".join(lines), encoding="utf-8")
-    temporary.replace(path)
+    lines.extend([f"[profile.{profile}.junit]", f"path = {json.dumps(junit)}", ""])
+    write_atomic(path, "\n".join(lines))
 
 
 def nextest_env() -> dict[str, str]:
@@ -187,10 +241,48 @@ def nextest_env() -> dict[str, str]:
     return env
 
 
+def stream_nextest(
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    binary_ids: dict[tuple[str, str], str],
+    descriptor: int,
+    outcomes: dict[str, str],
+) -> int:
+    process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
+    assert process.stdout is not None
+    try:
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            outcome = test_outcome(line)
+            if outcome is not None:
+                outcomes[outcome[0]] = outcome[1]
+            passed = parse_passed_event(line, binary_ids)
+            if passed is not None:
+                item = json.dumps({"binary_id": passed[0], "test": passed[1]}) + "\n"
+                os.write(descriptor, item.encode())
+        return process.wait()
+    except BaseException:
+        process.terminate()
+        process.wait()
+        raise
+
+
+def previously_passed(record_dir: Path, fallback: int) -> int:
+    try:
+        previous = json.loads((record_dir / "run.json").read_text(encoding="utf-8"))
+        return int(previous["passed"]) + int(previous["skipped_resumed"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return fallback
+
+
 def run_nextest(args: argparse.Namespace) -> int:
+    label = args.label
     repo_root = Path(args.repo_root).resolve()
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     cache_dir = Path(args.cache_dir).expanduser().resolve()
+    plans = split_plans(args.plan)
     prune(cache_dir)
     key = tree_key(repo_root, intentd_dir)
     run_dir = cache_dir / key
@@ -199,76 +291,130 @@ def run_nextest(args: argparse.Namespace) -> int:
     record = run_dir / "passed.jsonl"
     recorded = load_passed(record)
     resumed = recorded if args.resume == "1" and args.force != "1" else set()
-    complete = run_dir / "complete"
+    if plans:
+        # The full-suite `complete` marker belongs to `--workspace` runs only; a
+        # planned run keeps its own marker, junit files and run.json under changed/.
+        store_dir = run_dir / "changed"
+        profile = plan_key(plans)
+        record_dir = store_dir / profile
+        record_dir.mkdir(parents=True, exist_ok=True)
+        selections = plans
+        scope = "every planned test"
+    else:
+        store_dir = cache_dir
+        profile = key
+        record_dir = run_dir
+        selections = [["--workspace"]]
+        scope = "the complete suite"
+    complete = record_dir / "complete"
     if resumed and complete.is_file():
-        print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
+        skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
+        print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
         return 0
 
     env = nextest_env()
-    list_output = run(
-        [
-            "cargo", "nextest", "list", "--workspace",
-            "--build-jobs", args.build_jobs,
-            "--message-format", "json",
-        ],
-        intentd_dir,
-        env,
-    )
-    binary_ids = test_binary_ids(list_output)
+    binary_ids: dict[tuple[str, str], str] = {}
+    for selection in selections:
+        list_output = run(
+            [
+                "cargo", "nextest", "list", *selection,
+                "--build-jobs", args.build_jobs,
+                "--message-format", "json",
+            ],
+            intentd_dir,
+            env,
+        )
+        binary_ids.update(test_binary_ids(list_output))
     known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
-    unknown = resumed - known_tests
-    if unknown:
-        raise RuntimeError(f"passed-test record contains {len(unknown)} unlisted tests")
-    config = run_dir / "nextest.toml"
-    write_tool_config(config, cache_dir, key, resumed)
+    if plans:
+        # passed.jsonl is shared by every run on this tree; only the tests these
+        # plans select count as resumed here.
+        resumed = resumed & known_tests
+    else:
+        unknown = resumed - known_tests
+        if unknown:
+            raise RuntimeError(f"passed-test record contains {len(unknown)} unlisted tests")
+    configs = []
+    for index, _ in enumerate(selections, start=1):
+        if plans:
+            config = record_dir / f"nextest-{index}.toml"
+            write_tool_config(config, store_dir, profile, resumed, f"junit-{index}.xml")
+        else:
+            config = run_dir / "nextest.toml"
+            write_tool_config(config, store_dir, profile, resumed)
+        configs.append(config)
 
     complete.unlink(missing_ok=True)
-    if not resumed:
+    if not resumed and not plans:
         record.write_text("", encoding="utf-8")
 
     if args.resume == "1" and args.force == "1":
-        print("[test-intentd] GATE_FORCE=1: running the complete suite", flush=True)
+        print(f"[{label}] GATE_FORCE=1: running {scope}", flush=True)
     elif args.resume == "1" and not resumed:
-        print(
-            "[test-intentd] no passed-test record for this tree; running the complete suite",
-            flush=True,
-        )
+        print(f"[{label}] no passed-test record for this tree; running {scope}", flush=True)
 
-    command = [
-        "cargo", "nextest", "run", "--workspace",
-        "--build-jobs", args.build_jobs,
-        "--test-threads", args.test_threads,
-        "--tool-config-file", f"intent-gate:{config}",
-        "--profile", key,
-        "--message-format", "libtest-json-plus",
-        "--message-format-version", "0.1",
-    ]
-    if resumed:
-        command.extend(["--no-tests", "pass"])
-    process = subprocess.Popen(command, cwd=intentd_dir, env=env, text=True, stdout=subprocess.PIPE)
-    assert process.stdout is not None
+    started_at = utc_now()
+    status: int | None = None
+    results: list[dict[str, object]] = []
     descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            passed = parse_passed_event(line, binary_ids)
-            if passed is not None:
-                item = json.dumps({"binary_id": passed[0], "test": passed[1]}) + "\n"
-                os.write(descriptor, item.encode())
-        status = process.wait()
-    except BaseException:
-        process.terminate()
-        process.wait()
-        raise
+        for selection, config in zip(selections, configs):
+            command = [
+                "cargo", "nextest", "run", *selection,
+                "--build-jobs", args.build_jobs,
+                "--test-threads", args.test_threads,
+                "--tool-config-file", f"intent-gate:{config}",
+                "--profile", profile,
+                "--message-format", "libtest-json-plus",
+                "--message-format-version", "0.1",
+            ]
+            if resumed:
+                command.extend(["--no-tests", "pass"])
+            outcomes: dict[str, str] = {}
+            result: dict[str, object] = {"plan": " ".join(selection)}
+            results.append(result)
+            status = None
+            try:
+                status = stream_nextest(
+                    command, intentd_dir, env, binary_ids, descriptor, outcomes
+                )
+            finally:
+                result.update(tally(outcomes), exit_code=status)
+            if status != 0:
+                break
     finally:
         os.close(descriptor)
-    if status == 0:
-        temporary = complete.with_suffix(".tmp")
-        temporary.write_text("complete\n", encoding="utf-8")
-        temporary.replace(complete)
-        if resumed:
-            print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
+        totals = {"passed": 0, "failed": 0, "ignored": 0}
+        for result in results:
+            for name in totals:
+                totals[name] += int(result[name])
+        if status == 0:
+            write_atomic(complete, "complete\n")
+            if resumed:
+                print(
+                    f"resumed: skipped {len(resumed)} tests already passed for this tree",
+                    flush=True,
+                )
+        summary = summary_line(label, totals, len(resumed))
+        write_atomic(record_dir / "summary.txt", summary + "\n")
+        if plans:
+            run_record = {
+                "label": label,
+                "base": args.base,
+                "plans": [" ".join(plan) for plan in plans],
+                "tree_key": key,
+                "plan_key": profile,
+                "started_at": started_at,
+                "finished_at": utc_now(),
+                "exit_code": status,
+                "skipped_resumed": len(resumed),
+                **totals,
+                "results": results,
+            }
+            write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
+        print(summary, flush=True)
+        print(f"[{label}] record: {record_dir}", flush=True)
+    assert status is not None
     return status
 
 
@@ -281,10 +427,22 @@ def main() -> int:
     parser.add_argument("--force", choices=("0", "1"), default="0")
     parser.add_argument("--build-jobs", required=True)
     parser.add_argument("--test-threads", required=True)
+    parser.add_argument(
+        "--label", default=DEFAULT_LABEL, help="log prefix (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--plan",
+        action="append",
+        metavar="ARGS",
+        help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
+        "run in order instead of --workspace",
+    )
+    parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
+    args = parser.parse_args()
     try:
-        return run_nextest(parser.parse_args())
+        return run_nextest(args)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print(f"[test-intentd] ERROR: {error}", file=sys.stderr)
+        print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
         return 2
 
 
