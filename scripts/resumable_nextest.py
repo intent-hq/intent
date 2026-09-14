@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -12,9 +13,11 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 SCHEMA_VERSION = 1
@@ -277,6 +280,40 @@ def previously_passed(record_dir: Path, fallback: int) -> int:
         return fallback
 
 
+class Terminated(BaseException):
+    """Raised by the SIGTERM handler so `finally` blocks run before the runner exits."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"terminated by signal {signum}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def terminate_on_signal():
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def handler(signum, _frame):
+        raise Terminated(signum)
+
+    previous = signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def failure_exit_code(error: BaseException) -> int:
+    if isinstance(error, subprocess.CalledProcessError):
+        return error.returncode
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    if isinstance(error, Terminated):
+        return 128 + error.signum
+    return 2
+
+
 def run_nextest(args: argparse.Namespace) -> int:
     label = args.label
     repo_root = Path(args.repo_root).resolve()
@@ -307,83 +344,19 @@ def run_nextest(args: argparse.Namespace) -> int:
         selections = [["--workspace"]]
         scope = "the complete suite"
     complete = record_dir / "complete"
-    if resumed and complete.is_file():
+    resuming = args.resume == "1" and args.force != "1"
+    # A completed plan may legitimately have passed nothing (every selected test
+    # ignored), so the planned fast path keys on the marker alone.
+    if complete.is_file() and (resuming if plans else bool(resumed)):
         skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
         print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
         return 0
 
     env = nextest_env()
-    binary_ids: dict[tuple[str, str], str] = {}
-    for selection in selections:
-        list_output = run(
-            [
-                "cargo", "nextest", "list", *selection,
-                "--build-jobs", args.build_jobs,
-                "--message-format", "json",
-            ],
-            intentd_dir,
-            env,
-        )
-        binary_ids.update(test_binary_ids(list_output))
-    known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
-    if plans:
-        # passed.jsonl is shared by every run on this tree; only the tests these
-        # plans select count as resumed here.
-        resumed = resumed & known_tests
-    else:
-        unknown = resumed - known_tests
-        if unknown:
-            raise RuntimeError(f"passed-test record contains {len(unknown)} unlisted tests")
-    configs = []
-    for index, _ in enumerate(selections, start=1):
-        if plans:
-            config = record_dir / f"nextest-{index}.toml"
-            write_tool_config(config, store_dir, profile, resumed, f"junit-{index}.xml")
-        else:
-            config = run_dir / "nextest.toml"
-            write_tool_config(config, store_dir, profile, resumed)
-        configs.append(config)
-
-    complete.unlink(missing_ok=True)
-    if not resumed and not plans:
-        record.write_text("", encoding="utf-8")
-
-    if args.resume == "1" and args.force == "1":
-        print(f"[{label}] GATE_FORCE=1: running {scope}", flush=True)
-    elif args.resume == "1" and not resumed:
-        print(f"[{label}] no passed-test record for this tree; running {scope}", flush=True)
-
     started_at = utc_now()
-    status: int | None = None
     results: list[dict[str, object]] = []
-    descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        for selection, config in zip(selections, configs):
-            command = [
-                "cargo", "nextest", "run", *selection,
-                "--build-jobs", args.build_jobs,
-                "--test-threads", args.test_threads,
-                "--tool-config-file", f"intent-gate:{config}",
-                "--profile", profile,
-                "--message-format", "libtest-json-plus",
-                "--message-format-version", "0.1",
-            ]
-            if resumed:
-                command.extend(["--no-tests", "pass"])
-            outcomes: dict[str, str] = {}
-            result: dict[str, object] = {"plan": " ".join(selection)}
-            results.append(result)
-            status = None
-            try:
-                status = stream_nextest(
-                    command, intentd_dir, env, binary_ids, descriptor, outcomes
-                )
-            finally:
-                result.update(tally(outcomes), exit_code=status)
-            if status != 0:
-                break
-    finally:
-        os.close(descriptor)
+
+    def finalize(status: int | None) -> None:
         totals = {"passed": 0, "failed": 0, "ignored": 0}
         for result in results:
             for name in totals:
@@ -414,7 +387,102 @@ def run_nextest(args: argparse.Namespace) -> int:
             write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
         print(summary, flush=True)
         print(f"[{label}] record: {record_dir}", flush=True)
+
+    # From the first `cargo nextest list` onwards every exit — failure,
+    # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
+    try:
+        with terminate_on_signal():
+            binary_ids: dict[tuple[str, str], str] = {}
+            for selection in selections:
+                list_output = run(
+                    [
+                        "cargo", "nextest", "list", *selection,
+                        "--build-jobs", args.build_jobs,
+                        "--message-format", "json",
+                    ],
+                    intentd_dir,
+                    env,
+                )
+                binary_ids.update(test_binary_ids(list_output))
+            known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
+            if plans:
+                # passed.jsonl is shared by every run on this tree; only the tests
+                # these plans select count as resumed here.
+                resumed = resumed & known_tests
+            else:
+                unknown = resumed - known_tests
+                if unknown:
+                    raise RuntimeError(
+                        f"passed-test record contains {len(unknown)} unlisted tests"
+                    )
+            configs = []
+            for index, _ in enumerate(selections, start=1):
+                if plans:
+                    config = record_dir / f"nextest-{index}.toml"
+                    write_tool_config(
+                        config, store_dir, profile, resumed, f"junit-{index}.xml"
+                    )
+                else:
+                    config = run_dir / "nextest.toml"
+                    write_tool_config(config, store_dir, profile, resumed)
+                configs.append(config)
+
+            complete.unlink(missing_ok=True)
+            if not resumed and not plans:
+                record.write_text("", encoding="utf-8")
+
+            if args.resume == "1" and args.force == "1":
+                print(f"[{label}] GATE_FORCE=1: running {scope}", flush=True)
+            elif args.resume == "1" and not resumed:
+                print(
+                    f"[{label}] no passed-test record for this tree; running {scope}",
+                    flush=True,
+                )
+
+            status: int | None = None
+            descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                for selection, config in zip(selections, configs):
+                    command = [
+                        "cargo", "nextest", "run", *selection,
+                        "--build-jobs", args.build_jobs,
+                        "--test-threads", args.test_threads,
+                        "--tool-config-file", f"intent-gate:{config}",
+                        "--profile", profile,
+                        "--message-format", "libtest-json-plus",
+                        "--message-format-version", "0.1",
+                    ]
+                    if resumed:
+                        command.extend(["--no-tests", "pass"])
+                    outcomes: dict[str, str] = {}
+                    result: dict[str, object] = {"plan": " ".join(selection)}
+                    results.append(result)
+                    status = None
+                    try:
+                        status = stream_nextest(
+                            command, intentd_dir, env, binary_ids, descriptor, outcomes
+                        )
+                    finally:
+                        result.update(tally(outcomes), exit_code=status)
+                    if status != 0:
+                        break
+            finally:
+                os.close(descriptor)
+    except subprocess.CalledProcessError as error:
+        print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
+        exit_code = failure_exit_code(error)
+        finalize(exit_code)
+        return exit_code
+    except (KeyboardInterrupt, Terminated) as error:
+        print(f"[{label}] ERROR: interrupted: {error}", file=sys.stderr, flush=True)
+        exit_code = failure_exit_code(error)
+        finalize(exit_code)
+        return exit_code
+    except BaseException:
+        finalize(None)
+        raise
     assert status is not None
+    finalize(status)
     return status
 
 

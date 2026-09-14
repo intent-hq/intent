@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 import tomllib
@@ -482,13 +483,163 @@ class ResumableNextestTests(unittest.TestCase):
                 raise KeyboardInterrupt
 
             harness = PlannedRunHarness(root, [(lines(), 0)])
-            with self.assertRaises(KeyboardInterrupt):
-                harness.execute(make_args(root))
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(harness.execute(make_args(root)), 130)
             record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
             self.assertFalse((record_dir / "complete").exists())
-            self.assertIsNone(json.loads((record_dir / "run.json").read_text())["exit_code"])
+            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 130)
             self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
             self.assertIn("1 passed, 0 failed", harness.output_lines[-2])
+            self.assertIn("[test-changed] ERROR: interrupted", stderr.getvalue())
+
+    def test_list_failure_still_writes_record_and_returns_its_exit_code(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "intentd").mkdir()
+            failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=failure
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
+            ), contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(
+                io.StringIO()
+            ) as stderr:
+                self.assertEqual(gate.run_nextest(make_args(root)), 101)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            summary = (
+                "[test-changed] summary: 0 passed, 0 failed, 0 skipped/ignored, 0 resumed "
+                "(tests already passed for this tree)"
+            )
+            self.assertEqual(
+                stdout.getvalue().splitlines(), [summary, f"[test-changed] record: {record_dir}"]
+            )
+            self.assertIn("[test-changed] ERROR:", stderr.getvalue())
+            self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 101)
+            self.assertEqual(run_record["results"], [])
+            self.assertFalse((record_dir / "complete").exists())
+
+    def test_sigterm_terminates_cargo_and_finalizes_with_143(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def lines():
+                yield event("ok", "alpha::one$passes")
+                os.kill(os.getpid(), gate.signal.SIGTERM)
+                time.sleep(5)
+                raise AssertionError("SIGTERM handler did not interrupt the stream")
+
+            previous = gate.signal.getsignal(gate.signal.SIGTERM)
+            harness = PlannedRunHarness(root, [(lines(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(harness.execute(make_args(root)), 143)
+            self.assertIs(gate.signal.getsignal(gate.signal.SIGTERM), previous)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertFalse((record_dir / "complete").exists())
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 143)
+            self.assertEqual(run_record["results"][0]["exit_code"], None)
+            self.assertEqual(run_record["passed"], 1)
+            self.assertEqual(harness.output_lines[-1], f"[test-changed] record: {record_dir}")
+
+    def test_sigterm_to_real_process_leaves_durable_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "intentd").mkdir()
+            marker = root / "terminated"
+            child_code = f"""
+import importlib.util, json, os, sys, time
+from pathlib import Path
+from unittest import mock
+spec = importlib.util.spec_from_file_location("resumable_nextest", {str(SCRIPT)!r})
+gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gate)
+from types import SimpleNamespace
+
+class Proc:
+    def __init__(self):
+        self.stdout = self.lines()
+    def lines(self):
+        yield {event("ok", "alpha::one$passes")!r}
+        yield "entry\\n"
+        while True:
+            time.sleep(0.05)
+    def terminate(self):
+        Path({str(marker)!r}).write_text("terminated")
+    def wait(self):
+        return -15
+
+args = SimpleNamespace(repo_root=Path({str(root)!r}), intentd_dir="intentd", cache_dir=Path({str(root / "cache")!r}),
+    resume="0", force="0", build_jobs="2", test_threads="1", label="test-changed",
+    plan=["-p alpha --test one"], base=None)
+with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.object(
+    gate, "run", return_value={LISTING!r}
+), mock.patch.object(gate.subprocess, "Popen", side_effect=lambda *a, **k: Proc()):
+    raise SystemExit(gate.run_nextest(args))
+"""
+            child = subprocess.Popen(
+                [sys.executable, "-c", child_code],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            assert child.stdout is not None
+            try:
+                for line in child.stdout:
+                    if line == "entry\n":
+                        break
+                else:
+                    self.fail("child never reached the streaming loop")
+                child.send_signal(gate.signal.SIGTERM)
+                remaining, stderr = child.communicate(timeout=20)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertEqual(child.returncode, 143, stderr)
+            self.assertTrue(marker.is_file(), "nextest child was not terminated")
+            self.assertEqual(remaining.splitlines()[-1], f"[test-changed] record: {record_dir}")
+            self.assertIn("1 passed, 0 failed", remaining.splitlines()[-2])
+            self.assertIn("ERROR: interrupted", stderr)
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+
+    def test_ignored_only_completed_plan_resumes_without_cargo(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+            self.assertEqual(gate.load_passed(root / "cache" / KEY / "passed.jsonl"), set())
+
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("cargo must not run")
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
+            ), contextlib.redirect_stdout(io.StringIO()) as stdout:
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+            self.assertEqual(
+                stdout.getvalue(), "resumed: skipped 0 tests already passed for this tree\n"
+            )
+
+            forced = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
+            self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
+            self.assertEqual(len(forced.run_commands), 1)
+
+    def test_workspace_fast_path_still_requires_passed_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "intentd").mkdir()
+            run_dir = root / "cache" / KEY
+            run_dir.mkdir(parents=True)
+            (run_dir / "complete").write_text("complete\n", encoding="utf-8")
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            args = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(harness.execute(args), 0)
+            self.assertEqual(len(harness.run_commands), 1)
 
     def test_workspace_run_keeps_default_layout_and_appends_trailing_lines(self):
         with tempfile.TemporaryDirectory() as temporary:
