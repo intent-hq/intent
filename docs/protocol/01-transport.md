@@ -82,14 +82,19 @@ Malformed frames — shorter than the 5-byte header, an unknown opcode, an `OPEN
 
 | Limit | Value | On violation / expiry |
 | --- | --- | --- |
-| Concurrent streams | 32 | further `OPEN`s answered with `OPEN_ERR` until a stream closes |
+| Concurrent streams | 256 total; 32 per remote port | further `OPEN`s answered with capacity `OPEN_ERR` until a stream closes |
+| Inbound queued/in-progress payload bytes | 64 MiB shared | offending stream closed; sibling streams continue |
 | `DATA` payload (client → daemon) | 1 MiB | `1002` protocol close (whole connection) |
 | Inbound WebSocket message | 5-byte header + 1 MiB | `1009 Message Too Big` close — tunnel-specific cap, **not** the 40 MiB JSON-RPC cap (§1.3) |
 | TCP connect deadline | 10 s | `OPEN_ERR` naming the timeout |
 | Idle stream (no data either way; also bounds one blocked TCP write) | 300 s | stream torn down (final `CLOSE`) |
-| Wedged-stream forward deadline | 15 s | a stream whose full queue parks the mux is killed (final `CLOSE`) so pings keep flowing inside the heartbeat window |
+| Per-stream inbound queue | 32 frames, also subject to shared byte budget | full queue closes only that stream immediately; the mux never waits on its consumer |
 
-Flow control is per-connection (bounded frame queues both ways; daemon-side TCP reads are chunked into one `DATA` frame per 16 KiB read), not per-stream, so one stream with a stalled consumer can briefly head-of-line-block its siblings' inbound frames — the caps above bound the wedge on every axis.
+Admission counts connecting and established streams. The per-port cap prevents one forward from consuming the entire connection; the total budget accommodates eight full port budgets. This is bounded capacity, not a promise of progress under unlimited indefinitely held streams. The tunnel carries raw TCP: it cannot identify completed HTTP exchanges or reclaim arbitrary WebSockets safely, so idle expiry remains unchanged.
+
+Capacity rejection uses `too many concurrent streams (max N)` or `too many concurrent streams for port P (max N)`. A client may queue/retry only an unopened stream, before `OPEN_OK` and before sending application data. Refused ports, malformed frames and established-stream failures are not replayable. The desktop pauses local sockets in a bounded queue (256 pending total, 64 per port, 30-second admission deadline), schedules eligible ports round-robin, and bounds capacity retry backoff. Older daemons with a 32-total cap can still reject; retries remain bounded until they are upgraded.
+
+Inbound byte permits remain held through a blocked TCP write and are released on completion, cancellation or teardown. Full stream queues or exhausted shared bytes close only the offending stream without parking the shared reader. Daemon-side TCP reads produce at most 16 KiB per frame; the outbound queue holds 64 frames. Generation identity prevents stale output/cleanup from crossing a reused stream ID. Shared WebSocket write backpressure can still delay the connection. Desktop diagnostics report configured limits, active/pending counts, port, generation and last admission failure/wait; no application payload is recorded.
 
 **FE fallback usage (Electron only).** The intended consumer is the `browser.exec` loopback-rewrite **tunnel fallback** (§5.9, §5.14; monorepo#2323): when a remote-rewritten `navigate` / `openTab` reachability probe fails, the Electron FE forwards the daemon port over `/tunnel` — a local TCP listener on the client machine relays to a tunnel stream — and navigates to `http://127.0.0.1:<localPort>` instead, echoing `tunneled: true` in the action result. Web builds cannot host a local TCP listener and keep the explanatory probe error.
 
