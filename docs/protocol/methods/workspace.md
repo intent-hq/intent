@@ -1481,9 +1481,11 @@ latest `updatedAt` among equal ranks; `isDraft`, `mergeable` and `mergeableState
 with `status`, so the selected copy is one coherent snapshot), so a stale open
 duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
 stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
-on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL was
-canonicalized to is read as that lifecycle (root-only URLs the workspace never linked say
-nothing about the scalar). A URL the workspace does not carry is appended as a distinct
+on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL (`prUrl`) was
+canonicalized to is read as that lifecycle — whether that URL's copy is linked, pooled, or
+root-only — while every other URL says nothing about the scalar (neither a root-only PR
+nor a pooled `pullRequests` entry whose root copy merged while `prUrl` names another PR;
+without a `prUrl` the scalar is never normalized). A URL the workspace does not carry is appended as a distinct
 pool entry and follows the ordinary "most recently updated" selection. The fold is derived
 purely from already-persisted rows — **no forge calls** — and a git-root read failure
 degrades to the previous derivation (no signal, never an error). It is applied identically
