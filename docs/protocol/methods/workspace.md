@@ -1149,10 +1149,13 @@ PR is fresher). The **lifecycle** of a duplicate follows its source:
   derivation folds git-root PRs with (§5.1 "Git-root PR fold"; behavior only, within 10.1):
   among every copy of the URL — the linked `activePullRequest`, the stored `pullRequests`
   entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
-  is selected (`Open`/`Draft` < `Closed` < `Merged`, then the latest `updatedAt` among equal
-  ranks; ties on (rank, `updatedAt`) resolve by readiness — queued > ready > open, mirroring
-  step 4, non-draft over draft — then `mergeableState`, so the pick is total; `Merged` is
-  irreversible) and its `status`, `updatedAt`, `isDraft`, `mergeable`
+  is selected — the maximum of the **same-url tie key** (lifecycle rank: `Open`/`Draft` <
+  `Closed` < `Merged`; `updatedAt`; readiness rank: queued 5 > `mergeableState: clean` 4 >
+  `mergeable: true` with any other state 3 > `mergeable` unknown 2 > `mergeable: false` 1,
+  drafts never queued/ready, mirroring step 4; non-draft over draft; `mergeableState`;
+  `mergeable`; `isDraft`; `status`), compared lexicographically in that order, which is total
+  over every lifecycle field; `Merged` is irreversible — and its `status`, `updatedAt`,
+  `isDraft`, `mergeable`
   and `mergeableState` are written together, as one coherent snapshot, onto **both** the
   emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
   URL. The served PR fields therefore never disagree with `displayStatus` on a PR's
@@ -1500,12 +1503,21 @@ closed-unmerged one never promotes on its own. The fold **dedupes by PR `url`** 
 same lifecycle-ladder upgrade the emitted-`pullRequests` merge above applies: a URL the
 workspace already carries (linked `activePullRequest` or a `pullRequests` entry) keeps its
 identity fields, and every copy of that URL — linked, pooled, git-root — is canonicalized to
-the **highest** lifecycle among them (`Open`/`Draft` < `Closed` < `Merged`, then the
-latest `updatedAt` among equal ranks; ties on (rank, `updatedAt`) resolve by readiness —
-queued > ready > open, the step-4 precedence, non-draft over draft — then `mergeableState`,
-so two same-instant reads of one open PR converge on the readier copy rather than the first
-root visited; `isDraft`, `mergeable` and `mergeableState` move
-with `status`, so the selected copy is one coherent snapshot), so a stale open
+the **highest** lifecycle among them — the copy maximizing the **same-url tie key**, compared
+lexicographically in this order:
+
+1. lifecycle rank — `Open`/`Draft` < `Closed` < `Merged`;
+2. `updatedAt` — the latest among equal ranks;
+3. readiness rank — queued 5 > `mergeableState: clean` 4 > `mergeable: true` with any other
+   state 3 > `mergeable` unknown 2 > `mergeable: false` 1 (drafts are never queued or ready),
+   the step-4 precedence;
+4. non-draft over draft;
+5. `mergeableState`, 6. `mergeable`, 7. `isDraft`, 8. `status` — raw field values, so the
+   order is total over every lifecycle field and equal keys are identical snapshots.
+
+Two same-instant reads of one open PR therefore converge on the readier copy rather than the
+first root visited; `isDraft`, `mergeable` and `mergeableState` move with `status`, so the
+selected copy is one coherent snapshot. Consequently a stale open
 duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
 stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
 on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL (`prUrl`) was
@@ -1522,8 +1534,7 @@ on **every** surface that derives `displayStatus`: `workspace.list` and the lite
 (§6.5), so the three read surfaces and the transition event always agree. **The served PR
 fields carry the same canonical lifecycle**: on each of those read surfaces the emitted
 `activePullRequest` and the workspace-owned `pullRequests` entries are canonicalized in
-place with the very same same-url rule (the copy selected by (rank, `updatedAt`), ties by
-readiness then `mergeableState` — one
+place with the very same same-url rule (the copy maximizing the same-url tie key above — one
 coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` snapshot,
 identity fields untouched, nothing persisted), so no response pairs
 `activePullRequest: open` with `displayStatus: pr_merged`, or a `draft` pooled copy with
