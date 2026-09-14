@@ -1158,10 +1158,12 @@ computed on emit from already-persisted rows — plain column reads plus an in-m
 **no forge calls on the read path** — and exists so list/sidebar clients see submodule and
 monitored PRs without opening the workspace. A row with nothing to merge keeps its stored
 serialization untouched (an absent stored `pullRequests` stays omitted); a row that merges
-always serializes a plain array. The merge also runs **after** the `displayStatus`
-enrichment, so the PR/task rollup (the derivation below) reads only the stored
-workspace-level list — merged entries affect the emitted `pullRequests` array, never
-`displayStatus`. Everything else is unchanged: the stored `workspace.pull_requests` column
+always serializes a plain array. The merge runs **after** the `displayStatus`
+enrichment, but the derivation below sees the same external inputs on its own terms: the
+git-root PRs feed its PR rungs directly (as a same-rung input to the stored list — §5.1
+step 4, the git-root fold) and the monitored PRs feed them through the monitor signals
+(intentd#1329), so the emitted `pullRequests` array and `displayStatus` agree on what the
+workspace's PRs are. Everything else is unchanged: the stored `workspace.pull_requests` column
 keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
 explicit-null clear below still targets only the stored value), `workspace.get` and the
 write-path responses carry the unmerged workspace-level list, and the `pr:*` event
@@ -1419,7 +1421,10 @@ attention is never fabricated.
    here, but it can read as `pr_open`/`pr_ready` there.
 4. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
-      recently updated open/draft entry in `pullRequests` — yields `pr_queued`
+      recently updated open/draft entry in the PR pool — the stored `pullRequests` plus
+      the PRs persisted on the workspace's registered secondary git roots
+      (`workspace_git_root.pull_requests`, the sweep's per-root discovery — §5.6), a
+      **same-rung input** folded in by URL (see the git-root fold below) — yields `pr_queued`
       (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
       not draft); else `pr_ready` only when the PR is **truly mergeable** — not draft,
       `mergeable == true` AND `mergeable_state == "clean"`
@@ -1448,8 +1453,9 @@ attention is never fabricated.
       nothing, and a store read failure fails open to no signal.
    2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
       (`inProgress > 0` or `completed > 0`), else `not_started`.
-   3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests`
-      entry) → `pr_merged`. A **COMPLETED monitor** whose final snapshot shows the PR
+   3. **Latest PR merged** (the linked PR, else the most recently updated entry of the
+      same pool — `pullRequests` plus the folded git-root PRs) → `pr_merged`. A
+      **COMPLETED monitor** whose final snapshot shows the PR
       merged feeds this rung too (intentd#1329) — only the **latest** completed
       monitor (by `updatedAt`) counts, mirroring the linked-PR "most recently
       updated" semantics, so an older merged watch never masks a newer
@@ -1458,6 +1464,33 @@ attention is never fabricated.
       `not_started`.
 5. **Idle demotion** — when not running and step 4 yields `in_progress` or `not_started`,
    the result is demoted to `idle`; the PR stages and `complete` pass through.
+
+**Git-root PR fold (steps 4.1 and 4.3; behavior only, no version bump).** The PRs
+persisted on the workspace's registered secondary git roots
+(`workspace_git_root.pull_requests` — submodule and sibling-clone roots, §5.6 `gitRoot.*`)
+are a **same-rung input** to the PR stages, not a separate rung: they join the workspace's
+own `pullRequests` in one pool before steps 4.1 and 4.3 run, so a merged git-root PR reads
+`pr_merged` only once step 4.2 is clear (open tasks still precede the merged check), an
+open one holds `pr_open` / `pr_ready` / `pr_queued` even with every task complete, and a
+closed-unmerged one never promotes on its own. The fold **dedupes by PR `url`** with the
+same lifecycle-ladder upgrade the emitted-`pullRequests` merge above applies: a URL the
+workspace already carries (linked `activePullRequest` or a `pullRequests` entry) keeps its
+identity fields, and every copy of that URL — linked, pooled, git-root — is canonicalized to
+the **highest** lifecycle among them (`Open`/`Draft` < `Closed` < `Merged`, then the
+latest `updatedAt` among equal ranks; `isDraft`, `mergeable` and `mergeableState` move
+with `status`, so the selected copy is one coherent snapshot), so a stale open
+duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
+stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
+on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL was
+canonicalized to is read as that lifecycle (root-only URLs the workspace never linked say
+nothing about the scalar). A URL the workspace does not carry is appended as a distinct
+pool entry and follows the ordinary "most recently updated" selection. The fold is derived
+purely from already-persisted rows — **no forge calls** — and a git-root read failure
+degrades to the previous derivation (no signal, never an error). It is applied identically
+on **every** surface that derives `displayStatus`: `workspace.list` and the lite
+`workspace.subscribe` seq-0 snapshot (which reuse the list's single bulk git-root read),
+`workspace.get` (one scoped read), and the `workspace:displayStatus-changed` recompute
+(§6.5), so the three read surfaces and the transition event always agree.
 
 The dismissible `unread` workspace attention flag (the server-owned turn-end blue dot,
 §5.1 `attention`) **never feeds the derivation** — the intentd#945 step-6 unread
@@ -1480,9 +1513,9 @@ further guarded on the stored flag being `none`: it never downgrades a persisten
 on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
 retires that flag (its documented contract).
 
-A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — and the
-monitor signals — for open/draft entries) or open tasks (step 4.2 precedes the merged
-check). Transitions are pushed as
+A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — plus the
+folded git-root PRs and the monitor signals — for open/draft entries) or open tasks
+(step 4.2 precedes the merged check). Transitions are pushed as
 `workspace:displayStatus-changed` (§6.5), which since intentd#793 also fires on agent
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
@@ -1501,7 +1534,16 @@ monitor's signal back to the base rollup (the idempotent re-arm still recomputes
 stays a silent no-op). A mid-watch snapshot change (e.g. checks turning the PR
 mergeable, `pr_open` → `pr_ready`) does not push its own transition — the poll loop's
 non-terminal refreshes are not recompute sites; the flip surfaces on the next read-path
-enrichment or any later choke-point recompute. Hook lifecycle transitions
+enrichment or any later choke-point recompute. The **git-root PR sweep** is a recompute
+site too (the git-root fold above): the background PR-refresh loop's per-root refresh
+(§5.6 — the same sweep that emits `gitRoot:updated`) recomputes-and-compares after it
+persists a changed linkage or pool, so a secondary-root PR opening emits
+`pr_open`/`pr_ready`/`pr_queued` and one merging emits `pr_merged` (once the tasks are
+done) without waiting for the next `workspace.list`; registering a root that already
+carries PR data and unregistering a PR-bearing root (`ws.git.registerRoot` /
+`ws.git.unregisterRoot`, and the sweep's auto-prune of a missing path) recompute the
+same way, so removing the root lapses its rung back to the base rollup. An unchanged
+sweep emits nothing. Hook lifecycle transitions
 (intentd#856 established the sites): a hook **schedule** (a newly persisted active
 hook can raise `waiting`) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
 both the synchronous ops and the spawned-task run paths — so `waiting` drops when the
