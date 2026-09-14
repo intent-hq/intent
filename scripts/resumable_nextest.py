@@ -352,6 +352,9 @@ def run_nextest(args: argparse.Namespace) -> int:
         print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
         return 0
 
+    # Invalidate the previous marker before nextest is invoked so a failed or
+    # interrupted list step cannot leave a stale `complete` behind.
+    complete.unlink(missing_ok=True)
     env = nextest_env()
     started_at = utc_now()
     results: list[dict[str, object]] = []
@@ -427,7 +430,6 @@ def run_nextest(args: argparse.Namespace) -> int:
                     write_tool_config(config, store_dir, profile, resumed)
                 configs.append(config)
 
-            complete.unlink(missing_ok=True)
             if not resumed and not plans:
                 record.write_text("", encoding="utf-8")
 

@@ -629,6 +629,88 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 0)
             self.assertEqual(len(forced.run_commands), 1)
 
+    def test_forced_rerun_with_failing_list_clears_stale_complete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(make_args(root)), 0)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+
+            failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=failure
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
+            ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 101)
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 101)
+
+            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(third.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(len(third.list_commands), 1)
+            self.assertEqual(len(third.run_commands), 1)
+            self.assertTrue((record_dir / "complete").is_file())
+
+    def test_forced_rerun_interrupted_during_list_clears_stale_complete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(first.execute(make_args(root)), 0)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            self.assertTrue((record_dir / "complete").is_file())
+
+            def terminated_list(command, cwd, env=None):
+                os.kill(os.getpid(), gate.signal.SIGTERM)
+                time.sleep(5)
+                raise AssertionError("SIGTERM handler did not interrupt the list step")
+
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=terminated_list
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
+            ), contextlib.redirect_stdout(io.StringIO()) as stdout, contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1", force="1")), 143)
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
+            self.assertEqual(
+                stdout.getvalue().splitlines()[-1], f"[test-changed] record: {record_dir}"
+            )
+
+            third = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(third.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(len(third.run_commands), 1)
+
+    def test_workspace_forced_rerun_with_failing_list_clears_stale_complete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "intentd").mkdir()
+            run_dir = root / "cache" / KEY
+            run_dir.mkdir(parents=True)
+            (run_dir / "complete").write_text("complete\n", encoding="utf-8")
+            (run_dir / "passed.jsonl").write_text(
+                '{"binary_id":"alpha::one","test":"passes"}\n', encoding="utf-8"
+            )
+            failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
+            args = make_args(root, resume="1", force="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=failure
+            ), mock.patch.object(
+                gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
+            ), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
+                io.StringIO()
+            ):
+                self.assertEqual(gate.run_nextest(args), 101)
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
+            )
+
     def test_workspace_fast_path_still_requires_passed_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
