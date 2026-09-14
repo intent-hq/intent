@@ -8,7 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { EVENTS_DOC, SIDECAR, VENDORED_COPIES, diffCatalogs, inspectRepository } from './check-event-catalog.mjs';
+import { BYTE_MISMATCH, EVENTS_DOC, SIDECAR, VENDORED_COPIES, diffCatalogs, inspectRepository } from './check-event-catalog.mjs';
 
 const [INTENTD_GOLDEN, IOS_FIXTURE] = VENDORED_COPIES;
 
@@ -73,6 +73,39 @@ test('a differing type fails naming the type and the copy', async (t) => {
     failures: [
       { source: INTENTD_GOLDEN, message: 'unexpected type note:renamed' },
       { source: IOS_FIXTURE, message: 'missing type task:ready-tasks-changed' },
+    ],
+    skipped: [],
+  });
+});
+
+test('a semantically equal copy that is not byte-identical fails', async (t) => {
+  const reordered = withTypes(catalog, ['workspace:updated', 'note:created', 'task:ready-tasks-changed']);
+  const root = await fixture(t, {
+    [SIDECAR]: catalog,
+    [EVENTS_DOC]: doc,
+    [INTENTD_GOLDEN]: reordered,
+    [IOS_FIXTURE]: JSON.stringify(catalog, null, 2),
+  });
+  assert.deepEqual(await inspectRepository(root), {
+    failures: [
+      { source: INTENTD_GOLDEN, message: BYTE_MISMATCH },
+      { source: IOS_FIXTURE, message: BYTE_MISMATCH },
+    ],
+    skipped: [],
+  });
+
+  const duplicated = withTypes(catalog, [...catalog.types, 'note:created']);
+  const extraField = { ...catalog, generatedBy: 'hand' };
+  const root2 = await fixture(t, {
+    [SIDECAR]: catalog,
+    [EVENTS_DOC]: doc,
+    [INTENTD_GOLDEN]: duplicated,
+    [IOS_FIXTURE]: extraField,
+  });
+  assert.deepEqual(await inspectRepository(root2), {
+    failures: [
+      { source: INTENTD_GOLDEN, message: BYTE_MISMATCH },
+      { source: IOS_FIXTURE, message: BYTE_MISMATCH },
     ],
     skipped: [],
   });

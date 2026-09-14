@@ -5,8 +5,10 @@
 // intent_core::events::ALL_EVENT_TYPES), the protocol sidecar
 // docs/protocol/event-types.json, and the iOS test fixture. A vendored copy that
 // is missing because its submodule is not initialized is skipped; a copy that is
-// present but differs fails naming the differing types / discriminators. Every
-// type in the sidecar must also appear literally in docs/protocol/06-events.md.
+// present must be byte-identical to the sidecar — a semantic difference fails
+// naming the differing types / discriminators, and a byte-only difference
+// (ordering, formatting, duplicates, extra fields) fails as well. Every type in
+// the sidecar must also appear literally in docs/protocol/06-events.md.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -41,8 +43,9 @@ function setDifference(left, right) {
   return left.filter((item) => !rightSet.has(item));
 }
 
-// Differences between two catalogs, as human-readable sentences. An empty
-// array means the catalogs are identical.
+// Semantic differences between two catalogs, as human-readable sentences. An
+// empty array means the catalogs agree on types and discriminators; byte
+// identity is checked separately by `inspectRepository`.
 export function diffCatalogs(expected, actual) {
   const differences = [];
   if (expected.version !== actual.version) {
@@ -86,9 +89,12 @@ export function undocumentedTypes(catalog, doc) {
   return asStringList(catalog.types).filter((type) => !doc.includes(type));
 }
 
+export const BYTE_MISMATCH = `not byte-identical to ${SIDECAR} (ordering, formatting, duplicate, or extra field)`;
+
 export async function inspectRepository(root) {
   root = path.resolve(root);
-  const sidecar = await readJson(path.join(root, SIDECAR));
+  const sidecarBytes = await fs.readFile(path.join(root, SIDECAR));
+  const sidecar = JSON.parse(sidecarBytes.toString('utf8'));
   const failures = [];
   const skipped = [];
 
@@ -98,9 +104,11 @@ export async function inspectRepository(root) {
       skipped.push(copy);
       continue;
     }
-    for (const difference of diffCatalogs(sidecar, await readJson(copyPath))) {
-      failures.push({ source: copy, message: difference });
-    }
+    const copyBytes = await fs.readFile(copyPath);
+    if (copyBytes.equals(sidecarBytes)) continue;
+    const differences = diffCatalogs(sidecar, JSON.parse(copyBytes.toString('utf8')));
+    for (const difference of differences) failures.push({ source: copy, message: difference });
+    if (differences.length === 0) failures.push({ source: copy, message: BYTE_MISMATCH });
   }
 
   const doc = await fs.readFile(path.join(root, EVENTS_DOC), 'utf8');
