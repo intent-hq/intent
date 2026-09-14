@@ -87,6 +87,40 @@ jobs:
       - run: node --test scripts/check-protocol-catalog.test.mjs
       - run: make check-protocol-catalog
 
+  # The event-type catalog is vendored on three surfaces (intentd golden,
+  # protocol sidecar, iOS test fixture). The public intentd copy is checked out
+  # at its pin. packages/ios is private: its fixture is fetched at the pinned
+  # gitlink via the API with SUBMODULE_BUMP_TOKEN when present and skipped with
+  # a warning otherwise (mirrors auto-bump-submodules.yml's ios handling).
+  event-catalog-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-event-catalog.test.mjs
+      - run: git submodule update --init --depth=1 packages/intentd
+      - name: Fetch the iOS fixture at the pinned gitlink (best-effort)
+        env:
+          GH_TOKEN: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::SUBMODULE_BUMP_TOKEN is not set; skipping the packages/ios event catalog check."
+            exit 0
+          fi
+          pin=$(git rev-parse HEAD:packages/ios)
+          dest=packages/ios/IntentTests/Fixtures/event_types.json
+          mkdir -p "$(dirname "$dest")"
+          if ! gh api -H "Accept: application/vnd.github.raw" \
+              "repos/intent-hq/ios/contents/IntentTests/Fixtures/event_types.json?ref=$pin" > "$dest"; then
+            echo "::warning::Could not fetch IntentTests/Fixtures/event_types.json from intent-hq/ios@${pin:0:7}; skipping the packages/ios event catalog check."
+            rm -f "$dest"
+          fi
+      - run: make event-catalog-check
+
   # Hermetic shell suites stub daemon, cargo, and pnpm behavior where needed.
   shell-tests:
     runs-on: ubuntu-latest

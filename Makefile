@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog shipped-in rpc
+.PHONY: ports status docs-check check-protocol-catalog event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -129,11 +129,17 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 
-docs-check: ## Check documented development targets, knobs, and remote-host guidance
+docs-check: event-catalog-check ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
+
+# The event-type catalog is vendored on three surfaces: the intentd golden
+# (source of truth), the protocol sidecar docs/protocol/event-types.json, and
+# the iOS test fixture. A copy whose submodule is not initialized is skipped.
+event-catalog-check: ## Check the protocol event-type sidecar against the intentd golden, the iOS fixture, and 06-events.md
+	@node scripts/check-event-catalog.mjs
 
 # Release tracking: which cloudlands-releases alpha first carries one or more
 # merged commits. Pass one pair as COMPONENT=... SHA=..., or several as
@@ -188,13 +194,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy lint-repo-slug lint-event-types build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-repo-slug build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-repo-slug lint-event-types build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-repo-slug lint-event-types build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -213,7 +219,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
-	fmt clippy lint-repo-slug check clean clean-dev \
+	fmt clippy lint-repo-slug lint-event-types check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -389,9 +395,17 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 lint-repo-slug: ensure-intentd-submodule ## Lint raw repo-slug folding outside RepoRef (intent-core repo_slug_fold_lint)
 	cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs $(BUILD_JOBS)
 
-check: fmt clippy lint-repo-slug ## fmt + clippy + repo-slug fold lint
+# Source lint: fails naming file:line for any note:/task:/workspace:/agent:
+# string literal outside test code that is not in
+# intent_core::events::ALL_EVENT_TYPES (the catalog mirrored into
+# crates/intent-core/tests/goldens/event_types.json). Mirrors the intentd
+# `check` CI job so local gates match CI.
+lint-event-types: ensure-intentd-submodule ## Lint event-type string literals against ALL_EVENT_TYPES (intent-core event_type_lint)
+	cd $(INTENTD_DIR) && cargo test -p intent-core --test event_type_lint --jobs $(BUILD_JOBS)
 
-gate: check ## Run all local Rust gates (fmt, clippy, repo-slug lint, then nextest)
+check: fmt clippy lint-repo-slug lint-event-types ## fmt + clippy + repo-slug fold lint + event-type lint
+
+gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
