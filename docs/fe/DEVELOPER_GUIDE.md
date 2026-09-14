@@ -74,6 +74,25 @@ For Loop A work against the installed daemon, use `make dev-sandbox-app`; use
 hydration of a fresh, pre-warmed app takes roughly one to three minutes depending on host
 load. Follow the root health wait and keep waiting if the splash remains.
 
+### microVM sandboxes on a dev host (macOS arm64)
+
+The `microvm` execution environment needs a loadable `libkrun.dylib` next to the
+`intentd-microvm-helper` the daemon seats build. The packaged app bundles a GPU-less
+libkrun; on a dev host the helper falls back to Homebrew's `/opt/homebrew/lib`, which
+breaks whenever Homebrew core's `virglrenderer` replaces the `libkrun/krun` tap's fork.
+`make libkrun-local` builds the shipped GPU-less variant into `.dev/libkrun` instead
+(`brew install lld` first — upstream cross-links the guest init with it), and
+`make dev-daemon` / `make release-daemon` export `INTENTD_LIBKRUN_DIR` to that directory
+whenever it exists. The bundling model is documented in
+[ARCHITECTURE.md § Workspace checkouts & agent sandboxes](../ARCHITECTURE.md#workspace-checkouts--agent-sandboxes-cow).
+
+| Where to look | What it tells you |
+|---|---|
+| `make doctor` | `microVM libkrun:` line — local build, Homebrew, or none, from `intentd-microvm-helper --probe` |
+| `make libkrun-local` | Builds libkrun (`LIBKRUN_TAG`, default from the intentd libkrun-bundle pin) + copies libkrunfw into `.dev/libkrun` |
+| `packages/intentd/target/debug/intentd-microvm-helper --probe --libkrun-dir .dev/libkrun` | Exit 0 when the local build loads exactly as a boot would |
+| `otool -L .dev/libkrun/libkrun.dylib` | Must list no virglrenderer, libepoxy, or Homebrew paths |
+
 ### Remote Sandbox Internals
 
 `scripts/dev-ports.sh` hashes the worktree's canonical path into one of 1,000 four-port

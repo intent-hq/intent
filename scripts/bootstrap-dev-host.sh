@@ -286,6 +286,46 @@ launcher_probe() {
   esac
 }
 
+# Which libkrun the microVM helper would load (macOS only; the backend is
+# Hypervisor.framework). Runs `intentd-microvm-helper --probe`, the same dylib
+# resolution + dlopen the boot path uses: a `make libkrun-local` build under
+# .dev/libkrun first (the daemon seats export INTENTD_LIBKRUN_DIR to it), else
+# the helper's default search ending in Homebrew's /opt/homebrew/lib. microVM
+# sandboxes are optional, so this never counts as a required gap.
+report_microvm_libkrun() {
+  [[ "$(uname -s)" == Darwin ]] || return 0
+  local helper="" profile local_dir="$ROOT_DIR/.dev/libkrun" reason
+  for profile in debug release; do
+    if [[ -x "$INTENTD_DIR/target/$profile/intentd-microvm-helper" ]]; then
+      helper="$INTENTD_DIR/target/$profile/intentd-microvm-helper"
+      break
+    fi
+  done
+  if [[ -z "$helper" ]]; then
+    optional "microVM libkrun: intentd-microvm-helper not built yet (make dev-daemon builds it); run make libkrun-local for a GPU-less local libkrun"
+    return 0
+  fi
+  if [[ -f "$local_dir/libkrun.dylib" ]]; then
+    if run_bounded "$PROBE_TIMEOUT" "$ROOT_DIR" "$helper" --probe --libkrun-dir "$local_dir"; then
+      ok "microVM libkrun: local build at $local_dir (helper --probe loads it)"
+    else
+      reason=$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)
+      warn "microVM libkrun: local build at $local_dir does not load (${reason:-probe failed}); re-run make libkrun-local"
+    fi
+    return 0
+  fi
+  if run_bounded "$PROBE_TIMEOUT" "$ROOT_DIR" "$helper" --probe; then
+    if [[ -e /opt/homebrew/lib/libkrun.dylib ]]; then
+      ok "microVM libkrun: Homebrew /opt/homebrew/lib (helper --probe loads it); make libkrun-local builds the GPU-less variant the app ships"
+    else
+      ok "microVM libkrun: helper default search (helper --probe loads it)"
+    fi
+  else
+    reason=$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)
+    optional "microVM libkrun: none loadable, microVM sandboxes are unavailable (${reason:-probe failed}); run make libkrun-local"
+  fi
+}
+
 host_platform() {
   case "$(uname -s)" in
     Darwin) echo darwin ;;
@@ -598,6 +638,8 @@ check_all() {
   else
     ok "jq: $(jq_version)"
   fi
+
+  report_microvm_libkrun
 
   if command -v sccache >/dev/null 2>&1; then
     optional "sccache: installed"

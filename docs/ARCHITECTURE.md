@@ -266,6 +266,27 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   delegate resolution. The coordinator isolation hint (`rules.rs`
   `build_isolation_hint`) keys off the same field so prompt and provisioning
   cannot disagree.
+- **microVM backend: libkrun bundling.** The `microvm` environment boots the
+  sandbox through `intentd-microvm-helper`, which `dlopen`s `libkrun.dylib`
+  (libkrun in turn dlopens `libkrunfw.5.dylib` by bare leaf name, so the helper
+  chdirs into the libkrun directory first). The helper resolves that directory
+  in order: `--libkrun-dir`, `$INTENTD_LIBKRUN_DIR`, its own directory,
+  `<helper dir>/../lib`, then `/opt/homebrew/lib`; `--probe` runs exactly this
+  resolution + dlopen without creating a VM, and the daemon's startup host probe
+  caches its outcome to gate `microvmSupported`. Intent ships its own
+  **GPU-less** libkrun (upstream build flags `BLK=1 NET=1 TIMESYNC=1`, linking
+  only Hypervisor.framework + libSystem) plus libkrunfw and the helper next to
+  `intentd`, so the packaged app never depends on a host install and a stale
+  Homebrew copy cannot shadow the bundled one. Homebrew (the `libkrun/krun`
+  tap) is a **dev-only fallback**: the tap builds libkrun with `GPU=1`, which is
+  the sole reason it links the tap's virglrenderer fork + libepoxy, and when
+  Homebrew core's `virglrenderer` (a different ABI, no venus) replaces that fork
+  the tap's `libkrun.dylib` no longer loads while ours is unaffected because the
+  sandbox has no GPU path. Developers who hit that conflict (or want to run the
+  shipped variant) build the same GPU-less libkrun into `.dev/libkrun` with
+  `make libkrun-local`; `make dev-daemon` / `make release-daemon` export
+  `INTENTD_LIBKRUN_DIR` to it when present, and `make doctor` reports which
+  source (local build / Homebrew / none) the helper's `--probe` loads.
 - **Merge-back lifecycle.** Wire contract: PROTOCOL §5.5a (Status lifecycle). The
   merge-back runs on three paths — completion interception (turn end), the
   background retry sweep, and manual `sandbox.cow.merge` — all funneled through an
