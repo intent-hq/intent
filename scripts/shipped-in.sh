@@ -17,6 +17,10 @@
 # Carriage is monotonic across versioned tags (a commit carried by a tag is
 # carried by every newer one), so the scan stops at the newest tag when it
 # misses any pair; older tags are only inspected to find the oldest carrier.
+# A release that rolls the intentd pin backwards breaks that monotonicity: the
+# newest tag misses the intentd commit, so the scan stops there and exits 3
+# (rather than printing an older carrying tag) until a newer release carries
+# it again. This is deliberate -- the current alpha does not ship the change.
 #
 # Exit codes: 0 = printed a carrying tag; 3 = no scanned release carries every
 # pair yet (stdout empty; stderr names the pairs the newest scanned release
