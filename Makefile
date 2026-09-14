@@ -426,6 +426,9 @@ test-intentd: ensure-intentd-submodule
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
+# The runner line names its paths as "$VAR" references that the script's eval
+# expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
+# nested quote.
 test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, DRY_RUN=1 prints the plan)
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
@@ -433,7 +436,9 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 	}
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
-		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$(CURDIR)" --intentd-dir "$(INTENTD_DIR)" --cache-dir "$(GATE_CACHE_DIR)" --resume "$(RESUME)" --force "$(GATE_FORCE)"' \
+		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
+		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" \
+		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE"' \
 		scripts/rust-changed-tests.sh; status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \

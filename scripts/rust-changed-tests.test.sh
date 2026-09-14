@@ -435,6 +435,50 @@ NEXTEST_RUNNER="$bin_dir/runner" run_script
 [[ "$status" -eq 3 ]] || fail "$case_name (fallback) exited $status (expected 3): $stderr"
 [[ -z "$runner_log$cargo_log" ]] || fail "$case_name (fallback) invoked: $runner_log$cargo_log"
 
+# The Makefile names its paths as "$VAR" references inside the runner string
+# (expanded by the script's eval), so apostrophes and spaces in the repo root
+# or GATE_CACHE_DIR reach the runner as single words.
+case_name="runner string expands quoted env references to whole words"
+reset_repo
+edit crates/alpha/tests/one.rs
+export GATE_REPO_ROOT="/tmp/reviewer's repo" GATE_CACHE_DIR="/tmp/reviewer's gate runs"
+NEXTEST_RUNNER='"$RUNNER_BIN" --repo-root "$GATE_REPO_ROOT" --cache-dir "$GATE_CACHE_DIR" --resume "$RESUME"' \
+  RUNNER_BIN="$bin_dir/runner" RESUME=1 run_script
+unset GATE_REPO_ROOT GATE_CACHE_DIR
+expect_ok
+expect_runner --repo-root "/tmp/reviewer's repo" --cache-dir "/tmp/reviewer's gate runs" --resume 1 \
+  --plan "-p alpha --test one" --base origin/main --label test-changed
+
+# The actual `make test-changed` recipe must hand such paths over intact: a
+# copy of the real Makefile runs with a stub planner that evals NEXTEST_RUNNER
+# the way the script does and records the words (nested quotes used to make
+# the recipe itself fail to parse with exit 2 here). make -n cannot check this:
+# the recipe's logical line contains $(MAKE), so -n executes it anyway.
+make_bin=$(command -v make 2>/dev/null) || make_bin=""
+if [[ -n "$make_bin" ]]; then
+  case_name="Makefile test-changed recipe survives an apostrophe in GATE_CACHE_DIR"
+  mk="$temp_dir/reviewer's checkout"
+  mkdir -p "$mk/scripts" "$mk/packages/intentd/.git"
+  cp "$repo_root/Makefile" "$mk/Makefile"
+  cat >"$mk/scripts/rust-changed-tests.sh" <<'SH'
+#!/usr/bin/env bash
+eval "set -- $NEXTEST_RUNNER"
+{ echo "call:"; printf '%s\n' "$@"; } >>"$RUNNER_TEST_LOG"
+SH
+  chmod +x "$mk/scripts/rust-changed-tests.sh"
+  : >"$temp_dir/runner.log"
+  set +e
+  PATH="$bin_dir" RUNNER_TEST_LOG="$temp_dir/runner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
+    "$make_bin" -C "$mk" --no-print-directory test-changed GATE_CACHE_DIR="$mk/gate runs" RESUME=1 \
+    >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
+  status=$?
+  set -e
+  [[ "$status" -eq 0 ]] || fail "$case_name: make exited $status: $(<"$temp_dir/stderr")"
+  runner_log=$(<"$temp_dir/runner.log")
+  expected="call:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"
+  [[ "$runner_log" == "$expected" ]] || fail "$case_name: runner argv was"$'\n'"$runner_log"$'\n'"expected"$'\n'"$expected"
+fi
+
 # Build-wide files make the subset unreliable: exit 3 names them and defers to
 # the full `make test` (the Makefile target turns 3 into that run).
 for path in Cargo.toml Cargo.lock rust-toolchain.toml .config/nextest.toml .cargo/config.toml \
