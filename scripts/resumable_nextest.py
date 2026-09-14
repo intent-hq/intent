@@ -27,6 +27,8 @@ RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"
 RETRY_SUFFIX_RE = re.compile(r"#[0-9]+$")
 DEFAULT_LABEL = "test-intentd"
 TEST_OUTCOMES = ("ok", "failed", "ignored")
+# Outcomes appended to passed.jsonl; a failure supersedes an earlier pass.
+RECORDED_OUTCOMES = ("ok", "failed")
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -106,18 +108,30 @@ def prune(cache_dir: Path, now: float | None = None) -> None:
                 shutil.rmtree(entry)
 
 
-def load_passed(record: Path) -> set[tuple[str, str]]:
-    passed: set[tuple[str, str]] = set()
+def load_outcomes(record: Path) -> dict[tuple[str, str], str]:
+    """Latest recorded outcome per test for this tree.
+
+    The record is append-only and shared by every run on the tree, so a later
+    `failed` line supersedes an earlier pass of the same test. Lines without an
+    `outcome` field predate failure recording and are passes.
+    """
+    outcomes: dict[tuple[str, str], str] = {}
     if not record.is_file():
-        return passed
+        return outcomes
     with record.open(encoding="utf-8") as lines:
         for line in lines:
             try:
                 item = json.loads(line)
-                passed.add((item["binary_id"], item["test"]))
-            except (json.JSONDecodeError, KeyError, TypeError):
+                test = (item["binary_id"], item["test"])
+                outcome = item.get("outcome", "ok")
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 continue
-    return passed
+            outcomes[test] = outcome
+    return outcomes
+
+
+def load_passed(record: Path) -> set[tuple[str, str]]:
+    return {test for test, outcome in load_outcomes(record).items() if outcome == "ok"}
 
 
 def exact_regex(value: str) -> str:
@@ -149,14 +163,18 @@ def test_binary_ids(list_output: str) -> dict[tuple[str, str], str]:
     return binary_ids
 
 
-def parse_passed_event(
+def parse_recorded_event(
     line: str, binary_ids: dict[tuple[str, str], str]
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
+    """Return (binary_id, test, outcome) for a pass or failure event, else None."""
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
         return None
-    if event.get("type") != "test" or event.get("event") != "ok":
+    if not isinstance(event, dict) or event.get("type") != "test":
+        return None
+    outcome = event.get("event")
+    if outcome not in RECORDED_OUTCOMES:
         return None
     suite, separator, test = event.get("name", "").partition("$")
     if not separator or not suite or not test:
@@ -165,7 +183,14 @@ def parse_passed_event(
     binary_id = binary_ids.get((suite, test))
     if binary_id is None:
         raise RuntimeError(f"nextest test identifier was not listed: {event.get('name')!r}")
-    return binary_id, test
+    return binary_id, test, outcome
+
+
+def record_line(binary_id: str, test: str, outcome: str) -> str:
+    item: dict[str, str] = {"binary_id": binary_id, "test": test}
+    if outcome != "ok":
+        item["outcome"] = outcome
+    return json.dumps(item) + "\n"
 
 
 def test_outcome(line: str) -> tuple[str, str] | None:
@@ -261,10 +286,9 @@ def stream_nextest(
             outcome = test_outcome(line)
             if outcome is not None:
                 outcomes[outcome[0]] = outcome[1]
-            passed = parse_passed_event(line, binary_ids)
-            if passed is not None:
-                item = json.dumps({"binary_id": passed[0], "test": passed[1]}) + "\n"
-                os.write(descriptor, item.encode())
+            recorded = parse_recorded_event(line, binary_ids)
+            if recorded is not None:
+                os.write(descriptor, record_line(*recorded).encode())
         return process.wait()
     except BaseException:
         process.terminate()
@@ -333,7 +357,9 @@ def run_nextest(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
     record = run_dir / "passed.jsonl"
-    recorded = load_passed(record)
+    outcomes_by_test = load_outcomes(record)
+    recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
+    failed_on_tree = len(outcomes_by_test) - len(recorded)
     resumed = recorded if args.resume == "1" and args.force != "1" else set()
     if plans:
         # The full-suite `complete` marker belongs to `--workspace` runs only; a
@@ -353,8 +379,10 @@ def run_nextest(args: argparse.Namespace) -> int:
     complete = record_dir / "complete"
     resuming = args.resume == "1" and args.force != "1"
     # A completed plan may legitimately have passed nothing (every selected test
-    # ignored), so the planned fast path keys on the marker alone.
-    if complete.is_file() and (resuming if plans else bool(resumed)):
+    # ignored), so the planned fast path keys on the marker alone. A test that
+    # later failed on this tree (in any run sharing passed.jsonl) supersedes the
+    # marker: the run proceeds and reruns whatever is no longer recorded as passed.
+    if complete.is_file() and not failed_on_tree and (resuming if plans else bool(resumed)):
         skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
         print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
         return 0

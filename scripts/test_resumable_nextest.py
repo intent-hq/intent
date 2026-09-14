@@ -114,13 +114,22 @@ class ResumableNextestTests(unittest.TestCase):
             {"type": "test", "event": "ok", "name": "intentd::e2e$module::passes"}
         )
         self.assertEqual(
-            gate.parse_passed_event(event, binary_ids), ("intentd::e2e", "module::passes")
+            gate.parse_recorded_event(event, binary_ids),
+            ("intentd::e2e", "module::passes", "ok"),
         )
         unit_event = json.dumps(
             {"type": "test", "event": "ok", "name": "intent-core::intent_core$module::unit"}
         )
         self.assertEqual(
-            gate.parse_passed_event(unit_event, binary_ids), ("intent-core", "module::unit")
+            gate.parse_recorded_event(unit_event, binary_ids),
+            ("intent-core", "module::unit", "ok"),
+        )
+        failed_event = json.dumps(
+            {"type": "test", "event": "failed", "name": "intentd::e2e$module::passes"}
+        )
+        self.assertEqual(
+            gate.parse_recorded_event(failed_event, binary_ids),
+            ("intentd::e2e", "module::passes", "failed"),
         )
         expression = gate.remaining_filter(
             {("intentd::e2e", "module::passes"), ("intentd::e2e", "module::passes_two")}
@@ -130,8 +139,20 @@ class ResumableNextestTests(unittest.TestCase):
             "not ((binary_id(/^intentd::e2e$/) and (test(/^module::passes$/) | "
             "test(/^module::passes_two$/))))",
         )
-        self.assertIsNone(
-            gate.parse_passed_event('{"type":"test","event":"failed"}', binary_ids)
+        for skipped in (
+            '{"type":"test","event":"ignored","name":"intentd::e2e$module::passes"}',
+            '{"type":"test","event":"started","name":"intentd::e2e$module::passes"}',
+            '{"type":"suite","event":"failed"}',
+            "not json",
+        ):
+            self.assertIsNone(gate.parse_recorded_event(skipped, binary_ids))
+        self.assertEqual(
+            gate.record_line("intentd::e2e", "module::passes", "ok"),
+            '{"binary_id": "intentd::e2e", "test": "module::passes"}\n',
+        )
+        self.assertEqual(
+            gate.record_line("intentd::e2e", "module::passes", "failed"),
+            '{"binary_id": "intentd::e2e", "test": "module::passes", "outcome": "failed"}\n',
         )
 
     def test_pass_event_strips_retry_suffix(self):
@@ -140,18 +161,19 @@ class ResumableNextestTests(unittest.TestCase):
             {"type": "test", "event": "ok", "name": "intentd::e2e$module::passes#2"}
         )
         self.assertEqual(
-            gate.parse_passed_event(retried, binary_ids), ("intentd::e2e", "module::passes")
+            gate.parse_recorded_event(retried, binary_ids),
+            ("intentd::e2e", "module::passes", "ok"),
         )
         unlisted = json.dumps(
             {"type": "test", "event": "ok", "name": "intentd::e2e$module::missing#2"}
         )
         with self.assertRaisesRegex(RuntimeError, "was not listed"):
-            gate.parse_passed_event(unlisted, binary_ids)
+            gate.parse_recorded_event(unlisted, binary_ids)
         not_a_suffix = json.dumps(
             {"type": "test", "event": "ok", "name": "intentd::e2e$module::passes#2x"}
         )
         with self.assertRaisesRegex(RuntimeError, "was not listed"):
-            gate.parse_passed_event(not_a_suffix, binary_ids)
+            gate.parse_recorded_event(not_a_suffix, binary_ids)
 
     def test_list_metadata_maps_target_kinds_to_canonical_binary_ids(self):
         listing = json.dumps(
@@ -191,6 +213,22 @@ class ResumableNextestTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(gate.load_passed(record), {("one", "a"), ("two", "b")})
+
+    def test_record_load_lets_a_later_failure_supersede_an_earlier_pass(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = Path(temporary) / "passed.jsonl"
+            record.write_text(
+                '{"binary_id":"one","test":"a"}\n'
+                '{"binary_id":"one","test":"b"}\n'
+                '{"binary_id":"two","test":"c","outcome":"ok"}\n'
+                '{"binary_id":"one","test":"a","outcome":"failed"}\n'
+                '{"binary_id":"one","test":"never","outcome":"failed"}\n'
+                '{"binary_id":"two","test":"c","outcome":"failed"}\n'
+                '{"binary_id":"two","test":"c"}\n'
+                "[]\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(gate.load_passed(record), {("one", "b"), ("two", "c")})
 
     def test_rust_flags_include_all_cargo_sources(self):
         values = {
@@ -795,6 +833,117 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 ],
             )
             self.assertEqual((run_dir / "summary.txt").read_text(), summary + "\n")
+
+    def test_forced_failure_supersedes_earlier_pass_so_resume_reruns_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            run_dir.mkdir(parents=True)
+            (run_dir / "passed.jsonl").write_text(
+                '{"binary_id":"other","test":"elsewhere"}\n', encoding="utf-8"
+            )
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"]))
+            passes = event("ok", "alpha::one$passes")
+
+            first = PlannedRunHarness(root, [([passes, event("ok", "alpha::one$fails")], 0)])
+            self.assertEqual(first.execute(make_args(root)), 0)
+            self.assertTrue((record_dir / "complete").is_file())
+
+            forced = PlannedRunHarness(root, [([passes, event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(forced.execute(make_args(root, resume="1", force="1")), 100)
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("other", "elsewhere")},
+            )
+            lines = (run_dir / "passed.jsonl").read_text().splitlines()
+            self.assertEqual(
+                lines[-1], '{"binary_id": "alpha::one", "test": "fails", "outcome": "failed"}'
+            )
+
+            resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(resumed.execute(make_args(root, resume="1")), 100)
+            self.assertEqual(len(resumed.list_commands), 1)
+            self.assertEqual(len(resumed.run_commands), 1)
+            profile = tomllib.loads((record_dir / "nextest-1.toml").read_text())["profile"][record_dir.name]
+            self.assertEqual(
+                profile["default-filter"],
+                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+            )
+            self.assertFalse((record_dir / "complete").exists())
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 100)
+            self.assertEqual((run_record["failed"], run_record["skipped_resumed"]), (1, 1))
+
+            fixed = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
+            self.assertEqual(fixed.execute(make_args(root, resume="1")), 0)
+            self.assertEqual(len(fixed.run_commands), 1)
+            self.assertTrue((record_dir / "complete").is_file())
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("alpha::one", "fails"), ("other", "elsewhere")},
+            )
+
+    def test_workspace_resume_excludes_test_that_failed_in_a_later_planned_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            workspace = make_args(root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(workspace), 0)
+            self.assertTrue((run_dir / "complete").is_file())
+
+            planned = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(planned.execute(make_args(root, resume="1", force="1")), 100)
+            self.assertTrue((run_dir / "complete").is_file())
+            self.assertEqual(gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")})
+
+            resumed = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(resumed.execute(workspace), 100)
+            self.assertEqual(len(resumed.run_commands), 1)
+            self.assertEqual(resumed.run_commands[0][3], "--workspace")
+            config = tomllib.loads((run_dir / "nextest.toml").read_text())
+            self.assertEqual(
+                config["profile"][KEY]["default-filter"],
+                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+            )
+            self.assertFalse((run_dir / "complete").exists())
+            self.assertIn("1 failed", resumed.output_lines[-2])
+
+    def test_completed_plan_does_not_fast_path_over_a_failure_recorded_by_another_plan(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "cache" / KEY
+            plan_b = make_args(root, resume="1", plan=["-p alpha"])
+            record_b = run_dir / "changed" / gate.plan_key(gate.split_plans(["-p alpha"]))
+            all_pass = [event("ok", "alpha::one$passes"), event("ok", "alpha::one$fails")]
+            self.assertEqual(PlannedRunHarness(root, [(all_pass, 0)]).execute(plan_b), 0)
+            self.assertTrue((record_b / "complete").is_file())
+
+            plan_a = PlannedRunHarness(root, [([event("failed", "alpha::one$fails")], 100)])
+            self.assertEqual(plan_a.execute(make_args(root, resume="1", force="1")), 100)
+            self.assertTrue((record_b / "complete").is_file())
+
+            rerun = PlannedRunHarness(root, [([event("ok", "alpha::one$fails")], 0)])
+            self.assertEqual(rerun.execute(plan_b), 0)
+            self.assertEqual(len(rerun.list_commands), 1)
+            self.assertEqual(len(rerun.run_commands), 1)
+            profile = tomllib.loads((record_b / "nextest-1.toml").read_text())["profile"][record_b.name]
+            self.assertEqual(
+                profile["default-filter"],
+                "not ((binary_id(/^alpha::one$/) and (test(/^passes$/))))",
+            )
+            self.assertNotIn("resumed: skipped 2 tests already passed for this tree", rerun.output_lines)
+            self.assertTrue((record_b / "complete").is_file())
+
+            skip = PlannedRunHarness(root, [])
+            self.assertEqual(skip.execute(plan_b), 0)
+            self.assertEqual(skip.run_commands, [])
+            self.assertEqual(skip.list_commands, [])
+            self.assertEqual(
+                skip.output_lines, ["resumed: skipped 2 tests already passed for this tree"]
+            )
+
 
 
 if __name__ == "__main__":
