@@ -103,7 +103,7 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, �
 
 #### `system.status` — process resource fields (additive, optional)
 
-The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `updateSupported` (v8.7, below), `host`):
+The `system.status` result includes two **optional** self-process resource fields alongside the existing status payload (`running`, `listenMode`, `transports`, `port`, `clients`, `agents`, `maxAgents`, `version`, `uptimeSeconds`, `fingerprint`, `protocolVersion`, `updateSupported` (v8.7, below), `busyAgents` / `idleUpdateCheck` (v10.2, below), `host`):
 
 ```jsonc
 {
@@ -250,6 +250,35 @@ The `system.status` result additionally reports whether the daemon can act on `s
 - `updateSupported: true` reports that the supervision check **passed at read time** — not a delivery guarantee: the sitter can exit (or signaling can fail) between the status read and a later `system.requestUpdate`, so callers must still handle that call's documented `-32603`. It also says nothing about whether an update exists — the check outcome is observed out-of-band (see `system.requestUpdate` below).
 - **Additive** response field carrying the **v8.7** minor bump (the method surface is unchanged). **Always present** on 8.7+ daemons (a plain boolean, never `null`); **absent on older daemons** that predate it — clients must detect it by **presence**, not by protocol version. FE consumption is **strict**: the Update affordance (behind-pin toast action, Devices-page Update item) requires `updateSupported === true` — absence (older daemon) hides it too, while the behind-pin version state itself is still shown.
 
+#### `system.status` — `busyAgents` + `idleUpdateCheck` (additive, v10.2)
+
+The `system.status` result additionally reports the daemon's **in-flight turn count** and the state of the **idle-triggered update check** — the daemon→sitter handshake that keeps a busy daemon from being restarted under an agent (see `system.requestUpdate` below for the immediate variant):
+
+```jsonc
+{
+  "busyAgents": 0,
+  "idleUpdateCheck": {
+    "enabled": true,            // updates.checkOnIdle
+    "supported": true,          // handshake advertised AND sitter-supervised right now
+    "lastRequestedAt": "2026-09-15T14:00:00Z",   // RFC 3339 or null
+    "nextEligibleAt": "2026-09-15T15:00:00Z",    // RFC 3339 or null
+    "restartPending": false
+  }
+  // ...existing status fields (running, listenMode, transports, port, ...)
+}
+```
+
+- `busyAgents` is the number of agents with a **turn in flight** right now (`AgentManager::list_busy`) — the count the idle-update handshake gates on. Distinct from `agents`, which counts every live agent process (idle ones included). A plain integer, never `null`.
+- `idleUpdateCheck` is **always present** (an object, never `null`):
+  - `enabled` — the `updates.checkOnIdle` setting (§5.12), read live.
+  - `supported` — idle checks **will actually be sent**: the supervising sitter advertised the handshake at boot (`INTENTD_SITTER_IDLE_RESTART`) **and** the daemon is sitter-supervised at read time (the same probe as `updateSupported`). `false` under an older sitter without the SIGUSR2 handler even when supervised, `false` when unsupervised even if the marker was set, and constantly `false` on platforms without Unix signals.
+  - `lastRequestedAt` — when the daemon last sent (or last failed to send) the sitter an idle-mode check; `null` before the first request.
+  - `nextEligibleAt` — the earliest time the interval rule (`updates.idleCheckIntervalMinutes`, counted from the later of daemon start and the last request) allows another request; `null` while the requester is disabled (handshake not advertised or `checkOnIdle` off). A time in the past means the interval has elapsed and only the idle-grace condition is outstanding.
+  - `restartPending` — the sitter announced a **staged** newer version and the daemon will exit for the restart at the next moment `busyAgents` is `0`. Further idle checks are suppressed meanwhile.
+- **Mechanism.** While `enabled` and `supported`, the daemon itself asks the sitter for an update check (SIGUSR2 — check for updates and only **stage** what is found, never restart), rate-limited to once per `updates.idleCheckIntervalMinutes` and only after the daemon has been **continuously idle** (no turn in flight; hooks, PR monitors, subscriptions and queued messages do not count as busy) for `updates.idleGraceSeconds`. When a newer version is staged the sitter signals the daemon back (SIGUSR2), which sets `restartPending` and exits for the restart only once no turn is in flight. `system.requestUpdate` (SIGUSR1, below) is unchanged and still restarts **immediately** when a newer version installs; the sitter's 12–24 h periodic check remains the forced fallback for daemons that never go idle.
+- Timestamps are RFC 3339 UTC strings projected from the daemon's monotonic clock at read time (whole-second precision).
+- **Additive** response fields carrying the **v10.2** minor bump (the method surface is unchanged). **Absent on older daemons** — clients must detect them by **presence**, not by protocol version, and tolerate their absence.
+
 #### `system.importLegacy` (UDS-only, v2.2)
 
 Runs the daemon's legacy workspace import over RPC — the same engine behind the `intentd import-legacy` CLI and the first-boot hook — so a client can trigger a recovery import without shell access. Scans the default legacy roots and imports per-directory legacy workspaces (notes, comments, agent sessions, assets) into the live store.
@@ -312,6 +341,7 @@ Asks the daemon's supervising [`intentd-sitter`](https://github.com/intent-hq/in
 - `-32603` with a human-readable reason when the daemon is not sitter-supervised (missing/unparsable/stale pidfile, or a pidfile whose pid the OS recycled to a non-sitter process), when signaling fails, or on a platform without Unix signals.
 - `{ "ok": true }` means the signal was **delivered**, not that an update exists: the check outcome (restart or no-op) is observed out-of-band (e.g. the daemon restarting, `system.status` `version`/`uptimeSeconds`).
 - Clients can read `updateSupported` on `system.status` (above) to gate the update affordance instead of probing for the `-32603` failure. It is a read-time hint, not a guarantee: supervision can change between the status read and this call, so callers must still handle `-32603` here.
+- This is the **immediate** variant: a newer version installs and the daemon restarts right away, in-flight turns included. The daemon separately runs **idle-triggered** checks on its own (SIGUSR2 to the sitter, rate-limited, only while no turn is in flight) and exits for a staged update only when idle — observable via `system.status` `idleUpdateCheck` / `busyAgents` (v10.2, above). The sitter's 12–24 h periodic check remains the forced fallback.
 
 #### `pairing.getInfo` (local-only)
 
