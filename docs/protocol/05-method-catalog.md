@@ -179,7 +179,7 @@ The `system.status` result also includes **additive** routing fields so an authe
   "localIps": ["192.168.1.10", "10.0.0.5"], // addresses the WSS listener actually answers on (bind-aware; empty when the listener is down)
   "hostname": "studio.local",               // local OS hostname
   "prettyHostname": "Clement's Mac Studio", // OS "pretty" device name (falls back to hostname)
-  "tcAddress": "tc7f2a91.tailcat.net",      // tailcat tunnel address — present only while the tunnel sidecar is running
+  "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw", // tailcat address — present only while the sidecar is running
   "host": {
     "deviceKind": "macStudio",
     "hardwareModel": "Mac Studio",
@@ -193,6 +193,7 @@ The `system.status` result also includes **additive** routing fields so an authe
 - `hostname` is the local OS hostname (falls back to `intent` when unresolvable), matching `server.pairingInfo` / `host.status`.
 - `prettyHostname` ([intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available — matching `server.pairingInfo` / `host.status`. Served from the same background-refreshed cache as `localIps`/`hostname`.
 - `host.deviceKind` / `host.hardwareModel` are optional, additive host-identity fields shared with `host.status` and `server.pairingInfo`. `deviceKind`, when known, is `"macMini" | "macStudio" | "laptop" | "desktop" | "server" | "cloudVm"`; `hardwareModel` is the raw OS product/model name. Both fields are omitted (never `null`) when unknown and must be detected by presence. Detection runs in the background-refreshed host cache, never on the RPC path.
+- **Tailcat address format:** literal `tc` followed by case-sensitive, unpadded base64url-encoded CBOR. This is an opaque endpoint, not a DNS hostname. Preserve its case through parsing, storage, and dialing. Only trim surrounding whitespace. The examples use a dummy public key; they do not identify a live server.
 - `tcAddress` (additive, [intent-hq/intentd#1623](https://github.com/intent-hq/intentd/pull/1623)) is the tailcat tunnel's stable `tc…` address (`server.tunnel.*`, §5.12), served alongside `localIps` to local and remote callers alike so a connected client can refresh its stored tunnel route from `system.status` alone. Present only while the tunnel sidecar is actually running; **omitted** — never `null` — when the tunnel is disabled or the sidecar is down (including the restart-backoff window after an unexpected sidecar exit, so the field never advertises a route nothing is serving). Same address as `server.pairingInfo` / `pairing.getInfo`; detect by presence.
 - These fields are **additive** response fields shipped without a version bump (the method surface is unchanged); clients must detect them by **presence**, not by protocol version. Rationale: the caller already holds the bearer token, so serving the listen addresses on `system.status` lets a remote client (e.g. the iOS app) refresh its stored alternative routes for reconnect racing on every successful connect, while `server.pairingInfo` / `pairing.getInfo` (which also carry the token and cert fingerprint) stay local-only.
 
@@ -323,13 +324,13 @@ Returns the structured QR pairing payload so local clients (the `intentd pair` C
 
 ```json
 {
-  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...&tc=tc7f2a91.tailcat.net",
+  "uri": "intent://pair?v=1&host=192.168.1.10,10.0.0.5&port=5181&fp=AA:BB:...&token=abab...&tc=tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw",
   "hosts": ["192.168.1.10", "10.0.0.5"],
   "port": 5181,
   "fingerprint": "AA:BB:...",
   "token": "abab...",
   "version": 1,
-  "tcAddress": "tc7f2a91.tailcat.net"
+  "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw"
 }
 ```
 
@@ -361,7 +362,7 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
   "prettyHostname": "Clement's Mac Studio",
   "deviceKind": "macStudio",
   "hardwareModel": "Mac Studio",
-  "tcAddress": "tc7f2a91.tailcat.net"
+  "tcAddress": "tcoWFwWCAAAQIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHw"
 }
 ```
 
