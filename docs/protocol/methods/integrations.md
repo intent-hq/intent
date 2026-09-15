@@ -22,7 +22,7 @@
 
 ### 5.27 `github.*` namespace
 
-> The `github.*` namespace is served **daemon-owned** against `api.github.com` — 25 methods (24 network reads/writes plus the cached-first `github.branches.listCached` — one-shot ls-remote fallback on a miss — v6.2), with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
+> The `github.*` namespace is served **daemon-owned** against `api.github.com` — 27 methods (26 network reads/writes plus the cached-first `github.branches.listCached` — one-shot ls-remote fallback on a miss — v6.2), with real `nextToken`/`limit` pagination on the list reads (the uniform-pagination contract described in the conventions below), reusing the `intent-sourcecontrol` **octocrab** engine — the same engine that already backs `pr.*`. The auth trio (`connect` / `cancelAuth` / `revoke`) drives a daemon-owned **OAuth device flow** (see the auth-model note below). The field names and shapes here are the source of truth for both sides.
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
 > that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
@@ -54,6 +54,10 @@
 > - `github.cancelAuth` aborts a pending flow; `github.revoke` deletes the **stored** token (env /
 >   `gh` fallbacks are untouched — they re-resolve on the next probe).
 > - **Identity** is GitHub-derived: `github.getUser` returns the authenticated user from `GET /user`.
+> - **User lookup** for the collaborator picker: `github.users.search` (v10.2) is a login-prefix
+>   search over `GET /search/users`, **administrator-only** like the rest of `github.*` — the name
+>   is not on the collaborator allowlist, so a per-principal (collaborator) wire caller is refused
+>   with `-32003 Forbidden` regardless of workspace roles.
 >
 > **🔒 Secret guardrail.** The PAT is a secret: it is **never logged, echoed, or returned** over the
 > wire. Only **derived identity** fields (login, avatar, profile URL) and the boolean
@@ -101,6 +105,7 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
+| github.users.search | query (req), limit? | { users: { id: number, login: string, avatarUrl: string, htmlUrl: string }[] } — login-prefix user search over `GET /search/users` (v10.2; [intent-hq/intentd#1912](https://github.com/intent-hq/intentd/pull/1912)), backing the collaborator picker. `query` is required (missing → `-32602`); it is trimmed, one leading `@` is dropped, and the remainder is sent as `q = "<query> in:login type:user"` so hits are user accounts matched on login. A **blank** query (empty after trimming / `@`-stripping) answers `{ users: [] }` **without a forge call**. `limit` is the page size: default **8**, clamped into **[1, 10]** (out-of-range values are clamped, not rejected — an exception to the namespace's `limit` default 50 / max 200 convention; no `nextToken`, a single page only). Every hit carries `id` (the FE keys the picker on it — a hit the forge answered without one is dropped), `login`, `avatarUrl` and `htmlUrl` (the latter two `""` when absent). **Administrator-only**: like the rest of `github.*` the name is not on the collaborator allowlist, so a per-principal (collaborator) wire caller is refused with `-32003 Forbidden` (`data { code: "forbidden", detail }`) before dispatch regardless of workspace roles, and the service layer re-applies the same administrator gate. Draws on GitHub's **search-API quota** (30 requests/min per token), so clients should debounce. Token / forge failures → `-32603` per the conventions above |
 
 #### Pulls
 
