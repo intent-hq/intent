@@ -1235,9 +1235,10 @@ omitted** (see its bullet below):
 - `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
   `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding, parentAgentId?, isBackground? }`.
   Soft-deleted sessions (`status: "deleted"`) and soft-retired sessions (`retiredAt` set,
-  §5.5 `agent.restore`) are **excluded** from `count` / `agents` / `agentIds`, so the
-  summary lists the same rows as the default `agent.list` read; `agent.restore` brings a
-  row back.
+  §5.5 `agent.restore`) are **excluded** from `count` / `agents` / `agentIds`. The retired
+  exclusion matches the default `agent.list` read (its SQL filter is `retired_at IS NULL`
+  only), which itself still serves `deleted` rows — so the summary is a strict subset of
+  that read, not the same row set; `agent.restore` brings a retired row back.
   This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
   `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
   the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
