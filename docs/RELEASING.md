@@ -50,6 +50,27 @@ cloudlands-fe).
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
 
+### When a published daemon reaches running installs
+
+A sitter-supervised daemon (`intentd serve`) picks up a channel publish by one of two
+paths:
+
+- **Opportunistic, idle-triggered** — once no agent has had a turn in flight for
+  `updates.idleGraceSeconds` (default 120 s), the daemon asks its sitter to check
+  now (`SIGUSR2`), at most every `updates.idleCheckIntervalMinutes` (default 60).
+  The sitter stages any newer version and the daemon restarts into it the next
+  moment no turn is in flight, so an idle install updates within about an hour of
+  the publish without interrupting a running agent. `updates.checkOnIdle=false`
+  (live setting, no restart; see
+  [protocol/methods/settings.md](./protocol/methods/settings.md)) disables this path.
+- **Forced, periodic** — the sitter's randomized 12–24 h check, unchanged: it
+  installs a newer version (or one already staged) and restarts the daemon whether
+  or not a turn is in flight. This is the fallback for continuously busy installs and
+  the only path when `checkOnIdle` is off.
+
+`intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
+immediately.
+
 ## cloudlands-fe
 
 - The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
