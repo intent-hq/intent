@@ -228,6 +228,27 @@ test('accepts tests/<name>.rs, tests/<name>/main.rs and [[test]] name forms', ()
   assert.equal(hasTestTarget(fakeReader([]), declared, 'declared'), true);
 });
 
+test('requires a --test target in every selected package, reporting each crate that lacks it', () => {
+  const invocations = [{ line: 8, subcommand: 'test', packages: ['intent-core', 'intentd'], tests: ['lint'] }];
+  const onlyCore = fakeReader(['crates/intent-core/tests/lint.rs']);
+  assert.deepEqual(verifyInvocations(invocations, crates, onlyCore), {
+    checked: 3,
+    failures: [
+      "Makefile:8: error: cargo test target 'lint' (crate 'intentd') is missing at pinned intentd gitlink aaaaaaa: crates/intentd/tests/lint.rs not found",
+    ],
+  });
+  const onlyIntentd = fakeReader(['crates/intentd/tests/lint/main.rs']);
+  assert.deepEqual(verifyInvocations(invocations, crates, onlyIntentd).failures, [
+    "Makefile:8: error: cargo test target 'lint' (crate 'intent-core') is missing at pinned intentd gitlink aaaaaaa: crates/intent-core/tests/lint.rs not found",
+  ]);
+  assert.deepEqual(verifyInvocations(invocations, crates, fakeReader([])).failures, [
+    "Makefile:8: error: cargo test target 'lint' (crate 'intent-core') is missing at pinned intentd gitlink aaaaaaa: crates/intent-core/tests/lint.rs not found",
+    "Makefile:8: error: cargo test target 'lint' (crate 'intentd') is missing at pinned intentd gitlink aaaaaaa: crates/intentd/tests/lint.rs not found",
+  ]);
+  const both = fakeReader(['crates/intent-core/tests/lint.rs', 'crates/intentd/tests/lint.rs']);
+  assert.deepEqual(verifyInvocations(invocations, crates, both).failures, []);
+});
+
 test('fails a --test reference without a crate on the same invocation', () => {
   const invocations = [{ line: 3, subcommand: 'test', packages: [], tests: ['lint'] }];
   const { failures } = verifyInvocations(invocations, crates, fakeReader([]));
@@ -273,7 +294,9 @@ function makeFixture(t) {
   write('crates/foo/Cargo.toml', '[package]\nname = "foo"\n');
   write('crates/foo/tests/flat.rs', '');
   write('crates/foo/tests/nested/main.rs', '');
+  write('crates/foo/tests/common.rs', '');
   write('crates/bar/Cargo.toml', '[package]\nname = "bar-crate"\n\n[[test]]\nname = "declared"\npath = "src/x.rs"\n');
+  write('crates/bar/tests/common.rs', '');
   write('crates/README.md', '');
   git(intentd, 'add', '.');
   git(intentd, 'commit', '-q', '-m', 'pin');
@@ -333,19 +356,20 @@ test('CLI prints the success summary on a Makefile whose references exist at the
       '\t@echo "cd $(INTENTD_DIR) && cargo test -p nonexistent --test missing"',
       '\tcd $(INTENTD_DIR) && cargo test -p foo --test flat;# cargo test -p nonexistent --test missing',
       '\tcd $(INTENTD_DIR) && cargo test -p foo --test flat && true;# cargo test -p foo --test nope',
+      '\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test common',
       '',
     ].join('\n'),
   );
   const result = runCli(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `checked 13 cargo references against intentd@${sha.slice(0, 7)}\n`);
+  assert.equal(result.stdout, `checked 16 cargo references against intentd@${sha.slice(0, 7)}\n`);
 });
 
 test('CLI exits 1 naming the Makefile line, path and pin for a missing target', (t) => {
   const { root, sha } = makeFixture(t);
   fs.writeFileSync(
     path.join(root, 'Makefile'),
-    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n',
+    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test flat\n',
   );
   const result = runCli(root);
   assert.equal(result.status, 1);
@@ -353,6 +377,7 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
     result.stderr,
     `Makefile:3: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n` +
       `Makefile:5: error: cargo test target 'silent' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/silent.rs not found\n` +
-      `Makefile:6: error: cargo test target 'quoted#missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/quoted#missing.rs not found\n${HINT}\n`,
+      `Makefile:6: error: cargo test target 'quoted#missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/quoted#missing.rs not found\n` +
+      `Makefile:7: error: cargo test target 'flat' (crate 'bar-crate') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/bar/tests/flat.rs not found\n${HINT}\n`,
   );
 });

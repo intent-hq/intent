@@ -309,11 +309,14 @@ export function verifyInvocations(invocations, crates, reader, { makefile = 'Mak
         failures.push(
           `${makefile}:${line}: error: cargo test target '${test}' cannot be verified: the cargo invocation names no -p/--package crate`,
         );
-      } else if (resolved.length > 0 && !resolved.some((crate) => hasTestTarget(reader, crate, test))) {
-        const [crate] = resolved;
-        failures.push(
-          `${makefile}:${line}: error: cargo test target '${test}' (crate '${crate.name}') is missing at pinned intentd gitlink ${sha7}: ${crate.dir}/tests/${test}.rs not found`,
-        );
+      } else {
+        // cargo applies a named --test target to every selected package.
+        for (const crate of resolved) {
+          if (hasTestTarget(reader, crate, test)) continue;
+          failures.push(
+            `${makefile}:${line}: error: cargo test target '${test}' (crate '${crate.name}') is missing at pinned intentd gitlink ${sha7}: ${crate.dir}/tests/${test}.rs not found`,
+          );
+        }
       }
     }
   }
