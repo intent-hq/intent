@@ -272,12 +272,15 @@ with no rollback.
   The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
   on "not running": `starting` is a live state, and treating anything but a recorded
   exit as finished fired a false wake on the hook's validation run
-  ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
-  `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
-  are PTY-backed with no keyboard, so use the `make` targets — they disable progress bars
-  and pagers (`make list-tests` for nextest discovery, which ignores `PAGER`); a raw
-  `cargo nextest` / `cargo build` / `git` / `gh` must pass `--no-pager` / the same env or
-  it floods the buffer or stalls on `less`.
+  ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)). That
+  condition is total: a process the supervisor lost (killed externally, or live at a
+  daemon restart) reports `exited` with `exitCode === -1` — read `s.error`, treat it as a
+  failure, and do not re-poll (a saved gate run that died externally once left its hook
+  waiting until it expired). `ws.script.run` rejects `timeoutSeconds` above budget − 5s
+  (25s default). Saved scripts are PTY-backed with no keyboard, so use the `make` targets —
+  they disable progress bars and pagers (`make list-tests` for nextest discovery, which
+  ignores `PAGER`); a raw `cargo nextest` / `cargo build` / `git` / `gh` must pass
+  `--no-pager` / the same env or it floods the buffer or stalls on `less`.
 
 ## Release Process
 
