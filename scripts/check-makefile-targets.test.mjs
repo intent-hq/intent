@@ -1,0 +1,246 @@
+import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import {
+  CheckError,
+  HINT,
+  createGitlinkReader,
+  extractCargoReferences,
+  hasTestTarget,
+  joinContinuations,
+  loadCrates,
+  parseArguments,
+  parseMakefile,
+  parsePackageName,
+  parseTestTargetNames,
+  resolveGitlink,
+  verifyInvocations,
+} from './check-makefile-targets.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./check-makefile-targets.mjs', import.meta.url));
+const SHA = 'a'.repeat(40);
+
+const fakeReader = (paths, sha = SHA) => ({
+  sha,
+  exists: (objectPath) => paths.includes(objectPath),
+  read: () => '',
+  listTree: () => [],
+});
+
+const crates = new Map([
+  ['intent-core', { name: 'intent-core', dir: 'crates/intent-core', cargoToml: '[package]\nname = "intent-core"\n' }],
+  ['intentd', { name: 'intentd', dir: 'crates/intentd', cargoToml: '[package]\nname = "intentd"\n' }],
+]);
+
+test('joins backslash continuations and keeps the first physical line number', () => {
+  const text = 'a: b\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p x \\\n\t\t--test y\nnext: c\n';
+  assert.deepEqual(joinContinuations(text), [
+    { line: 1, text: 'a: b' },
+    { line: 2, text: '\tcd $(INTENTD_DIR) && cargo test -p x --test y' },
+    { line: 5, text: 'next: c' },
+    { line: 6, text: '' },
+  ]);
+});
+
+test('detects only tab-indented recipe lines rooted in INTENTD_DIR', () => {
+  const makefile = [
+    'RUSTUP_CARGO = $(shell cd $(INTENTD_DIR) && cargo test -p ignored --test ignored)',
+    '# cd $(INTENTD_DIR) && cargo test -p ignored --test ignored',
+    'lint: ensure-intentd-submodule',
+    '\t# cd $(INTENTD_DIR) && cargo test -p ignored --test ignored',
+    '\tcd $(FE_DIR) && cargo test -p ignored --test ignored',
+    '\tcargo test -p ignored --test ignored',
+    '\t@cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs 4',
+    '\t@echo "    cargo run -p ignored --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve"',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 7, subcommand: 'test', packages: ['intent-core'], tests: ['repo_slug_fold_lint'] },
+  ]);
+});
+
+test('records the first physical line of a continued recipe', () => {
+  const makefile = 'lint:\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p intent-core \\\n\t\t--test event_type_lint\n';
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 2, subcommand: 'test', packages: ['intent-core'], tests: ['event_type_lint'] },
+  ]);
+});
+
+test('extracts -p, --package, --package=, --test and --test= forms', () => {
+  assert.deepEqual(extractCargoReferences('cargo test -p a --package b --package=c --test x --test=y --jobs 4'), {
+    subcommand: 'test',
+    packages: ['a', 'b', 'c'],
+    tests: ['x', 'y'],
+  });
+  assert.deepEqual(extractCargoReferences('cargo run -q -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- --test z'), {
+    subcommand: 'run',
+    packages: ['intentd'],
+    tests: [],
+  });
+  assert.equal(extractCargoReferences('cargo fmt --check'), null);
+  assert.equal(extractCargoReferences('rustup which cargo'), null);
+});
+
+test('accepts the --manifest-path form and multiple invocations on one recipe line', () => {
+  const makefile = '\tcargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- doctor && cargo build -p intent-core\n';
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 1, subcommand: 'run', packages: ['intentd'], tests: [] },
+    { line: 1, subcommand: 'build', packages: ['intent-core'], tests: [] },
+  ]);
+});
+
+test('reads the package name and [[test]] target names from Cargo.toml', () => {
+  const toml = '[package]\nname = "intent-core"\nversion = "1.0.0"\n\n[[test]]\nname = "custom"\npath = "src/lint.rs"\n\n[[test]]\nname = \'other\'\n\n[dependencies]\nname = "not-a-test"\n';
+  assert.equal(parsePackageName(toml), 'intent-core');
+  assert.deepEqual(parseTestTargetNames(toml), ['custom', 'other']);
+  assert.equal(parsePackageName('[dependencies]\nname = "x"\n'), undefined);
+});
+
+test('reports an unknown crate', () => {
+  const invocations = [{ line: 12, subcommand: 'test', packages: ['nope'], tests: ['lint'] }];
+  const { checked, failures } = verifyInvocations(invocations, crates, fakeReader([]));
+  assert.equal(checked, 2);
+  assert.deepEqual(failures, [
+    `Makefile:12: error: cargo package 'nope' is unknown at pinned intentd gitlink aaaaaaa: no crates/*/Cargo.toml declares [package] name = "nope"`,
+  ]);
+});
+
+test('reports a missing test file with the expected path', () => {
+  const invocations = [{ line: 413, subcommand: 'test', packages: ['intent-core'], tests: ['fixed_sleep_lint'] }];
+  const { failures } = verifyInvocations(invocations, crates, fakeReader([]), { makefile: 'Makefile' });
+  assert.deepEqual(failures, [
+    "Makefile:413: error: cargo test target 'fixed_sleep_lint' (crate 'intent-core') is missing at pinned intentd gitlink aaaaaaa: crates/intent-core/tests/fixed_sleep_lint.rs not found",
+  ]);
+});
+
+test('accepts tests/<name>.rs, tests/<name>/main.rs and [[test]] name forms', () => {
+  const reader = fakeReader(['crates/intent-core/tests/flat.rs', 'crates/intent-core/tests/nested/main.rs']);
+  const core = crates.get('intent-core');
+  assert.equal(hasTestTarget(reader, core, 'flat'), true);
+  assert.equal(hasTestTarget(reader, core, 'nested'), true);
+  assert.equal(hasTestTarget(reader, core, 'absent'), false);
+  const declared = { ...core, cargoToml: '[package]\nname = "intent-core"\n[[test]]\nname = "declared"\n' };
+  assert.equal(hasTestTarget(fakeReader([]), declared, 'declared'), true);
+});
+
+test('fails a --test reference without a crate on the same invocation', () => {
+  const invocations = [{ line: 3, subcommand: 'test', packages: [], tests: ['lint'] }];
+  const { failures } = verifyInvocations(invocations, crates, fakeReader([]));
+  assert.deepEqual(failures, [
+    "Makefile:3: error: cargo test target 'lint' cannot be verified: the cargo invocation names no -p/--package crate",
+  ]);
+});
+
+test('parses CLI arguments', () => {
+  assert.deepEqual(parseArguments(['--gitlink', 'abc', '--makefile=other/Makefile']), {
+    makefile: 'other/Makefile',
+    intentdDir: 'packages/intentd',
+    gitlink: 'abc',
+  });
+  assert.throws(() => parseArguments(['--bogus']), CheckError);
+  assert.throws(() => parseArguments(['--gitlink']), CheckError);
+});
+
+// Builds a throwaway "monorepo" whose packages/intentd gitlink points at a
+// nested throwaway intentd repo containing crates/foo and crates/bar.
+function makeFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'check-makefile-targets-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (cwd, ...args) =>
+    execFileSync('git', args, {
+      cwd,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.invalid',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.invalid',
+      },
+    });
+  const intentd = path.join(root, 'packages', 'intentd');
+  fs.mkdirSync(intentd, { recursive: true });
+  git(intentd, 'init', '-q', '-b', 'main');
+  const write = (relative, content) => {
+    fs.mkdirSync(path.dirname(path.join(intentd, relative)), { recursive: true });
+    fs.writeFileSync(path.join(intentd, relative), content);
+  };
+  write('crates/foo/Cargo.toml', '[package]\nname = "foo"\n');
+  write('crates/foo/tests/flat.rs', '');
+  write('crates/foo/tests/nested/main.rs', '');
+  write('crates/bar/Cargo.toml', '[package]\nname = "bar-crate"\n\n[[test]]\nname = "declared"\npath = "src/x.rs"\n');
+  write('crates/README.md', '');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'pin');
+  const sha = git(intentd, 'rev-parse', 'HEAD').trim();
+  // Only the working tree has this file; the pin must not see it.
+  write('crates/foo/tests/uncommitted.rs', '');
+
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${sha},packages/intentd`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  return { root, intentd, sha, git };
+}
+
+function runCli(cwd, ...args) {
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+test('resolves the gitlink from HEAD and reads crates through git objects only', (t) => {
+  const { root, sha } = makeFixture(t);
+  assert.equal(resolveGitlink({ cwd: root }), sha);
+  assert.equal(resolveGitlink({ cwd: root, gitlink: sha.slice(0, 8) }), sha);
+  const reader = createGitlinkReader(sha, { cwd: root });
+  const found = loadCrates(reader);
+  assert.deepEqual([...found.keys()].sort(), ['bar-crate', 'foo']);
+  assert.equal(found.get('foo').dir, 'crates/foo');
+  assert.equal(hasTestTarget(reader, found.get('foo'), 'flat'), true);
+  assert.equal(hasTestTarget(reader, found.get('foo'), 'nested'), true);
+  assert.equal(hasTestTarget(reader, found.get('bar-crate'), 'declared'), true);
+  assert.equal(hasTestTarget(reader, found.get('foo'), 'uncommitted'), false, 'working tree must not be consulted');
+});
+
+test('exits 2 with a submodule hint when the gitlink object is absent', (t) => {
+  const { root } = makeFixture(t);
+  const missing = '1'.repeat(40);
+  assert.throws(
+    () => resolveGitlink({ cwd: root, gitlink: missing }),
+    (error) => error instanceof CheckError && error.exitCode === 2 && error.message.includes('git submodule update --init packages/intentd'),
+  );
+  fs.writeFileSync(path.join(root, 'Makefile'), 'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n');
+  const result = runCli(root, '--gitlink', missing);
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /is not present in packages\/intentd/);
+  assert.match(result.stderr, /git submodule update --init packages\/intentd/);
+});
+
+test('CLI prints the success summary on a Makefile whose references exist at the pin', (t) => {
+  const { root, sha } = makeFixture(t);
+  fs.writeFileSync(
+    path.join(root, 'Makefile'),
+    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n\tcd $(INTENTD_DIR) && cargo test -p foo --test=nested\n\tcargo run -p bar-crate --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve\n',
+  );
+  const result = runCli(root);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `checked 5 cargo references against intentd@${sha.slice(0, 7)}\n`);
+});
+
+test('CLI exits 1 naming the Makefile line, path and pin for a missing target', (t) => {
+  const { root, sha } = makeFixture(t);
+  fs.writeFileSync(
+    path.join(root, 'Makefile'),
+    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n',
+  );
+  const result = runCli(root);
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr,
+    `Makefile:3: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n${HINT}\n`,
+  );
+});
