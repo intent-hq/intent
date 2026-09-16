@@ -67,11 +67,17 @@ export function stripShellComment(text) {
   return text;
 }
 
+// The shell command a recipe line runs: flags and comments removed; `null` for
+// non-recipe lines.
+export function recipeCommand(logicalText) {
+  if (!logicalText.startsWith('\t')) return null;
+  return stripShellComment(recipeBody(logicalText));
+}
+
 export function isIntentdRecipe(logicalText) {
-  if (!logicalText.startsWith('\t')) return false;
-  const body = recipeBody(logicalText);
-  if (body.startsWith('#')) return false;
-  return INTENTD_ROOT_MARKERS.some((marker) => marker.test(body));
+  const command = recipeCommand(logicalText);
+  if (command === null) return false;
+  return INTENTD_ROOT_MARKERS.some((marker) => marker.test(command));
 }
 
 // Arguments after a bare `--` belong to the invoked binary and are skipped; an
@@ -105,7 +111,7 @@ export function parseMakefile(text) {
   const invocations = [];
   for (const { line, text: logical } of joinContinuations(text)) {
     if (!isIntentdRecipe(logical)) continue;
-    for (const segment of stripShellComment(recipeBody(logical)).split(SHELL_SEPARATOR)) {
+    for (const segment of recipeCommand(logical).split(SHELL_SEPARATOR)) {
       const references = extractCargoReferences(segment);
       if (references) invocations.push({ line, ...references });
     }

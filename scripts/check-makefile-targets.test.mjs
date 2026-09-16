@@ -12,6 +12,7 @@ import {
   createGitlinkReader,
   extractCargoReferences,
   hasTestTarget,
+  isIntentdRecipe,
   joinContinuations,
   loadCrates,
   parseArguments,
@@ -118,6 +119,16 @@ test('ignores unquoted inline shell comments but keeps quoted arguments', () => 
   assert.deepEqual(parseMakefile('\tcd $(INTENTD_DIR) && cargo test -p intent-core --test real # --test does_not_exist\n'), [
     { line: 1, subcommand: 'test', packages: ['intent-core'], tests: ['real'] },
   ]);
+});
+
+test('ignores INTENTD_DIR root markers that only appear inside a shell comment', () => {
+  const commentedCd = '\tcargo test -p unrelated --test other # cd $(INTENTD_DIR) && cargo test -p intent-core --test commented\n';
+  const commentedManifest = '\tcargo test -p unrelated --test other # --manifest-path $(INTENTD_DIR)/Cargo.toml\n';
+  const fullyCommented = '\t# cd $(INTENTD_DIR) && cargo test -p intent-core --test commented\n';
+  assert.equal(isIntentdRecipe(commentedCd.trimEnd()), false);
+  assert.equal(isIntentdRecipe(commentedManifest.trimEnd()), false);
+  assert.equal(isIntentdRecipe(fullyCommented.trimEnd()), false);
+  assert.deepEqual(parseMakefile(commentedCd + commentedManifest + fullyCommented), []);
 });
 
 test('accepts TOML table headers with trailing comments', () => {
