@@ -52,14 +52,18 @@
 > was not observable, `exitCode` is the sentinel `-1` and `error` names the cause:
 >
 > - a spawn/cwd failure — the existing launch-failure `error` text;
-> - `exit status unobservable` — the child was reaped out-of-band or the PTY closed without
->   reporting a status; the supervisor's liveness backstop detects a provably gone process
->   within its exit-poll interval (a zombie — exited but not yet reaped — does not count);
+> - `exit status unobservable` — the child was reaped out-of-band, the PTY host dropped the
+>   session, or the recorded pid is gone without a reported status; the supervisor's liveness
+>   backstop detects a provably gone process within its exit-poll interval (a zombie —
+>   exited but not yet reaped — does not count);
 > - `lost: the daemon stopped while the script was running` — a command-mode script that was
 >   live when the daemon last stopped, hydrated from the was-running marker (below).
 >
 > A real process exit never yields `-1`: treat it as a failure, read `error`, and do not
 > re-poll — the reading is final until the next `script.start` clears the terminal fields.
+> The sentinel lives on the runtime state (`script.status`, `script.list`, `script:state`);
+> the `script.run` result's own `exitCode?` is unchanged and still carries only an observed
+> code.
 >
 > **Was-running marker (`previouslyRunning?`, new in intentd, within v5.1).** Closing the app
 > stops the daemon and kills every running script, and boot hydration previously loaded all
@@ -88,14 +92,15 @@
 > - **Dismiss:** `script.stop` on a non-running script that carries the marker clears it —
 >   in memory and, via the same best-effort persist as every other transition, on the row —
 >   and returns ok (instead of erroring), and **emits a `script:state` event** carrying the
->   cleared state, so other subscribers do not retain a stale `previouslyRunning: true` (or
->   `lost` reading); the row hydrates as plain `idle` after the next restart.
+>   cleared state (plain `idle`), so other subscribers do not retain a stale
+>   `previouslyRunning: true` (or `lost` reading); the row hydrates as plain `idle` after the
+>   next restart.
 > - **Workspace-scoped.** The runtime registry permits the same client-supplied `scriptId` in
 >   separate workspaces, so marker reads and writes are qualified by `workspaceId` — setting
 >   or clearing the marker in one workspace never touches a same-id script in another.
 > - Marker writes are **best-effort**: a failed bookkeeping write is logged and never fails the
 >   runtime transition or its `script:state` event. Persistence is therefore not guaranteed on
 >   any path, dismiss included — if the clearing write fails, the marker stays on the row and
->   rehydrates as `previouslyRunning: true` after the next daemon restart, and the client can
->   dismiss it again.
+>   rehydrates as `previouslyRunning: true` (or the `lost` reading) after the next daemon
+>   restart, and the client can dismiss it again.
 
