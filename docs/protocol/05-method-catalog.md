@@ -377,7 +377,10 @@ capability becomes available. `updateSupported` retains its channel-update meani
 - After installation the daemon re-verifies the sitter and sends restart-only
   `SIGHUP`, without a channel check. Clients poll status, tolerate the restart
   disconnect, reconnect using existing credentials/fingerprint, and confirm
-  `system.status.version` equals the requested target before reporting success.
+  `system.status.version` matches the requested target by SemVer precedence before
+  reporting success: a reported `v` prefix and build metadata may be ignored, but
+  the release numbers and prerelease identifier must match. The request and
+  acceptance `targetVersion` remain the exact bare release identifier.
   An unrelated concurrent update may win; a reconnected version mismatch is a
   failure, not successful completion of the exact request. Polling must be bounded.
 
