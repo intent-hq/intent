@@ -136,8 +136,11 @@ the notify step logs a warning and skips, and the cron backstop still advances t
 
 The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
 whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
-or it carries the `submodule-pin-intended` label. For an urgent bump, dispatch the
-workflow instead of filing a PR:
+or it carries the `submodule-pin-intended` label, and `check-makefile-targets` (run by
+the `docs-check` job and as part of `make check`) fails a PR whose Makefile references
+an intentd crate or `--test` target absent at the pinned gitlink, so a Makefile change
+that depends on an intentd PR must wait for the auto-bump. For an urgent bump, dispatch
+the workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml

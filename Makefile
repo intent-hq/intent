@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog event-catalog-check shipped-in rpc
+.PHONY: ports status docs-check check-protocol-catalog check-makefile-targets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -134,6 +134,12 @@ docs-check: event-catalog-check ## Check documented development targets, knobs, 
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
+
+# Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
+# INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
+# depends on an unmerged intentd PR must wait for the auto-bump.
+check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced intentd crates and --test targets exist at the pinned gitlink
+	@node scripts/check-makefile-targets.mjs
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
 # (source of truth), the protocol sidecar docs/protocol/event-types.json, and
@@ -412,7 +418,7 @@ lint-event-types: ensure-intentd-submodule ## Lint event-type string literals ag
 lint-fixed-sleeps: ensure-intentd-submodule ## Lint unannotated fixed sleeps in tests against the ratcheting baseline (intent-core fixed_sleep_lint)
 	cd $(INTENTD_DIR) && cargo test -p intent-core --test fixed_sleep_lint --jobs $(BUILD_JOBS)
 
-check: fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps ## fmt + clippy + repo-slug fold lint + event-type lint + fixed-sleep lint
+check: check-makefile-targets fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps ## Makefile target check + fmt + clippy + repo-slug fold lint + event-type lint + fixed-sleep lint
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test

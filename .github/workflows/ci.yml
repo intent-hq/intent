@@ -71,8 +71,11 @@ jobs:
   # Documentation invariants include the public frontend agent guide, the
   # browser-tab contract surfaces in cloudlands-fe and intentd, and the
   # protocol method catalog (docs/protocol/05-method-catalog.md ↔ methods/*.md
-  # ↔ intentd's catalog.rs). Initialize only those submodules; packages/ios is
-  # private and intentionally untouched.
+  # ↔ intentd's catalog.rs). The root Makefile's intentd crate / `--test`
+  # references must also exist at the pinned intentd gitlink
+  # (check-makefile-targets), so a Makefile change that depends on an unmerged
+  # intentd PR fails here until the auto-bump lands. Initialize only those
+  # submodules; packages/ios is private and intentionally untouched.
   docs-check:
     runs-on: ubuntu-latest
     steps:
@@ -86,6 +89,8 @@ jobs:
       - run: make docs-check
       - run: node --test scripts/check-protocol-catalog.test.mjs
       - run: make check-protocol-catalog
+      - run: node --test scripts/check-makefile-targets.test.mjs
+      - run: make check-makefile-targets
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
   # protocol sidecar, iOS test fixture). The public intentd copy is checked out
