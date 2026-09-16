@@ -1,27 +1,22 @@
 # Intent
 
-**Intent** is a platform for coordinating coding agents at scale. A Rust
-daemon (`intentd`) runs on your machine and owns everything — workspaces,
-notes, tasks, coding agents, git, terminals, and events — exposing it all
-through a JSON-RPC API. A desktop app (Electron + SvelteKit) and an iOS
-companion app connect to the daemon as thin clients.
-
-<!-- TODO: screenshot/demo -->
-
-```
-┌────────────────────────┐   ┌────────────────────────┐
-│      Desktop app       │   │   iOS companion app    │
-│  Electron + SvelteKit  │   │        SwiftUI         │
-└───────────┬────────────┘   └───────────┬────────────┘
-            │ JSON-RPC over UDS          │ JSON-RPC over WSS/TLS (LAN)
-            ▼                            ▼
-┌─────────────────────────────────────────────────────────┐
-│                  intentd — Rust daemon                  │
-│  workspaces · notes · tasks · agents · git · terminals  │
-└─────────────────────────────────────────────────────────┘
-```
+**Intent** is a desktop application for coordinating coding agents at scale.
+Manage workspaces, notes, tasks, coding agents, git, and terminals in one place.
+The app bundles and manages its Rust backend daemon (`intentd`) for you.
 
 ## Install
+
+**[Download the latest packaged app from intentapp.dev](https://intentapp.dev).**
+This is the recommended way to use Intent; no separate `intentd` installation
+is needed.
+
+For all other versions, visit the
+[cloudlands-releases release page](https://github.com/intent-hq/cloudlands-releases/releases).
+
+## Standalone daemon (advanced)
+
+Install `intentd` separately only if you want to run and manage the daemon
+independently of the desktop app, such as on a remote host.
 
 Installing `intentd` installs the **sitter** — a small self-updating shim,
 itself named `intentd`, that downloads the latest real daemon from the public
@@ -89,9 +84,6 @@ Prebuilt sitter archives for macOS, Linux, and Windows are published on the
 public intentd-releases repo's
 [`sitter-latest` release](https://github.com/intent-hq/intentd-releases/releases/tag/sitter-latest).
 
-The desktop app is not yet packaged for download; it will ship via GitHub
-Releases. Until then, you can [build it from source](#build-from-source).
-
 ## Build from source
 
 ```sh
@@ -141,6 +133,21 @@ and does not start another daemon.
 
 ## Architecture
 
+<!-- TODO: screenshot/demo -->
+
+```
+┌────────────────────────┐   ┌────────────────────────┐
+│      Desktop app       │   │   iOS companion app    │
+│  Electron + SvelteKit  │   │        SwiftUI         │
+└───────────┬────────────┘   └───────────┬────────────┘
+            │ JSON-RPC over UDS          │ JSON-RPC over WSS/TLS (LAN)
+            ▼                            ▼
+┌─────────────────────────────────────────────────────────┐
+│                  intentd — Rust daemon                  │
+│  workspaces · notes · tasks · agents · git · terminals  │
+└─────────────────────────────────────────────────────────┘
+```
+
 Clients are thin: all state and business logic — including the agent runtime —
 live in `intentd`, which persists to SQLite and serves JSON-RPC 2.0 over a
 Unix-domain socket (local clients) and WSS/TLS (LAN clients such as the iOS
@@ -167,7 +174,7 @@ update checks against public GitHub Releases and actions you take yourself:
   [intent-hq/cloudlands-releases](https://github.com/intent-hq/cloudlands-releases),
   and fetches release notes for the installed version from the same repo's
   GitHub Releases API.
-- **intentd sitter self-update** — the sitter (see [Install](#install))
+- **intentd sitter self-update** — the sitter (see [Standalone daemon](#standalone-daemon-advanced))
   downloads the daemon and checks the channel manifests published on the
   public
   [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases)
