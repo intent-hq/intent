@@ -256,7 +256,7 @@ with no rollback.
 
 - `make gate` runs `make check` and then the full nextest suite. `make test` remains
   the test-only entry point. Resume records apply only to nextest; `make gate` always
-  reruns fmt, clippy, and the repo-slug fold lint.
+  reruns fmt, clippy, and the source lints.
 - When the full suite is impractical, run `make test-changed` before entering the
   merge queue: it diffs the intentd checkout against `origin/main` (override with
   `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the

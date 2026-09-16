@@ -12,9 +12,12 @@ import {
   createGitlinkReader,
   commandWords,
   extractCargoReferences,
+  globToRegExp,
   hasTestTarget,
   isIntentdRecipe,
+  isTestGlob,
   joinContinuations,
+  listTestTargets,
   loadCrates,
   parseArguments,
   parseMakefile,
@@ -30,11 +33,23 @@ const words = (command) => splitShellCommands(command)[0] ?? [];
 const SCRIPT = fileURLToPath(new URL('./check-makefile-targets.mjs', import.meta.url));
 const SHA = 'a'.repeat(40);
 
+// `paths` are blob paths; a directory entry is listed for every path directly
+// under `treePath`, as `git ls-tree <sha> <treePath>/` would.
 const fakeReader = (paths, sha = SHA) => ({
   sha,
   exists: (objectPath) => paths.includes(objectPath),
   read: () => '',
-  listTree: () => [],
+  listTree: (treePath) => {
+    const prefix = `${treePath}/`;
+    const entries = new Map();
+    for (const p of paths) {
+      if (!p.startsWith(prefix)) continue;
+      const [head, ...rest] = p.slice(prefix.length).split('/');
+      const type = rest.length === 0 ? 'blob' : 'tree';
+      entries.set(head, { mode: type === 'tree' ? '040000' : '100644', type, path: prefix + head });
+    }
+    return [...entries.values()];
+  },
 });
 
 const crates = new Map([
@@ -89,6 +104,56 @@ test('extracts -p, --package, --package=, --test and --test= forms', () => {
   });
   assert.equal(extractCargoReferences(words('cargo fmt --check')), null);
   assert.equal(extractCargoReferences(words('rustup which cargo')), null);
+});
+
+test('records --workspace / --all selection alongside packages and tests', () => {
+  assert.deepEqual(extractCargoReferences(words("cargo test --workspace --test '*_lint' --jobs 4")), {
+    subcommand: 'test',
+    packages: [],
+    tests: ['*_lint'],
+    workspace: true,
+  });
+  assert.deepEqual(extractCargoReferences(words('cargo test --all -p a --test b')), {
+    subcommand: 'test',
+    packages: ['a'],
+    tests: ['b'],
+    workspace: true,
+  });
+  assert.deepEqual(parseMakefile("\tcd $(INTENTD_DIR) && cargo test --workspace --test '*_lint'\n"), [
+    { line: 1, subcommand: 'test', packages: [], tests: ['*_lint'], workspace: true },
+  ]);
+});
+
+test('treats a --test value with glob metacharacters as a pattern', () => {
+  assert.equal(isTestGlob('*_lint'), true);
+  assert.equal(isTestGlob('lint_?'), true);
+  assert.equal(isTestGlob('[ab]_lint'), true);
+  assert.equal(isTestGlob('fixed_sleep_lint'), false);
+  assert.equal(isTestGlob('quoted#missing'), false);
+  const star = globToRegExp('*_lint');
+  assert.equal(star.test('repo_slug_fold_lint'), true);
+  assert.equal(star.test('_lint'), true);
+  assert.equal(star.test('lint_foo'), false);
+  assert.equal(star.test('a_lint.rs'), false);
+  assert.equal(globToRegExp('lint_?').test('lint_a'), true);
+  assert.equal(globToRegExp('lint_?').test('lint_ab'), false);
+  assert.equal(globToRegExp('[ab]_lint').test('a_lint'), true);
+  assert.equal(globToRegExp('[ab]_lint').test('c_lint'), false);
+  assert.equal(globToRegExp('[!ab]_lint').test('c_lint'), true);
+  assert.equal(globToRegExp('a.b*').test('aXb_'), false, 'regex metacharacters in the pattern are literal');
+});
+
+test('lists auto-discovered and declared test targets of a crate', () => {
+  const reader = fakeReader([
+    'crates/intent-core/tests/flat.rs',
+    'crates/intent-core/tests/nested/main.rs',
+    'crates/intent-core/tests/helper/mod.rs',
+    'crates/intent-core/tests/goldens/x.json',
+    'crates/intent-core/tests/notes.txt',
+  ]);
+  const declared = { ...crates.get('intent-core'), cargoToml: '[package]\nname = "intent-core"\n[[test]]\nname = "declared"\n' };
+  assert.deepEqual(listTestTargets(reader, declared).sort(), ['declared', 'flat', 'nested']);
+  assert.deepEqual(listTestTargets(fakeReader([]), crates.get('intentd')), []);
 });
 
 test('tokenizes shell words quote-aware and splits on unquoted operators', () => {
@@ -323,6 +388,50 @@ test('fails a --test reference without a crate on the same invocation', () => {
   ]);
 });
 
+test('accepts a --workspace --test glob when at least one crate has a matching target', () => {
+  const invocations = [{ line: 5, subcommand: 'test', packages: [], tests: ['*_lint'], workspace: true }];
+  const oneMatch = fakeReader(['crates/intentd/tests/serve_spawn_lint.rs', 'crates/intent-core/tests/common/mod.rs']);
+  assert.deepEqual(verifyInvocations(invocations, crates, oneMatch), { checked: 1, failures: [] });
+  const nestedMatch = fakeReader(['crates/intent-core/tests/event_type_lint/main.rs']);
+  assert.deepEqual(verifyInvocations(invocations, crates, nestedMatch).failures, []);
+  const declared = new Map([
+    ['intent-core', { ...crates.get('intent-core'), cargoToml: '[package]\nname = "intent-core"\n[[test]]\nname = "custom_lint"\n' }],
+  ]);
+  assert.deepEqual(verifyInvocations(invocations, declared, fakeReader([])).failures, []);
+});
+
+test('fails a --test glob naming the pattern when no selected crate has a matching target', () => {
+  const noLints = fakeReader(['crates/intent-core/tests/lint_helper.rs', 'crates/intentd/tests/e2e_guard.rs']);
+  const workspace = [{ line: 5, subcommand: 'test', packages: [], tests: ['*_lint'], workspace: true }];
+  assert.deepEqual(verifyInvocations(workspace, crates, noLints), {
+    checked: 1,
+    failures: ["Makefile:5: error: cargo test pattern '*_lint' matches no test target in any workspace crate at pinned intentd gitlink aaaaaaa"],
+  });
+  const scoped = [{ line: 6, subcommand: 'test', packages: ['intent-core'], tests: ['*_lint'] }];
+  const onlyElsewhere = fakeReader(['crates/intentd/tests/serve_spawn_lint.rs']);
+  assert.deepEqual(verifyInvocations(scoped, crates, onlyElsewhere).failures, [
+    "Makefile:6: error: cargo test pattern '*_lint' matches no test target in crate 'intent-core' at pinned intentd gitlink aaaaaaa",
+  ]);
+  const unscoped = [{ line: 7, subcommand: 'test', packages: [], tests: ['*_lint'] }];
+  assert.deepEqual(verifyInvocations(unscoped, crates, onlyElsewhere).failures, [
+    "Makefile:7: error: cargo test pattern '*_lint' cannot be verified: the cargo invocation names no -p/--package crate and passes no --workspace",
+  ]);
+});
+
+test('a literal --test name still requires an exact target, never a partial match', () => {
+  const reader = fakeReader(['crates/intent-core/tests/fixed_sleep_lint.rs']);
+  const partial = [{ line: 9, subcommand: 'test', packages: ['intent-core'], tests: ['sleep_lint'] }];
+  assert.deepEqual(verifyInvocations(partial, crates, reader).failures, [
+    "Makefile:9: error: cargo test target 'sleep_lint' (crate 'intent-core') is missing at pinned intentd gitlink aaaaaaa: crates/intent-core/tests/sleep_lint.rs not found",
+  ]);
+  const exact = [{ line: 9, subcommand: 'test', packages: ['intent-core'], tests: ['fixed_sleep_lint'] }];
+  assert.deepEqual(verifyInvocations(exact, crates, reader).failures, []);
+  const literalUnderWorkspace = [{ line: 10, subcommand: 'test', packages: [], tests: ['fixed_sleep_lint'], workspace: true }];
+  assert.deepEqual(verifyInvocations(literalUnderWorkspace, crates, reader).failures, [
+    "Makefile:10: error: cargo test target 'fixed_sleep_lint' cannot be verified: the cargo invocation names no -p/--package crate",
+  ]);
+});
+
 test('parses CLI arguments', () => {
   assert.deepEqual(parseArguments(['--gitlink', 'abc', '--makefile=other/Makefile']), {
     makefile: 'other/Makefile',
@@ -427,12 +536,15 @@ test('CLI prints the success summary on a Makefile whose references exist at the
       '\t{ cd $(INTENTD_DIR) && cargo test -p bar-crate --test declared; }',
       '\t( cd $(INTENTD_DIR) && cargo test -p foo --test flat)',
       '\t(cd $(INTENTD_DIR) && cargo test -p bar-crate --test declared)',
+      "\tcd $(INTENTD_DIR) && cargo test --workspace --test 'fl*' --jobs 4",
+      "\tcd $(INTENTD_DIR) && cargo test --workspace --test 'decl?red'",
+      "\tcd $(INTENTD_DIR) && cargo test -p foo --test 'nest*'",
       '',
     ].join('\n'),
   );
   const result = runCli(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `checked 24 cargo references against intentd@${sha.slice(0, 7)}\n`);
+  assert.equal(result.stdout, `checked 28 cargo references against intentd@${sha.slice(0, 7)}\n`);
 });
 
 test('CLI exits 1 naming the Makefile line, path and pin for a missing target', (t) => {
@@ -441,7 +553,10 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
     path.join(root, 'Makefile'),
     'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test flat\n' +
       '\tif true; then \\\n\t\tcd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test conditional; \\\n\tfi\n' +
-      '\t(cd $(INTENTD_DIR) && cargo test -p foo --test compact_missing)\n',
+      '\t(cd $(INTENTD_DIR) && cargo test -p foo --test compact_missing)\n' +
+      "\tcd $(INTENTD_DIR) && cargo test --workspace --test '*_lint'\n" +
+      "\tcd $(INTENTD_DIR) && cargo test -p bar-crate --test 'fl*'\n" +
+      "\tcd $(INTENTD_DIR) && cargo test --workspace --test 'uncommit*'\n",
   );
   const result = runCli(root);
   assert.equal(result.status, 1);
@@ -452,6 +567,9 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
       `Makefile:6: error: cargo test target 'quoted#missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/quoted#missing.rs not found\n` +
       `Makefile:7: error: cargo test target 'flat' (crate 'bar-crate') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/bar/tests/flat.rs not found\n` +
       `Makefile:8: error: cargo test target 'conditional' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/conditional.rs not found\n` +
-      `Makefile:11: error: cargo test target 'compact_missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/compact_missing.rs not found\n${HINT}\n`,
+      `Makefile:11: error: cargo test target 'compact_missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/compact_missing.rs not found\n` +
+      `Makefile:12: error: cargo test pattern '*_lint' matches no test target in any workspace crate at pinned intentd gitlink ${sha.slice(0, 7)}\n` +
+      `Makefile:13: error: cargo test pattern 'fl*' matches no test target in crate 'bar-crate' at pinned intentd gitlink ${sha.slice(0, 7)}\n` +
+      `Makefile:14: error: cargo test pattern 'uncommit*' matches no test target in any workspace crate at pinned intentd gitlink ${sha.slice(0, 7)}\n${HINT}\n`,
   );
 });

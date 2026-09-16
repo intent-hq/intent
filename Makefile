@@ -200,13 +200,13 @@ BUILD_JOBS ?= -2
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
 gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-repo-slug lint-event-types lint-fixed-sleeps build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -225,7 +225,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
-	fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -395,30 +395,22 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
-# Source lint: fails naming file:line wherever repository owner/name identity
-# is case-folded or compared outside intent_core::RepoRef. Mirrors the intentd
-# `check` CI job so local gates match CI.
-lint-repo-slug: ensure-intentd-submodule ## Lint raw repo-slug folding outside RepoRef (intent-core repo_slug_fold_lint)
-	cd $(INTENTD_DIR) && cargo test -p intent-core --test repo_slug_fold_lint --jobs $(BUILD_JOBS)
+# Source lints are discovered by convention: every `tests/*_lint.rs` in any
+# intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
+# native --test glob selects all of them across the workspace. Adding a lint
+# in intentd therefore needs no change here. Mirrors the intentd `check` CI
+# job so local gates match CI.
+lint-sources: ensure-intentd-submodule ## Run every intentd source lint (tests/*_lint.rs in any intentd crate)
+	cd $(INTENTD_DIR) && cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
 
-# Source lint: fails naming file:line for any note:/task:/workspace:/agent:
-# string literal outside test code that is not in
-# intent_core::events::ALL_EVENT_TYPES (the catalog mirrored into
-# crates/intent-core/tests/goldens/event_types.json). Mirrors the intentd
-# `check` CI job so local gates match CI.
-lint-event-types: ensure-intentd-submodule ## Lint event-type string literals against ALL_EVENT_TYPES (intent-core event_type_lint)
-	cd $(INTENTD_DIR) && cargo test -p intent-core --test event_type_lint --jobs $(BUILD_JOBS)
+# Deprecated aliases of lint-sources, kept for one release so existing local
+# scripts keep working; each now runs the full source-lint set.
+lint-repo-slug: lint-sources ## Deprecated alias of lint-sources
+lint-event-types: lint-sources ## Deprecated alias of lint-sources
+lint-fixed-sleeps: lint-sources ## Deprecated alias of lint-sources
+lint-raw-child: lint-sources ## Deprecated alias of lint-sources
 
-# Source lint: fails naming file:line for any fixed sleep in test code
-# (tokio::time::sleep / std::thread::sleep / shell `sleep N`) that carries no
-# `// timing-guard: <reason>` annotation and is not grandfathered by
-# crates/intent-core/tests/fixed_sleep_baseline.txt (a ratcheting baseline:
-# counts may only go down). Mirrors the intentd `check` CI job so local gates
-# match CI.
-lint-fixed-sleeps: ensure-intentd-submodule ## Lint unannotated fixed sleeps in tests against the ratcheting baseline (intent-core fixed_sleep_lint)
-	cd $(INTENTD_DIR) && cargo test -p intent-core --test fixed_sleep_lint --jobs $(BUILD_JOBS)
-
-check: check-makefile-targets fmt clippy lint-repo-slug lint-event-types lint-fixed-sleeps ## Makefile target check + fmt + clippy + repo-slug fold lint + event-type lint + fixed-sleep lint
+check: check-makefile-targets fmt clippy lint-sources ## Makefile target check + fmt + clippy + source lints
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
