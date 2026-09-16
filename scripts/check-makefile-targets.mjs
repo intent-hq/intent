@@ -12,8 +12,8 @@ export const HINT =
   'hint: the referenced artifact probably lives on an unmerged intentd branch; merge the intentd PR and wait for auto-bump-submodules to advance the pin before landing this monorepo change.';
 
 const USAGE = 'usage: check-makefile-targets.mjs [--makefile <path>] [--gitlink <sha>] [--intentd-dir <path>]';
-const INTENTD_ROOT_MARKERS = [/\bcd\s+"?\$\(INTENTD_DIR\)"?\s+&&/, /--manifest-path[= ]"?\$\(INTENTD_DIR\)"?\/Cargo\.toml/];
-const SHELL_SEPARATOR = /\s*(?:&&|\|\||;|\|)\s*/;
+const INTENTD_MANIFEST = '$(INTENTD_DIR)/Cargo.toml';
+const SHELL_OPERATORS = ['&&', '||', ';', '|'];
 const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
 
@@ -51,57 +51,112 @@ export function recipeBody(logicalText) {
   return logicalText.slice(1).replace(/^[\s@\-+]+/, '');
 }
 
-// Drops an unquoted `#` comment (one that starts a word) from a shell line.
-export function stripShellComment(text) {
-  let quote = null;
-  for (let i = 0; i < text.length; i += 1) {
+// Splits a shell line into simple commands (on unquoted `&&`, `||`, `;`, `|`),
+// each a list of words with their quoting removed. Single quotes are literal,
+// double quotes honour backslash escapes of `"` `\` `$` and backquote, and an
+// unquoted backslash escapes the next character. An unquoted `#` at a word
+// boundary starts a comment that runs to the end of the line.
+export function splitShellCommands(text) {
+  const commands = [];
+  let words = [];
+  let word = '';
+  let inWord = false;
+  const endWord = () => {
+    if (inWord) words.push(word);
+    word = '';
+    inWord = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (words.length > 0) commands.push(words);
+    words = [];
+  };
+  let i = 0;
+  while (i < text.length) {
     const char = text[i];
-    if (quote) {
-      if (char === quote) quote = null;
-    } else if (char === '"' || char === "'") {
-      quote = char;
-    } else if (char === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
-      return text.slice(0, i);
+    if (char === "'") {
+      const close = text.indexOf("'", i + 1);
+      const end = close === -1 ? text.length : close;
+      word += text.slice(i + 1, end);
+      inWord = true;
+      i = end + 1;
+    } else if (char === '"') {
+      inWord = true;
+      i += 1;
+      while (i < text.length && text[i] !== '"') {
+        if (text[i] === '\\' && '"\\$`'.includes(text[i + 1] ?? '')) i += 1;
+        word += text[i];
+        i += 1;
+      }
+      i += 1;
+    } else if (char === '\\') {
+      word += text[i + 1] ?? '';
+      inWord = true;
+      i += 2;
+    } else if (/\s/.test(char)) {
+      endWord();
+      i += 1;
+    } else if (char === '#' && !inWord) {
+      break;
+    } else {
+      const operator = SHELL_OPERATORS.find((candidate) => text.startsWith(candidate, i));
+      if (operator) {
+        endCommand();
+        i += operator.length;
+      } else {
+        word += char;
+        inWord = true;
+        i += 1;
+      }
     }
   }
-  return text;
+  endCommand();
+  return commands;
 }
 
-// The shell command a recipe line runs: flags and comments removed; `null` for
-// non-recipe lines.
-export function recipeCommand(logicalText) {
+// The simple commands a recipe line runs, with Make flags and comments removed;
+// `null` for non-recipe lines.
+export function recipeCommands(logicalText) {
   if (!logicalText.startsWith('\t')) return null;
-  return stripShellComment(recipeBody(logicalText));
+  return splitShellCommands(recipeBody(logicalText));
+}
+
+// A command is rooted in intentd when it is `cd $(INTENTD_DIR)` or passes
+// `--manifest-path $(INTENTD_DIR)/Cargo.toml`.
+export function isIntentdRootedCommand(words) {
+  if (words[0] === 'cd' && words[1] === '$(INTENTD_DIR)') return true;
+  return words.some(
+    (word, index) =>
+      word === `--manifest-path=${INTENTD_MANIFEST}` || (word === '--manifest-path' && words[index + 1] === INTENTD_MANIFEST),
+  );
 }
 
 export function isIntentdRecipe(logicalText) {
-  const command = recipeCommand(logicalText);
-  if (command === null) return false;
-  return INTENTD_ROOT_MARKERS.some((marker) => marker.test(command));
+  const commands = recipeCommands(logicalText);
+  return commands !== null && commands.some(isIntentdRootedCommand);
 }
 
 // Arguments after a bare `--` belong to the invoked binary and are skipped; an
 // echoed `cargo ...` hint is text, not an invocation.
-export function extractCargoReferences(segment) {
-  const tokens = segment.trim().split(/\s+/);
-  const cargoIndex = tokens.indexOf('cargo');
+export function extractCargoReferences(words) {
+  const cargoIndex = words.indexOf('cargo');
   if (cargoIndex === -1) return null;
-  if (tokens.slice(0, cargoIndex).some((token) => /^[@\-+]*echo$/.test(token))) return null;
-  const subcommand = tokens.slice(cargoIndex + 1).find((token) => !token.startsWith('+'));
+  if (words.slice(0, cargoIndex).includes('echo')) return null;
+  const subcommand = words.slice(cargoIndex + 1).find((word) => !word.startsWith('+'));
   if (!CARGO_SUBCOMMANDS.has(subcommand)) return null;
   const packages = [];
   const tests = [];
-  for (let i = cargoIndex + 1; i < tokens.length; i += 1) {
-    const token = tokens[i];
-    if (token === '--') break;
-    if (token === '-p' || token === '--package') {
-      if (tokens[i + 1] !== undefined) packages.push(tokens[(i += 1)]);
-    } else if (token.startsWith('--package=')) {
-      packages.push(token.slice('--package='.length));
-    } else if (token === '--test') {
-      if (tokens[i + 1] !== undefined) tests.push(tokens[(i += 1)]);
-    } else if (token.startsWith('--test=')) {
-      tests.push(token.slice('--test='.length));
+  for (let i = cargoIndex + 1; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === '--') break;
+    if (word === '-p' || word === '--package') {
+      if (words[i + 1] !== undefined) packages.push(words[(i += 1)]);
+    } else if (word.startsWith('--package=')) {
+      packages.push(word.slice('--package='.length));
+    } else if (word === '--test') {
+      if (words[i + 1] !== undefined) tests.push(words[(i += 1)]);
+    } else if (word.startsWith('--test=')) {
+      tests.push(word.slice('--test='.length));
     }
   }
   return { subcommand, packages, tests };
@@ -110,9 +165,10 @@ export function extractCargoReferences(segment) {
 export function parseMakefile(text) {
   const invocations = [];
   for (const { line, text: logical } of joinContinuations(text)) {
-    if (!isIntentdRecipe(logical)) continue;
-    for (const segment of recipeCommand(logical).split(SHELL_SEPARATOR)) {
-      const references = extractCargoReferences(segment);
+    const commands = recipeCommands(logical);
+    if (commands === null || !commands.some(isIntentdRootedCommand)) continue;
+    for (const words of commands) {
+      const references = extractCargoReferences(words);
       if (references) invocations.push({ line, ...references });
     }
   }
