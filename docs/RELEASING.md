@@ -80,10 +80,14 @@ it. It ships through its own hand-written pipeline,
 triggered by pushing a `sitter-vX.Y.Z` tag.
 
 - **Versioning** — the sitter keeps an independent `0.1.x` line. release-plz advances
-  `crates/intentd-sitter/Cargo.toml` in the ordinary intentd Release PR whenever sitter
-  files changed since the last daemon tag (see the `intentd-sitter` entry in
-  [`release-plz.toml`](../packages/intentd/release-plz.toml)), so no manual bump is
-  needed; the workflow fails if the tag does not match the crate version.
+  `crates/intentd-sitter/Cargo.toml` in the ordinary intentd Release PR whenever files
+  under `crates/intentd-sitter` changed since the last daemon tag (see the
+  `intentd-sitter` entry in [`release-plz.toml`](../packages/intentd/release-plz.toml)),
+  so no manual bump is needed for crate changes. The repo-root `scripts/install.sh` /
+  `scripts/install.ps1` (republished on `sitter-latest`) are outside the crate and NOT
+  detected: an installer-script-only change needs a manual
+  `chore(sitter): bump intentd-sitter to X.Y.Z` PR before tagging. The workflow fails
+  if the tag does not match the crate version.
 - **Procedure** — after the Release PR that bumped the sitter version has merged, tag
   that `main` commit `sitter-v<Cargo.toml version>` and push the tag:
 
@@ -107,8 +111,8 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   were assumed covered by the last sitter release (`sitter-v0.1.8`, cut before them),
   and `sitter-v0.1.14` had to be cut afterwards.
 - **Is a sitter release pending?** — a non-empty
-  `git log sitter-v<last>..origin/main -- crates/intentd-sitter` (ignoring
-  `chore: release` commits) means unreleased sitter work.
+  `git log sitter-v<last>..origin/main -- crates/intentd-sitter scripts/install.sh scripts/install.ps1`
+  (ignoring `chore: release` commits) means unreleased sitter work.
 
 ## cloudlands-fe
 
