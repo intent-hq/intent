@@ -147,6 +147,45 @@ test('detects roots and cargo after shell control keywords, group openers and en
   ]);
 });
 
+test('keeps $(...), $$(...) and $((...)) expansions as single words', () => {
+  assert.deepEqual(words('cargo run --manifest-path $(INTENTD_DIR)/Cargo.toml -- $$(pwd)/x $(shell echo $(A)) $((1+2)) \\( "(y)"'), [
+    'cargo',
+    'run',
+    '--manifest-path',
+    '$(INTENTD_DIR)/Cargo.toml',
+    '--',
+    '$$(pwd)/x',
+    '$(shell echo $(A))',
+    '$((1+2))',
+    '(',
+    '(y)',
+  ]);
+  assert.deepEqual(parseMakefile('\tcd $(INTENTD_DIR) && cargo test -p intent-core --test $$(basename $(shell pwd))\n'), [
+    { line: 1, subcommand: 'test', packages: ['intent-core'], tests: ['$$(basename $(shell pwd))'] },
+  ]);
+});
+
+test('tokenizes unquoted subshell parentheses as delimiters regardless of surrounding whitespace', () => {
+  assert.deepEqual(splitShellCommands('(cd $(INTENTD_DIR) && cargo test -p intent-core --test compact)'), [
+    ['(', 'cd', '$(INTENTD_DIR)'],
+    ['cargo', 'test', '-p', 'intent-core', '--test', 'compact', ')'],
+  ]);
+  assert.deepEqual(commandWords(['(', 'cargo', 'test', '--test', 'x', ')', ')']), ['cargo', 'test', '--test', 'x']);
+  const makefile = [
+    'lint:',
+    '\t(cd $(INTENTD_DIR) && cargo test -p intent-core --test does_not_exist)',
+    '\t( cd $(INTENTD_DIR) && cargo test -p intent-core --test fixed_sleep_lint)',
+    '\t(cd $(INTENTD_DIR)&&cargo test -p intent-core --test compact_operator)',
+    '\t(echo "(cd $(INTENTD_DIR) && cargo test -p nonexistent --test missing)")',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 2, subcommand: 'test', packages: ['intent-core'], tests: ['does_not_exist'] },
+    { line: 3, subcommand: 'test', packages: ['intent-core'], tests: ['fixed_sleep_lint'] },
+    { line: 4, subcommand: 'test', packages: ['intent-core'], tests: ['compact_operator'] },
+  ]);
+});
+
 test('quoted text inside echo / printf arguments is inert', () => {
   const makefile = [
     '\t@echo "cd $(INTENTD_DIR) && cargo test -p intent-core --test nope"',
@@ -386,12 +425,14 @@ test('CLI prints the success summary on a Makefile whose references exist at the
       '\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test common',
       '\tif true; then cd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test flat; fi',
       '\t{ cd $(INTENTD_DIR) && cargo test -p bar-crate --test declared; }',
+      '\t( cd $(INTENTD_DIR) && cargo test -p foo --test flat)',
+      '\t(cd $(INTENTD_DIR) && cargo test -p bar-crate --test declared)',
       '',
     ].join('\n'),
   );
   const result = runCli(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `checked 20 cargo references against intentd@${sha.slice(0, 7)}\n`);
+  assert.equal(result.stdout, `checked 24 cargo references against intentd@${sha.slice(0, 7)}\n`);
 });
 
 test('CLI exits 1 naming the Makefile line, path and pin for a missing target', (t) => {
@@ -399,7 +440,8 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
   fs.writeFileSync(
     path.join(root, 'Makefile'),
     'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test flat\n' +
-      '\tif true; then \\\n\t\tcd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test conditional; \\\n\tfi\n',
+      '\tif true; then \\\n\t\tcd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test conditional; \\\n\tfi\n' +
+      '\t(cd $(INTENTD_DIR) && cargo test -p foo --test compact_missing)\n',
   );
   const result = runCli(root);
   assert.equal(result.status, 1);
@@ -409,6 +451,7 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
       `Makefile:5: error: cargo test target 'silent' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/silent.rs not found\n` +
       `Makefile:6: error: cargo test target 'quoted#missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/quoted#missing.rs not found\n` +
       `Makefile:7: error: cargo test target 'flat' (crate 'bar-crate') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/bar/tests/flat.rs not found\n` +
-      `Makefile:8: error: cargo test target 'conditional' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/conditional.rs not found\n${HINT}\n`,
+      `Makefile:8: error: cargo test target 'conditional' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/conditional.rs not found\n` +
+      `Makefile:11: error: cargo test target 'compact_missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/compact_missing.rs not found\n${HINT}\n`,
   );
 });

@@ -14,7 +14,9 @@ export const HINT =
 const USAGE = 'usage: check-makefile-targets.mjs [--makefile <path>] [--gitlink <sha>] [--intentd-dir <path>]';
 const INTENTD_MANIFEST = '$(INTENTD_DIR)/Cargo.toml';
 const SHELL_OPERATORS = ['&&', '||', ';', '|'];
-const SHELL_PREFIX_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '(']);
+const SHELL_GROUP_OPENERS = new Set(['{', '(']);
+const SHELL_GROUP_CLOSERS = new Set(['}', ')']);
+const SHELL_PREFIX_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', ...SHELL_GROUP_OPENERS]);
 const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
@@ -53,11 +55,27 @@ export function recipeBody(logicalText) {
   return logicalText.slice(1).replace(/^[\s@\-+]+/, '');
 }
 
+// Length of the `$(...)`, `$$(...)` or `$((...))` expansion starting at `start`
+// (its parentheses balanced), or 0 when `$` is not followed by `(`.
+function expansionLength(text, start) {
+  let i = start;
+  while (text[i] === '$') i += 1;
+  if (text[i] !== '(') return 0;
+  let depth = 0;
+  for (; i < text.length; i += 1) {
+    if (text[i] === '(') depth += 1;
+    else if (text[i] === ')' && (depth -= 1) === 0) return i + 1 - start;
+  }
+  return text.length - start;
+}
+
 // Splits a shell line into simple commands (on unquoted `&&`, `||`, `;`, `|`),
 // each a list of words with their quoting removed. Single quotes are literal,
 // double quotes honour backslash escapes of `"` `\` `$` and backquote, and an
 // unquoted backslash escapes the next character. An unquoted `#` at a word
-// boundary starts a comment that runs to the end of the line.
+// boundary starts a comment that runs to the end of the line. Unquoted `(` and
+// `)` are words of their own (subshell delimiters) unless they belong to a
+// `$(...)` / `$$(...)` / `$((...))` expansion, which stays inside its word.
 export function splitShellCommands(text) {
   const commands = [];
   let words = [];
@@ -100,6 +118,15 @@ export function splitShellCommands(text) {
       i += 1;
     } else if (char === '#' && !inWord) {
       break;
+    } else if (char === '$' && expansionLength(text, i) > 0) {
+      const length = expansionLength(text, i);
+      word += text.slice(i, i + length);
+      inWord = true;
+      i += length;
+    } else if (char === '(' || char === ')') {
+      endWord();
+      words.push(char);
+      i += 1;
     } else {
       const operator = SHELL_OPERATORS.find((candidate) => text.startsWith(candidate, i));
       if (operator) {
@@ -124,11 +151,14 @@ export function recipeCommands(logicalText) {
 }
 
 // A simple command from its command name on: leading shell reserved words,
-// group openers and NAME=value assignments are skipped.
+// group openers and NAME=value assignments are skipped, as are trailing group
+// closers.
 export function commandWords(words) {
   let start = 0;
   while (start < words.length && (SHELL_PREFIX_WORDS.has(words[start]) || SHELL_ASSIGNMENT.test(words[start]))) start += 1;
-  return words.slice(start);
+  let end = words.length;
+  while (end > start && SHELL_GROUP_CLOSERS.has(words[end - 1])) end -= 1;
+  return words.slice(start, end);
 }
 
 // A command is rooted in intentd when it is `cd $(INTENTD_DIR)` or passes
