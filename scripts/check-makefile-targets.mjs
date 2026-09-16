@@ -365,25 +365,51 @@ export function isTestGlob(name) {
   return GLOB_METACHARACTERS.test(name);
 }
 
-export function globToRegExp(pattern) {
+// Mirrors the parse rules of the `glob` crate cargo builds --test patterns
+// with (`cannot build glob pattern from ...`): `**` must be a whole path
+// component, `***` is invalid, `[` needs a non-empty class closed by `]`, and
+// negation is spelled `[!...]` (`^` is an ordinary class member). Returns
+// { matcher } for a valid pattern, { error } otherwise.
+export function compileTestGlob(pattern) {
+  const chars = [...pattern];
   let source = '';
-  for (let i = 0; i < pattern.length; i += 1) {
-    const char = pattern[i];
-    if (char === '*') source += '.*';
-    else if (char === '?') source += '.';
-    else if (char === '[') {
-      const close = pattern.indexOf(']', i + 2);
-      if (close === -1) source += '\\[';
-      else {
-        const body = pattern.slice(i + 1, close);
-        const negated = body.startsWith('!') || body.startsWith('^');
-        const chars = (negated ? body.slice(1) : body).replace(/[\\\]^]/g, '\\$&');
-        source += `[${negated ? '^' : ''}${chars}]`;
-        i = close;
+  let i = 0;
+  while (i < chars.length) {
+    const char = chars[i];
+    if (char === '*') {
+      const start = i;
+      while (i < chars.length && chars[i] === '*') i += 1;
+      const count = i - start;
+      if (count > 2) return { error: 'wildcards are either regular `*` or recursive `**`' };
+      if (count === 2) {
+        const startsComponent = start === 0 || chars[start - 1] === '/';
+        const endsComponent = i === chars.length || chars[i] === '/';
+        if (!startsComponent || !endsComponent) return { error: 'recursive wildcards must form a single path component' };
       }
-    } else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      source += '.*';
+    } else if (char === '?') {
+      source += '.';
+      i += 1;
+    } else if (char === '[') {
+      const negated = chars[i + 1] === '!';
+      const bodyStart = i + (negated ? 2 : 1);
+      const close = chars.indexOf(']', bodyStart + 1);
+      if (close === -1) return { error: 'invalid range pattern' };
+      const body = chars.slice(bodyStart, close).join('').replace(/[\\\]^]/g, '\\$&');
+      source += `[${negated ? '^' : ''}${body}]`;
+      i = close + 1;
+    } else {
+      source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      i += 1;
+    }
   }
-  return new RegExp(`^${source}$`);
+  return { matcher: new RegExp(`^${source}$`) };
+}
+
+export function globToRegExp(pattern) {
+  const { matcher, error } = compileTestGlob(pattern);
+  if (error) throw new CheckError(`cannot build glob pattern from '${pattern}': ${error}`);
+  return matcher;
 }
 
 export function verifyInvocations(invocations, crates, reader, { makefile = 'Makefile' } = {}) {
@@ -413,8 +439,12 @@ export function verifyInvocations(invocations, crates, reader, { makefile = 'Mak
           );
           continue;
         }
+        const { matcher, error } = compileTestGlob(test);
+        if (error) {
+          failures.push(`${makefile}:${line}: error: cargo cannot build glob pattern from '${test}': ${error}`);
+          continue;
+        }
         const selected = workspace ? [...crates.values()] : resolved;
-        const matcher = globToRegExp(test);
         if (selected.some((crate) => listTestTargets(reader, crate).some((name) => matcher.test(name)))) continue;
         const scope = workspace
           ? 'any workspace crate'

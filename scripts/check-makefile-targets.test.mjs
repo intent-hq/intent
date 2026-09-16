@@ -11,6 +11,7 @@ import {
   HINT,
   createGitlinkReader,
   commandWords,
+  compileTestGlob,
   extractCargoReferences,
   globToRegExp,
   hasTestTarget,
@@ -141,7 +142,22 @@ test('treats a --test value with glob metacharacters as a pattern', () => {
   assert.equal(globToRegExp('[ab]_lint').test('a_lint'), true);
   assert.equal(globToRegExp('[ab]_lint').test('c_lint'), false);
   assert.equal(globToRegExp('[!ab]_lint').test('c_lint'), true);
+  assert.equal(globToRegExp('[^ab]_lint').test('^_lint'), true, '^ is an ordinary class member, not negation');
+  assert.equal(globToRegExp('[^ab]_lint').test('c_lint'), false);
+  assert.equal(globToRegExp('[]]_lint').test(']_lint'), true);
   assert.equal(globToRegExp('a.b*').test('aXb_'), false, 'regex metacharacters in the pattern are literal');
+});
+
+test('rejects patterns the glob crate (and therefore cargo) cannot build', () => {
+  assert.equal(compileTestGlob('**').error, undefined, 'a lone ** is a whole path component');
+  assert.equal(compileTestGlob('**/x_lint').error, undefined);
+  assert.deepEqual(compileTestGlob('**_lint'), { error: 'recursive wildcards must form a single path component' });
+  assert.deepEqual(compileTestGlob('z**'), { error: 'recursive wildcards must form a single path component' });
+  assert.deepEqual(compileTestGlob('***_lint'), { error: 'wildcards are either regular `*` or recursive `**`' });
+  assert.deepEqual(compileTestGlob('[_lint'), { error: 'invalid range pattern' });
+  assert.deepEqual(compileTestGlob('[]_lint'), { error: 'invalid range pattern' });
+  assert.deepEqual(compileTestGlob('[!]_lint'), { error: 'invalid range pattern' });
+  assert.throws(() => globToRegExp('**_lint'), /cannot build glob pattern from '\*\*_lint'/);
 });
 
 test('lists auto-discovered and declared test targets of a crate', () => {
@@ -451,6 +467,21 @@ test('a --test glob ignores tests/ files of a crate with autotests = false unles
     ],
   ]);
   assert.deepEqual(verifyInvocations(invocations, declared, reader), { checked: 1, failures: [] });
+});
+
+test('fails a cargo-invalid --test glob even when a lenient reading would match existing targets', () => {
+  const reader = fakeReader(['crates/intent-core/tests/fixed_sleep_lint.rs']);
+  const invocations = [
+    { line: 11, subcommand: 'test', packages: [], tests: ['**_lint'], workspace: true },
+    { line: 12, subcommand: 'test', packages: ['intent-core'], tests: ['[_lint'] },
+  ];
+  assert.deepEqual(verifyInvocations(invocations, crates, reader), {
+    checked: 3,
+    failures: [
+      "Makefile:11: error: cargo cannot build glob pattern from '**_lint': recursive wildcards must form a single path component",
+      "Makefile:12: error: cargo cannot build glob pattern from '[_lint': invalid range pattern",
+    ],
+  });
 });
 
 test('a literal --test name still requires an exact target, never a partial match', () => {
