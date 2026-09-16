@@ -344,6 +344,43 @@ Asks the daemon's supervising [`intentd-sitter`](https://github.com/intent-hq/in
 - Clients can read `updateSupported` on `system.status` (above) to gate the update affordance instead of probing for the `-32603` failure. It is a read-time hint, not a guarantee: supervision can change between the status read and this call, so callers must still handle `-32603` here.
 - This is the **immediate** variant: a newer version installs and the daemon restarts right away, in-flight turns included. The daemon separately runs **idle-triggered** checks on its own (SIGUSR2 to the sitter, rate-limited, only while no turn is in flight) and exits for a staged update only when idle — observable via `system.status` `idleUpdateCheck` / `busyAgents` (v10.2, above). The sitter's 12–24 h periodic check remains the forced fallback.
 
+#### Exact-version `system.requestUpdate` (additive, v10.3)
+
+An authenticated UDS or WSS caller may request `{ "targetVersion": "0.9.99" }`.
+It MUST first read `system.status` and require `exactUpdateSupported === true`.
+Older daemons ignore unknown parameters; **never** send a target without the
+capability and never retry it as a parameterless channel update.
+
+`exactUpdateSupported` is always a boolean on supporting daemons. It requires Unix
+sitter supervision (verified direct parent, process name, and pid range) and the
+sitter's `INTENTD_SITTER_EXACT_UPDATE=1` handshake, which guarantees serialized
+installer/state mutations. An older sitter must be updated manually before this
+capability becomes available. `updateSupported` retains its channel-update meaning.
+
+- The target is a bare SemVer release identifier, at most 128 bytes, with no `v`
+  prefix, whitespace, path/URL components, or build metadata. Prereleases are allowed.
+  Malformed targets, null, non-string targets, and unknown parameters return `-32602`.
+- The target must be strictly newer than the running daemon; current/older targets,
+  unsupported supervision, and overlapping requests return `-32603` immediately.
+  A target below the already-installed version is rejected asynchronously with
+  `targetUpdate.state: "failed"` after acceptance. Parameterless channel requests
+  are rejected while an exact update is active.
+- Acceptance returns `{ "ok": true, "targetVersion": "0.9.99" }`; it does not mean
+  installation succeeded. Installation runs off the connection read loop, using
+  platform-derived assets and checksum sidecars from fixed release hosts. Channel
+  configuration is preserved. Archive verification or installation failure leaves
+  the daemon running and does not trigger a channel fallback.
+- `system.status.targetUpdate` is absent before the first request and after restart.
+  During the operation it is `{ "targetVersion": "0.9.99", "state": "installing" }`,
+  then `state: "restarting"`. Failure is `{ "targetVersion": "0.9.99", "state": "failed", "message": "…" }`;
+  a failed operation may be retried. There is no progress event.
+- After installation the daemon re-verifies the sitter and sends restart-only
+  `SIGHUP`, without a channel check. Clients poll status, tolerate the restart
+  disconnect, reconnect using existing credentials/fingerprint, and confirm
+  `system.status.version` equals the requested target before reporting success.
+  An unrelated concurrent update may win; a reconnected version mismatch is a
+  failure, not successful completion of the exact request. Polling must be bounded.
+
 #### `pairing.getInfo` (local-only)
 
 Returns the structured QR pairing payload so local clients (the `intentd pair` CLI, desktop GUI) can render a QR code for LAN pairing.
