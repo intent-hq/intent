@@ -1617,7 +1617,13 @@ done) without waiting for the next `workspace.list`; registering a root that alr
 carries PR data and unregistering a PR-bearing root (`ws.git.registerRoot` /
 `ws.git.unregisterRoot`, and the sweep's auto-prune of a missing path) recompute the
 same way, so removing the root lapses its rung back to the base rollup. An unchanged
-sweep emits nothing. Hook lifecycle transitions
+sweep emits nothing. The **`github.pulls.get` fold** (§5.27,
+[intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923)) is a recompute
+site too: a successful on-demand fetch is upserted into every workspace and git root
+referencing the PR by URL, and each persisted delta (the write that emits `pr:updated` /
+`gitRoot:updated`) recomputes-and-compares, so a hover-card read of a just-merged PR emits
+`pr_merged` without waiting for the next sweep; an unchanged or unreferenced PR emits
+nothing. Hook lifecycle transitions
 (intentd#856 established the sites): a hook **schedule** (a newly persisted active
 hook can raise `waiting`) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
 both the synchronous ops and the spawned-task run paths — so `waiting` drops when the
