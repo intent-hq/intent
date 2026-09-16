@@ -14,6 +14,8 @@ export const HINT =
 const USAGE = 'usage: check-makefile-targets.mjs [--makefile <path>] [--gitlink <sha>] [--intentd-dir <path>]';
 const INTENTD_MANIFEST = '$(INTENTD_DIR)/Cargo.toml';
 const SHELL_OPERATORS = ['&&', '||', ';', '|'];
+const SHELL_PREFIX_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '(']);
+const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
 
@@ -121,13 +123,22 @@ export function recipeCommands(logicalText) {
   return splitShellCommands(recipeBody(logicalText));
 }
 
+// A simple command from its command name on: leading shell reserved words,
+// group openers and NAME=value assignments are skipped.
+export function commandWords(words) {
+  let start = 0;
+  while (start < words.length && (SHELL_PREFIX_WORDS.has(words[start]) || SHELL_ASSIGNMENT.test(words[start]))) start += 1;
+  return words.slice(start);
+}
+
 // A command is rooted in intentd when it is `cd $(INTENTD_DIR)` or passes
 // `--manifest-path $(INTENTD_DIR)/Cargo.toml`.
 export function isIntentdRootedCommand(words) {
-  if (words[0] === 'cd' && words[1] === '$(INTENTD_DIR)') return true;
-  return words.some(
+  const command = commandWords(words);
+  if (command[0] === 'cd' && command[1] === '$(INTENTD_DIR)') return true;
+  return command.some(
     (word, index) =>
-      word === `--manifest-path=${INTENTD_MANIFEST}` || (word === '--manifest-path' && words[index + 1] === INTENTD_MANIFEST),
+      word === `--manifest-path=${INTENTD_MANIFEST}` || (word === '--manifest-path' && command[index + 1] === INTENTD_MANIFEST),
   );
 }
 
@@ -139,22 +150,23 @@ export function isIntentdRecipe(logicalText) {
 // Arguments after a bare `--` belong to the invoked binary and are skipped; an
 // echoed `cargo ...` hint is text, not an invocation.
 export function extractCargoReferences(words) {
-  const cargoIndex = words.indexOf('cargo');
+  const command = commandWords(words);
+  const cargoIndex = command.indexOf('cargo');
   if (cargoIndex === -1) return null;
-  if (words.slice(0, cargoIndex).includes('echo')) return null;
-  const subcommand = words.slice(cargoIndex + 1).find((word) => !word.startsWith('+'));
+  if (command.slice(0, cargoIndex).includes('echo')) return null;
+  const subcommand = command.slice(cargoIndex + 1).find((word) => !word.startsWith('+'));
   if (!CARGO_SUBCOMMANDS.has(subcommand)) return null;
   const packages = [];
   const tests = [];
-  for (let i = cargoIndex + 1; i < words.length; i += 1) {
-    const word = words[i];
+  for (let i = cargoIndex + 1; i < command.length; i += 1) {
+    const word = command[i];
     if (word === '--') break;
     if (word === '-p' || word === '--package') {
-      if (words[i + 1] !== undefined) packages.push(words[(i += 1)]);
+      if (command[i + 1] !== undefined) packages.push(command[(i += 1)]);
     } else if (word.startsWith('--package=')) {
       packages.push(word.slice('--package='.length));
     } else if (word === '--test') {
-      if (words[i + 1] !== undefined) tests.push(words[(i += 1)]);
+      if (command[i + 1] !== undefined) tests.push(command[(i += 1)]);
     } else if (word.startsWith('--test=')) {
       tests.push(word.slice('--test='.length));
     }

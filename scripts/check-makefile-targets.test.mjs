@@ -10,6 +10,7 @@ import {
   CheckError,
   HINT,
   createGitlinkReader,
+  commandWords,
   extractCargoReferences,
   hasTestTarget,
   isIntentdRecipe,
@@ -117,6 +118,32 @@ test('resolves quoted -p / --test / --package= / --test= values without their qu
     { line: 1, subcommand: 'test', packages: ['intent-core'], tests: ['fixed_sleep_lint'] },
     { line: 2, subcommand: 'test', packages: ['intent-core'], tests: ['event_type_lint'] },
     { line: 3, subcommand: 'build', packages: ['intentd'], tests: [] },
+  ]);
+});
+
+test('detects roots and cargo after shell control keywords, group openers and env assignments', () => {
+  assert.deepEqual(commandWords(['then', 'RUST_LOG=debug', 'cargo', 'test', 'A=1']), ['cargo', 'test', 'A=1']);
+  assert.deepEqual(commandWords(['{', 'cd', '$(INTENTD_DIR)']), ['cd', '$(INTENTD_DIR)']);
+  assert.deepEqual(commandWords(['echo', 'then']), ['echo', 'then']);
+  const makefile = [
+    'lint:',
+    '\tif true; then cd $(INTENTD_DIR) && cargo test -p intent-core --test does_not_exist; fi',
+    '\t{ cd $(INTENTD_DIR) && cargo test -p intent-core --test grouped; }',
+    '\t( cd $(INTENTD_DIR) && cargo test -p intent-core --test subshell )',
+    '\tcd $(INTENTD_DIR) && RUST_LOG=debug CARGO_TERM_COLOR=always cargo test -p intent-core --test env_prefixed',
+    '\tif test -d x; then RUST_LOG=debug cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p intentd --test manifest_prefixed; fi',
+    '\twhile true; do ! cd $(INTENTD_DIR) && cargo build -p intentd; done',
+    '\tif true; then echo "cd $(INTENTD_DIR) && cargo test -p nonexistent --test missing"; fi',
+    "\t{ echo 'cd $(INTENTD_DIR) && cargo test -p nonexistent --test missing'; }",
+    '',
+  ].join('\n');
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 2, subcommand: 'test', packages: ['intent-core'], tests: ['does_not_exist'] },
+    { line: 3, subcommand: 'test', packages: ['intent-core'], tests: ['grouped'] },
+    { line: 4, subcommand: 'test', packages: ['intent-core'], tests: ['subshell'] },
+    { line: 5, subcommand: 'test', packages: ['intent-core'], tests: ['env_prefixed'] },
+    { line: 6, subcommand: 'test', packages: ['intentd'], tests: ['manifest_prefixed'] },
+    { line: 7, subcommand: 'build', packages: ['intentd'], tests: [] },
   ]);
 });
 
@@ -357,19 +384,22 @@ test('CLI prints the success summary on a Makefile whose references exist at the
       '\tcd $(INTENTD_DIR) && cargo test -p foo --test flat;# cargo test -p nonexistent --test missing',
       '\tcd $(INTENTD_DIR) && cargo test -p foo --test flat && true;# cargo test -p foo --test nope',
       '\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test common',
+      '\tif true; then cd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test flat; fi',
+      '\t{ cd $(INTENTD_DIR) && cargo test -p bar-crate --test declared; }',
       '',
     ].join('\n'),
   );
   const result = runCli(root);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `checked 16 cargo references against intentd@${sha.slice(0, 7)}\n`);
+  assert.equal(result.stdout, `checked 20 cargo references against intentd@${sha.slice(0, 7)}\n`);
 });
 
 test('CLI exits 1 naming the Makefile line, path and pin for a missing target', (t) => {
   const { root, sha } = makeFixture(t);
   fs.writeFileSync(
     path.join(root, 'Makefile'),
-    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test flat\n',
+    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n\tcd $(INTENTD_DIR) && cargo test -p "foo" --test "quoted#missing"\n\tcd $(INTENTD_DIR) && cargo test -p foo -p bar-crate --test flat\n' +
+      '\tif true; then \\\n\t\tcd $(INTENTD_DIR) && RUST_LOG=debug cargo test -p foo --test conditional; \\\n\tfi\n',
   );
   const result = runCli(root);
   assert.equal(result.status, 1);
@@ -378,6 +408,7 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
     `Makefile:3: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n` +
       `Makefile:5: error: cargo test target 'silent' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/silent.rs not found\n` +
       `Makefile:6: error: cargo test target 'quoted#missing' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/quoted#missing.rs not found\n` +
-      `Makefile:7: error: cargo test target 'flat' (crate 'bar-crate') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/bar/tests/flat.rs not found\n${HINT}\n`,
+      `Makefile:7: error: cargo test target 'flat' (crate 'bar-crate') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/bar/tests/flat.rs not found\n` +
+      `Makefile:8: error: cargo test target 'conditional' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/conditional.rs not found\n${HINT}\n`,
   );
 });
