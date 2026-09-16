@@ -20,6 +20,7 @@ const SHELL_PREFIX_WORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while',
 const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
+const TOML_AUTOTESTS = /^autotests\s*=\s*(true|false)\b/;
 const GLOB_METACHARACTERS = /[*?[]/;
 
 export class CheckError extends Error {
@@ -257,6 +258,17 @@ export function parseTestTargetNames(cargoToml) {
     .filter((name) => name !== undefined);
 }
 
+// `[package] autotests = false` turns off cargo's tests/ auto-discovery; only
+// declared [[test]] targets remain. Defaults to true, as in cargo.
+export function parsePackageAutotests(cargoToml) {
+  const section = tomlSections(cargoToml).find((candidate) => candidate.name === 'package' && !candidate.array);
+  for (const line of section?.lines ?? []) {
+    const match = TOML_AUTOTESTS.exec(line);
+    if (match) return match[1] === 'true';
+  }
+  return true;
+}
+
 function git(args, { cwd } = {}) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
@@ -334,9 +346,11 @@ export function hasTestTarget(reader, crate, name) {
 }
 
 // Every test target cargo auto-discovers for a crate (tests/<name>.rs and
-// tests/<name>/main.rs) plus the [[test]] names declared in its manifest.
+// tests/<name>/main.rs, unless the package sets autotests = false) plus the
+// [[test]] names declared in its manifest.
 export function listTestTargets(reader, crate) {
   const names = new Set(parseTestTargetNames(crate.cargoToml));
+  if (!parsePackageAutotests(crate.cargoToml)) return [...names];
   for (const entry of reader.listTree(`${crate.dir}/tests`)) {
     const base = path.posix.basename(entry.path);
     if (entry.type === 'blob' && base.endsWith('.rs')) names.add(base.slice(0, -'.rs'.length));

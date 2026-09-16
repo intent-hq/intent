@@ -21,6 +21,7 @@ import {
   loadCrates,
   parseArguments,
   parseMakefile,
+  parsePackageAutotests,
   parsePackageName,
   parseTestTargetNames,
   resolveGitlink,
@@ -154,6 +155,18 @@ test('lists auto-discovered and declared test targets of a crate', () => {
   const declared = { ...crates.get('intent-core'), cargoToml: '[package]\nname = "intent-core"\n[[test]]\nname = "declared"\n' };
   assert.deepEqual(listTestTargets(reader, declared).sort(), ['declared', 'flat', 'nested']);
   assert.deepEqual(listTestTargets(fakeReader([]), crates.get('intentd')), []);
+});
+
+test('autotests = false drops auto-discovered tests/ targets but keeps declared [[test]] targets', () => {
+  assert.equal(parsePackageAutotests('[package]\nname = "x"\n'), true);
+  assert.equal(parsePackageAutotests('[package]\nname = "x"\nautotests = true\n'), true);
+  assert.equal(parsePackageAutotests('[package]\nname = "x"\nautotests = false # comment\n'), false);
+  assert.equal(parsePackageAutotests('[package]\nname = "x"\n[lib]\nautotests = false\n'), true, 'only the [package] table counts');
+  const reader = fakeReader(['crates/intent-core/tests/hidden_lint.rs', 'crates/intent-core/tests/nested_lint/main.rs']);
+  const off = { ...crates.get('intent-core'), cargoToml: '[package]\nname = "intent-core"\nautotests = false\n' };
+  assert.deepEqual(listTestTargets(reader, off), []);
+  const offDeclared = { ...off, cargoToml: `${off.cargoToml}[[test]]\nname = "declared_lint"\npath = "tests/hidden_lint.rs"\n` };
+  assert.deepEqual(listTestTargets(reader, offDeclared), ['declared_lint']);
 });
 
 test('tokenizes shell words quote-aware and splits on unquoted operators', () => {
@@ -416,6 +429,28 @@ test('fails a --test glob naming the pattern when no selected crate has a matchi
   assert.deepEqual(verifyInvocations(unscoped, crates, onlyElsewhere).failures, [
     "Makefile:7: error: cargo test pattern '*_lint' cannot be verified: the cargo invocation names no -p/--package crate and passes no --workspace",
   ]);
+});
+
+test('a --test glob ignores tests/ files of a crate with autotests = false unless declared as [[test]]', () => {
+  const invocations = [{ line: 8, subcommand: 'test', packages: [], tests: ['*_lint'], workspace: true }];
+  const reader = fakeReader(['crates/intent-core/tests/hidden_lint.rs']);
+  const off = new Map([
+    ['intent-core', { ...crates.get('intent-core'), cargoToml: '[package]\nname = "intent-core"\nautotests = false\n' }],
+  ]);
+  assert.deepEqual(verifyInvocations(invocations, off, reader), {
+    checked: 1,
+    failures: ["Makefile:8: error: cargo test pattern '*_lint' matches no test target in any workspace crate at pinned intentd gitlink aaaaaaa"],
+  });
+  const declared = new Map([
+    [
+      'intent-core',
+      {
+        ...crates.get('intent-core'),
+        cargoToml: '[package]\nname = "intent-core"\nautotests = false\n[[test]]\nname = "hidden_lint"\npath = "tests/hidden_lint.rs"\n',
+      },
+    ],
+  ]);
+  assert.deepEqual(verifyInvocations(invocations, declared, reader), { checked: 1, failures: [] });
 });
 
 test('a literal --test name still requires an exact target, never a partial match', () => {
