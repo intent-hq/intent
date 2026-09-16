@@ -8,7 +8,7 @@ Releases are built and published by the **Release Alpha** workflow in GitHub Act
 
 1. Reads the pinned intentd version from `intentd.version` and fetches the matching release asset via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/intentd`); it fails fast if the pinned release or its assets don't exist
 2. Builds the app for all four platforms in parallel jobs — macOS (arm64), Windows (x64), Linux (x64), Linux (arm64) — each with its staged `intentd` sidecar
-3. Signs and notarizes the macOS app using Apple Developer ID certificates (Windows and Linux artifacts are unsigned)
+3. Signs and notarizes the macOS app using Apple Developer ID certificates, and signs the Windows installer and portable exe via DigiCert KeyLocker as publisher `SHV Labs` (see [DEPLOYING.md](./DEPLOYING.md#platform-builds-and-runners); Linux artifacts are unsigned)
 4. Generates release notes from the `cloudlands-fe` commit range; the intentd section lists the intentd commit delta between the previous release's pin (recovered from the previous release's `release-manifest.json` asset) and the current pin — falling back to a pin-only link when the previous pin can't be recovered, or to the pin line + compare link without a commit list when the intentd compare API is unavailable
 5. Publishes artifacts to `intent-hq/cloudlands-releases` on GitHub, including:
    - macOS DMG installer + ZIP archive (+ blockmaps), Windows NSIS + portable `.exe` (+ blockmap), Linux AppImage/`.deb`

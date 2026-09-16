@@ -114,7 +114,17 @@ Release workflows require the following secrets configured on `intent-hq/cloudla
 - `RELEASE_PAT` — Personal access token with `repo` scope on `cloudlands-fe` + `cloudlands-releases` (also used by release-please, which needs contents + pull-requests + issues write; `repo` scope covers all three)
 - `INTENTD_READ_PAT` — Personal access token with read-only access to `intent-hq/intentd` (used to download the pinned intentd release assets while the repo is private)
 
-Windows builds require no signing secrets — they ship **unsigned** (see
+**Windows signing (DigiCert KeyLocker):**
+
+- `INTENT_WINDOWS_SM_API_KEY` — DigiCert Software Trust Manager API key
+- `INTENT_WINDOWS_SM_CLIENT_CERT_FILE_B64` — base64-encoded PKCS#12 client authentication certificate
+- `INTENT_WINDOWS_SM_CLIENT_CERT_PASSWORD` — client certificate password
+
+Plus two repository **variables** (not secrets): `INTENT_WINDOWS_SM_HOST` (the
+Software Trust Manager host URL) and `INTENT_WINDOWS_SM_KEYPAIR_ALIAS` (the
+KeyLocker keypair alias to sign with). All five are consumed by the `build-windows`
+job of `release-alpha.yml` and by the Windows leg of `manual-signed-build.yml`; a
+missing one **fails the job** before the build starts (see
 [Platform builds and runners](#platform-builds-and-runners)).
 
 ## Alpha Release Workflow
@@ -130,7 +140,7 @@ The alpha release workflow is defined in `.github/workflows/release-alpha.yml`.
 **What it does:**
 
 1. A resolve/validate job resolves the release tag (from the tag push, or the dispatch input), validates its format (supports prerelease suffixes like `v1.2.3-beta.1`), verifies the tag matches the `package.json` version at that commit (guards against tags not created by release-please), and fails if a `v{version}` release already exists on `intent-hq/cloudlands-releases` (duplicate-release protection)
-2. **Per-platform build jobs** run in parallel (see [Platform builds and runners](#platform-builds-and-runners) for runners and artifacts). Each job checks out the release tag, sets up pnpm and Node.js 22, installs frontend dependencies, reads the pinned intentd version from `intentd.version`, fetches the pinned intentd sidecar for its platform/arch via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/`; fails fast if the pinned release or its assets don't exist on `intent-hq/intentd`), then builds and packages the app. The macOS job additionally imports the code signing certificate into a temporary keychain and signs + notarizes the app via the `scripts/notarize.js` afterSign hook (the staged sidecar is signed by the `scripts/sign-sidecar.js` afterPack hook); Windows and Linux artifacts are unsigned
+2. **Per-platform build jobs** run in parallel (see [Platform builds and runners](#platform-builds-and-runners) for runners and artifacts). Each job checks out the release tag, sets up pnpm and Node.js 22, installs frontend dependencies, reads the pinned intentd version from `intentd.version`, fetches the pinned intentd sidecar for its platform/arch via `scripts/fetch-sidecar.cjs` (sha256-verified, staged at `resources/sidecar/`; fails fast if the pinned release or its assets don't exist on `intent-hq/intentd`), then builds and packages the app. The macOS job additionally imports the code signing certificate into a temporary keychain and signs + notarizes the app via the `scripts/notarize.js` afterSign hook (the staged sidecar is signed by the `scripts/sign-sidecar.js` afterPack hook). The Windows job signs the NSIS installer, the portable exe and the main app exe with DigiCert KeyLocker via the `scripts/windows-sign.cjs` sign hook, then validates `latest.yml` against the signed installer and verifies both shipped executables' Authenticode signatures (see [Platform builds and runners](#platform-builds-and-runners)). Linux artifacts are unsigned
 3. A **publish job** runs only after **every** build job succeeds — any platform build failure fails the whole release; there is no partial publish. It generates release notes from the fe commit range (the intentd section lists the intentd commit delta from the previous release's pin, recovered from the previous release's `release-manifest.json` asset — falling back to a pin-only reference when the previous pin can't be recovered, or to the pin line + compare link without a commit list when the intentd compare API is unavailable) and publishes all platforms' artifacts to `intent-hq/cloudlands-releases`:
    - Creates immutable versioned release: `v{version}`
    - Updates rolling `beta` release tag (clobbers existing assets)
@@ -182,7 +192,13 @@ Notes:
 
 - **Self-hosted runner dependency**: both Linux jobs require their self-hosted runners (`tinybox` for x64 — monorepo#1340, `comfy` for arm64) to be online; a release run queues (and eventually fails) if one is unavailable. macOS uses a GitHub-hosted runner and Windows an org-hosted runner.
 - **Linux arm64 temporarily ships AppImage-only**: electron-builder's bundled fpm fails to spawn on the arm64 runner, so `deb:arm64` is disabled until the runner issue is resolved (monorepo#1286).
-- **Windows builds are unsigned** (first iteration). The `scripts/windows-sign.cjs` sign hook silently skips signing when `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING` is unset; DigiCert integrated signing in releases is a follow-up. Expect SmartScreen warnings on install.
+- **Windows builds are signed** with DigiCert KeyLocker as publisher **SHV Labs** (`win.signtoolOptions.publisherName` in `electron-builder.yml`; intent-hq/intent#1296). Signing is unconditional in `build-windows`:
+  1. A **credential gate** checks the three `INTENT_WINDOWS_SM_*` secrets and two variables listed under [Required GitHub Secrets](#required-github-secrets) and fails the job — before the slow build — if any is unset. A release never falls back to an unsigned installer.
+  2. The base64 client certificate is decoded into `$RUNNER_TEMP` and `digicert/code-signing-software-trust-action@v1` installs `smctl`.
+  3. electron-builder runs with `INTENT_WINDOWS_ENABLE_INTEGRATED_SIGNING=true`, so the `scripts/windows-sign.cjs` sign hook signs the main app exe, the NSIS installer (`Intent.Setup.<version>.exe`) and the portable exe (`Intent.<version>.exe`) via `smctl`; NSIS helper stubs are skipped and not published.
+  4. **In-job validation**: `latest.yml` must name the installer and carry its actual sha512 (electron-builder hashes after signing; a stale hash would break every updater download), and `Get-AuthenticodeSignature` must report a `Valid` signature on both shipped executables whose signer CN equals `publisherName` (read from `electron-builder.yml` so the two cannot drift).
+  5. The decoded certificate file is deleted (`rm -f`, not a secure wipe) in an `always()` cleanup step; the hosted runner VM is ephemeral, so nothing outlives the job.
+- **One-time manual reinstall for pre-signing Windows alpha installs**: electron-updater verifies a downloaded installer's signature against the `publisherName` baked into the installed app. Installs from the unsigned alpha builds (publisher `Clement Pang`) reject the first `SHV Labs`-signed update, so those machines must download and install the signed installer manually once; updates continue automatically from then on. For the same reason, never ship an unsigned (or differently-signed) Windows build after a signed one.
 - **Linux packages are unsigned** (standard for AppImage/deb distributed outside a package repository). Snap is not built or published.
 - macOS remains signed + notarized as before.
 
@@ -216,7 +232,11 @@ The packaged artifacts (`.dmg`/`.zip`, `.exe`, AppImage/`.deb`) will be in `dist
 `.github/workflows/manual-signed-build.yml` ("Manual Signed Build") is dispatch-only
 and builds any branch/ref — e.g. a PR branch — into platform installers for manual
 testing. Platforms are opt-in (`build_macos` / `build_windows` / `build_linux`);
-`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert).
+`sign` defaults to true (macOS Developer ID + notarization, Windows DigiCert
+KeyLocker — the same steps and `INTENT_WINDOWS_SM_*` credentials as the
+`build-windows` release job, gated on the `sign` input). This is the route for a
+**signed Windows test build** of a PR branch, e.g. to confirm SmartScreen shows
+the `SHV Labs` publisher before a release; `sign: false` produces unsigned builds.
 Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is produced.
