@@ -71,6 +71,45 @@ paths:
 `intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
 immediately.
 
+### Cutting a sitter release
+
+The sitter (`crates/intentd-sitter`, installed as `intentd`) is `dist = false`: the
+daemon's cargo-dist pipeline (`release.yml`) never builds it and release-plz never tags
+it. It ships through its own hand-written pipeline,
+[`release-sitter.yml`](../packages/intentd/.github/workflows/release-sitter.yml),
+triggered by pushing a `sitter-vX.Y.Z` tag.
+
+- **Versioning** — the sitter keeps an independent `0.1.x` line. release-plz advances
+  `crates/intentd-sitter/Cargo.toml` in the ordinary intentd Release PR whenever sitter
+  files changed since the last daemon tag (see the `intentd-sitter` entry in
+  [`release-plz.toml`](../packages/intentd/release-plz.toml)), so no manual bump is
+  needed; the workflow fails if the tag does not match the crate version.
+- **Procedure** — after the Release PR that bumped the sitter version has merged, tag
+  that `main` commit `sitter-v<Cargo.toml version>` and push the tag:
+
+  ```bash
+  cd packages/intentd && git fetch origin
+  git tag sitter-v<version> <main-commit> && git push origin sitter-v<version>
+  ```
+
+- **What the run does** — builds the sitter for the same 5 targets as the daemon,
+  packages archives named like daemon archives, publishes a GitHub Release on the tag
+  (never marked "latest"), refreshes the fixed `sitter-latest` release (archives,
+  `install.sh` / `install.ps1`), builds `.deb`s, mirrors everything to
+  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) (skipped
+  with a warning without `INTENTD_RELEASES_TOKEN`), and pushes the Homebrew formula
+  to `intent-hq/homebrew-tap` (skipped on prereleases).
+- **No self-update** — running installs pick a new sitter up only by reinstalling
+  (`install.sh` one-liner, `brew upgrade`, `.deb`; see the intentd README install
+  section). Daemon work that needs a newer sitter — e.g. the idle-triggered handshake
+  above, which requires the sitter to advertise the capability — is inert on installs
+  still running an older sitter. Incident: the sitter changes merged in intentd #1920
+  were assumed covered by the last sitter release (`sitter-v0.1.8`, cut before them),
+  and `sitter-v0.1.14` had to be cut afterwards.
+- **Is a sitter release pending?** — a non-empty
+  `git log sitter-v<last>..origin/main -- crates/intentd-sitter` (ignoring
+  `chore: release` commits) means unreleased sitter work.
+
 ## cloudlands-fe
 
 - The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
