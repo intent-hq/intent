@@ -70,8 +70,8 @@ Version 10.2 is an **additive** minor bump over 10.1: it adds two **always-prese
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.2", server: { protocolVersion: "10.2", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.2", ... }`
+- `client.hello` response: `{ protocolVersion: "10.3", server: { protocolVersion: "10.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.3", ... }`
 
 ### Compatibility Policy
 
@@ -79,4 +79,3 @@ The protocol version is advertised in two places:
 - **Breaking changes** (removed methods, changed signatures, renamed fields) bump the **major** version (e.g., 2.0 → 3.0).
 
 The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`. Any drift (added, removed, or renamed methods) causes CI failure with the instruction: "Update ROUTER_METHODS in catalog.rs, update docs/protocol/05-method-catalog.md, and bump the protocol version." Additive response fields on an existing method (e.g., the optional `system.status` resource fields, §5 fast-path notes) do not change the golden-test-enforced catalog and ship within the current version; clients must detect them by **presence**, not by protocol version.
-
