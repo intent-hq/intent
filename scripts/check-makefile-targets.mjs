@@ -14,7 +14,7 @@ export const HINT =
 const USAGE = 'usage: check-makefile-targets.mjs [--makefile <path>] [--gitlink <sha>] [--intentd-dir <path>]';
 const INTENTD_ROOT_MARKERS = [/\bcd\s+"?\$\(INTENTD_DIR\)"?\s+&&/, /--manifest-path[= ]"?\$\(INTENTD_DIR\)"?\/Cargo\.toml/];
 const SHELL_SEPARATOR = /\s*(?:&&|\|\||;|\|)\s*/;
-const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?$/;
+const TOML_HEADER = /^(\[\[?)\s*([^\]\s]+)\s*\]\]?\s*(?:#.*)?$/;
 const TOML_NAME = /^name\s*=\s*(?:"([^"]*)"|'([^']*)')/;
 
 export class CheckError extends Error {
@@ -46,9 +46,30 @@ export function joinContinuations(text) {
   return logical;
 }
 
+// The recipe body without the tab and Make's leading `@` / `-` / `+` flags.
+export function recipeBody(logicalText) {
+  return logicalText.slice(1).replace(/^[\s@\-+]+/, '');
+}
+
+// Drops an unquoted `#` comment (one that starts a word) from a shell line.
+export function stripShellComment(text) {
+  let quote = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === '#' && (i === 0 || /\s/.test(text[i - 1]))) {
+      return text.slice(0, i);
+    }
+  }
+  return text;
+}
+
 export function isIntentdRecipe(logicalText) {
   if (!logicalText.startsWith('\t')) return false;
-  const body = logicalText.slice(1).replace(/^[\s@\-+]+/, '');
+  const body = recipeBody(logicalText);
   if (body.startsWith('#')) return false;
   return INTENTD_ROOT_MARKERS.some((marker) => marker.test(body));
 }
@@ -84,7 +105,7 @@ export function parseMakefile(text) {
   const invocations = [];
   for (const { line, text: logical } of joinContinuations(text)) {
     if (!isIntentdRecipe(logical)) continue;
-    for (const segment of logical.split(SHELL_SEPARATOR)) {
+    for (const segment of stripShellComment(recipeBody(logical)).split(SHELL_SEPARATOR)) {
       const references = extractCargoReferences(segment);
       if (references) invocations.push({ line, ...references });
     }

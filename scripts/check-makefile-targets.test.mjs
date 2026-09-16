@@ -19,6 +19,7 @@ import {
   parsePackageName,
   parseTestTargetNames,
   resolveGitlink,
+  stripShellComment,
   verifyInvocations,
 } from './check-makefile-targets.mjs';
 
@@ -92,6 +93,36 @@ test('accepts the --manifest-path form and multiple invocations on one recipe li
     { line: 1, subcommand: 'run', packages: ['intentd'], tests: [] },
     { line: 1, subcommand: 'build', packages: ['intent-core'], tests: [] },
   ]);
+});
+
+test('strips Make recipe flags so @cargo / -cargo invocations are still extracted', () => {
+  const makefile = [
+    'lint:',
+    '\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p intent-core --test does_not_exist',
+    '\t-cd $(INTENTD_DIR) && cargo test -p intent-core --test other',
+    '\t+@cd $(INTENTD_DIR) && cargo build -p intentd',
+    '',
+  ].join('\n');
+  assert.deepEqual(parseMakefile(makefile), [
+    { line: 2, subcommand: 'test', packages: ['intent-core'], tests: ['does_not_exist'] },
+    { line: 3, subcommand: 'test', packages: ['intent-core'], tests: ['other'] },
+    { line: 4, subcommand: 'build', packages: ['intentd'], tests: [] },
+  ]);
+});
+
+test('ignores unquoted inline shell comments but keeps quoted arguments', () => {
+  assert.equal(stripShellComment('cargo test -p a --test b # --test c'), 'cargo test -p a --test b ');
+  assert.equal(stripShellComment('cargo test -p a --test "b # c"'), 'cargo test -p a --test "b # c"');
+  assert.equal(stripShellComment("echo 'x # y' # z"), "echo 'x # y' ");
+  assert.equal(stripShellComment('cargo test -p a --test b#c'), 'cargo test -p a --test b#c');
+  assert.deepEqual(parseMakefile('\tcd $(INTENTD_DIR) && cargo test -p intent-core --test real # --test does_not_exist\n'), [
+    { line: 1, subcommand: 'test', packages: ['intent-core'], tests: ['real'] },
+  ]);
+});
+
+test('accepts TOML table headers with trailing comments', () => {
+  assert.equal(parsePackageName('[package] # comment\nname = "intent-core"\n'), 'intent-core');
+  assert.deepEqual(parseTestTargetNames('[package]\nname="intent-core"\n[[test]] # comment\nname="declared"\n'), ['declared']);
 });
 
 test('reads the package name and [[test]] target names from Cargo.toml', () => {
@@ -235,12 +266,13 @@ test('CLI exits 1 naming the Makefile line, path and pin for a missing target', 
   const { root, sha } = makeFixture(t);
   fs.writeFileSync(
     path.join(root, 'Makefile'),
-    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n',
+    'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat # --test not_a_reference\n\tcd $(INTENTD_DIR) && \\\n\t\tcargo test -p foo --test uncommitted\n\t@cargo test --manifest-path $(INTENTD_DIR)/Cargo.toml -p foo --test silent\n',
   );
   const result = runCli(root);
   assert.equal(result.status, 1);
   assert.equal(
     result.stderr,
-    `Makefile:3: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n${HINT}\n`,
+    `Makefile:3: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n` +
+      `Makefile:5: error: cargo test target 'silent' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/silent.rs not found\n${HINT}\n`,
   );
 });
