@@ -520,8 +520,8 @@ with the PR-refresh and git-root sweeps: a quota-exhausted forge read — the
 observation or PR read itself or any secondary checklist / branch-rules /
 comment read, except the branch-rules read nested inside GitHub's per-signal
 `merge_requirements` probe, which degrades every failure to `rulesKnown:
-false` without pausing — pauses all forge-touching sweep work until the
-forge-reported reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
+false` without pausing (monorepo#5281) — pauses all forge-touching sweep
+work until the forge-reported reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
 reported reset), stamping the pause deadline as `lastError` on every active
 monitor across workspaces (`Store::annotate_active_pr_monitors_pause`), and
 the gate is re-consulted before every fetch within a sweep so a pause opened
