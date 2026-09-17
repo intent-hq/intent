@@ -481,24 +481,61 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
 becomes due after an effective interval (the minimum time between two polls of
 one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
-up to the next `pollSeconds` tick) stretched so the loop is modelled to spend at most
-the live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
-minimum 60, maximum 5000; each PR poll costed at 3 REST calls — a cadence
-**cost model**, not a hard ceiling: no request is counted or blocked against
-it, and actual spend can differ — the 3-call unit is a single-page estimate,
-so paginated review lists and degraded-path REST fallbacks cost more, while
-GraphQL reads ride their own quota), fetching a capped oldest-first subset per tick so
-a large monitor set is spread across ticks instead of burst-fetched, and
-honouring the global forge rate-limit gate (`services::rate_limit`,
-monorepo#2961) shared with the PR-refresh and git-root sweeps: a
-quota-exhausted forge read — the PR read itself or any secondary checklist /
-comment read — pauses all PR-monitor polling until the window resets,
-recording the pause as `lastError` on the affected monitors, and the gate
-is re-consulted before every fetch within a sweep so a pause opened by a
-sibling sweep stops the in-flight sweep too — diffs the
-merge-requirements checklist
+up to the next `pollSeconds` tick) planned as the larger of two cadences
+(`effective_pr_monitor_interval_secs` / `plan_quota_cadence`): the
+hourly-budget cadence, stretched so the loop is modelled to spend at most the
+live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
+minimum 60, maximum 5000; each PR poll costed at `PR_MONITOR_REQUESTS_PER_POLL`
+= 3 calls — a cadence **cost model**, not a hard ceiling: no request is counted
+or blocked against it, and actual spend can differ — the 3-call unit is a
+single-page planning constant, so the folded observation spends less and
+paginated review lists / degraded-path REST fallbacks more), and the quota
+cadence (intentd#1948): each due-sweep tick spends one quota-free
+`rate_limit` probe and stretches the interval so the projected spend to the
+window's reset stays within the live `prMonitor.quotaSharePercent` (default
+50, minimum 1, maximum 100) of the forge's REMAINING quota, rounded up to
+whole ticks — and defers polling entirely, however stale or catch-up-marked
+the monitors, once that share cannot pay for one fetch (a failed probe or a
+host without the signal falls back to the hourly budget alone). Each tick
+fetches a capped oldest-first subset of the due PRs
+(`pr_monitor_fetches_per_tick`) so a large monitor set is spread across ticks
+instead of burst-fetched; while a stretched interval spaces fetches further
+apart than one tick, the cap is zero until that spacing has elapsed since the
+newest `lastPolledAt`, so a stale backlog (restart, outage, quota stretch)
+drains within the planned budget — a hold measured from the persisted stamps,
+needing no spend counter. On GitHub one poll is a single GraphQL
+`pr_observation` (PR record, merge-requirement signals, reviews and review
+threads within bounded windows, conversation-comment count; `rateLimit.cost`
+1) plus a REST `branch_rules` read — 2 reads where the per-signal sequence
+cost 6 (intentd#1949); an outgrown window takes the paged per-signal read
+for that piece only, a failed folded read (other than quota exhaustion) falls
+back to the per-signal reads, and a fingerprint-unchanged cheap poll reuses
+the previous full fetch for up to 5 polls / 15 minutes. The loop honours the
+global forge rate-limit gate (`services::rate_limit`, monorepo#2961) shared
+with the PR-refresh and git-root sweeps: a quota-exhausted forge read — the
+observation or PR read itself or any secondary checklist / branch-rules /
+comment read — pauses all forge-touching sweep work until the forge-reported
+reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
+reported reset), stamping the pause deadline as `lastError` on every active
+monitor across workspaces (`Store::annotate_active_pr_monitors_pause`), and
+the gate is re-consulted before every fetch within a sweep so a pause opened
+by a sibling sweep stops the in-flight sweep too. While paused, each
+PR-monitor and PR-refresh tick re-probes `rate_limit` for free and lifts the
+pause early once `remaining ≥ max(500, 10% of limit)`
+(`maybe_lift_rate_limit_pause`, intentd#1945), clearing the annotations
+(`Store::clear_active_pr_monitors_pause`); the gate transition and its bulk
+stamp / clear run under the gate's reconcile lock, and the `pr_monitor` row
+is authoritative for the pause — a poll's guarded write-back lands only its
+genuine error part, composed in SQL with the row's current unexpired
+annotation (`PrMonitorPollUpdate::last_error`), never introducing, moving,
+or resurrecting one; boot rehydration strips annotations left by the
+previous process. Every `PrMonitor` wire projection carries the deadline as
+`pausedUntil` on ACTIVE rows while the gate is closed, monitor wakes carry it
+in their metadata, and `ws.pr.snapshot` samples it after its awaited forge
+reads (intentd#1954). Each poll diffs the merge-requirements checklist
 (checks, reviews, threads, mergeability, branch rules — composed in
-`pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
+`pr_ops::merge_requirements` / `merge_requirements_from_observation` with
+per-signal, never-fatal degradation) against
 the monitor's persisted **emit baseline** (the PR state as of the last
 delivered wake, or registration), and wakes the owning agent with a single
 consolidated notification once the PR has been quiet for
