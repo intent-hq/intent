@@ -818,12 +818,34 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns — binding only while the tree is over budget **and** host available memory is below `HOST_MEMORY_RESERVE_BYTES` (8 GiB + one provisional agent); see the headroom rule below. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
+- **The budget binds only when the host is short — a two-condition rule**
+  ([intent-hq/intentd#1947](https://github.com/intent-hq/intentd/pull/1947)).
+  `budget_admits` in `intent-services/src/agent_manager.rs` refuses a spawn
+  (and `evict_while_over_budget` drains idle trees) only while **both** hold:
+  the charged tree total is over budget **and** the host's available memory
+  (Linux `MemAvailable`, sampled in the same `system.status` sweep as the
+  tree) is below `HOST_MEMORY_RESERVE_BYTES` = 8 GiB + `PROVISIONAL_AGENT_BYTES`.
+  The tree total double-counts shared pages and includes every daemon
+  descendant (dev servers, test runs, headless browsers started through
+  `ws.script` / `host.exec`), so on a large host it crosses the budget —
+  auto or an explicit small value alike — while tens of gigabytes are still
+  free; an over-budget tree with that headroom is admitted without queueing
+  or eviction. **Strict fallback:** when the probe cannot read available
+  memory (`None` — non-Linux hosts, or before the first sample resolves it)
+  the budget denies on the tree alone, exactly the pre-#1947 behaviour. One
+  `TreeMemoryProbe::sample()` returns bytes, sample id and headroom from the
+  same sweep, so a decision never pairs one sweep's total with the next
+  sweep's headroom. The idle-reap sweep (`idleReapMinutes`) is independent
+  of this rule and still drains idle trees on its own TTL.
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
-  (monorepo#2063, validated end-to-end against real agents). Set to 1500 MB,
+  (monorepo#2063, validated end-to-end against real agents **under the strict
+  policy** — the tree-only criterion that is now the fallback above; on a
+  host with headroom the gate does not engage, so these figures describe the
+  host-short regime, not the common case on a large seat). Set to 1500 MB,
   a 20-agent simultaneous burst peaked at **3.06 GB** against **12.37 GB**
   unbounded, and settled at 1.73 GB against 11.56 GB; the same-budget 8-agent
   burst peaked at 2.47 GB and 3.09 GB across two runs — i.e. **the bound does
@@ -834,10 +856,11 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   `PROVISIONAL_AGENT_BYTES` = 660 MB, and `budget_pending_bytes` resets when a
   new sample seq lands while a just-spawned agent's RSS is still ramping —
   `ProcessRegistry` in `intent-services/src/agent_manager.rs`), so it is a
-  **fixed offset, not proportional to demand**: budget for roughly 2× the
-  configured value as the transient. That sizing rule covers the **admission**
-  transient the measurement exercised — a burst of comparable agents — and is
-  not a runtime ceiling. The gate runs at spawn only: an already-admitted
+  **fixed offset, not proportional to demand**: when the gate is engaged,
+  budget for roughly 2× the configured value as the transient. That sizing
+  rule covers the **admission** transient the measurement exercised — a burst
+  of comparable agents with the host short — and is not a runtime ceiling.
+  The gate runs at spawn only: an already-admitted
   agent whose own workload grows (the 9.6 GB `vitest` case above) is never
   re-checked and can carry the tree past the budget by itself, and the gate's
   only lever against that is refusing later spawns and evicting idle trees.
