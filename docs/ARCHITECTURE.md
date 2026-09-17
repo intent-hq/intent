@@ -827,20 +827,25 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   `budget_admits` in `intent-services/src/agent_manager.rs` refuses a spawn
   (and `evict_while_over_budget` drains idle trees) only while **both** hold:
   the charged tree total is over budget **and** the host's available memory
-  (Linux `MemAvailable`, sampled in the same `system.status` sweep as the
-  tree) is below `HOST_MEMORY_RESERVE_BYTES` = 8 GiB + `PROVISIONAL_AGENT_BYTES`.
+  (`sysinfo` available memory, read in the same published `system.status`
+  sweep as the tree) is below `HOST_MEMORY_RESERVE_BYTES` = 8 GiB +
+  `PROVISIONAL_AGENT_BYTES`.
   The tree total double-counts shared pages and includes every daemon
   descendant (dev servers, test runs, headless browsers started through
   `ws.script` / `host.exec`), so on a large host it crosses the budget —
   auto or an explicit small value alike — while tens of gigabytes are still
   free; an over-budget tree with that headroom is admitted without queueing
-  or eviction. **Strict fallback:** when the probe cannot read available
-  memory (`None` — non-Linux hosts, or before the first sample resolves it)
-  the budget denies on the tree alone, exactly the pre-#1947 behaviour. One
-  `TreeMemoryProbe::sample()` returns bytes, sample id and headroom from the
-  same sweep, so a decision never pairs one sweep's total with the next
-  sweep's headroom. The idle-reap sweep (`idleReapMinutes`) is independent
-  of this rule and still drains idle trees on its own TTL.
+  or eviction. **Strict fallback:** when a published tree sample carries no
+  headroom reading (`available_memory: None` — the host's available-memory
+  sampling is unsupported or failed, so `sysinfo` reported zero) the budget
+  denies on the tree alone, exactly the pre-#1947 behaviour. This is
+  distinct from having no tree sample yet: before the first published sweep
+  lands, `budget_denies` returns no denial at all, so the gate stays inert
+  rather than strict. One `TreeMemoryProbe::sample()` returns bytes, sample
+  id and headroom from the same sweep, so a decision never pairs one sweep's
+  total with the next sweep's headroom. The idle-reap sweep
+  (`idleReapMinutes`) is independent of this rule and still drains idle
+  trees on its own TTL.
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
   (monorepo#2063, validated end-to-end against real agents **under the strict
   policy** — the tree-only criterion that is now the fallback above; on a

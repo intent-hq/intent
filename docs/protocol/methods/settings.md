@@ -9,7 +9,7 @@
 | settings.list | — | { settings: SettingDefinitionWithValue[], revision: number } (sensitive values redacted; TOML-backed entries carry `origin`) |
 | settings.get | path (req) | { path, value, definition, origin?, revision: number } — -32602 if path is unknown |
 | settings.update | changes (req, array of { path, value, reason? }) | { applied: [{ path, value, origin? }], revision: number }; triggers settings:changed |
-| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue) — -32602 if path is unknown |
+| settings.reset | path (req) | { path, value, origin?, revision: number } (restores defaultValue, except for absent-means-auto keys — see below — where it removes the key and returns `value: null`) — -32602 if path is unknown |
 
 `SettingDefinition`** shape:**
 
@@ -23,7 +23,7 @@ interface SettingDefinition {
   enumValues?: string[];  // present when type === "enum"
   min?: number;           // numeric bound (type === "number")
   max?: number;           // numeric bound (type === "number")
-  defaultValue?: unknown; // value used by settings.reset
+  defaultValue?: unknown; // value used by settings.reset (informational only for absent-means-auto keys, see below)
   sensitive?: boolean;    // when true, value is redacted in settings.list / settings.get
   tokenImpact?: string;   // approximate prompt-token cost of the gated feature, e.g. "~620 tokens/session"; presence-detected (absent when unannotated)
 }
