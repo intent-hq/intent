@@ -492,19 +492,23 @@ single-page planning constant, so the folded observation spends less and
 paginated review lists / degraded-path REST fallbacks more), and the quota
 cadence (intentd#1948): each due-sweep tick spends one quota-free
 `rate_limit` probe and stretches the interval so the projected spend to the
-window's reset stays within the live `prMonitor.quotaSharePercent` (default
-50, minimum 1, maximum 100) of the forge's REMAINING quota, rounded up to
-whole ticks — and defers polling entirely, however stale or catch-up-marked
-the monitors, once that share cannot pay for one fetch (a failed probe or a
-host without the signal falls back to the hourly budget alone). Each tick
+window's reset (capped at 2h) stays within the live
+`prMonitor.quotaSharePercent` (default 50, minimum 1, maximum 100) of the
+forge's REMAINING quota — `allowed = floor(remaining × share / 100)` in
+integer arithmetic, interval `ceil(distinctPRs × 3 × secondsToReset /
+allowed)`, rounded up to whole ticks — and defers polling entirely, however
+stale or catch-up-marked the monitors, once `allowed < 3` (a failed probe or
+a host without the signal falls back to the hourly budget alone). Each tick
 fetches a capped oldest-first subset of the due PRs
 (`pr_monitor_fetches_per_tick`) so a large monitor set is spread across ticks
 instead of burst-fetched; while a stretched interval spaces fetches further
 apart than one tick, the cap is zero until that spacing has elapsed since the
 newest `lastPolledAt`, so a stale backlog (restart, outage, quota stretch)
 drains within the planned budget — a hold measured from the persisted stamps,
-needing no spend counter. On GitHub one poll is a single GraphQL
-`pr_observation` (PR record, merge-requirement signals, reviews and review
+needing no spend counter, and keyed on the final interval alone, so a
+budget-derived stretch holds even with unknown or plentiful quota. On GitHub
+one poll is a single GraphQL `pr_observation` (PR record,
+merge-requirement signals, reviews and review
 threads within bounded windows, conversation-comment count; `rateLimit.cost`
 1) plus a REST `branch_rules` read — 2 reads where the per-signal sequence
 cost 6 (intentd#1949); an outgrown window takes the paged per-signal read
@@ -514,8 +518,10 @@ the previous full fetch for up to 5 polls / 15 minutes. The loop honours the
 global forge rate-limit gate (`services::rate_limit`, monorepo#2961) shared
 with the PR-refresh and git-root sweeps: a quota-exhausted forge read — the
 observation or PR read itself or any secondary checklist / branch-rules /
-comment read — pauses all forge-touching sweep work until the forge-reported
-reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
+comment read, except the branch-rules read nested inside GitHub's per-signal
+`merge_requirements` probe, which degrades every failure to `rulesKnown:
+false` without pausing — pauses all forge-touching sweep work until the
+forge-reported reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
 reported reset), stamping the pause deadline as `lastError` on every active
 monitor across workspaces (`Store::annotate_active_pr_monitors_pause`), and
 the gate is re-consulted before every fetch within a sweep so a pause opened
@@ -523,7 +529,12 @@ by a sibling sweep stops the in-flight sweep too. While paused, each
 PR-monitor and PR-refresh tick re-probes `rate_limit` for free and lifts the
 pause early once `remaining ≥ max(500, 10% of limit)`
 (`maybe_lift_rate_limit_pause`, intentd#1945), clearing the annotations
-(`Store::clear_active_pr_monitors_pause`); the gate transition and its bulk
+(`Store::clear_active_pr_monitors_pause`) at once — `pausedUntil` is derived
+from the in-memory gate and vanishes as soon as it opens, by lift or expiry,
+while an expired annotation waits for the row's next write-back and
+`lastSnapshot` for the next successful poll; a fetch that hits quota
+exhaustion after a lift spends its own free reset probe when re-pausing
+(`pause_sweeps_for_rate_limit`); the gate transition and its bulk
 stamp / clear run under the gate's reconcile lock, and the `pr_monitor` row
 is authoritative for the pause — a poll's guarded write-back lands only its
 genuine error part, composed in SQL with the row's current unexpired
