@@ -54,7 +54,7 @@ delete cascade). The FE
 
 | Method | Params | Result |
 | --- | --- | --- |
-| hook.list | workspaceId (req) | `{ hooks: Hook[] }` — every hook in the workspace, all states |
+| hook.list | workspaceId (req), includeRetired? (bool, default `false`) | `{ hooks: Hook[] }` — oldest first. By default the **active** hooks only (`scheduled` / `running`), each a full Hook (`code` included). With `includeRetired: true` the retired rows (`dispatched` / `evicted` / `cancelled` / `expired`) are listed too, as a **light projection** — `code`, `lastState`, `lastLogs` omitted; every other Hook field kept (within v10.2, [intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307) — see "Active-only default" below) |
 | hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the wire path may cancel **any** hook in the workspace and the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake — see the ownership scoping below) |
 | hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run (a `cron` hook's next fire is recomputed from the expression; a `runAt` hook fires its one shot early and retires — schedule-kinds block below) |
 
@@ -107,7 +107,26 @@ a hook wake is always bounded in size (the cap bounds the wake itself; it does n
 guarantee the provider has context room for it; `lastError` itself is persisted
 verbatim). `hook:*` event payloads (§6.5) stay light
 and do **not** carry `lastLogs` or `lastState` (they do carry `perpetual`/`dispatchCount`);
-clients read the heavy fields via `hook.list`.
+clients read the heavy fields via `hook.list` (active rows) or `ws.hook.get` (any row).
+
+**Active-only default and the light retired projection** (within v10.2 — additive
+optional param plus a narrowed default, no method-catalog change;
+[intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307)). Retired hook
+rows are never pruned, so a long-lived workspace accumulates hundreds of them, each with
+its full `code` and `lastState`; listing them all on every read (the FE hook chip row
+polls `hook.list`) inflated the frame past the large-frame warning threshold. `hook.list`
+(and the MCP `ws.hook.list`) therefore returns **only the active hooks by default** —
+`scheduled` / `running`, as full Hook rows because the FE's expanded chip view reads
+`code` — and takes an optional `includeRetired` (boolean, default `false`). With
+`includeRetired: true` the terminal rows are appended in the same oldest-first order as a
+**light projection**: `code`, `lastState` and `lastLogs` are omitted (presence-detected —
+absent, never `null`), while `hookId`, `workspaceId`, `agentId`, `name`, `delayMs` /
+`cron` / `runAt`, `state`, `createdAt`, `expiresAt`, `lastRunAt`, `nextRunAt`, `runCount`,
+`perpetual`, `dispatchCount` and `lastError` are kept, so history views and re-arm
+decisions still have everything but the script. `ws.hook.get(hookId)` remains the
+full-row recovery path for a retired hook's `code` and is unchanged. The MCP binding
+takes the flag as `ws.hook.list({ includeRetired: true })`; a bare `ws.hook.list()` stays
+valid and is the active-only read. Active rows are byte-for-byte unchanged in both modes.
 
 **Schedule kinds: `cron` and `runAt`** (within v8.7 — additive Hook wire fields plus
 MCP-only schedule params, no method-catalog change;
@@ -214,9 +233,9 @@ optional caller:
 
 The wire contract is untouched (`hook.cancel` params/result unchanged); the scoping is
 purely on the agent-facing MCP binding. Cross-agent hook cleanup is therefore a
-coordination act, not a unilateral one: `hook.list` returns every hook in the workspace
-with its owning `agentId`, so an agent that wants a sibling's hook stopped asks the owner
-(or the user does it from the FE) instead of cancelling it silently.
+coordination act, not a unilateral one: `hook.list` returns every active hook in the
+workspace with its owning `agentId`, so an agent that wants a sibling's hook stopped asks
+the owner (or the user does it from the FE) instead of cancelling it silently.
 
 Errors: a missing `workspaceId`/`hookId` and an unknown, foreign-workspace, or inactive
 (`cancel`/`runNow` on a non-active state) `hookId` all surface as `-32602` (§9;
@@ -229,10 +248,24 @@ applied by the internal `agent.subscribe`/`event.subscribe` aliases, §5.5/§5.1
 wire `events.subscribe` matches the `eventTypes` patterns as given, §6.4).
 
 ```json
-// → request
+// → request (active hooks only — the default)
 { "jsonrpc":"2.0","id":96,"method":"hook.list","params":{ "workspaceId":"ws-1" } }
 // ← response
 { "jsonrpc":"2.0","id":96,"result":{ "hooks":[
+  { "hookId":"hook-01…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch",
+    "code":"const s = await ws.pr.snapshot(887); if (hookState && JSON.stringify(s) !== JSON.stringify(hookState)) return { dispatch: true, message: 'PR #887 changed' }; return { dispatch: false, state: s };","delayMs":60000,"state":"scheduled",
+    "createdAt":"2026-07-31T10:00:00Z","expiresAt":"2026-07-31T11:00:00Z",
+    "lastRunAt":"2026-07-31T10:05:00Z",
+    "nextRunAt":"2026-07-31T10:06:00Z","runCount":6,"perpetual":false,"dispatchCount":0 } ] } }
+
+// → request (retired rows too, as the light projection)
+{ "jsonrpc":"2.0","id":97,"method":"hook.list","params":{ "workspaceId":"ws-1","includeRetired":true } }
+// ← response — the retired row carries no code / lastState / lastLogs
+{ "jsonrpc":"2.0","id":97,"result":{ "hooks":[
+  { "hookId":"hook-00…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch-old",
+    "delayMs":60000,"state":"dispatched",
+    "createdAt":"2026-07-31T09:00:00Z","expiresAt":"2026-07-31T10:00:00Z",
+    "lastRunAt":"2026-07-31T09:30:00Z","runCount":31,"perpetual":false,"dispatchCount":1 },
   { "hookId":"hook-01…","workspaceId":"ws-1","agentId":"agent-3f…","name":"ci-watch",
     "code":"const s = await ws.pr.snapshot(887); if (hookState && JSON.stringify(s) !== JSON.stringify(hookState)) return { dispatch: true, message: 'PR #887 changed' }; return { dispatch: false, state: s };","delayMs":60000,"state":"scheduled",
     "createdAt":"2026-07-31T10:00:00Z","expiresAt":"2026-07-31T11:00:00Z",
