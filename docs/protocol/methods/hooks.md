@@ -54,7 +54,7 @@ delete cascade). The FE
 
 | Method | Params | Result |
 | --- | --- | --- |
-| hook.list | workspaceId (req), includeRetired? (bool, default `false`) | `{ hooks: Hook[] }` — oldest first. By default the **active** hooks only (`scheduled` / `running`), each a full Hook (`code` included). With `includeRetired: true` the retired rows (`dispatched` / `evicted` / `cancelled` / `expired`) are listed too, as a **light projection** — `code`, `lastState`, `lastLogs` omitted; every other Hook field kept (within v10.2, [intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307) — see "Active-only default" below) |
+| hook.list | workspaceId (req), includeRetired? (bool, default `false`) | `{ hooks: (Hook \| HookSummary)[] }` — oldest first. By default the **active** hooks only (`scheduled` / `running`), each a full Hook (`code` included), so a default read is `{ hooks: Hook[] }`. With `includeRetired: true` the retired rows (`dispatched` / `evicted` / `cancelled` / `expired`) are listed too, each as a **HookSummary** — the light projection below with `code`, `lastState`, `lastLogs` omitted; every other Hook field kept (within v10.2, [intent-hq/intent#5307](https://github.com/intent-hq/intent/issues/5307) — see "Active-only default" below) |
 | hook.cancel | workspaceId (req), hookId (req) | `{ ok: true, hook }` — the cancelled Hook; the wire path may cancel **any** hook in the workspace and the owning agent is woken with a cancellation notice (an owner-initiated `ws.hook.cancel` does not self-wake — see the ownership scoping below) |
 | hook.runNow | workspaceId (req), hookId (req) | `{ ok: true, hookId }` — ack only; the triggered run's outcome surfaces as `hook:*` events. The hook's inter-run timer resets after the run (a `cron` hook's next fire is recomputed from the expression; a `runAt` hook fires its one shot early and retires — schedule-kinds block below) |
 
@@ -123,7 +123,12 @@ polls `hook.list`) inflated the frame past the large-frame warning threshold. `h
 absent, never `null`), while `hookId`, `workspaceId`, `agentId`, `name`, `delayMs` /
 `cron` / `runAt`, `state`, `createdAt`, `expiresAt`, `lastRunAt`, `nextRunAt`, `runCount`,
 `perpetual`, `dispatchCount` and `lastError` are kept, so history views and re-arm
-decisions still have everything but the script. `ws.hook.get(hookId)` remains the
+decisions still have everything but the script. That light row is the **HookSummary**
+shape — `Hook` minus `code`, `lastState` and `lastLogs`, with `state` always one of the
+four retired states — and the `hooks` array is therefore `(Hook | HookSummary)[]`:
+every active entry is a full `Hook`, every retired entry a `HookSummary`, and a consumer
+that validates or generates types from the Hook definition must accept both (a default
+read is still `Hook[]`). `ws.hook.get(hookId)` remains the
 full-row recovery path for a retired hook's `code` and is unchanged. The MCP binding
 takes the flag as `ws.hook.list({ includeRetired: true })`; a bare `ws.hook.list()` stays
 valid and is the active-only read. Active rows are byte-for-byte unchanged in both modes.
