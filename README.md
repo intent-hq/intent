@@ -96,6 +96,10 @@ make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install
 make build   # cargo build --workspace
 ```
 
+`make coverage-e2e` / `make coverage-all` additionally need cargo-llvm-cov and the
+llvm-tools-preview component; `make doctor` reports them as an `[optional]` row, and
+`BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host` installs them.
+
 Developing from a remote daemon host? Start with the one-screen
 [agent loop](AGENTS.md#developing-on-a-remote-host); use the
 [frontend recipes](packages/cloudlands-fe/AGENTS.md#dogfooding-a-dev-fe-against-a-daemon)

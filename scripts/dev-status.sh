@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # JSON schema:
-# {"host":{"doctorOk":bool,"gaps":[string]},"ports":{},"sandboxes":[],
+# {"host":{"doctorOk":bool,"gaps":[string],
+#  "coverageTooling":{"ready":bool,"detail":string}},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
 #  "pr?":{"number":int,"url":string,"state":string,
@@ -46,15 +47,37 @@ def run(command, *, cwd=root, env=None, timeout=3):
         return None
 
 
+COVERAGE_UNKNOWN = {"ready": False, "detail": "unknown"}
+
+
+def coverage_tooling(lines):
+    # Derived from the doctor's "[optional] cargo-llvm-cov: ..." row; ready only
+    # when both cargo-llvm-cov and llvm-tools-preview are present.
+    for line in lines:
+        detail = line.removeprefix("[optional] ").strip()
+        if line.startswith("[optional] ") and detail.startswith("cargo-llvm-cov:"):
+            return {"ready": "with llvm-tools-preview" in detail, "detail": detail}
+    return dict(COVERAGE_UNKNOWN)
+
+
 def doctor_status():
     result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"])
     if result is None:
-        return {"doctorOk": False, "gaps": ["doctor check could not complete"]}
+        return {
+            "doctorOk": False,
+            "gaps": ["doctor check could not complete"],
+            "coverageTooling": dict(COVERAGE_UNKNOWN),
+        }
+    lines = result.stdout.splitlines()
     gaps = []
-    for line in result.stdout.splitlines():
+    for line in lines:
         if line.startswith("[missing]  "):
             gaps.append(line.removeprefix("[missing]  ").strip())
-    return {"doctorOk": result.returncode == 0, "gaps": gaps}
+    return {
+        "doctorOk": result.returncode == 0,
+        "gaps": gaps,
+        "coverageTooling": coverage_tooling(lines),
+    }
 
 
 def port_status():
@@ -237,6 +260,16 @@ print("Intent worktree status")
 print(f"Host       doctor {'ok' if report['host']['doctorOk'] else 'has gaps'}")
 for gap in report["host"]["gaps"]:
     print(f"           gap: {gap}")
+coverage = report["host"]["coverageTooling"]
+if coverage["ready"]:
+    coverage_text = "cargo-llvm-cov ready"
+elif coverage["detail"] == "unknown":
+    coverage_text = "cargo-llvm-cov unknown"
+elif coverage["detail"].startswith("cargo-llvm-cov: not installed"):
+    coverage_text = "cargo-llvm-cov not installed"
+else:
+    coverage_text = "cargo-llvm-cov installed, llvm-tools-preview missing"
+print(f"Coverage   {coverage_text}")
 ports = report["ports"]
 print("Ports      " + "  ".join(f"{name}={value}" for name, value in ports.items()))
 if report["sandboxes"]:

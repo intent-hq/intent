@@ -132,7 +132,9 @@ line and writes state only after this gate succeeds; older frontend branches fal
 socket and HTTP readiness probes.
 
 `STATUS_JSON=1 make status` consumes these files and health responses into
-`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, `host.coverageTooling`
+(`{ready, detail}` from the doctor's `[optional] cargo-llvm-cov` row; `ready` only when
+cargo-llvm-cov and llvm-tools-preview are both present), submodule dirty and
 ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
 submodule HEAD has moved off it, and optional PR/check summaries when GitHub
 authentication is available. The report is read-only, including stale sandbox state.

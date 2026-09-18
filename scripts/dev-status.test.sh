@@ -65,9 +65,13 @@ import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 assert set(report) == {"host", "ports", "sandboxes", "repos", "docs"}
-assert set(report["host"]) == {"doctorOk", "gaps"}
+assert set(report["host"]) == {"doctorOk", "gaps", "coverageTooling"}
 assert isinstance(report["host"]["doctorOk"], bool)
 assert isinstance(report["host"]["gaps"], list)
+coverage = report["host"]["coverageTooling"]
+assert set(coverage) == {"ready", "detail"}
+assert isinstance(coverage["ready"], bool) and isinstance(coverage["detail"], str)
+assert coverage["detail"].startswith("cargo-llvm-cov: "), coverage
 assert {"DEV_PORT", "DEV_TCP_PORT", "BRIDGE_PORT", "CDP_PORT"} <= set(report["ports"])
 assert report["sandboxes"] == []
 assert set(report["repos"]) == {"intentd", "cloudlands-fe"}
@@ -87,19 +91,55 @@ SH
 chmod +x "$bin_dir/gh"
 export GH_TEST_LOG="$temp_dir/gh.log"
 
+# The doctor probes cargo from $CARGO_HOME/bin regardless of PATH, so an empty
+# CARGO_HOME with cargo off PATH is how absence is simulated (never uninstall).
+mkdir -p "$temp_dir/no-cargo"
+CARGO_HOME="$temp_dir/no-cargo" PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+  bash "$script" >"$temp_dir/no-coverage.json"
+python3 - "$temp_dir/no-coverage.json" <<'PY' || fail "coverageTooling did not report cargo-llvm-cov as absent"
+import json
+import sys
+coverage = json.load(open(sys.argv[1], encoding="utf-8"))["host"]["coverageTooling"]
+assert coverage["ready"] is False, coverage
+assert coverage["detail"].startswith("cargo-llvm-cov: not installed"), coverage
+PY
+grep -q '^Coverage   cargo-llvm-cov not installed$' \
+  <(CARGO_HOME="$temp_dir/no-cargo" PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" bash "$script") \
+  || fail "human status did not report cargo-llvm-cov as not installed"
+
+# With the host PATH restored, coverageTooling.ready must match whether this
+# host can actually run cargo-llvm-cov with llvm-tools-preview installed.
+expected_coverage_ready=false
+if PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" cargo llvm-cov --version >/dev/null 2>&1 \
+  && PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'; then
+  expected_coverage_ready=true
+fi
+
 write_live_state "$state_dir/ui.json" "$$"
 PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
   bash "$script" >"$temp_dir/populated.json"
-python3 - "$temp_dir/populated.json" <<'PY' || fail "populated sandbox report was incorrect"
+python3 - "$temp_dir/populated.json" "$expected_coverage_ready" <<'PY' || fail "populated sandbox report was incorrect"
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
+expected_ready = sys.argv[2] == "true"
 assert len(report["sandboxes"]) == 1
 sandbox = report["sandboxes"][0]
 assert sandbox["mode"] == "ui"
 assert sandbox["supervisor"] == {"kind": "workspace-service", "id": "fixture"}
 assert sandbox["health"] is None
+coverage = report["host"]["coverageTooling"]
+assert coverage["ready"] is expected_ready, coverage
+assert coverage["detail"].startswith("cargo-llvm-cov: "), coverage
+assert ("with llvm-tools-preview" in coverage["detail"]) is expected_ready, coverage
 PY
+if [[ "$expected_coverage_ready" == true ]]; then
+  coverage_line='^Coverage   cargo-llvm-cov ready$'
+else
+  coverage_line='^Coverage   cargo-llvm-cov \(not installed\|installed, llvm-tools-preview missing\)$'
+fi
+grep -q "$coverage_line" <(PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$script") \
+  || fail "human status did not print the Coverage line"
 [[ -f "$state_dir/ui.json" ]] || fail "status removed a live fixture state file"
 
 cat >"$state_dir/stale.json" <<'JSON'
