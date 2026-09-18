@@ -9,6 +9,13 @@ FE_DIR=${FE_DIR:-"$ROOT_DIR/packages/cloudlands-fe"}
 TOOLCHAIN_FILE="$INTENTD_DIR/rust-toolchain.toml"
 PACKAGE_FILE="$FE_DIR/package.json"
 CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
+# Recent rustup installs a named-but-absent toolchain behind implicit
+# invocations (`rustup run`, `rustup component list --toolchain`, the cargo
+# proxy, `rustup show`, even `rustup toolchain list` under an absent override
+# pin). The doctor is read-only, so disable that for every rustup call this
+# script makes; install mode is unaffected because it installs explicitly via
+# rustup toolchain install / component add / default.
+export RUSTUP_AUTO_INSTALL=0
 # Caller-visible cargo, resolved BEFORE this script's own PATH prepend below.
 # Under make (MAKELEVEL set) the Makefile has already prepended the pinned
 # rustup toolchain dir and CARGO_BIN_DIR (see the PATH export in the Makefile);
@@ -21,7 +28,7 @@ CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
 # (where `rustup which` would otherwise answer with the default toolchain).
 CALLER_PATH="$PATH"
 if [[ -n ${MAKELEVEL:-} ]]; then
-  make_rustup_cargo=$([[ -r "$TOOLCHAIN_FILE" ]] && cd "${INTENTD_DIR}" 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+  make_rustup_cargo=$([[ -r "$TOOLCHAIN_FILE" ]] && cd "${INTENTD_DIR}" 2>/dev/null && rustup which cargo 2>/dev/null)
   make_prefix="${make_rustup_cargo:+${make_rustup_cargo%cargo}:}${CARGO_BIN_DIR:-${CARGO_INSTALL_ROOT:-$CARGO_HOME}/bin}:"
   while [[ "$CALLER_PATH" == "$make_prefix"* ]]; do
     CALLER_PATH=${CALLER_PATH#"$make_prefix"}
@@ -167,9 +174,24 @@ required_submodules_ready() {
   [[ -e "$INTENTD_DIR/.git" && -e "$FE_DIR/.git" ]]
 }
 
-rust_toolchain_ready() {
+# The pin appears in `rustup toolchain list`, a pure listing under the
+# RUSTUP_AUTO_INSTALL=0 exported above. Every probe that names the pin
+# (`rustup run`, `rustup component list --toolchain`) is gated on it so an
+# absent pin reports [missing] without touching the network.
+toolchain_installed() {
   [[ -n "$TOOLCHAIN" ]] || return 1
   command -v rustup >/dev/null 2>&1 || return 1
+  local listing line
+  listing=$(rustup toolchain list 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    line=${line%% *}
+    [[ "$line" == "$TOOLCHAIN" || "$line" == "$TOOLCHAIN"-* ]] && return 0
+  done <<<"$listing"
+  return 1
+}
+
+rust_toolchain_ready() {
+  toolchain_installed || return 1
   rustup run "$TOOLCHAIN" rustc --version >/dev/null 2>&1 || return 1
   rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^rustfmt-' || return 1
   rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^clippy-'
@@ -193,7 +215,7 @@ report_shadowing_cargo() {
   # permanently even for a pin-honoring rustup proxy. Skip silently.
   [[ "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
   local line version
-  line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" RUSTUP_AUTO_INSTALL=0 "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
+  line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
   version=${line#cargo }
   version=${version%% *}
   [[ "$version" == "$TOOLCHAIN" ]] && return 0
@@ -461,6 +483,7 @@ llvm_cov_ready() {
 llvm_tools_ready() {
   command -v rustup >/dev/null 2>&1 || return 1
   if [[ -n "$TOOLCHAIN" ]]; then
+    toolchain_installed || return 1
     rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^llvm-tools'
   else
     rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'
