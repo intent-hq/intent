@@ -258,9 +258,11 @@ with no rollback.
   the test-only entry point. Resume records apply only to nextest; `make gate` always
   reruns fmt, clippy, and the source lints.
 - When the full suite is impractical, run `make test-changed` before entering the
-  merge queue: it diffs the intentd checkout against `origin/main` (override with
-  `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the
-  full suite on manifest, lockfile, or nextest-config changes; `DRY_RUN=1` prints the plan.
+  merge queue: only the nextest targets the intentd checkout changed vs `origin/main`
+  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
+  manifest/lockfile/nextest-config changes. The selection is intentd's
+  `scripts/changed-tests.sh`; `make coverage-changed` runs it under llvm-cov — the
+  local equivalent of the PR's `coverage-changed` job.
 - `make test` and `make test-changed` write a resume record and, when tests ran,
   print its `record:` path (a fully resumed run prints only the skip count). After an
   interruption rerun with `RESUME=1` to skip tests recorded as passed for the same

@@ -179,7 +179,8 @@ WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, test-changed, coverage-e2e, coverage-all).
+# (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
+# coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
 # --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
@@ -199,14 +200,14 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
@@ -224,7 +225,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -441,18 +442,21 @@ test-intentd: ensure-intentd-submodule
 		--test-threads "$(TEST_THREADS)"
 
 # Pre-queue gate when the full suite is impractical: runs only the nextest
-# targets the intentd checkout changed vs BASE (default origin/main), mapped
-# per crate by scripts/rust-changed-tests.sh (see its header) and executed
-# through scripts/resumable_nextest.py, so the run writes the same gate-run
-# record as `make test` (junit, summary, run.json under GATE_CACHE_DIR, path
-# printed on exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse
-# dependencies are not propagated, so `make test` stays the complete gate.
+# targets the intentd checkout changed vs BASE (default origin/main). The
+# selection is intentd's $(INTENTD_DIR)/scripts/changed-tests.sh (see its
+# header for the path → crate mapping; the same script drives intentd's
+# pull_request `coverage-changed` job), executed through
+# scripts/resumable_nextest.py, so the run writes the same gate-run record as
+# `make test` (junit, summary, run.json under GATE_CACHE_DIR, path printed on
+# exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are
+# not propagated, so `make test` stays the complete gate.
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
 # The runner line names its paths as "$VAR" references that the script's eval
 # expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
-# nested quote.
+# nested quote; the script execs the runner from this directory, so the
+# relative scripts/ path resolves against the monorepo root.
 test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, DRY_RUN=1 prints the plan)
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
@@ -463,13 +467,37 @@ test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd br
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
 		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" \
 		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE"' \
-		scripts/rust-changed-tests.sh; status=$$?; \
+		$(INTENTD_DIR)/scripts/changed-tests.sh; status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
 	fi; \
 	echo "[test-changed] falling back to the full 'make test'"; \
 	exec $(MAKE) --no-print-directory test
+
+# Local equivalent of intentd's pull_request `coverage-changed` CI job: the
+# same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
+# instrumentation the merge queue's coverage-e2e / coverage-all jobs use
+# (INTENTD_TEST_TIMEOUT_MULTIPLIER=3, auggie_context_e2e excluded), so a test
+# that only fails instrumented (intent-hq/intentd#1947) fails here before the
+# queue. No report or floor is produced; a build-wide change runs the mapped
+# crates/ selection instead of falling back. No gate-run record is written
+# (the instrumented run is not resumable). The script does not install
+# cargo-llvm-cov / llvm-tools itself, hence the preflight (skipped under
+# DRY_RUN=1, which only prints the plan).
+coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE under llvm-cov, as intentd's PR coverage-changed job does (DRY_RUN=1 prints the plan)
+	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
+		cargo nextest --version >/dev/null 2>&1 || { \
+			echo "[coverage-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+			exit 1; \
+		}; \
+		cargo llvm-cov --version >/dev/null 2>&1 || { \
+			echo "[coverage-changed] ERROR: cargo-llvm-cov is not installed — run 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'"; \
+			exit 1; \
+		}; \
+	fi
+	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented
 
 # nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
 # export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.

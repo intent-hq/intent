@@ -2,24 +2,26 @@
 
 set -euo pipefail
 
-# The caller's environment must not steer the script under test (a shell with
+# Monorepo-owned changed-tests behaviour only: the `make test-changed` and
+# `make coverage-changed` recipes wrapping intentd's scripts/changed-tests.sh,
+# and the --runner hand-off into scripts/resumable_nextest.py (record/resume).
+# The path -> crate mapping, fallback and grouping cases live in intentd's
+# scripts/test-changed-tests.sh.
+
+# The caller's environment must not steer the recipes under test (a shell with
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
-unset NEXTEST_RUNNER RESUME GATE_FORCE GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR
+unset NEXTEST_RUNNER RESUME GATE_FORCE GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-script="$repo_root/scripts/rust-changed-tests.sh"
-# The interpreter that runs the script under test defaults to the one running
-# this suite; the Bash 3.2 compatibility pass at the end re-executes the suite
-# with it set to a real Bash 3.
+intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
+# The interpreter the intentd script runs under (its `#!/usr/bin/env bash`
+# resolves to $bin_dir/bash) defaults to the one running this suite; the Bash
+# 3.2 compatibility pass at the end re-executes the suite with a real Bash 3.
 script_bash=${RUST_CHANGED_TESTS_TEST_BASH:-$BASH}
 temp_dir=$(cd "$(mktemp -d)" && pwd -P)
 bin_dir="$temp_dir/bin"
-# The fixture checkout sits where the script's INTENTD_DIR default resolves
-# relative to a symlinked copy of the script under $temp_dir/scripts.
-repo="$temp_dir/packages/intentd"
-mkdir -p "$bin_dir" "$repo" "$temp_dir/scripts"
-ln -s "$script" "$temp_dir/scripts/rust-changed-tests.sh"
+mkdir -p "$bin_dir"
 trap 'rm -rf "$temp_dir"' EXIT
 
 fail() {
@@ -27,601 +29,206 @@ fail() {
   exit 1
 }
 
-for command in bash dirname mktemp rm sort; do
+[[ -f "$intentd_script" ]] \
+  || fail "$intentd_script is missing; initialize the intentd submodule (git submodule update --init packages/intentd)"
+
+ln -s "$script_bash" "$bin_dir/bash"
+for command in dirname mktemp rm sort; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 # python3 runs the real record-writing runner in the end-to-end cases below;
 # those are skipped when it is missing.
 python3=$(command -v python3 2>/dev/null) || python3=""
 [[ -z "$python3" ]] || ln -s "$python3" "$bin_dir/python3"
+ln -s "$(command -v git)" "$bin_dir/git"
 
-# git wrapper: the subcommand named by GIT_STUB_FAIL fails like a broken
-# checkout would; everything else reaches the real git.
-real_git=$(command -v git)
-cat >"$bin_dir/git" <<SH
-#!/usr/bin/env bash
-if [[ -n "\${GIT_STUB_FAIL-}" && "\${1-}" == "\$GIT_STUB_FAIL" ]]; then
-  echo "fatal: stubbed git \$1 failure" >&2
-  exit 128
-fi
-exec "$real_git" "\$@"
-SH
-chmod +x "$bin_dir/git"
-
-# Stub cargo: every invocation is appended to CARGO_TEST_LOG as "<cwd>: <argv>"
-# and exits with CARGO_STUB_EXIT (default 0). It drains stdin like a real
-# nextest child could, so the script must not feed it the remaining plans.
+# Stub cargo: every invocation is appended to CARGO_TEST_LOG as "<cwd>: <argv>";
+# the subcommand named by CARGO_STUB_MISSING fails like an uninstalled cargo
+# subcommand (`cargo llvm-cov --version` without cargo-llvm-cov), everything
+# else exits 0.
 cat >"$bin_dir/cargo" <<'SH'
 #!/usr/bin/env bash
 printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
-while IFS= read -r _; do :; done
-exit "${CARGO_STUB_EXIT:-0}"
+if [[ -n "${CARGO_STUB_MISSING-}" && "${1-}" == "$CARGO_STUB_MISSING" ]]; then
+  echo "error: no such command: $1" >&2
+  exit 101
+fi
 SH
 chmod +x "$bin_dir/cargo"
 
-# Stub runner: appends "call:" plus one line per argv word to RUNNER_TEST_LOG
-# and exits with RUNNER_STUB_EXIT (default 0).
-cat >"$bin_dir/runner" <<'SH'
+# Stub make, standing in for the recipe's $(MAKE) re-entry: records its argv.
+cat >"$bin_dir/make-stub" <<'SH'
 #!/usr/bin/env bash
-{ echo "call:"; printf '%s\n' "$@"; } >>"$RUNNER_TEST_LOG"
-exit "${RUNNER_STUB_EXIT:-0}"
+{ echo "make:"; printf '%s\n' "$@"; } >>"$PLANNER_TEST_LOG"
 SH
-chmod +x "$bin_dir/runner"
+chmod +x "$bin_dir/make-stub"
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 
-g() {
-  git -C "$repo" "$@"
-}
+# The recipes run from a copy of the real Makefile in a checkout whose path
+# carries an apostrophe (the runner line must hand such paths over as whole
+# words; nested quotes used to make the recipe itself fail to parse with exit
+# 2). make -n cannot check this: the test-changed logical line contains
+# $(MAKE), so -n executes it anyway. A stub planner in place of intentd's
+# scripts/changed-tests.sh records its argv, the knobs the recipe exports and,
+# when NEXTEST_RUNNER is set, the words the script's eval would hand the
+# runner. The Makefile prepends the rustup-pinned cargo dir and CARGO_BIN_DIR
+# (default ~/.cargo/bin) to every recipe's PATH, so a host cargo would outrank
+# the stub; pointing CARGO_BIN_DIR at the stub dir and blanking RUSTUP_CARGO
+# keeps the preflights hermetic on any host.
+mk="$temp_dir/reviewer's checkout"
+mkdir -p "$mk/scripts" "$mk/packages/intentd/scripts" "$mk/packages/intentd/.git"
+cp "$repo_root/Makefile" "$mk/Makefile"
+cat >"$mk/packages/intentd/scripts/changed-tests.sh" <<'SH'
+#!/usr/bin/env bash
+{
+  echo "call:"
+  printf '%s\n' "$@"
+  for knob in BASE DRY_RUN BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN; do
+    printf 'env %s=%s\n' "$knob" "${!knob-}"
+  done
+  if [[ -n "${NEXTEST_RUNNER-}" ]]; then
+    eval "set -- $NEXTEST_RUNNER"
+    echo "runner:"
+    printf '%s\n' "$@"
+  fi
+} >>"$PLANNER_TEST_LOG"
+exit "${PLANNER_STUB_EXIT:-0}"
+SH
+chmod +x "$mk/packages/intentd/scripts/changed-tests.sh"
 
-# Fixture workspace: alpha has a lib and two integration tests with shared
-# helpers, beta is a binary-only crate, gamma mirrors alpha's smoke test name.
-write() {
-  mkdir -p "$repo/$(dirname "$1")"
-  printf '%s\n' "${2:-$1}" >"$repo/$1"
-}
-write Cargo.toml '[workspace]'
-write Cargo.lock
-write rust-toolchain.toml
-write .config/nextest.toml
-write .cargo/config.toml
-write crates/alpha/Cargo.toml
-write crates/alpha/src/lib.rs
-write crates/alpha/src/util/mod.rs
-write crates/alpha/tests/one.rs
-write crates/alpha/tests/two.rs
-write crates/alpha/tests/common/mod.rs
-write crates/alpha/tests/fixtures/data.json
-write crates/alpha/tests/fixtures/café.json
-write crates/alpha/benches/bench.rs
-write crates/alpha/examples/demo.rs
-write crates/beta/Cargo.toml
-write crates/beta/build.rs
-write crates/beta/src/main.rs
-write crates/beta/tests/smoke.rs
-write crates/beta/migrations/001.sql
-write crates/gamma/Cargo.toml
-write crates/gamma/src/lib.rs
-write crates/gamma/tests/smoke.rs
-write README.md
-write docs/guide.md
-write scripts/tool.sh
-g init -q
-g add -A
-g commit -q -m base
-g update-ref refs/remotes/origin/main HEAD
-g checkout -q -b feature
+make_bin=$(command -v make 2>/dev/null) || make_bin=""
 
-reset_repo() {
-  g reset -q --hard refs/remotes/origin/main
-  g clean -fdq
+# Env prefixes on the call (PLANNER_STUB_EXIT=3 run_make ...) reach the stubs;
+# make variables go on the command line after the target.
+run_make() {
+  : >"$temp_dir/planner.log"
   : >"$temp_dir/cargo.log"
-  : >"$temp_dir/runner.log"
-}
-
-edit() {
-  echo "// changed" >>"$repo/$1"
-}
-
-commit_all() {
-  g add -A
-  g commit -q -m "${1:-change}"
-}
-
-# Env prefixes on the call (DRY_RUN=1 run_script ...) reach the script; the
-# inputs it reads default to unset here so the suite's own environment cannot
-# leak into the expected argv. PATH_UNDER_TEST prepends extra stub directories.
-run_script() {
   set +e
-  PATH="${PATH_UNDER_TEST:+$PATH_UNDER_TEST:}$bin_dir" INTENTD_DIR="${INTENTD_DIR-$repo}" BASE="${BASE-}" \
-    BUILD_JOBS="${BUILD_JOBS-}" TEST_THREADS="${TEST_THREADS-}" DRY_RUN="${DRY_RUN-}" \
-    NEXTEST_RUNNER="${NEXTEST_RUNNER-}" \
-    CARGO_TEST_LOG="$temp_dir/cargo.log" RUNNER_TEST_LOG="$temp_dir/runner.log" \
-    "$script_bash" "${SCRIPT_UNDER_TEST:-$script}" "$@" >"$temp_dir/stdout" 2>"$temp_dir/stderr"
+  PATH="$bin_dir" PLANNER_TEST_LOG="$temp_dir/planner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
+    "$make_bin" -C "$mk" --no-print-directory "$@" CARGO_BIN_DIR="$bin_dir" RUSTUP_CARGO= \
+    >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
   status=$?
   set -e
   stdout=$(<"$temp_dir/stdout")
   stderr=$(<"$temp_dir/stderr")
+  planner_log=$(<"$temp_dir/planner.log")
   cargo_log=$(<"$temp_dir/cargo.log")
-  runner_log=$(<"$temp_dir/runner.log")
 }
 
-expect_cargo() {
-  local expected="" line
-  for line in "$@"; do
-    expected+="$repo: nextest run $line"$'\n'
+expect_make_ok() {
+  [[ "$status" -eq 0 ]] || fail "$case_name: make exited $status: $stderr"
+}
+
+# $1 = the planner argv line(s), $2.. = the knob values in the stub's order.
+expect_planner() {
+  local expected="call:"$'\n'"$1" knob
+  shift
+  for knob in BASE DRY_RUN BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN; do
+    expected+=$'\n'"env $knob=$1"
+    shift
   done
-  [[ "$cargo_log" == "${expected%$'\n'}" ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"$'\n'"expected"$'\n'"${expected%$'\n'}"
+  [[ "$planner_log" == "$expected"* ]] || fail "$case_name: planner log was"$'\n'"$planner_log"$'\n'"expected to start with"$'\n'"$expected"
 }
 
-expect_plan() {
-  local line
-  for line in "$@"; do
-    [[ "$stdout" == *"[test-changed] cargo nextest run $line"* ]] || fail "$case_name: plan is missing '$line':"$'\n'"$stdout"
-  done
-  [[ "$(grep -c '^\[test-changed\] cargo nextest run ' <<<"$stdout")" -eq $# ]] || fail "$case_name: expected $# plan line(s):"$'\n'"$stdout"
-}
-
-expect_ok() {
-  [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
-  [[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
-}
-
-
-case_name="clean tree"
-reset_repo
-run_script
-expect_ok
-[[ "$stdout" == "[test-changed] nothing to test (no Rust changes vs origin/main)" ]] || fail "$case_name printed '$stdout'"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-
-case_name="committed single test file"
-reset_repo
-edit crates/alpha/tests/one.rs
-commit_all
-run_script
-expect_ok
-expect_plan "-p alpha --test one"
-expect_cargo "-p alpha --test one"
-[[ "$stdout" != *"note:"* ]] || fail "$case_name printed the src note: $stdout"
-
-case_name="unstaged, staged and untracked edits"
-reset_repo
-edit crates/alpha/tests/one.rs
-edit crates/alpha/tests/two.rs
-g add crates/alpha/tests/two.rs
-write crates/gamma/tests/fresh.rs
-run_script
-expect_ok
-expect_cargo "-p alpha --test one --test two" "-p gamma --test fresh"
-
-case_name="committed change under a feature branch with main moved on"
-reset_repo
-edit crates/alpha/tests/one.rs
-commit_all
-g checkout -q --detach refs/remotes/origin/main
-edit crates/beta/tests/smoke.rs
-commit_all "main moved on"
-g update-ref refs/remotes/origin/main HEAD
-g checkout -q feature
-run_script
-expect_ok
-expect_cargo "-p alpha --test one"
-
-case_name="shared test helpers select every integration test of the crate"
-reset_repo
-edit crates/alpha/tests/common/mod.rs
-edit crates/alpha/tests/one.rs
-run_script
-expect_ok
-expect_plan "-p alpha --tests"
-expect_cargo "-p alpha --tests"
-
-case_name="test fixture selects every integration test of the crate"
-reset_repo
-edit crates/alpha/tests/fixtures/data.json
-run_script
-expect_ok
-expect_cargo "-p alpha --tests"
-
-# Git C-quotes such names in line-oriented output; the script must read raw
-# NUL-delimited paths (verifier repro on 91fb6b0).
-case_name="untracked fixture with a space in its name"
-reset_repo
-write "crates/alpha/tests/fixtures/new fixture.json"
-run_script
-expect_ok
-expect_cargo "-p alpha --tests"
-
-case_name="tracked fixture with a non-ASCII name"
-reset_repo
-edit crates/alpha/tests/fixtures/café.json
-run_script
-expect_ok
-expect_cargo "-p alpha --tests"
-
-# Both sides of a rename count as changed (rename detection is off), so a
-# moved test is a deleted one plus a new one.
-case_name="renamed integration test counts the old and new path"
-reset_repo
-g mv crates/alpha/tests/one.rs crates/alpha/tests/moved.rs
-run_script
-expect_ok
-expect_cargo "-p alpha --tests"
-
-case_name="file moved from src into tests keeps the src selection"
-reset_repo
-g mv crates/alpha/src/util/mod.rs crates/alpha/tests/old.rs
-run_script
-expect_ok
-expect_plan "-p alpha --lib --bins --tests"
-expect_cargo "-p alpha --lib --bins --tests"
-[[ "$stdout" == *"note: crates/alpha/src changed"* ]] || fail "$case_name: no src note: $stdout"
-
-case_name="deleted integration test falls back to --tests"
-reset_repo
-g rm -q crates/alpha/tests/two.rs
-run_script
-expect_ok
-expect_cargo "-p alpha --tests"
-
-case_name="src change selects lib, bins and integration tests with a note"
-reset_repo
-edit crates/alpha/src/util/mod.rs
-edit crates/alpha/tests/one.rs
-run_script
-expect_ok
-expect_plan "-p alpha --lib --bins --tests"
-expect_cargo "-p alpha --lib --bins --tests"
-[[ "$stdout" == *"[test-changed] note: crates/alpha/src changed; only alpha's own tests run (downstream crates are not selected)"* ]] || fail "$case_name: no src note: $stdout"
-[[ "$(grep -c 'note:' <<<"$stdout")" -eq 1 ]] || fail "$case_name: note printed more than once: $stdout"
-
-case_name="src change in a crate without a lib drops --lib"
-reset_repo
-edit crates/beta/src/main.rs
-run_script
-expect_ok
-expect_cargo "-p beta --bins --tests"
-
-case_name="other crate file selects every test target and subsumes the rest"
-reset_repo
-edit crates/beta/migrations/001.sql
-edit crates/beta/src/main.rs
-edit crates/beta/tests/smoke.rs
-run_script
-expect_ok
-expect_plan "-p beta"
-expect_cargo "-p beta"
-[[ "$stdout" != *"note:"* ]] || fail "$case_name printed the src note for a subsumed selection: $stdout"
-
-case_name="benches, examples and inert non-crate paths are ignored"
-reset_repo
-edit crates/alpha/benches/bench.rs
-edit crates/alpha/examples/demo.rs
-edit README.md
-edit docs/guide.md
-write .github/workflows/x.yml
-write LICENSE
-write NOTICE
-write .gitignore
-write deny.toml
-write release-plz.toml
-write dist-workspace.toml
-run_script
-expect_ok
-[[ "$stdout" == *"nothing to test"* ]] || fail "$case_name printed '$stdout'"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-
-case_name="crates with different selections run separately, identical ones share"
-reset_repo
-edit crates/alpha/tests/common/mod.rs
-write crates/gamma/tests/fixtures/x.json
-edit crates/beta/src/main.rs
-run_script
-expect_ok
-expect_plan "-p alpha -p gamma --tests" "-p beta --bins --tests"
-expect_cargo "-p alpha -p gamma --tests" "-p beta --bins --tests"
-
-case_name="same-named test files across crates share one invocation"
-reset_repo
-edit crates/beta/tests/smoke.rs
-edit crates/gamma/tests/smoke.rs
-run_script
-expect_ok
-expect_cargo "-p beta -p gamma --test smoke"
-
-case_name="different test files across crates stay separate"
-reset_repo
-edit crates/alpha/tests/one.rs
-edit crates/gamma/tests/smoke.rs
-run_script
-expect_ok
-expect_cargo "-p alpha --test one" "-p gamma --test smoke"
-
-case_name="build-jobs and test-threads are appended"
-reset_repo
-edit crates/alpha/tests/one.rs
-BUILD_JOBS=-2 TEST_THREADS=4 run_script
-expect_ok
-expect_plan "-p alpha --test one --build-jobs -2 --test-threads 4"
-expect_cargo "-p alpha --test one --build-jobs -2 --test-threads 4"
-reset_repo
-edit crates/alpha/tests/one.rs
-run_script --build-jobs 3 --test-threads=num-cpus
-expect_ok
-expect_cargo "-p alpha --test one --build-jobs 3 --test-threads num-cpus"
-
-case_name="dry run prints the plan without invoking cargo"
-reset_repo
-edit crates/alpha/tests/one.rs
-edit crates/beta/src/main.rs
-DRY_RUN=1 run_script
-expect_ok
-expect_plan "-p alpha --test one" "-p beta --bins --tests"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-run_script --dry-run
-expect_ok
-[[ -z "$cargo_log" ]] || fail "$case_name (--dry-run) invoked cargo: $cargo_log"
-DRY_RUN=0 run_script
-expect_ok
-expect_cargo "-p alpha --test one" "-p beta --bins --tests"
-
-case_name="cargo failure stops the run and propagates its exit code"
-reset_repo
-edit crates/alpha/tests/one.rs
-edit crates/beta/src/main.rs
-CARGO_STUB_EXIT=100 run_script
-[[ "$status" -eq 100 ]] || fail "$case_name exited $status (expected 100): $stderr"
-expect_cargo "-p alpha --test one"
-[[ "$stderr" == "[test-changed] cargo nextest run -p alpha --test one exited 100" ]] || fail "$case_name stderr: $stderr"
-
-# With a runner the script plans as usual, then hands every plan to one
-# runner invocation instead of calling cargo itself.
-expect_runner() {
-  local expected="call:"$'\n' word
-  for word in "$@"; do
-    expected+="$word"$'\n'
-  done
-  [[ "$runner_log" == "${expected%$'\n'}" ]] || fail "$case_name: runner argv was"$'\n'"$runner_log"$'\n'"expected"$'\n'"${expected%$'\n'}"
-  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo alongside the runner: $cargo_log"
-}
-
-case_name="runner receives every plan in one invocation"
-reset_repo
-edit crates/alpha/tests/one.rs
-write crates/gamma/tests/fresh.rs
-NEXTEST_RUNNER="$bin_dir/runner" BUILD_JOBS=-2 TEST_THREADS=4 run_script
-expect_ok
-expect_plan "-p alpha --test one --build-jobs -2 --test-threads 4" "-p gamma --test fresh --build-jobs -2 --test-threads 4"
-expect_runner --plan "-p alpha --test one" --plan "-p gamma --test fresh" \
-  --base origin/main --label test-changed --build-jobs -2 --test-threads 4
-[[ "$(grep -c '^call:$' <<<"$runner_log")" -eq 1 ]] || fail "$case_name: runner called more than once: $runner_log"
-
-case_name="runner command line is shell-quoted and gets the explicit BASE"
-reset_repo
-edit crates/alpha/tests/one.rs
-commit_all
-g branch -q -f other HEAD
-edit crates/gamma/tests/smoke.rs
-run_script --base other --runner "'$bin_dir/runner' --cache-dir '/tmp/gate runs'"
-expect_ok
-expect_runner --cache-dir "/tmp/gate runs" --plan "-p gamma --test smoke" --base other --label test-changed
-
-case_name="runner failure propagates its exit code"
-reset_repo
-edit crates/alpha/tests/one.rs
-NEXTEST_RUNNER="$bin_dir/runner" RUNNER_STUB_EXIT=7 run_script
-[[ "$status" -eq 7 ]] || fail "$case_name exited $status (expected 7): $stderr"
-[[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
-expect_runner --plan "-p alpha --test one" --base origin/main --label test-changed
-
-case_name="runner is not invoked for a dry run, an empty plan or a fallback"
-reset_repo
-edit crates/alpha/tests/one.rs
-NEXTEST_RUNNER="$bin_dir/runner" DRY_RUN=1 run_script
-expect_ok
-expect_plan "-p alpha --test one"
-[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (dry run) invoked: $runner_log$cargo_log"
-reset_repo
-NEXTEST_RUNNER="$bin_dir/runner" run_script
-expect_ok
-[[ "$stdout" == *"nothing to test"* ]] || fail "$case_name (empty) printed '$stdout'"
-[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (empty) invoked: $runner_log$cargo_log"
-reset_repo
-edit Cargo.lock
-NEXTEST_RUNNER="$bin_dir/runner" run_script
-[[ "$status" -eq 3 ]] || fail "$case_name (fallback) exited $status (expected 3): $stderr"
-[[ -z "$runner_log$cargo_log" ]] || fail "$case_name (fallback) invoked: $runner_log$cargo_log"
-
-# The Makefile names its paths as "$VAR" references inside the runner string
-# (expanded by the script's eval), so apostrophes and spaces in the repo root
-# or GATE_CACHE_DIR reach the runner as single words.
-case_name="runner string expands quoted env references to whole words"
-reset_repo
-edit crates/alpha/tests/one.rs
-export GATE_REPO_ROOT="/tmp/reviewer's repo" GATE_CACHE_DIR="/tmp/reviewer's gate runs"
-NEXTEST_RUNNER='"$RUNNER_BIN" --repo-root "$GATE_REPO_ROOT" --cache-dir "$GATE_CACHE_DIR" --resume "$RESUME"' \
-  RUNNER_BIN="$bin_dir/runner" RESUME=1 run_script
-unset GATE_REPO_ROOT GATE_CACHE_DIR
-expect_ok
-expect_runner --repo-root "/tmp/reviewer's repo" --cache-dir "/tmp/reviewer's gate runs" --resume 1 \
-  --plan "-p alpha --test one" --base origin/main --label test-changed
-
-# The actual `make test-changed` recipe must hand such paths over intact: a
-# copy of the real Makefile runs with a stub planner that evals NEXTEST_RUNNER
-# the way the script does and records the words (nested quotes used to make
-# the recipe itself fail to parse with exit 2 here). make -n cannot check this:
-# the recipe's logical line contains $(MAKE), so -n executes it anyway.
-# The Makefile prepends the rustup-pinned cargo dir and CARGO_BIN_DIR (default
-# ~/.cargo/bin) to every recipe's PATH, so a host cargo would outrank the stub;
-# pointing CARGO_BIN_DIR at the stub dir and blanking RUSTUP_CARGO keeps the
-# recipe's `cargo nextest --version` preflight hermetic on any host.
-make_bin=$(command -v make 2>/dev/null) || make_bin=""
-if [[ -n "$make_bin" ]]; then
-  case_name="Makefile test-changed recipe survives an apostrophe in GATE_CACHE_DIR"
-  mk="$temp_dir/reviewer's checkout"
-  mkdir -p "$mk/scripts" "$mk/packages/intentd/.git"
-  cp "$repo_root/Makefile" "$mk/Makefile"
-  cat >"$mk/scripts/rust-changed-tests.sh" <<'SH'
-#!/usr/bin/env bash
-eval "set -- $NEXTEST_RUNNER"
-{ echo "call:"; printf '%s\n' "$@"; } >>"$RUNNER_TEST_LOG"
-SH
-  chmod +x "$mk/scripts/rust-changed-tests.sh"
-  : >"$temp_dir/runner.log"
-  : >"$temp_dir/cargo.log"
-  set +e
-  PATH="$bin_dir" RUNNER_TEST_LOG="$temp_dir/runner.log" CARGO_TEST_LOG="$temp_dir/cargo.log" \
-    "$make_bin" -C "$mk" --no-print-directory test-changed CARGO_BIN_DIR="$bin_dir" RUSTUP_CARGO= \
-    GATE_CACHE_DIR="$mk/gate runs" RESUME=1 \
-    >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
-  status=$?
-  set -e
-  [[ "$status" -eq 0 ]] || fail "$case_name: make exited $status: $(<"$temp_dir/stderr")"
-  cargo_log=$(<"$temp_dir/cargo.log")
+if [[ -z "$make_bin" ]]; then
+  echo "rust-changed-tests tests: make not found; Makefile recipe cases skipped"
+else
+  case_name="test-changed recipe survives an apostrophe in GATE_CACHE_DIR"
+  run_make test-changed GATE_CACHE_DIR="$mk/gate runs" RESUME=1
+  expect_make_ok
   [[ "$cargo_log" == *": nextest --version" ]] \
     || fail "$case_name: stub cargo did not serve the preflight; cargo log: '$cargo_log'"
-  runner_log=$(<"$temp_dir/runner.log")
-  expected="call:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"
-  [[ "$runner_log" == "$expected" ]] || fail "$case_name: runner argv was"$'\n'"$runner_log"$'\n'"expected"$'\n'"$expected"
+  expect_planner "" "" "" -2 -2 none never
+  expected="runner:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"
+  [[ "$planner_log" == *$'\n'"$expected" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"$'\n'"expected to end with"$'\n'"$expected"
+
+  case_name="test-changed recipe passes BASE, DRY_RUN, BUILD_JOBS, TEST_THREADS and GATE_FORCE through"
+  run_make test-changed BASE=other DRY_RUN=1 BUILD_JOBS=2 TEST_THREADS=1 GATE_FORCE=1
+  expect_make_ok
+  expect_planner "" other 1 2 1 none never
+  [[ "$planner_log" == *$'\n'"--resume"$'\n'"0"$'\n'"--force"$'\n'"1" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+
+  # Exit 3 (build-wide change) defers to the full `make test`: announced only
+  # under DRY_RUN=1, re-entered through $(MAKE) otherwise. Any other failure
+  # is the recipe's own.
+  case_name="test-changed recipe announces the fallback under DRY_RUN=1"
+  PLANNER_STUB_EXIT=3 run_make test-changed DRY_RUN=1 MAKE="$bin_dir/make-stub"
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] DRY_RUN: would fall back to the full 'make test'" ]] || fail "$case_name: stdout: $stdout"
+  [[ "$planner_log" != *"make:"* ]] || fail "$case_name: re-entered make: $planner_log"
+
+  case_name="test-changed recipe falls back to the full make test on exit 3"
+  PLANNER_STUB_EXIT=3 run_make test-changed MAKE="$bin_dir/make-stub"
+  expect_make_ok
+  [[ "$stdout" == *"[test-changed] falling back to the full 'make test'" ]] || fail "$case_name: stdout: $stdout"
+  [[ "$planner_log" == *$'\n'"make:"$'\n'"--no-print-directory"$'\n'"test" ]] || fail "$case_name: make re-entry argv was"$'\n'"$planner_log"
+
+  case_name="test-changed recipe propagates other planner failures"
+  PLANNER_STUB_EXIT=5 run_make test-changed MAKE="$bin_dir/make-stub"
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stderr" == *"Error 5"* ]] || fail "$case_name: stderr: $stderr"
+  [[ "$stdout" != *"falling back"* && "$planner_log" != *"make:"* ]] || fail "$case_name: fell back: $stdout $planner_log"
+
+  case_name="coverage-changed recipe passes --instrumented and the knobs"
+  run_make coverage-changed BASE=other BUILD_JOBS=2 TEST_THREADS=1
+  expect_make_ok
+  [[ "$cargo_log" == *": nextest --version"$'\n'*": llvm-cov --version" ]] \
+    || fail "$case_name: stub cargo did not serve both preflights; cargo log: '$cargo_log'"
+  expect_planner "--instrumented" other "" 2 1 none never
+  [[ "$planner_log" != *"runner:"* ]] || fail "$case_name: NEXTEST_RUNNER was set: $planner_log"
+
+  case_name="coverage-changed recipe fails without cargo-llvm-cov"
+  CARGO_STUB_MISSING=llvm-cov run_make coverage-changed
+  [[ "$status" -ne 0 ]] || fail "$case_name: make exited 0"
+  [[ "$stdout" == *"[coverage-changed] ERROR: cargo-llvm-cov is not installed"* ]] || fail "$case_name: stdout: $stdout"
+  [[ -z "$planner_log" ]] || fail "$case_name: planner ran: $planner_log"
+
+  case_name="coverage-changed recipe skips the preflight under DRY_RUN=1"
+  CARGO_STUB_MISSING=llvm-cov run_make coverage-changed DRY_RUN=1
+  expect_make_ok
+  [[ -z "$cargo_log" ]] || fail "$case_name: cargo was invoked: $cargo_log"
+  expect_planner "--instrumented" "" 1 -2 -2 none never
 fi
 
-# Build-wide files make the subset unreliable: exit 3 names them and defers to
-# the full `make test` (the Makefile target turns 3 into that run).
-for path in Cargo.toml Cargo.lock rust-toolchain.toml .config/nextest.toml .cargo/config.toml \
-  crates/alpha/Cargo.toml crates/beta/build.rs; do
-  case_name="build-wide change $path"
-  reset_repo
-  edit "$path"
-  edit crates/alpha/tests/one.rs
-  run_script
-  [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-  [[ "$stderr" == *"need the full suite -- run 'make test':"*"  $path"* ]] || fail "$case_name stderr: $stderr"
-  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-done
-# Tests read repo files outside crates/ through CARGO_MANIFEST_DIR
-# (scripts/install.sh, repo-wide lints), so any non-inert path out there also
-# defers to the full suite, even alongside a precisely mapped test change.
-for path in scripts/install.sh scripts/tool.sh packaging/deb/control unknown.toml; do
-  case_name="non-crate change $path"
-  reset_repo
-  write "$path" "// changed"
-  edit crates/alpha/tests/one.rs
-  run_script
-  [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-  [[ "$stderr" == *"need the full suite -- run 'make test':"*"  $path"* ]] || fail "$case_name stderr: $stderr"
-  [[ "$stderr" != *"crates/alpha/tests/one.rs"* ]] || fail "$case_name listed a mapped path: $stderr"
-  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-done
-case_name="untracked build-wide file with a non-ASCII name"
-reset_repo
-write .cargo/café.toml
-run_script
-[[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-[[ "$stderr" == *"  .cargo/café.toml"* ]] || fail "$case_name stderr: $stderr"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-case_name="build-wide change in a dry run"
-reset_repo
-write .cargo/audit.toml
-DRY_RUN=1 run_script
-[[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-[[ "$stderr" == *"  .cargo/audit.toml"* ]] || fail "$case_name stderr: $stderr"
-for rename in "Cargo.lock Cargo.lock.backup" "crates/beta/build.rs crates/beta/retired.rs"; do
-  case_name="renamed build-wide file ($rename) still needs the full suite"
-  reset_repo
-  # shellcheck disable=SC2086
-  g mv $rename
-  run_script
-  [[ "$status" -eq 3 ]] || fail "$case_name exited $status (expected 3): $stderr"
-  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-  [[ "$stderr" == *"  ${rename%% *}"* ]] || fail "$case_name stderr: $stderr"
-  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-done
-
-# A failing git command is an error, never an empty change set.
-for subcommand in diff ls-files; do
-  case_name="git $subcommand failure"
-  reset_repo
-  edit crates/alpha/tests/one.rs
-  GIT_STUB_FAIL=$subcommand run_script
-  [[ "$status" -eq 2 ]] || fail "$case_name exited $status (expected 2): $stderr"
-  [[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-  [[ "$stderr" == "fatal: stubbed git $subcommand failure"$'\n'"[test-changed] git $subcommand "*" failed in $repo (exit 128)" ]] || fail "$case_name stderr: $stderr"
-  [[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-done
-
-case_name="unresolvable BASE"
-reset_repo
-edit crates/alpha/tests/one.rs
-BASE=origin/nope run_script
-[[ "$status" -eq 2 ]] || fail "$case_name exited $status (expected 2): $stderr"
-[[ -z "$stdout" ]] || fail "$case_name printed '$stdout'"
-[[ "$stderr" == "[test-changed] cannot resolve BASE 'origin/nope' in $repo; run 'git -C $repo fetch origin main' or set BASE=<ref>" ]] || fail "$case_name stderr: $stderr"
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-run_script --base origin/nope
-[[ "$status" -eq 2 ]] || fail "$case_name (--base) exited $status (expected 2): $stderr"
-
-case_name="explicit BASE"
-reset_repo
-edit crates/alpha/tests/one.rs
-commit_all
-g branch -q -f other HEAD
-edit crates/gamma/tests/smoke.rs
-commit_all
-BASE=other run_script
-expect_ok
-expect_cargo "-p gamma --test smoke"
-run_script --base=other --dry-run
-expect_ok
-expect_plan "-p gamma --test smoke"
-
-case_name="INTENTD_DIR that is not a checkout"
-reset_repo
-INTENTD_DIR="$temp_dir/missing" run_script
-[[ "$status" -eq 2 ]] || fail "$case_name (missing) exited $status (expected 2): $stderr"
-[[ "$stderr" == *"intentd checkout not found at $temp_dir/missing (set INTENTD_DIR)"* ]] || fail "$case_name (missing) stderr: $stderr"
-INTENTD_DIR="$bin_dir" run_script
-[[ "$status" -eq 2 ]] || fail "$case_name (not git) exited $status (expected 2): $stderr"
-[[ "$stderr" == *"$bin_dir is not a git checkout (set INTENTD_DIR)"* ]] || fail "$case_name (not git) stderr: $stderr"
-
-case_name="INTENTD_DIR defaults to packages/intentd next to the script"
-reset_repo
-edit crates/alpha/tests/one.rs
-INTENTD_DIR="" SCRIPT_UNDER_TEST="$temp_dir/scripts/rust-changed-tests.sh" run_script
-expect_ok
-expect_cargo "-p alpha --test one"
-INTENTD_DIR="" run_script --intentd-dir "$repo" --dry-run
-expect_ok
-expect_plan "-p alpha --test one"
-
-case_name="usage errors"
-reset_repo
-edit crates/alpha/tests/one.rs
-for args in --bogus "--base" "--build-jobs" "--runner" "extra"; do
-  # shellcheck disable=SC2086
-  run_script $args
-  [[ "$status" -eq 2 ]] || fail "$case_name '$args' exited $status (expected 2): $stderr"
-  [[ "$stderr" == "Usage: "* ]] || fail "$case_name '$args' stderr: $stderr"
-done
-[[ -z "$cargo_log" ]] || fail "$case_name invoked cargo: $cargo_log"
-
-# End to end with the real record-writing runner: a fake cargo answers
+# End to end through the real `make test-changed`: intentd's changed-tests.sh
+# hands the plan to the real record-writing runner. A fixture intentd checkout
+# (alpha has a lib and one integration test) carries scripts/changed-tests.sh
+# as a committed symlink to the real script, so the script resolves the
+# fixture as its repo root and the symlink is not an untracked change. The
+# fixture monorepo carries a copy of the Makefile and the runner, and
+# packages/intentd as a symlink to the fixture checkout so the runner's
+# --intentd-dir resolves as the Makefile passes it. A fake cargo answers
 # `nextest list` with a canned suite listing and `nextest run` with libtest
 # `test ok` events for those tests (after checking the --tool-config-file the
-# runner wrote exists); rustc/cargo version stubs feed the tree key. The
-# fixture monorepo carries packages/intentd as a symlink to $repo so the
-# runner's --intentd-dir resolves as the Makefile passes it.
-if [[ -z "$python3" ]]; then
-  echo "rust-changed-tests tests: python3 not found; record/resume end-to-end cases skipped"
+# runner wrote exists); rustc/cargo version stubs feed the tree key.
+if [[ -z "$python3" || -z "$make_bin" ]]; then
+  echo "rust-changed-tests tests: python3 or make not found; record/resume end-to-end cases skipped"
 else
   e2e_bin="$temp_dir/e2e-bin"
-  mono="$temp_dir/mono"
+  repo="$temp_dir/e2e/intentd"
+  mono="$temp_dir/e2e/mono"
   cache="$temp_dir/gate runs"
-  mkdir -p "$e2e_bin" "$mono/packages"
+  mkdir -p "$e2e_bin" "$repo/scripts" "$repo/crates/alpha/src" "$repo/crates/alpha/tests" "$mono/packages" "$mono/scripts"
+  printf '[workspace]\n' >"$repo/Cargo.toml"
+  mkdir -p "$repo/.config"
+  for file in Cargo.lock rust-toolchain.toml .config/nextest.toml \
+    crates/alpha/Cargo.toml crates/alpha/src/lib.rs crates/alpha/tests/one.rs; do
+    printf '%s\n' "$file" >"$repo/$file"
+  done
+  ln -s "$intentd_script" "$repo/scripts/changed-tests.sh"
+  g() {
+    git -C "$repo" "$@"
+  }
+  g init -q
+  g add -A
+  g commit -q -m base
+  g update-ref refs/remotes/origin/main HEAD
+  g checkout -q -b feature
+  cp "$repo_root/Makefile" "$mono/Makefile"
+  cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
   ln -s "$repo" "$mono/packages/intentd"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q
@@ -656,11 +263,24 @@ esac
 SH
   chmod +x "$e2e_bin/rustc" "$e2e_bin/cargo"
 
-  # $1 = RESUME, $2 = GATE_FORCE; the runner line mirrors the Makefile's.
-  e2e_run() {
-    PATH_UNDER_TEST="$e2e_bin" BUILD_JOBS=2 TEST_THREADS=1 \
-      NEXTEST_RUNNER="python3 '$repo_root/scripts/resumable_nextest.py' --repo-root '$mono' --intentd-dir packages/intentd --cache-dir '$cache' --resume $1 --force $2" \
-      run_script
+  # $1 = RESUME, $2 = GATE_FORCE. CARGO_BIN_DIR puts the e2e stubs ahead of the
+  # plain ones on the recipe's PATH.
+  e2e_make() {
+    : >"$temp_dir/cargo.log"
+    set +e
+    PATH="$bin_dir" CARGO_TEST_LOG="$temp_dir/cargo.log" \
+      "$make_bin" -C "$mono" --no-print-directory test-changed CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
+      GATE_CACHE_DIR="$cache" RESUME="$1" GATE_FORCE="$2" BUILD_JOBS=2 TEST_THREADS=1 \
+      >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
+    status=$?
+    set -e
+    stdout=$(<"$temp_dir/stdout")
+    stderr=$(<"$temp_dir/stderr")
+    cargo_log=$(<"$temp_dir/cargo.log")
+  }
+  expect_ok() {
+    [[ "$status" -eq 0 ]] || fail "$case_name: exited $status: $stderr"
+    [[ -z "$stderr" ]] || fail "$case_name: unexpected stderr: $stderr"
   }
   summary_line="[test-changed] summary: 2 passed, 0 failed, 0 skipped/ignored, 0 resumed (tests already passed for this tree)"
   expect_recorded_run() {
@@ -673,9 +293,8 @@ SH
   }
 
   case_name="end to end: first run writes the plan record"
-  reset_repo
-  edit crates/alpha/tests/one.rs
-  e2e_run 0 0
+  echo "// changed" >>"$repo/crates/alpha/tests/one.rs"
+  e2e_make 0 0
   expect_recorded_run
   for file in run.json summary.txt complete nextest-1.toml; do
     [[ -f "$record_dir/$file" ]] || fail "$case_name: $record_dir/$file is missing"
@@ -691,22 +310,21 @@ SH
   first_record=$record_dir
 
   case_name="end to end: RESUME=1 on the unchanged tree skips the run"
-  : >"$temp_dir/cargo.log"
-  e2e_run 1 0
+  e2e_make 1 0
   expect_ok
   [[ "$stdout" == *"[test-changed] cargo nextest run -p alpha --test one"*$'\n'"resumed: skipped 2 tests already passed for this tree" ]] || fail "$case_name: stdout: $stdout"
   [[ "$cargo_log" != *"nextest list"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: cargo was invoked: $cargo_log"
 
   case_name="end to end: RESUME=1 after a tracked edit runs the plan again"
-  edit crates/alpha/tests/one.rs
-  e2e_run 1 0
+  echo "// changed" >>"$repo/crates/alpha/tests/one.rs"
+  e2e_make 1 0
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] no passed-test record for this tree; running every planned test"* ]] || fail "$case_name: stdout: $stdout"
   [[ "$record_dir" != "$first_record" ]] || fail "$case_name: the record dir did not change with the tree"
   changed_record=$record_dir
 
   case_name="end to end: GATE_FORCE=1 ignores the matching record"
-  e2e_run 1 1
+  e2e_make 1 1
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] GATE_FORCE=1: running every planned test"* ]] || fail "$case_name: stdout: $stdout"
   [[ "$record_dir" == "$changed_record" ]] || fail "$case_name: record dir moved on an unchanged tree: $record_dir"
@@ -718,8 +336,10 @@ echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BAS
 # Stock macOS /bin/bash is 3.2 (intent-hq/intent#4706). `bash -n` alone
 # accepts Bash 4+ builtins and expansions, so reject them by pattern too,
 # then rerun the fixtures under a real Bash 3 when one can be found (same
-# lookup as shipped-in.test.sh).
-bash -n "$script" || fail "rust-changed-tests.sh does not parse"
+# lookup as shipped-in.test.sh). intentd's script has its own Bash 3 gate in
+# scripts/test-changed-tests.sh; this suite's rerun feeds it a Bash 3 through
+# $bin_dir/bash. A missing Bash 3 is a skip notice by default; set
+# REQUIRE_BASH3 to a non-empty value (CI) to make it a failure instead.
 bash -n "${BASH_SOURCE[0]}" || fail "rust-changed-tests.test.sh does not parse"
 bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
 # Full-line comments, the pattern itself and the gate_sample calls below are
@@ -747,7 +367,7 @@ gate_sample miss 'echo ${rest%%/*}'
 gate_sample miss 'echo ${path##* -> }'
 gate_sample miss 'x) y ;;'
 gate_sample miss '# mapfile is unavailable on Bash 3'
-gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
+gate_hits=$(gate_matches "${BASH_SOURCE[0]}")
 [[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
 
 find_bash3() {
@@ -769,6 +389,8 @@ if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
   : # the fixtures above already ran under Bash 3
 elif bash3=$(find_bash3); then
   RUST_CHANGED_TESTS_TEST_BASH="$bash3" "$bash3" "${BASH_SOURCE[0]}"
+elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
 else
   echo "rust-changed-tests tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
 fi
