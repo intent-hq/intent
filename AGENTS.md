@@ -254,21 +254,20 @@ with no rollback.
 
 ### Resuming local Rust gates
 
-- `make gate` runs `make check` and then the full nextest suite. `make test` remains
-  the test-only entry point. Resume records apply only to nextest; `make gate` always
+- `make gate` runs `make check` then the full nextest suite; `make test` is the
+  test-only entry point. Resume records apply only to nextest; `make gate` always
   reruns fmt, clippy, and the source lints.
 - When the full suite is impractical, run `make test-changed` before entering the
-  merge queue: only the nextest targets the intentd checkout changed vs `origin/main`
-  (`BASE=<ref>`; `DRY_RUN=1` prints the plan), falling back to the full suite on
-  manifest/lockfile/nextest-config changes. The selection is intentd's
-  `scripts/changed-tests.sh`; `make coverage-changed` runs it under llvm-cov — the
-  local equivalent of the PR's `coverage-changed` job.
-- `make test` and `make test-changed` write a resume record and, when tests ran,
-  print its `record:` path (a fully resumed run prints only the skip count). After an
-  interruption rerun with `RESUME=1` to skip tests recorded as passed for the same
-  tracked and untracked worktree, submodule pointers, toolchain, lockfile, and nextest
-  config (`GATE_FORCE=1` ignores a matching record). Records (junit plus a passed-test
-  stream) live under `$HOME/.cache/intent/gate-runs` and expire after seven days.
+  merge queue: intentd's `scripts/changed-tests.sh` picks the nextest targets changed
+  vs `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
+  full suite on manifest/lockfile/nextest-config changes; `make coverage-changed`
+  runs it under llvm-cov.
+- `make test` and `make test-changed` write a resume record and print its `record:`
+  path when tests ran (a fully resumed run prints only the skip count). After an
+  interruption, `RESUME=1` skips tests recorded as passed for the same worktree
+  (tracked and untracked), submodule pointers, toolchain, lockfile, and nextest config
+  (`GATE_FORCE=1` ignores a matching record). Records (junit plus a passed-test
+  stream) live in `$HOME/.cache/intent/gate-runs` and expire after 7 days.
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
   The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
