@@ -901,17 +901,21 @@ each with a dedicated change event (§6.5) that carries the new value:
   `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
   clears it for all clients. **The served `unread` value is DERIVED from per-agent seen
   markers** on the `workspace.list` / `workspace.get` / subscription emit path:
-  `unread` = any **top-level (no parent, non-background, non-deleted, non-retired)**
-  session whose newest user/assistant message is an assistant message the v4.5 seen
-  marker has not caught up with (`lastMessageId` set, `lastMessageRole == "assistant"`,
-  `metadata.lastSeenMessageId` absent or ≠ `lastMessageId` — the same equality-only
-  comparison as the client-side per-agent derivation, §5.5 `agent.markSeen`). A
-  soft-retired session (`retiredAt` set, §5.5 `agent.restore`) never participates: the
-  FE cannot land on a hidden agent to read it, so retiring the LAST unread session
-  settles the stored flag exactly like the last seen-marker advance (one
+  `unread` = any **top-level (no parent, non-background, non-deleted, non-retired, not
+  muted)** session whose newest user/assistant message is an assistant message the v4.5
+  seen marker has not caught up with (`lastMessageId` set, `lastMessageRole ==
+  "assistant"`, `metadata.lastSeenMessageId` absent or ≠ `lastMessageId` — the same
+  equality-only comparison as the client-side per-agent derivation, §5.5
+  `agent.markSeen`). A soft-retired session (`retiredAt` set, §5.5 `agent.restore`) never
+  participates: the FE cannot land on a hidden agent to read it, so retiring the LAST
+  unread session settles the stored flag exactly like the last seen-marker advance (one
   `workspace:attention-changed { none }`, `review_required` untouched) and
   `agent.restore` is silent (no stored-flag write, no event) — a restored session with
-  an unseen assistant last message simply re-derives `unread` on the next read. A stored
+  an unseen assistant last message simply re-derives `unread` on the next read. A muted
+  session (`notificationsMuted`, §5.5 `agent.update`) follows the same shape: muting the
+  LAST unread session settles the stored flag with one `workspace:attention-changed
+  { none }`, and unmuting is silent — the unseen tail re-derives `unread` on the next
+  read. A stored
   `review_required` always wins over the derivation; the stored `unread` flag is no
   longer the read-path source of truth — the turn-end raise still writes it (back-compat
   + the transition emit), but a stale stored value can neither show nor hide the blue
@@ -1402,15 +1406,19 @@ and live agent activity around the "current cycle" rollup:
 
 The attention axes (steps 0–2) are probed per workspace
 over its **top-level foreground** sessions — no `parentAgentId`, not background
-(`isBackground`), not deleted, and not soft-retired (`retiredAt` unset) — plus the
-dismissible workspace `attention` flag
+(`isBackground`), not deleted, not soft-retired (`retiredAt` unset), and not muted
+(`notificationsMuted`, §5.5 `agent.update`) — plus the dismissible workspace `attention`
+flag
 (`review_required` only — the `unread` flag never feeds the derivation). Child
 and background sessions never count: their attention surface is the parent/subscriber (the
 §5.5 attention-retire taxonomy). A soft-retired session (§5.5 `agent.restore`) is inert
 and never counts either — a retired session parked in `error`, or holding a pending
 blocker / discussion request or pending questions, moves none of these axes (the
 retire op recomputes-and-compares `displayStatus`, so the rung lapses on the retire), and
-`agent.restore` brings its signal back. A pending attention request raised MID-TURN whose
+`agent.restore` brings its signal back. A muted session is silenced the same way: none of
+its signals count while `notificationsMuted` is set (the mute toggle
+recomputes-and-compares `displayStatus`, so the rung lapses on the mute), and unmuting
+brings them back. A pending attention request raised MID-TURN whose
 user-facing surfacing is still parked on the deferred-attention registry does not count
 either ([intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639), §5.5
 idle-deferred surfacing): the request feeds these axes only from the turn-end flush
@@ -1580,8 +1588,9 @@ only when a **top-level foreground** agent's queue drains (intentd#1021): child 
 (`parent_agent_id` set) and background agents never raise it — their completions surface
 to their parent/coordinator, not the user. A `NotFound` session load (deleted agent)
 skips the raise too, as does a session soft-retired mid-turn (`ws.agent.retire` from
-inside the turn — `retired_at` set by the time its drain ends), while a genuine store
-error fails open (raise + warn). The raise is
+inside the turn — `retired_at` set by the time its drain ends) or muted
+(`notificationsMuted`, §5.5 `agent.update`) by the time its drain ends, while a genuine
+store error fails open (raise + warn). The raise is
 further guarded on the stored flag being `none`: it never downgrades a persistent
 `review_required` (no `workspace:attention-changed`), and `workspace.markSeen` — guarded
 on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
