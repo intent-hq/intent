@@ -40,6 +40,13 @@ GH_INSTALL_URL="https://github.com/cli/cli#installation"
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 
+# Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
+# plus the llvm-tools-preview rustup component. Neither is required by make
+# test, so the doctor reports them as [optional] and bootstrap installs them
+# only on request (--coverage / BOOTSTRAP_COVERAGE=1): cargo install compiles
+# cargo-llvm-cov from source.
+LLVM_COV_INSTALL="cargo install cargo-llvm-cov --locked && rustup component add llvm-tools-preview"
+
 # Supported Node: read from packages/cloudlands-fe/package.json engines.node by
 # load_versions, so the frontend owns the range (its install builds node-pty
 # with node-gyp 13, whose undici dependency throws on Node 20,
@@ -59,6 +66,7 @@ PROBE_ERROR=""
 
 MODE=install
 ASSUME_YES=${BOOTSTRAP_YES:-0}
+WITH_COVERAGE=${BOOTSTRAP_COVERAGE:-0}
 FAILURES=0
 TOOLCHAIN=""
 PACKAGE_MANAGER=""
@@ -73,10 +81,12 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--check-frontend] [--yes]"
+  echo "Usage: $0 [--check] [--check-frontend] [--coverage] [--yes]"
   echo "  --check            Report missing requirements without changing the host"
   echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
   echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --coverage         Also install cargo-llvm-cov and llvm-tools-preview for"
+  echo "                     make coverage-e2e / coverage-all (env alias: BOOTSTRAP_COVERAGE=1)"
   echo "  --yes              Install without prompting"
 }
 
@@ -84,6 +94,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
     --check-frontend) MODE=check-frontend ;;
+    --coverage) WITH_COVERAGE=1 ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -431,6 +442,35 @@ jq_ready() {
   jq_version >/dev/null
 }
 
+# Probed through cargo like the nextest check (not command -v), so a stale
+# cargo-llvm-cov binary that no longer runs counts as absent.
+llvm_cov_version() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local output
+  output=$(cargo llvm-cov --version 2>/dev/null) || return 1
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+llvm_cov_ready() {
+  llvm_cov_version >/dev/null
+}
+
+# The coverage scripts run inside packages/intentd, so the component must be on
+# the pinned toolchain; without a readable pin the active toolchain is checked.
+llvm_tools_ready() {
+  command -v rustup >/dev/null 2>&1 || return 1
+  if [[ -n "$TOOLCHAIN" ]]; then
+    rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^llvm-tools'
+  else
+    rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'
+  fi
+}
+
+coverage_tooling_ready() {
+  llvm_cov_ready && llvm_tools_ready
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -447,7 +487,24 @@ installable_gap_exists() {
   frontend_dependencies_ready || return 0
   gh_ready || return 0
   jq_ready || return 0
+  if [[ "$WITH_COVERAGE" == 1 ]]; then
+    coverage_tooling_ready || return 0
+  fi
   return 1
+}
+
+# Optional row: never counts toward FAILURES, so doctorOk is unaffected.
+report_coverage_tooling() {
+  local version
+  if version=$(llvm_cov_version); then
+    if llvm_tools_ready; then
+      optional "cargo-llvm-cov: $version with llvm-tools-preview (make coverage-e2e / coverage-all)"
+    else
+      optional "cargo-llvm-cov: $version, but llvm-tools-preview is missing; run rustup component add llvm-tools-preview"
+    fi
+  else
+    optional "cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or $LLVM_COV_INSTALL"
+  fi
 }
 
 # Reports the Corepack and frontend-package-manager state shared by check_all
@@ -553,6 +610,7 @@ check_all() {
   else
     missing "cargo-nextest: required by make test"
   fi
+  report_coverage_tooling
 
   local node_found
   if node_ready; then
@@ -727,6 +785,33 @@ install_rust() {
     rm -f -- "$TEMP_FILE"
     TEMP_FILE=""
     hash -r
+  fi
+}
+
+# Opt-in (--coverage / BOOTSTRAP_COVERAGE=1): a default bootstrap never
+# mentions coverage tooling, so an otherwise-complete host still reports
+# "nothing to do".
+install_coverage_tooling() {
+  [[ "$WITH_COVERAGE" == 1 ]] || return 0
+
+  if coverage_tooling_ready; then
+    echo "[skip] $(llvm_cov_version) with llvm-tools-preview already installed"
+    return
+  fi
+
+  if ! llvm_cov_ready; then
+    echo "[install] cargo-llvm-cov (cargo install compiles it from source)"
+    cargo install cargo-llvm-cov --locked || exit 1
+    hash -r
+  else
+    echo "[skip] $(llvm_cov_version) already installed"
+  fi
+
+  if ! llvm_tools_ready; then
+    echo "[install] llvm-tools-preview component for Rust $TOOLCHAIN"
+    rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
+  else
+    echo "[skip] llvm-tools-preview already installed"
   fi
 }
 
@@ -922,6 +1007,7 @@ load_versions
 install_python
 install_native_build_dependencies
 install_rust
+install_coverage_tooling
 install_node
 install_frontend
 install_gh

@@ -240,8 +240,8 @@ help: ## List documented targets
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 	@scripts/bootstrap-dev-host.sh --check
 
-bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
-	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
+bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use; BOOTSTRAP_COVERAGE=1 adds cargo-llvm-cov + llvm-tools-preview)
+	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,) $(if $(filter 1 yes true,$(BOOTSTRAP_COVERAGE)),--coverage,)
 
 # Frontend-toolchain preflight for the targets that shell out to
 # `corepack pnpm`. Fails fast with doctor's [missing] wording plus

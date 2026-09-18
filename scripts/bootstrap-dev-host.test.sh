@@ -373,4 +373,70 @@ run_doctor
 expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
 rm -f "$bin_dir/cargo"
 
+# Coverage tooling is optional. A cargo that answers `llvm-cov --version` and a
+# rustup listing the llvm-tools component print the version row.
+row_not_installed="[optional] cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or cargo install cargo-llvm-cov --locked && rustup component add llvm-tools-preview"
+pinned_cargo='echo "cargo 1.96.0 (0123abcd 2026-01-01)"'
+write_launcher cargo "[ \"\$1\" = llvm-cov ] && { echo \"cargo-llvm-cov 0.9.0\"; exit 0; }; $pinned_cargo"
+write_launcher rustup '[ "$1" = component ] && { echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0; }; exit 1'
+run_doctor
+expect_line "[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0 with llvm-tools-preview (make coverage-e2e / coverage-all)"
+reject_line "[missing]  cargo-llvm-cov"
+gaps_coverage_ready=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary with coverage tooling present"
+
+# Without the llvm-tools component the row names the rustup command.
+write_launcher rustup 'exit 1'
+run_doctor
+expect_line "[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0, but llvm-tools-preview is missing; run rustup component add llvm-tools-preview"
+reject_line "[missing]  cargo-llvm-cov"
+gaps_no_llvm_tools=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary without llvm-tools"
+
+# A cargo without the llvm-cov subcommand (exit 101, as cargo reports an
+# unknown command) yields the not-installed row naming both install routes.
+# None of the three states prints [missing] or changes the gap count.
+write_launcher rustup '[ "$1" = component ] && { echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0; }; exit 1'
+write_launcher cargo "[ \"\$1\" = llvm-cov ] && { echo \"error: no such command: llvm-cov\" >&2; exit 101; }; $pinned_cargo"
+run_doctor
+expect_line "$row_not_installed"
+reject_line "[missing]  cargo-llvm-cov"
+gaps_coverage_missing=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary with coverage tooling absent"
+[[ "$gaps_coverage_ready" == "$gaps_coverage_missing" && "$gaps_coverage_ready" == "$gaps_no_llvm_tools" ]] \
+  || fail "coverage tooling changed the gap count: '$gaps_coverage_ready' vs '$gaps_no_llvm_tools' vs '$gaps_coverage_missing'"
+
+# Without any cargo the row degrades to not-installed instead of failing.
+rm -f "$bin_dir/cargo" "$bin_dir/rustup"
+run_doctor
+expect_line "$row_not_installed"
+reject_line "[missing]  cargo-llvm-cov"
+
+# install_coverage_tooling is a no-op unless opted in; opted in, it skips a
+# complete host and runs cargo install / rustup component add for the gaps.
+bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"
+sed '/^if \[\[ "\$MODE" == check \]\]; then$/,$d' "$script" >"$bootstrap_funcs"
+grep -q '^install_coverage_tooling() {' "$bootstrap_funcs" || fail "could not extract bootstrap functions for the install_coverage_tooling fixture"
+tool_log="$temp_dir/tool.log"
+run_install_coverage() {
+  : >"$tool_log"
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= TOOL_LOG="$tool_log" BOOTSTRAP_COVERAGE="$1" \
+    bash -c 'funcs=$1; set --; source "$funcs"; load_versions; install_coverage_tooling' bash "$bootstrap_funcs" >"$output" 2>&1 \
+    || fail "install_coverage_tooling exited non-zero with BOOTSTRAP_COVERAGE=$1"
+}
+write_launcher cargo "[ \"\$1\" = install ] && { echo \"cargo \$*\" >>\"\$TOOL_LOG\"; exit 0; }; [ \"\$1\" = llvm-cov ] && exit 101; $pinned_cargo"
+write_launcher rustup '[ "$1" = component ] && [ "$2" = add ] && { echo "rustup $*" >>"$TOOL_LOG"; exit 0; }; exit 1'
+run_install_coverage 0
+[[ ! -s "$output" ]] || fail "default bootstrap mentioned coverage tooling: $(cat "$output")"
+[[ ! -s "$tool_log" ]] || fail "default bootstrap installed coverage tooling: $(cat "$tool_log")"
+run_install_coverage 1
+expect_line "[install] cargo-llvm-cov"
+expect_line "[install] llvm-tools-preview component for Rust 1.96.0"
+grep -qx 'cargo install cargo-llvm-cov --locked' "$tool_log" || fail "opt-in bootstrap did not run cargo install cargo-llvm-cov --locked: $(cat "$tool_log")"
+grep -qx 'rustup component add --toolchain 1.96.0 llvm-tools-preview' "$tool_log" || fail "opt-in bootstrap did not add llvm-tools-preview: $(cat "$tool_log")"
+write_launcher cargo "[ \"\$1\" = llvm-cov ] && { echo \"cargo-llvm-cov 0.9.0\"; exit 0; }; $pinned_cargo"
+write_launcher rustup '[ "$1" = component ] && [ "$2" = list ] && { echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0; }; exit 1'
+run_install_coverage 1
+expect_line "[skip] cargo-llvm-cov 0.9.0 with llvm-tools-preview already installed"
+reject_line "[install]"
+rm -f "$bin_dir/cargo" "$bin_dir/rustup"
+
 echo "bootstrap-dev-host tests passed"
