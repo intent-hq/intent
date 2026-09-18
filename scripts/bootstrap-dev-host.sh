@@ -44,8 +44,8 @@ JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
 # plus the llvm-tools-preview rustup component. Neither is required by make
 # test, so the doctor reports them as [optional] and bootstrap installs them
 # only on request (--coverage / BOOTSTRAP_COVERAGE=1): cargo install compiles
-# cargo-llvm-cov from source.
-LLVM_COV_INSTALL="cargo install cargo-llvm-cov --locked && rustup component add llvm-tools-preview"
+# cargo-llvm-cov from source. The printed remediation comes from
+# llvm_cov_install_command, which qualifies the rustup step with the pin.
 
 # Supported Node: read from packages/cloudlands-fe/package.json engines.node by
 # load_versions, so the frontend owns the range (its install builds node-pty
@@ -471,6 +471,21 @@ coverage_tooling_ready() {
   llvm_cov_ready && llvm_tools_ready
 }
 
+# Printed remediations target the toolchain llvm_tools_ready probed: with a
+# readable pin the component goes on that toolchain (the rustup default may
+# differ), otherwise the unqualified command installs into the active one.
+llvm_tools_install_command() {
+  if [[ -n "$TOOLCHAIN" ]]; then
+    printf 'rustup component add llvm-tools-preview --toolchain %s\n' "$TOOLCHAIN"
+  else
+    printf 'rustup component add llvm-tools-preview\n'
+  fi
+}
+
+llvm_cov_install_command() {
+  printf 'cargo install cargo-llvm-cov --locked && %s\n' "$(llvm_tools_install_command)"
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -500,10 +515,10 @@ report_coverage_tooling() {
     if llvm_tools_ready; then
       optional "cargo-llvm-cov: $version with llvm-tools-preview (make coverage-e2e / coverage-all)"
     else
-      optional "cargo-llvm-cov: $version, but llvm-tools-preview is missing; run rustup component add llvm-tools-preview"
+      optional "cargo-llvm-cov: $version, but llvm-tools-preview is missing; run $(llvm_tools_install_command)"
     fi
   else
-    optional "cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or $LLVM_COV_INSTALL"
+    optional "cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or $(llvm_cov_install_command)"
   fi
 }
 

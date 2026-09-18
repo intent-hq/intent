@@ -108,10 +108,20 @@ grep -q '^Coverage   cargo-llvm-cov not installed$' \
   || fail "human status did not report cargo-llvm-cov as not installed"
 
 # With the host PATH restored, coverageTooling.ready must match whether this
-# host can actually run cargo-llvm-cov with llvm-tools-preview installed.
+# host can actually run cargo-llvm-cov with llvm-tools-preview on the pinned
+# toolchain: the doctor probes the channel from packages/intentd/
+# rust-toolchain.toml (honoring INTENTD_DIR), which may differ from the rustup
+# default; without a readable pin it falls back to the active toolchain.
+host_path="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+pinned_toolchain=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "${INTENTD_DIR:-$repo_root/packages/intentd}/rust-toolchain.toml" 2>/dev/null || true)
+component_list=(rustup component list --installed)
+if [[ -n "$pinned_toolchain" ]]; then
+  component_list+=(--toolchain "$pinned_toolchain")
+fi
 expected_coverage_ready=false
-if PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" cargo llvm-cov --version >/dev/null 2>&1 \
-  && PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH" rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'; then
+if PATH="$host_path" cargo llvm-cov --version >/dev/null 2>&1 \
+  && PATH="$host_path" "${component_list[@]}" 2>/dev/null | grep -q '^llvm-tools'; then
   expected_coverage_ready=true
 fi
 

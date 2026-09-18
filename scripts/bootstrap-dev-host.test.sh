@@ -375,21 +375,44 @@ rm -f "$bin_dir/cargo"
 
 # Coverage tooling is optional. A cargo that answers `llvm-cov --version` and a
 # rustup listing the llvm-tools component print the version row.
-row_not_installed="[optional] cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or cargo install cargo-llvm-cov --locked && rustup component add llvm-tools-preview"
+row_ready="[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0 with llvm-tools-preview (make coverage-e2e / coverage-all)"
+row_no_llvm_tools="[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0, but llvm-tools-preview is missing; run rustup component add llvm-tools-preview --toolchain 1.96.0"
+row_not_installed="[optional] cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or cargo install cargo-llvm-cov --locked && rustup component add llvm-tools-preview --toolchain 1.96.0"
 pinned_cargo='echo "cargo 1.96.0 (0123abcd 2026-01-01)"'
 write_launcher cargo "[ \"\$1\" = llvm-cov ] && { echo \"cargo-llvm-cov 0.9.0\"; exit 0; }; $pinned_cargo"
 write_launcher rustup '[ "$1" = component ] && { echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0; }; exit 1'
 run_doctor
-expect_line "[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0 with llvm-tools-preview (make coverage-e2e / coverage-all)"
+expect_line "$row_ready"
 reject_line "[missing]  cargo-llvm-cov"
 gaps_coverage_ready=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary with coverage tooling present"
 
-# Without the llvm-tools component the row names the rustup command.
+# Without the llvm-tools component the row names the rustup command for the
+# pinned toolchain, which is the one the probe checked.
+write_launcher rustup 'exit 1'
+run_doctor
+expect_line "$row_no_llvm_tools"
+reject_line "[missing]  cargo-llvm-cov"
+gaps_no_llvm_tools=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary without llvm-tools"
+
+# The probe and the remediation agree on the pinned toolchain in both
+# directions: a component present only on the pin is ready, one present only
+# on the rustup default is not, and the command then targets the pin.
+write_launcher rustup 'if [ "$1" = component ] && [ "$2" = list ]; then case " $* " in *" --toolchain 1.96.0 "*) echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0 ;; esac; fi; exit 1'
+run_doctor
+expect_line "$row_ready"
+write_launcher rustup 'if [ "$1" = component ] && [ "$2" = list ]; then case " $* " in *" --toolchain "*) exit 1 ;; esac; echo "llvm-tools-x86_64-unknown-linux-gnu"; exit 0; fi; exit 1'
+run_doctor
+expect_line "$row_no_llvm_tools"
+
+# Without a readable pin the probe falls back to the active toolchain and the
+# command stays unqualified.
+mv "$intentd_dir/rust-toolchain.toml" "$temp_dir/rust-toolchain.toml.bak"
+run_doctor
+expect_line "$row_ready"
 write_launcher rustup 'exit 1'
 run_doctor
 expect_line "[optional] cargo-llvm-cov: cargo-llvm-cov 0.9.0, but llvm-tools-preview is missing; run rustup component add llvm-tools-preview"
-reject_line "[missing]  cargo-llvm-cov"
-gaps_no_llvm_tools=$(grep -F 'Doctor found' "$output") || fail "expected a gap summary without llvm-tools"
+mv "$temp_dir/rust-toolchain.toml.bak" "$intentd_dir/rust-toolchain.toml"
 
 # A cargo without the llvm-cov subcommand (exit 101, as cargo reports an
 # unknown command) yields the not-installed row naming both install routes.
