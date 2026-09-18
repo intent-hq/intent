@@ -699,6 +699,23 @@ sends. **MCP-only surface changes** (§6.8 principle) — no new wire methods; t
   `ws.agent.removeQueuedMessage` ownership, and the question-answer intake exactly as
   before, and they remain the authoritative attribution for clients (the header is a
   prompt-visibility rendering of the same stamped fields, not a new source of truth).
+- **Collaborator sender preamble *(within 10.3, [intent-hq/intentd#1987](https://github.com/intent-hq/intentd/pull/1987))*** —
+  the human-side counterpart of the A2A header: a user-origin send from a per-principal
+  wire caller whose membership role in the target workspace is `collaborator` gets the
+  daemon-prepended single-line paragraph `Message from @{login} ({displayName}), a
+  collaborator (guest) of this workspace — not the workspace owner.` plus a blank line
+  above the caller's text, rendered from the bound principal's row (never from
+  caller-supplied text), applied before persist/enqueue at every human-authored front
+  door — the `agent.send*` / queue / edit / wake paths, a `role: user` row of
+  `agent.appendMessage`, and the caller-supplied `agentInstructions` / `taskText` of
+  `agent.delegate` (which now also carry the caller's `fromPrincipalId` stamp; the
+  task-note fallback carries neither) — idempotent by exact match, and byte-identical
+  for the owner, the administrator, unbound / UDS / legacy-token callers and
+  agent-origin sends. Intentional exception: a collaborator's `agent.editQueuedMessage`
+  of an A2A / automatic entry keeps this header as its sender and is not preambled. Full
+  contract — entry points, name fallbacks, sanitization, and the renderer's exact-match
+  strip against the served `author` projection — in §5.47 (`multiplayer.md`,
+  *Attribution*).
 - **`agent.diagnostics` queues fill** — the per-agent `queues` snapshots are now real
   (previously hardcoded `[]`), using the same drain-order sorting.
 
