@@ -16,6 +16,7 @@ script="$repo_root/scripts/dev-sandbox.sh"
 temp_dir=$(mktemp -d)
 sandbox_pid=""
 foreign_pid=""
+dummy_pid=""
 listener_pid=""
 state_dir="$temp_dir/state"
 
@@ -27,6 +28,10 @@ cleanup() {
   if [[ -n "$foreign_pid" ]]; then
     kill "$foreign_pid" 2>/dev/null || true
     wait "$foreign_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$dummy_pid" ]]; then
+    kill "$dummy_pid" 2>/dev/null || true
+    wait "$dummy_pid" 2>/dev/null || true
   fi
   if [[ -n "$listener_pid" ]]; then
     kill "$listener_pid" 2>/dev/null || true
@@ -478,6 +483,7 @@ write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 restart_writer_pid=$!
 MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/restart-stop.out" 2>"$temp_dir/restart-stop.err"
 wait "$dummy_pid" 2>/dev/null || true
+dummy_pid=""
 wait "$restart_writer_pid"
 grep -q 'sandbox ui restarted .* stop it with ws.script.stop instead' "$temp_dir/restart-stop.err" || fail "supervised restart warning was not printed"
 rm -f "$state_dir/ui.json"
