@@ -26,13 +26,18 @@
 #      step) whose body, up to the matching `done` (nesting-aware for
 #      `for`/`while`/`until`...`done`), contains a sleep per rule 1 or 2. The
 #      `for` line is the reported site; the inner sleep counts on its own.
+#      Loop words count only in command position (so `f() {` opens a function
+#      body and `echo done` is an argument), and the body of a `<<` / `<<-`
+#      heredoc is data for loop tracking: it opens and closes no shell loop,
+#      while rules 1 and 2 still scan it (`cat <<'SH'` writes executable stubs).
 #
 # Marker: `# timing-guard: <reason>` in a `#` comment (standalone or trailing)
 # on the sleep's own line or the line immediately above exempts it, e.g.
 # `# timing-guard: poll interval`. The reason is required: a bare
 # `timing-guard:` is malformed, never exempts, and is reported as its own error.
 # Detection is line-based: `"…"` / `'…'` literals are skipped when locating the
-# `#`, but no heredoc state is tracked.
+# `#`; heredoc state affects loop tracking only, so a marker on a heredoc line
+# exempts the sleep on that line as usual.
 #
 # Baseline (`scripts/fixed-sleep-baseline.txt`): one `<path> <count>` line per
 # file that still has unannotated sleeps, sorted by path. It only ratchets down:
@@ -164,23 +169,28 @@ function classify_marker(line,   comment, at) {
 # The line is split into shell words (quoted text is already blanked by
 # mask(), so `"done"` is never a word). A word is a loop keyword only when it
 # is exactly `for`/`while`/`until`/`do`/`done` AND stands in command position:
-# the first word of the line, the word after `;` `&&` `||` `|` `&` `(` `{`, or
-# the word after a `do`/`then`/`else`/`{` that was itself in command position.
-# A leading `NAME=value` assignment keeps command position for the next word;
-# any other word (`echo do done`, `done=1`) ends it.
-function keyword_tokens(masked, kpos, kind,   n, i, len, c, start, word, cmdpos) {
+# the first word of the line, the word after `;` `&&` `||` `|` `&` `(` `{`, the
+# word after the `)` that closes a function's `()` or a subshell (a `$(…)`,
+# `<(…)` or `>(…)` substitution ends mid-word instead, so `echo $(x) done` is
+# an argument), or the word after a `do`/`then`/`else`/`{` that was itself in
+# command position. A leading `NAME=value` assignment keeps command position
+# for the next word; any other word (`echo do done`, `done=1`, `echo {`) ends it.
+function keyword_tokens(masked, kpos, kind,   n, i, len, c, start, word, cmdpos, pd, psub) {
   n = 0
-  split("", kpos); split("", kind)
+  split("", kpos); split("", kind); split("", psub)
   len = length(masked)
   cmdpos = 1
+  pd = 0
   i = 1
   while (i <= len) {
     c = substr(masked, i, 1)
     if (c == " " || c == "\t") { i++; continue }
     if (c == ";" || c == "&" || c == "|" || c == "(" || c == ")") {
+      if (c == "(") { pd++; psub[pd] = (i > 1 && substr(masked, i - 1, 1) ~ /[$<>]/) }
       if (i < len && substr(masked, i + 1, 1) == c) i++
       i++
-      cmdpos = (c != ")")
+      cmdpos = 1
+      if (c == ")" && pd > 0) { cmdpos = !psub[pd]; pd-- }
       continue
     }
     start = i
@@ -206,6 +216,29 @@ function keyword_tokens(masked, kpos, kind,   n, i, len, c, start, word, cmdpos)
   return n
 }
 
+# Append the delimiter of every heredoc operator on the line (`<<` / `<<-`,
+# never the `<<<` here-string) to the hd_delim[] / hd_strip[] queue. The
+# operator is located on the masked line so quoted or commented `<<` never
+# opens one; the delimiter word is read from the raw line so `<<'EOF'`,
+# `<<"EOF"` and `<<\EOF` keep their text once the quoting is dropped.
+function heredoc_openers(masked, raw,   len, i, j, strip, word) {
+  len = length(masked)
+  for (i = 1; i < len; i++) {
+    if (substr(masked, i, 2) != "<<") continue
+    if (substr(masked, i + 2, 1) == "<") { i += 2; continue }
+    i += 2
+    strip = 0
+    if (substr(masked, i, 1) == "-") { strip = 1; i++ }
+    while (i <= len && substr(masked, i, 1) ~ /[ \t]/) i++
+    j = i
+    while (j <= length(raw) && substr(raw, j, 1) !~ /[ \t;&|<>()]/) j++
+    word = substr(raw, i, j - i)
+    gsub(/["'\\]/, "", word)
+    if (word != "") { hd_n++; hd_delim[hd_n] = word; hd_strip[hd_n] = strip }
+    i = j - 1
+  }
+}
+
 function emit(lineno, text, m_here, m_above) {
   if (m_here == 1 || m_above == 1) return
   printf "%d:%d:%s\n", lineno, (m_here == 2 || m_above == 2) ? 1 : 0, text
@@ -218,12 +251,23 @@ function close_loop() {
   depth--
 }
 
-FNR == 1 { depth = 0; m_above = 0 }
+FNR == 1 { depth = 0; m_above = 0; hd_n = 0; hd_at = 1 }
 {
   m_here = classify_marker($0)
   masked = mask($0)
   ns = sleep_positions($0, spos)
-  nk = keyword_tokens(masked, kpos, kind)
+  if (hd_at <= hd_n) {
+    # Heredoc data: rules 1-2 and markers apply as on any line, loop words
+    # do not. The terminator line is the delimiter alone (`<<-` strips tabs).
+    nk = 0
+    term = $0
+    if (hd_strip[hd_at]) sub(/^\t+/, "", term)
+    if (term == hd_delim[hd_at]) hd_at++
+    if (hd_at > hd_n) { hd_n = 0; hd_at = 1 }
+  } else {
+    nk = keyword_tokens(masked, kpos, kind)
+    heredoc_openers(masked, $0)
+  }
   if (ns > 0) emit(FNR, trim($0), m_here, m_above)
   # Walk sleeps and loop keywords in offset order so a same-line
   # `for … do sleep 1; done` attributes the sleep to its own loop.
