@@ -392,6 +392,47 @@ for iteration in $(seq 1 20); do
   [[ "$status" -eq 143 ]] || fail "signal-window TERM returned $status instead of 143 (iteration $iteration)"
 done
 
+# Regression for intent-hq/intent#5420: a TERM landing between the frontend
+# fork and `fe_pid=$!` used to run cleanup with an empty pid, exit 143 and leave
+# the frontend running. SANDBOX_TEST_FORK_HOLD parks the script inside that
+# window for as long as the hold file exists, so the TERM is delivered there
+# deterministically; the hold is then released and the script must still tear
+# the frontend down. The script's own port probes run `python3 - <port>` too,
+# so the frontend's `Local:` line (printed once it has bound the port, i.e.
+# after the fork) gates the pid lookup — otherwise pgrep can pick the pre-fork
+# port_is_free probe and the TERM lands before the window.
+port=$(free_port)
+fork_hold="$temp_dir/fork-hold"
+touch "$fork_hold"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SANDBOX_TEST_FORK_HOLD="$fork_hold" \
+  bash "$script" ui >"$temp_dir/fork-window.out" 2>&1 &
+sandbox_pid=$!
+if ! wait_until grep -q "^Local: http://127.0.0.1:$port/" "$temp_dir/fork-window.out"; then
+  rm -f "$fork_hold"
+  fail "fork-window frontend did not bind its port within ${ready_timeout}s"
+fi
+if ! frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/fork-window.out"); then
+  rm -f "$fork_hold"
+  fail "could not find the fork-window frontend child"
+fi
+kill -TERM "$sandbox_pid"
+sleep 0.2
+rm -f "$fork_hold"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+if ! wait_until pid_gone "$frontend_pid"; then
+  kill -KILL "$frontend_pid" 2>/dev/null || true
+  echo "fork-window sandbox output:" >&2
+  cat "$temp_dir/fork-window.out" >&2 || true
+  fail "TERM inside the fork → pid-capture window leaked frontend $frontend_pid (script exit $status)"
+fi
+[[ "$status" -eq 143 ]] || fail "fork-window TERM returned $status instead of 143"
+[[ ! -e "$state_dir/ui.json" ]] || fail "UI state file remained after a fork-window TERM"
+
 cat >"$temp_dir/supervised.mk" <<'MAKE'
 supervised-ui:
 	@exec bash "$(SCRIPT)" ui

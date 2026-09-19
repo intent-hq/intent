@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # State schema: intentdSource is installed|bin|dev|release|none; UI uses none
 # with a null socket because it does not connect to a daemon.
+#
+# Test-only hook: SANDBOX_TEST_FORK_HOLD=<path> pauses the script between each
+# child fork and its pid capture for as long as <path> exists, so a test can
+# deliver a signal inside that window deterministically. Unset in normal use.
 
 set -u
 
@@ -33,6 +37,7 @@ build_jobs=${BUILD_JOBS:--2}
 socket_path=${INTENTD_SOCKET:-}
 fe_pid=""
 daemon_pid=""
+fork_hold=${SANDBOX_TEST_FORK_HOLD:-}
 cleaning=0
 child_exit_status=0
 state_file="$state_dir/$mode.json"
@@ -434,6 +439,12 @@ trap cleanup EXIT
 trap 'on_signal 130' INT
 trap 'on_signal 143' HUP TERM
 
+# Test-only (SANDBOX_TEST_FORK_HOLD): widen the fork → `$!` window so a test can
+# land a signal inside it. A foreground `sleep` does not touch `$!`.
+hold_fork_window() {
+  while [[ -n "$fork_hold" && -e "$fork_hold" ]]; do sleep 0.05; done
+}
+
 socket_accepts() {
   [[ -S "$socket_path" ]] || return 1
   python3 - "$socket_path" <<'PY' >/dev/null 2>&1
@@ -632,6 +643,7 @@ elif [[ "$mode" == stack ]]; then
   fi
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
     INTENTD_LEGACY_IMPORT_ROOTS="" "$intentd_bin" "${daemon_args[@]}" &
+  hold_fork_window
   daemon_pid=$!
 fi
 
@@ -646,6 +658,7 @@ fe_script=dev:web
   INTENTD_SOCKET="$socket_path" INTENT_DEV_DAEMON_BRIDGE=$([[ "$mode" == ui ]] && echo 0 || echo 1) \
     exec corepack pnpm run "$fe_script"
 ) &
+hold_fork_window
 fe_pid=$!
 
 deadline=$((SECONDS + ready_timeout))
