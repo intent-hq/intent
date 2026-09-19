@@ -1,0 +1,364 @@
+#!/usr/bin/env bash
+#
+# Self-test for scripts/lint-fixed-sleeps.sh. It copies the lint into a temp
+# repo skeleton, writes fixture `scripts/*.test.sh` suites and a fixture
+# baseline, and pins the sleep predicate, the `timing-guard:` marker rules and
+# the baseline ratchet by exit code and `path:line` output, so the lint can be
+# refactored safely. The lint skips this file by name, so the fixtures below
+# spell every pattern out without markers.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
+script=$repo_root/scripts/lint-fixed-sleeps.sh
+temp_dir=$(mktemp -d)
+trap 'rm -rf "$temp_dir"' EXIT
+
+# The fixtures below run lint-fixed-sleeps.sh under $script_bash and append
+# every exit code + output to $transcript, so a rerun under another
+# interpreter (see the Bash 3 section at the end) can be compared byte for
+# byte.
+script_bash=${LINT_FIXED_SLEEPS_TEST_BASH:-$BASH}
+transcript=${LINT_FIXED_SLEEPS_TEST_TRANSCRIPT:-$temp_dir/transcript}
+: >"$transcript"
+
+baseline=scripts/fixed-sleep-baseline.txt
+
+fail() {
+  echo "lint-fixed-sleeps test failed: $*" >&2
+  exit 1
+}
+
+run_check() {
+  local status=0
+  check_output=$(cd "$temp_dir" && "$script_bash" scripts/lint-fixed-sleeps.sh "$@" 2>&1) || status=$?
+  printf 'exit %s\n%s\n' "$status" "$check_output" >>"$transcript"
+  return "$status"
+}
+
+mkdir -p "$temp_dir/scripts"
+cp "$script" "$temp_dir/scripts/lint-fixed-sleeps.sh"
+
+# Fixture suites are built line by line so each case records its own
+# `scripts/<file>:<line>` reference: `site` lines must be reported as
+# unannotated fixed sleeps, `clean` lines must not be, `emit` is filler.
+fixture_rel=
+fixture_lines=0
+fixture_sites=0
+site_names=()
+site_refs=()
+clean_names=()
+clean_refs=()
+begin_fixture() {
+  fixture_rel=scripts/$1
+  : >"$temp_dir/$fixture_rel"
+  fixture_lines=0
+  fixture_sites=0
+}
+emit() {
+  printf '%s\n' "$1" >>"$temp_dir/$fixture_rel"
+  fixture_lines=$((fixture_lines + 1))
+}
+site() {
+  emit "$2"
+  fixture_sites=$((fixture_sites + 1))
+  site_names+=("$1")
+  site_refs+=("$fixture_rel:$fixture_lines")
+}
+clean() {
+  emit "$2"
+  clean_names+=("$1")
+  clean_refs+=("$fixture_rel:$fixture_lines")
+}
+
+# Entries start on line 3: a comment header and a blank line must be ignored.
+write_baseline() {
+  {
+    printf '# fixture baseline\n\n'
+    printf '%s\n' "$@"
+  } >"$temp_dir/$baseline"
+}
+
+# ---- predicate ---------------------------------------------------------------
+
+begin_fixture predicate.test.sh
+site 'plain sleep 0.2' 'sleep 0.2'
+site 'sleep .2 (leading dot)' 'sleep .2'
+site 'tab-separated sleep' $'sleep\t0.2'
+site 'double-quoted duration' 'sleep "0.2"'
+site 'single-quoted duration' "sleep '2'"
+site 'poll loop without a deadline' 'while [ ! -e x ]; do sleep 0.05; done'
+site 'fixed sleep before a stay-alive sleep' 'sleep 0.2; sleep 60 &'
+site 'sleep 60 && (not the stay-alive idiom)' 'sleep 60 && echo'
+site 'sleep 60 &> (not the stay-alive idiom)' 'sleep 60 &>/dev/null'
+site 'python time.sleep(30)' 'time.sleep(30)'
+emit "python3 - <<'PY'"
+emit 'import time'
+site 'indented time.sleep(0.5) in a python heredoc' '  time.sleep(0.5)'
+emit 'PY'
+site 'fixed-count for header (sleep in body)' 'for _ in {1..100}; do'
+site 'sleep inside a fixed-count for' '  sleep 0.01'
+emit 'done'
+site 'exec -a name sleep 6543 inside a quoted string' 'holder_cmd="exec -a name sleep 6543"'
+emit ''
+clean 'stay-alive sleep 60 &' 'sleep 60 &'
+clean 'stay-alive sleep 60 & in a while loop' 'while :; do sleep 60 & wait $!; done'
+clean 'nosleep is not sleep' 'nosleep 10'
+clean 'thread_sleep is not sleep' 'thread_sleep 10'
+clean 'commented-out sleep' '# sleep 5'
+clean 'sleep as a word with no argument' 'echo sleep'
+clean 'variable duration' 'sleep "$interval"'
+clean 'arithmetic duration' 'sleep $((n))'
+clean 'fixed-count for without a sleep' 'for i in {1..3}; do touch "f$i"; done'
+emit ''
+site 'fixed-count for whose body has only a marked sleep (for line)' 'for _ in {1..3}; do'
+clean 'marked sleep inside a fixed-count for' '  sleep 1 # timing-guard: fixture'
+emit 'done'
+predicate_sites=$fixture_sites
+
+# ---- markers -----------------------------------------------------------------
+
+begin_fixture markers.test.sh
+clean 'trailing marker' 'sleep 1 # timing-guard: fixture trailing'
+emit ''
+emit '# timing-guard: fixture on the line above'
+clean 'standalone marker on the line above' 'sleep 1'
+emit ''
+emit '# timing-guard: fixture two lines above'
+emit 'echo between'
+site 'marker two lines above does not exempt' 'sleep 1'
+emit ''
+emit '# timing-guard:'
+site 'bare marker on the line above does not exempt' 'sleep 1'
+malformed_above_ref=$fixture_rel:$fixture_lines
+emit ''
+site 'bare trailing marker does not exempt' 'sleep 1 # timing-guard:'
+malformed_trailing_ref=$fixture_rel:$fixture_lines
+emit ''
+site 'marker text inside a quoted string with no # is not a marker' "sleep 1 'timing-guard: not a comment'"
+quoted_marker_ref=$fixture_rel:$fixture_lines
+emit ''
+site 'marker text inside a quoted # is not a marker' 'echo "# timing-guard: quoted"; sleep 1'
+quoted_hash_ref=$fixture_rel:$fixture_lines
+markers_sites=$fixture_sites
+
+write_baseline
+if run_check; then
+  fail "predicate/marker fixtures with an empty baseline were accepted"
+fi
+grep -q "^scripts/predicate.test.sh: $predicate_sites unannotated fixed sleep(s), the baseline has no entry for it:$" <<<"$check_output" ||
+  fail "predicate fixture header did not report exactly $predicate_sites sites with no baseline entry: $check_output"
+grep -q "^scripts/markers.test.sh: $markers_sites unannotated fixed sleep(s), the baseline has no entry for it:$" <<<"$check_output" ||
+  fail "markers fixture header did not report exactly $markers_sites sites with no baseline entry: $check_output"
+for ((i = 0; i < ${#site_refs[@]}; i++)); do
+  grep -q "^${site_refs[i]}: error: unannotated fixed sleep: " <<<"$check_output" ||
+    fail "positive case '${site_names[i]}' was not reported at ${site_refs[i]}: $check_output"
+done
+for ((i = 0; i < ${#clean_refs[@]}; i++)); do
+  grep -q "^${clean_refs[i]}:" <<<"$check_output" &&
+    fail "negative case '${clean_names[i]}' was reported at ${clean_refs[i]}: $check_output"
+done
+grep -q '^scripts/predicate.test.sh:[0-9]*: error: unannotated fixed sleep: sleep 0.2; sleep 60 &$' <<<"$check_output" ||
+  fail "reported site text was not the trimmed source line: $check_output"
+grep -q "^$malformed_above_ref: error: timing-guard marker is malformed: expected \`# timing-guard: <reason>\` in a \`#\` comment; the reason is required: sleep 1$" <<<"$check_output" ||
+  fail "bare marker on the line above was not reported as malformed at $malformed_above_ref: $check_output"
+grep -q "^$malformed_trailing_ref: error: timing-guard marker is malformed: " <<<"$check_output" ||
+  fail "bare trailing marker was not reported as malformed at $malformed_trailing_ref: $check_output"
+grep -q "^$quoted_marker_ref: error: timing-guard marker is malformed" <<<"$check_output" &&
+  fail "marker text inside a quoted string was treated as a (malformed) marker at $quoted_marker_ref: $check_output"
+grep -q "^$quoted_hash_ref: error: timing-guard marker is malformed" <<<"$check_output" &&
+  fail "marker text inside a quoted # was treated as a (malformed) marker at $quoted_hash_ref: $check_output"
+malformed_count=$(grep -c 'timing-guard marker is malformed' <<<"$check_output" || true)
+[[ "$malformed_count" -eq 2 ]] ||
+  fail "expected exactly 2 malformed marker findings, got $malformed_count: $check_output"
+grep -qF -- "fix: justify each new sleep with \`# timing-guard: <reason>\` on its line or the one above, or replace it with a wait on an observable event; as a last resort (never preferred) set its entry in $baseline to \`scripts/predicate.test.sh $predicate_sites\`." <<<"$check_output" ||
+  fail "over-baseline finding did not name the marker fix and the exact baseline entry: $check_output"
+
+if ! run_check --print-counts; then
+  fail "--print-counts failed: $check_output"
+fi
+expected_counts="scripts/markers.test.sh $markers_sites"$'\n'"scripts/predicate.test.sh $predicate_sites"
+[[ "$check_output" == "$expected_counts" ]] ||
+  fail "--print-counts did not print one sorted \`<path> <count>\` line per file with sites:"$'\n'"$check_output"
+
+# ---- ratchet -----------------------------------------------------------------
+
+rm -f "$temp_dir"/scripts/*.test.sh
+begin_fixture a.test.sh
+emit 'sleep 1'
+emit 'echo ok'
+emit 'sleep 2'
+begin_fixture b.test.sh
+emit 'sleep 3'
+begin_fixture c.test.sh
+emit 'sleep 60 &'
+emit '# timing-guard: fixture'
+emit 'sleep 4'
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1'
+if ! run_check; then
+  fail "clean tree with a matching baseline was rejected: $check_output"
+fi
+[[ -z "$check_output" ]] || fail "clean tree with a matching baseline printed output: $check_output"
+
+write_baseline 'scripts/a.test.sh 1' 'scripts/b.test.sh 1'
+if run_check; then
+  fail "file over its baseline entry was accepted"
+fi
+grep -q '^scripts/a.test.sh: 2 unannotated fixed sleep(s), the baseline allows 1:$' <<<"$check_output" ||
+  fail "file over its baseline entry did not report the count against the entry: $check_output"
+grep -q '^scripts/a.test.sh:1: error: unannotated fixed sleep: sleep 1$' <<<"$check_output" ||
+  fail "file over its baseline entry did not name line 1: $check_output"
+grep -q '^scripts/a.test.sh:3: error: unannotated fixed sleep: sleep 2$' <<<"$check_output" ||
+  fail "file over its baseline entry did not name line 3: $check_output"
+grep -qF -- "set its entry in $baseline to \`scripts/a.test.sh 2\`." <<<"$check_output" ||
+  fail "file over its baseline entry did not name the last-resort entry: $check_output"
+grep -q '^scripts/b.test.sh' <<<"$check_output" &&
+  fail "file matching its baseline entry was reported alongside an over-baseline file: $check_output"
+
+write_baseline 'scripts/b.test.sh 1'
+if run_check; then
+  fail "file absent from the baseline was accepted"
+fi
+grep -q '^scripts/a.test.sh: 2 unannotated fixed sleep(s), the baseline has no entry for it:$' <<<"$check_output" ||
+  fail "file absent from the baseline did not report the missing entry: $check_output"
+grep -q '^scripts/a.test.sh:1: error: unannotated fixed sleep: sleep 1$' <<<"$check_output" &&
+  grep -q '^scripts/a.test.sh:3: error: unannotated fixed sleep: sleep 2$' <<<"$check_output" ||
+  fail "file absent from the baseline did not name every line: $check_output"
+
+write_baseline 'scripts/a.test.sh 3' 'scripts/b.test.sh 1'
+if run_check; then
+  fail "file under its baseline entry was accepted"
+fi
+grep -qF -- "$baseline:3: error: scripts/a.test.sh has 2 unannotated fixed sleep(s) but the baseline allows 3; the ratchet only moves down: replace its line with \`scripts/a.test.sh 2\`" <<<"$check_output" ||
+  fail "file under its baseline entry did not name the corrected baseline line: $check_output"
+grep -q '^scripts/a.test.sh:' <<<"$check_output" &&
+  fail "file under its baseline entry had its sites listed: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1' 'scripts/c.test.sh 1'
+if run_check; then
+  fail "baseline entry for a file with no unannotated sleeps was accepted"
+fi
+grep -qF -- "$baseline:5: error: scripts/c.test.sh has no unannotated fixed sleeps left but the baseline allows 1; the ratchet only moves down: remove its line \`scripts/c.test.sh 1\`" <<<"$check_output" ||
+  fail "entry for a file with no unannotated sleeps did not say to remove the line: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1' 'scripts/zz-gone.test.sh 4'
+if run_check; then
+  fail "stale baseline entry for a missing file was accepted"
+fi
+grep -qF -- "$baseline:5: error: scripts/zz-gone.test.sh no longer exists; remove its line \`scripts/zz-gone.test.sh 4\`" <<<"$check_output" ||
+  fail "stale baseline entry did not name the missing file and its line: $check_output"
+
+write_baseline 'scripts/b.test.sh 1' 'scripts/a.test.sh 2'
+if run_check; then
+  fail "unsorted baseline was accepted"
+fi
+grep -qF -- "$baseline:4: error: entries must be sorted by path and unique, but \"scripts/a.test.sh\" follows \"scripts/b.test.sh\"" <<<"$check_output" ||
+  fail "unsorted baseline failure did not name the line and paths: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/a.test.sh 2' 'scripts/b.test.sh 1'
+if run_check; then
+  fail "duplicate baseline entry was accepted"
+fi
+grep -qF -- "$baseline:4: error: entries must be sorted by path and unique, but \"scripts/a.test.sh\" follows \"scripts/a.test.sh\"" <<<"$check_output" ||
+  fail "duplicate baseline entry failure did not name the line and path: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1' 'scripts/c.test.sh 0'
+if run_check; then
+  fail "baseline entry with count 0 was accepted"
+fi
+grep -qF -- "$baseline:5: error: a file with no unannotated sleeps has no entry; remove \"scripts/c.test.sh 0\"" <<<"$check_output" ||
+  fail "count 0 baseline entry failure did not say to remove the line: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1' 'scripts/c.test.sh many'
+if run_check; then
+  fail "baseline entry with a non-numeric count was accepted"
+fi
+grep -qF -- "$baseline:5: error: count \"many\" is not a number" <<<"$check_output" ||
+  fail "non-numeric count failure did not name the line and count: $check_output"
+
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh' 'scripts/c.test.sh 1'
+if run_check; then
+  fail "baseline entry without a count was accepted"
+fi
+grep -qF -- "$baseline:4: error: expected \`<path> <count>\`, got \"scripts/b.test.sh\"" <<<"$check_output" ||
+  fail "missing count failure did not name the line and entry: $check_output"
+
+rm -f "$temp_dir/$baseline"
+if run_check; then
+  fail "missing baseline file was accepted"
+fi
+grep -qF -- "$baseline: error: baseline file is missing" <<<"$check_output" ||
+  fail "missing baseline file was not reported: $check_output"
+
+# The lint's own self-test is skipped by name, so its fixtures need no
+# markers or baseline entry.
+begin_fixture lint-fixed-sleeps.test.sh
+emit 'sleep 5'
+emit 'for _ in {1..10}; do sleep 0.1; done'
+write_baseline 'scripts/a.test.sh 2' 'scripts/b.test.sh 1'
+if ! run_check; then
+  fail "the lint scanned its own self-test: $check_output"
+fi
+[[ -z "$check_output" ]] || fail "skipping the self-test printed output: $check_output"
+if ! run_check --print-counts; then
+  fail "--print-counts failed with the self-test present: $check_output"
+fi
+grep -q 'lint-fixed-sleeps.test.sh' <<<"$check_output" &&
+  fail "--print-counts listed the lint's own self-test: $check_output"
+
+echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
+[[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0
+
+# Stock macOS /bin/bash is 3.2 (intent-hq/intent#4759). `bash -n` alone
+# accepts Bash 4+ builtins and expansions, so reject them by pattern too,
+# then rerun the fixtures under a real Bash 3 when one can be found (same
+# lookup as docs-check.test.sh: BASH3_BIN, bash3, Homebrew bash@3, 3.x
+# /bin/bash) and require a byte-identical transcript. A missing Bash 3 is a
+# skip notice by default; set REQUIRE_BASH3 to a non-empty value (CI) to make
+# it a failure instead.
+bash -n "$script" || fail "lint-fixed-sleeps.sh does not parse"
+bash -n "${BASH_SOURCE[0]}" || fail "lint-fixed-sleeps.test.sh does not parse"
+bash4_constructs='(^|[^A-Za-z0-9_])(declare|local|typeset)([[:blank:]]+-[A-Za-z]+)*[[:blank:]]+-[A-Za-z]*[An][A-Za-z]*([^A-Za-z]|$)|(^|[^A-Za-z0-9_])(mapfile|readarray|coproc)([^A-Za-z0-9_]|$)|\$\{([A-Za-z_][A-Za-z_0-9]*|[0-9]+|[@*#?!$-])(\[[^]]*\])?(\^\^?|,,?)[^}]*\}|&>>|\|&|;;?&'
+# Full-line comments and the pattern itself are not scanned, nor is the awk
+# program inside the lint's `<<'AWK'` heredoc: it is awk, not bash, and its
+# character classes (`[;&|()]`) read as `case` fallthrough operators. The
+# heredoc lines are blanked, not dropped, so reported line numbers stay right.
+gate_matches() {
+  local file
+  for file in "$@"; do
+    sed "/<<'AWK'/,/^AWK\$/s/.*//" "$file" | grep -nE "$bash4_constructs" | sed "s|^|$file:|" || true
+  done | grep -vE '^([^:]*:)?[0-9]+:[[:blank:]]*#' | grep -v -F 'bash4_constructs' || true
+}
+gate_hits=$(gate_matches "$script" "${BASH_SOURCE[0]}")
+[[ -z "$gate_hits" ]] || fail "Bash 4+ constructs found (stock macOS bash is 3.2):"$'\n'"$gate_hits"
+
+find_bash3() {
+  local candidate resolved brew_prefix
+  brew_prefix=$(brew --prefix bash@3 2>/dev/null) || brew_prefix=""
+  for candidate in "${BASH3_BIN:-}" bash3 "${brew_prefix:+$brew_prefix/bin/bash}" \
+    /opt/homebrew/opt/bash@3/bin/bash /usr/local/opt/bash@3/bin/bash /bin/bash; do
+    [[ -n "$candidate" ]] || continue
+    resolved=$(command -v "$candidate" 2>/dev/null) || continue
+    [[ -x "$resolved" ]] || continue
+    "$resolved" -c '[[ "${BASH_VERSINFO[0]}" -eq 3 ]]' 2>/dev/null || continue
+    printf '%s\n' "$resolved"
+    return 0
+  done
+  return 1
+}
+
+if [[ "${BASH_VERSINFO[0]}" -eq 3 ]]; then
+  : # the fixtures above already ran under Bash 3
+elif bash3=$(find_bash3); then
+  bash3_transcript=$temp_dir/bash3-transcript
+  LINT_FIXED_SLEEPS_TEST_BASH="$bash3" LINT_FIXED_SLEEPS_TEST_TRANSCRIPT="$bash3_transcript" \
+    "$bash3" "${BASH_SOURCE[0]}"
+  cmp -s "$transcript" "$bash3_transcript" ||
+    fail "lint-fixed-sleeps.sh output differs between bash $BASH_VERSION and $bash3:"$'\n'"$(diff "$transcript" "$bash3_transcript" || true)"
+  echo "lint-fixed-sleeps.sh output is identical under bash $BASH_VERSION and $bash3"
+elif [[ -n "${REQUIRE_BASH3:-}" ]]; then
+  fail "no Bash 3 interpreter found and REQUIRE_BASH3 is set (point BASH3_BIN at one, or unset REQUIRE_BASH3 to skip the real 3.2 run)"
+else
+  echo "lint-fixed-sleeps tests: no Bash 3 interpreter found (set BASH3_BIN); real 3.2 run skipped, static gate only"
+fi
