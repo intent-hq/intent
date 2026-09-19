@@ -309,8 +309,9 @@ grep -q 'lint-fixed-sleeps.test.sh' <<<"$check_output" &&
 
 # ---- verifier harness fixtures ------------------------------------------------
 #
-# The 81 cases the wave-1 verifier accepted the lint against, replayed one
-# per isolated skeleton with the same checks: `--print-counts` exits 0 and its
+# The 81 cases the wave-1 verifier accepted the lint against, plus the PR
+# review regressions (functions, subshells, heredocs), replayed one per
+# isolated skeleton with the same checks: `--print-counts` exits 0 and its
 # counts sum to <count>; a plain run exits <status> (default: 1 when <count>
 # is above 0, else 0) with nothing on stdout, every <fragment> on stderr and,
 # on failure, the baseline path named on the first stderr line. <source> is
@@ -440,6 +441,29 @@ harness_case loop-done-variable-assignment - 1 - - $'for _ in {1..3}; do\n  done
 harness_case loop-do-word-until-argument - 1 - - $'for _ in {1..3}; do\n  echo do until next time\ndone\nsleep 1'
 harness_case loop-after-if-then - 2 - - $'if true; then for _ in {1..3}; do\n  sleep 1\ndone; fi'
 harness_case loop-nested-bare-until - 2 - - $'for _ in {1..3}; do\n  until\n    true\n  do\n    :\n  done\n  sleep 1\ndone'
+# functions and subshells: `)` restores command position so `f() {` opens a
+# body, while a `$(…)` / `<(…)` substitution ends mid-word (PR #5433 review)
+harness_case loop-in-function-inline - 1 - - $'f() { for i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone; }' 'scripts/x.test.sh:1:'
+harness_case loop-in-function-newline - 1 - - $'f() {\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone\n}' 'scripts/x.test.sh:2:'
+harness_case loop-nested-function-while - 1 - - $'for i in {1..3}; do\n  f() { while false; do :; done; }\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:1:'
+harness_case loop-in-subshell-inline - 1 - - $'(for i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone)' 'scripts/x.test.sh:1:'
+harness_case loop-in-command-substitution - 1 - - $'result=$(for i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone)' 'scripts/x.test.sh:1:'
+harness_case loop-done-after-substitution - 1 - - $'for i in {1..3}; do\n  echo $(date) done\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:1:'
+harness_case loop-done-after-process-substitution - 1 - - $'for i in {1..3}; do\n  diff <(echo a) done\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:1:'
+harness_case loop-brace-argument - 1 - - $'for i in {1..3}; do\n  echo { done\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:1:'
+# heredocs: body lines are data for loop tracking only; rules 1-2 and markers
+# still scan them because `cat <<'SH'` writes executable stubs
+harness_case heredoc-python-for-is-data - 1 - - $'for i in {1..3}; do\npython3 - <<\'CODE\'\nfor n in range(3):\n    print(n)\nCODE\ndone\nsleep 1' 'scripts/x.test.sh:7:'
+harness_case heredoc-python-done-is-data - 1 - - $'for i in {1..3}; do\npython3 - <<\'CODE\'\nimport time\ndone = False\ntime.sleep(.1) # timing-guard: poll interval\nCODE\ndone' 'scripts/x.test.sh:1:'
+harness_case heredoc-loop-header-is-data - 1 - - $'cat <<\'CODE\'\nfor i in {1..3}; do\nCODE\nsleep 1' 'scripts/x.test.sh:4:'
+harness_case heredoc-quoted-loop-is-data - 1 - - $'cat <<\'CODE\'\nfor i in {1..3}; do\n  :\ndone\nCODE\nsleep 1' 'scripts/x.test.sh:6:'
+harness_case heredoc-shell-sleep-still-counts - 1 - - $'cat <<\'SH\' >stub.sh\nsleep 5\nSH' 'scripts/x.test.sh:2:'
+harness_case heredoc-shell-sleep-in-loop - 2 - - $'for i in {1..3}; do\n  cat <<SH >stub.sh\nsleep 5\nSH\ndone' 'scripts/x.test.sh:1:' 'scripts/x.test.sh:3:'
+harness_case heredoc-python-sleep-still-counts - 1 - - $'python3 - <<PY\nimport time\ntime.sleep(2)\nPY' 'scripts/x.test.sh:3:'
+harness_case heredoc-marker-still-exempts - 0 - - $'cat <<\'SH\' >stub.sh\nsleep 5 # timing-guard: stub fixture\nSH'
+harness_case heredoc-dash-strips-tabs - 1 - - $'for i in {1..3}; do\n\tcat <<-EOF\n\tdone\n\tEOF\ndone\nsleep 1' 'scripts/x.test.sh:6:'
+harness_case heredoc-here-string-is-not-a-heredoc - 1 - - $'for i in {1..3}; do\n  read -r x <<<"$y"\n  :\ndone\nsleep 1' 'scripts/x.test.sh:5:'
+harness_case heredoc-quoted-operator-is-text - 1 - - $'for i in {1..3}; do\n  echo "<<EOF"\n  :\ndone\nsleep 1' 'scripts/x.test.sh:5:'
 
 # ratchet and baseline syntax
 harness_case ratchet-equal - 1 0 $'scripts/x.test.sh 1\n' 'sleep 1'
@@ -461,7 +485,7 @@ harness_case skip-self-test scripts/lint-fixed-sleeps.test.sh 0 - - 'sleep 1'
 harness_case skip-recursive scripts/subdir/x.test.sh 0 - - 'sleep 1'
 harness_case skip-nontest scripts/production.sh 0 - - 'sleep 1'
 
-[[ "$harness_cases" -eq 81 ]] || fail "expected 81 harness cases, ran $harness_cases"
+[[ "$harness_cases" -eq 100 ]] || fail "expected 100 harness cases, ran $harness_cases"
 
 echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0
