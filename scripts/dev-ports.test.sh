@@ -68,14 +68,14 @@ sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
 while True:
-    time.sleep(60)
+    time.sleep(60)  # timing-guard: placeholder lifetime
 PY
 listener_pid=$!
 ready_deadline=$((SECONDS + ready_timeout))
 while [[ ! -e "$ready_file" ]]; do
   kill -0 "$listener_pid" 2>/dev/null || fail "test listener exited before it was ready"
   (( SECONDS < ready_deadline )) || break
-  sleep 0.02
+  sleep 0.02 # timing-guard: poll interval
 done
 [[ -e "$ready_file" ]] || fail "test listener did not start within ${ready_timeout}s"
 

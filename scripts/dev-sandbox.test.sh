@@ -56,7 +56,7 @@ wait_until() {
   local deadline=$((SECONDS + ready_timeout))
   while ! "$@"; do
     (( SECONDS < deadline )) || return 1
-    sleep 0.02
+    sleep 0.02 # timing-guard: poll interval
   done
 }
 
@@ -123,7 +123,7 @@ wait_for_ready() {
   until grep -q '^Sandbox ready:' "$output" 2>/dev/null; do
     kill -0 "$sandbox_pid" 2>/dev/null || return 1
     (( SECONDS < deadline )) || return 1
-    sleep 0.05
+    sleep 0.05 # timing-guard: poll interval
   done
 }
 
@@ -144,7 +144,7 @@ find_frontend_pid() {
     fi
     kill -0 "$parent" 2>/dev/null || break
     (( SECONDS < deadline )) || break
-    sleep 0.02
+    sleep 0.02 # timing-guard: poll interval
   done
   echo "children of sandbox pid $parent (alive: $(kill -0 "$parent" 2>/dev/null && echo yes || echo no)):" >&2
   ps -eo pid,ppid,stat,command | awk -v pp="$parent" 'NR == 1 || $2 == pp' >&2
@@ -221,7 +221,7 @@ sock = socket.socket()
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(3600)
+time.sleep(3600)  # timing-guard: placeholder lifetime
 PY
 listener_pid=$!
 wait_until test -e "$busy_ready" || fail "busy-port listener did not start"
@@ -451,6 +451,7 @@ fi
 [[ ! -e "$state_dir/stale.json" ]] || fail "stale state file was not removed"
 grep -q 'Stale sandbox state:' "$temp_dir/stale.err" || fail "stale state file was not reported"
 
+# timing-guard: placeholder lifetime
 sleep 3600 &
 foreign_pid=$!
 foreign_port=$(free_port)
@@ -474,11 +475,12 @@ kill "$foreign_pid"
 wait "$foreign_pid" 2>/dev/null || true
 foreign_pid=""
 
+# timing-guard: placeholder lifetime
 sleep 3600 &
 dummy_pid=$!
 write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
-  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done
+  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done # timing-guard: poll interval
   printf '%s\n' '{"mode":"ui","pid":99999999,"devPort":1}' >"$state_dir/ui.json"
 ) &
 restart_writer_pid=$!
@@ -543,7 +545,7 @@ sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(3600)
+time.sleep(3600)  # timing-guard: placeholder lifetime
 PY
 listener_pid=$!
 wait_until test -e "$busy_ready.pinned" || fail "pinned-port listener did not start"

@@ -171,6 +171,7 @@ reject_line "Killed"
 
 # A stalled launcher is killed together with its children.
 stall_name="stalled-launcher-$(basename "$temp_dir")"
+# timing-guard: placeholder lifetime
 write_launcher corepack "bash -c 'exec -a $stall_name sleep 6543'; exit 1"
 run_doctor
 expect_line "[missing]  Corepack: 'corepack --version' did not finish within 2s: the launcher $bin_dir/corepack"
@@ -214,6 +215,7 @@ expect_line "[missing]  frontend dependencies: node cannot load node-pty/build/R
 reject_line "[ok]       frontend dependencies:"
 
 # The load probe is bounded like the launcher probes.
+# timing-guard: placeholder lifetime
 write_launcher node "[ \"\$1\" = --version ] && { echo v24.19.0; exit 0; }; exec sleep 6543"
 run_doctor
 expect_line "[missing]  frontend dependencies: loading node-pty/build/Release/pty.node with node did not finish within 2s"
