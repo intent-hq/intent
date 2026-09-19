@@ -145,7 +145,9 @@ The shell suites are linted by `make lint-shell-sleeps` (part of `make check`): 
 `sleep <n>`, `time.sleep(<n>)`, or fixed-count poll loop in `scripts/*.test.sh` must wait
 on an observable event instead, or carry `# timing-guard: <reason>` on its line or the
 line above. `scripts/fixed-sleep-baseline.txt` grandfathers existing sites and only
-ratchets down.
+ratchets down. The poll-loop rule tokenises line by line; its accepted blind spots
+(multi-line arithmetic containing `<<`, a `case` pattern `done)`) are listed in the
+header of `scripts/lint-fixed-sleeps.sh` and pinned by `scripts/lint-fixed-sleeps.test.sh`.
 
 ### Chat-motion performance traces
 

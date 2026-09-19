@@ -488,6 +488,18 @@ harness_case heredoc-double-quoted-delimiter-space - 1 - - $'cat <<"END CODE"\nd
 harness_case heredoc-dash-quoted-delimiter-space - 1 - - $'cat <<-\'END CODE\'\n\tdone\n\tEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
 harness_case heredoc-escaped-space-delimiter - 1 - - $'cat <<END\\ CODE\ndone\nEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
 harness_case heredoc-backslash-delimiter - 1 - - $'cat <<\\EOF\ndone\nEOF\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+# known limitations (accepted false negatives / misattributions, PR #5433
+# review): these pin the CURRENT output, not the desired one. A parser change
+# that flips any of them must update both the expectation here and the "Known
+# limitations of rule 3" list in the lint header. The first three miss the
+# unmarked fixed-count header (a correct parse would count 1, the lint counts
+# 0); the fourth reports the already-closed header on line 1 because the
+# `done` on line 5 falls inside the mistaken heredoc region (a correct parse
+# would count 0, the lint counts 1).
+harness_case known-limit-arith-multiline-expansion - 0 - - $'flags=$((\n  1 << 2\n))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone'
+harness_case known-limit-arith-multiline-command - 0 - - $'((\n  flags = 1 << 2\n))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone'
+harness_case known-limit-case-pattern-done - 0 - - $'for i in {1..3}; do\n  case $i in\n    done) :;;\n  esac\n  sleep .1 # timing-guard: poll interval\ndone'
+harness_case known-limit-arith-multiline-in-loop-misattributes - 1 - - $'for i in {1..3}; do\n  flags=$((\n    1 << 2\n  ))\ndone\nsleep 1 # timing-guard: legitimate outside wait' 'scripts/x.test.sh:1:'
 
 # ratchet and baseline syntax
 harness_case ratchet-equal - 1 0 $'scripts/x.test.sh 1\n' 'sleep 1'
@@ -509,7 +521,7 @@ harness_case skip-self-test scripts/lint-fixed-sleeps.test.sh 0 - - 'sleep 1'
 harness_case skip-recursive scripts/subdir/x.test.sh 0 - - 'sleep 1'
 harness_case skip-nontest scripts/production.sh 0 - - 'sleep 1'
 
-[[ "$harness_cases" -eq 120 ]] || fail "expected 120 harness cases, ran $harness_cases"
+[[ "$harness_cases" -eq 124 ]] || fail "expected 124 harness cases, ran $harness_cases"
 
 echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0

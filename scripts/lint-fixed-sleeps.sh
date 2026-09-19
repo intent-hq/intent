@@ -31,6 +31,18 @@
 #      heredoc is data for loop tracking: it opens and closes no shell loop,
 #      while rules 1 and 2 still scan it (`cat <<'SH'` writes executable stubs).
 #
+# Known limitations of rule 3 (accepted, pinned by the self-test's "known
+# limitations" group). Tokenisation is line-local, so a construct that spans
+# lines can confuse the loop tracker, which then may miss or misattribute loop
+# findings for the rest of the file:
+#   - a multi-line `$(( … ))` / `(( … ))` whose `<<` sits on a continuation
+#     line is taken as a heredoc opener: later loop headers are missed, and a
+#     `done` inside the mistaken heredoc region leaves its loop open, so a later
+#     marked sleep is reported against that earlier header;
+#   - a `case` pattern `done)` at the start of a line closes the loop early.
+# Rules 1 and 2 are unaffected. A contributor who hits one can restructure the
+# expression onto one line or add a `# timing-guard:` marker.
+#
 # Marker: `# timing-guard: <reason>` in a `#` comment (standalone or trailing)
 # on the sleep's own line or the line immediately above exempts it, e.g.
 # `# timing-guard: poll interval`. The reason is required: a bare
