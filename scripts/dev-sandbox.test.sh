@@ -480,7 +480,7 @@ sleep 3600 &
 dummy_pid=$!
 write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
-  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done # timing-guard: poll interval
+  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done
   printf '%s\n' '{"mode":"ui","pid":99999999,"devPort":1}' >"$state_dir/ui.json"
 ) &
 restart_writer_pid=$!
