@@ -421,6 +421,12 @@ harness_case marker-hash-no-space - 0 - - 'sleep 1 #timing-guard: reason'
 harness_case marker-hash-after-semicolon - 0 - - 'sleep 1;# timing-guard: reason'
 harness_case marker-hash-after-brace - 0 - - '{ sleep 1; }# timing-guard: reason'
 harness_case malformed-hash-inside-word-is-not-a-marker - 1 - - 'sleep 1; echo foo#timing-guard:' 'scripts/x.test.sh:1:'
+# sleeps are scanned only up to the `#` comment (PR #5433 review)
+harness_case comment-sleep-after-command - 0 - - 'echo ok # sleep 1'
+harness_case comment-python-sleep-in-heredoc - 0 - - $'python3 - <<\'CODE\'\nx = 0  # time.sleep(1)\nCODE'
+harness_case comment-after-real-sleep-still-counts - 1 - - 'sleep 1 # explanatory text' 'scripts/x.test.sh:1:'
+harness_case comment-sleep-inside-word-counts - 1 - - 'sleep 1; echo foo#sleep 2' 'scripts/x.test.sh:1:'
+harness_case loop-comment-sleep-only - 0 - - $'for _ in {1..3}; do\n  echo ok # sleep 1\ndone'
 
 # fixed-count loops: the header counts as a site when the body has a sleep
 harness_case loop-inline - 2 - - 'for _ in {1..3}; do sleep .1; done'
@@ -491,7 +497,7 @@ harness_case skip-self-test scripts/lint-fixed-sleeps.test.sh 0 - - 'sleep 1'
 harness_case skip-recursive scripts/subdir/x.test.sh 0 - - 'sleep 1'
 harness_case skip-nontest scripts/production.sh 0 - - 'sleep 1'
 
-[[ "$harness_cases" -eq 105 ]] || fail "expected 105 harness cases, ran $harness_cases"
+[[ "$harness_cases" -eq 110 ]] || fail "expected 110 harness cases, ran $harness_cases"
 
 echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0

@@ -95,7 +95,9 @@ function sleep_at(line, at,   after, arg) {
 }
 
 # Fill pos[] with the offset of every fixed sleep on `line` (rules 1 and 2),
-# in offset order; return how many. Comment lines never count.
+# in offset order; return how many. Callers pass the line cut at its `#`
+# comment (see mask()), so `echo ok # sleep 1` never counts; a sleep before
+# the comment still does.
 function sleep_positions(line, pos,   n, t, rest, off, at, a, b, v) {
   n = 0
   split("", pos)
@@ -257,7 +259,7 @@ FNR == 1 { depth = 0; m_above = 0; hd_n = 0; hd_at = 1 }
 {
   m_here = classify_marker($0)
   masked = mask($0)
-  ns = sleep_positions($0, spos)
+  ns = sleep_positions(comment_at ? substr($0, 1, comment_at - 1) : $0, spos)
   if (hd_at <= hd_n) {
     # Heredoc data: rules 1-2 and markers apply as on any line, loop words
     # do not. The terminator line is the delimiter alone (`<<-` strips tabs).
