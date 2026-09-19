@@ -71,8 +71,11 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.43 Daemon stack sampling — `debug.sampleStacks` | [methods/system-observability.md](./methods/system-observability.md) |
 | §5.44 Guided Antigravity setup — `providers.setup.*` | [methods/models-providers.md](./methods/models-providers.md#544-guided-antigravity-setup) |
 | §5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
+| MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync: every method documented in a `methods/*.md` table must appear in the catalog, and every catalog entry must be dispatchable by intentd. A new method therefore needs both a `methods/*.md` table row and a catalog entry in the same change.
+
+`make check-mcp-bindings` (a prerequisite of `make docs-check`) covers the MCP-only `ws.*` surface the catalog does not: it parses the `WORKSPACE_API_DESCRIPTION` / `WORKSPACE_API_DESCRIPTION_CHIEF` help-text constants in intentd's `crates/intent-acp/src/mcp_server/tools.rs` at the pinned gitlink and enforces that (1) the generated signature index [methods/mcp-bindings.md](./methods/mcp-bindings.md) matches the help text line for line, (2) every `ws.<namespace>.<method>` name mentioned in prose under `docs/protocol/` exists in the help text (renamed bindings are listed in the script's `RENAMED_BINDINGS` map), and (3) every parameter or option name used in an inline-code signature mention such as `` `ws.pr.snapshot(prNumber, { repo? })` `` is a parameter/option of that binding. A change to a binding's help line (new option, new result field) therefore fails CI until `make mcp-bindings-doc` regenerates the index — and the regeneration diff names the binding whose prose paragraph needs updating.
 
 ## Compatibility policy (summary)
 

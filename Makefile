@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog check-makefile-targets event-catalog-check shipped-in rpc
+.PHONY: ports status docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -129,11 +129,20 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 
-docs-check: event-catalog-check ## Check documented development targets, knobs, and remote-host guidance
+docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
+
+# The MCP `ws.*` binding surface is documented only by the help-text constants
+# in intentd's tools.rs; docs/protocol/methods/mcp-bindings.md is the generated
+# signature index, and prose mentions under docs/protocol/ must match it.
+check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text
+	@node scripts/check-mcp-bindings.mjs
+
+mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text
+	@node scripts/check-mcp-bindings.mjs --write
 
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that

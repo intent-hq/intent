@@ -71,7 +71,10 @@ jobs:
   # Documentation invariants include the public frontend agent guide, the
   # browser-tab contract surfaces in cloudlands-fe and intentd, and the
   # protocol method catalog (docs/protocol/05-method-catalog.md ↔ methods/*.md
-  # ↔ intentd's catalog.rs). The root Makefile's intentd crate / `--test`
+  # ↔ intentd's catalog.rs), and the MCP `ws.*` bindings index
+  # (docs/protocol/methods/mcp-bindings.md plus prose signature mentions ↔ the
+  # help-text constants in intentd's mcp_server/tools.rs; check-mcp-bindings,
+  # run by make docs-check). The root Makefile's intentd crate / `--test`
   # references must also exist at the pinned intentd gitlink
   # (check-makefile-targets), so a Makefile change that depends on an unmerged
   # intentd PR fails here until the auto-bump lands. Initialize only those
@@ -89,6 +92,7 @@ jobs:
       - run: make docs-check
       - run: node --test scripts/check-protocol-catalog.test.mjs
       - run: make check-protocol-catalog
+      - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: make check-makefile-targets
 
