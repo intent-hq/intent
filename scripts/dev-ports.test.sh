@@ -78,6 +78,20 @@ if (cd "$temp_dir" && DEV_PORT="$busy_port" bash "$script" >"$temp_dir/explicit.
 fi
 grep -q 'explicit DEV_PORT=.* is busy' "$temp_dir/explicit.stderr" || fail "busy explicit port error was unclear"
 
+# Explicit ports are validated and probed one at a time, in DEV_PORT,
+# DEV_TCP_PORT, BRIDGE_PORT, CDP_PORT order: a busy earlier port is reported
+# before an invalid or duplicate later one.
+if (cd "$temp_dir" && DEV_PORT="$busy_port" DEV_TCP_PORT=invalid bash "$script" >/dev/null 2>"$temp_dir/busy-then-invalid.stderr"); then
+  fail "busy explicit port followed by an invalid one was accepted"
+fi
+grep -q "explicit DEV_PORT=$busy_port is busy" "$temp_dir/busy-then-invalid.stderr" \
+  || fail "busy explicit port was not reported before a later invalid port: $(cat "$temp_dir/busy-then-invalid.stderr")"
+if (cd "$temp_dir" && DEV_PORT="$busy_port" DEV_TCP_PORT="$busy_port" bash "$script" >/dev/null 2>"$temp_dir/busy-then-dup.stderr"); then
+  fail "busy explicit port followed by a duplicate was accepted"
+fi
+grep -q "explicit DEV_PORT=$busy_port is busy" "$temp_dir/busy-then-dup.stderr" \
+  || fail "busy explicit port was not reported before a later duplicate port: $(cat "$temp_dir/busy-then-dup.stderr")"
+
 # Regression for intent-hq/intent#4619: a connection accepted and closed by a
 # now-gone listener leaves TIME_WAIT state on the port, which is not a listener.
 timewait_port=$(python3 - <<'PY'

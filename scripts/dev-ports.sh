@@ -61,9 +61,8 @@ explicit_value() {
 }
 
 validate_explicit_ports() {
-  local name value normalized busy index
+  local name value normalized
   local seen_ports=" "
-  local -a explicit_names=() explicit_ports=()
   for name in "${PORT_NAMES[@]}"; do
     value=$(explicit_value "$name")
     [[ -n "$value" ]] || continue
@@ -77,22 +76,11 @@ validate_explicit_ports() {
       return 1
     fi
     seen_ports+="$normalized "
-    explicit_names+=("$name")
-    explicit_ports+=("$normalized")
-  done
-  ((${#explicit_ports[@]})) || return 0
-
-  if busy=$(first_busy_port "${explicit_ports[@]}"); then
-    return 0
-  fi
-  for ((index = 0; index < ${#explicit_ports[@]}; index++)); do
-    if [[ "${explicit_ports[$index]}" == "$busy" ]]; then
-      echo "[dev-ports] ERROR: explicit ${explicit_names[$index]}=$busy is busy; explicit ports are never remapped." >&2
+    if ! first_busy_port "$normalized" >/dev/null; then
+      echo "[dev-ports] ERROR: explicit $name=$normalized is busy; explicit ports are never remapped." >&2
       return 1
     fi
   done
-  echo "[dev-ports] ERROR: probing explicit ports failed." >&2
-  return 1
 }
 
 resolve_block() {
