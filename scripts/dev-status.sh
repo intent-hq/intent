@@ -83,9 +83,11 @@ def doctor_status():
     }
 
 
-# One scripts/dev-ports.sh run spawns python3 four times (one per port) and
-# measured 2.3-3.3 s on a loaded host, so the former 2 s budget emptied "ports"
-# under load; 10 s keeps ~3x headroom while still bounding the report.
+# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
+# port block (~0.8 s each on a loaded host, more when explicit ports are set or
+# the preferred block is busy); the former 2 s budget emptied "ports" under
+# load, and 10 s keeps generous headroom for loaded hosts while still bounding
+# the report.
 PORT_TIMEOUT_DEFAULT = 10.0
 
 
