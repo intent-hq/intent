@@ -23,6 +23,12 @@ fail() {
 
 make_bin=$(command -v make)
 
+# Readiness budget for the held test listener (intent-hq/intent#5411): a fixed
+# 100x0.01s poll expired on a loaded host before python3 had even started.
+ready_timeout=${DEV_PORTS_TEST_READY_TIMEOUT:-30}
+[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] \
+  || fail "DEV_PORTS_TEST_READY_TIMEOUT must be a positive integer (got '$ready_timeout')"
+
 value_of() {
   local output=$1 key=$2 line
   while IFS= read -r line; do
@@ -49,6 +55,8 @@ override=$(cd "$temp_dir" && DEV_PORT=61000 DEV_TCP_PORT=61001 BRIDGE_PORT=61002
 preferred=$(cd "$temp_dir" && bash "$script")
 busy_port=$(value_of "$preferred" DEV_PORT)
 ready_file="$temp_dir/listener-ready"
+# The listener holds the port until cleanup() kills it, so no case below can
+# outlive it on a slow host.
 python3 - "$busy_port" "$ready_file" <<'PY' &
 import pathlib
 import socket
@@ -59,14 +67,17 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+while True:
+    time.sleep(60)
 PY
 listener_pid=$!
-for _ in {1..100}; do
-  [[ -e "$ready_file" ]] && break
-  sleep 0.01
+ready_deadline=$((SECONDS + ready_timeout))
+while [[ ! -e "$ready_file" ]]; do
+  kill -0 "$listener_pid" 2>/dev/null || fail "test listener exited before it was ready"
+  (( SECONDS < ready_deadline )) || break
+  sleep 0.02
 done
-[[ -e "$ready_file" ]] || fail "test listener did not start"
+[[ -e "$ready_file" ]] || fail "test listener did not start within ${ready_timeout}s"
 
 remapped=$(cd "$temp_dir" && bash "$script" 2>"$temp_dir/remap.stderr")
 [[ "$(value_of "$remapped" DEV_PORT)" != "$busy_port" ]] || fail "busy preferred port was not skipped"
