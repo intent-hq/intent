@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# Timing budgets (seconds, positive integers) for loaded hosts
+# (intent-hq/intent#5411):
+#   SANDBOX_READY_TIMEOUT    readiness budget of every sandbox launch, passed to
+#                            the script and mirrored by wait_for_ready (default 20)
+#   SANDBOX_ISOLATION_WINDOW lifetime of the placeholder processes (busy-port
+#                            listeners, foreign/dummy pids) that must outlive
+#                            their test segment (default 120)
+# Every wait returns as soon as its condition holds and every placeholder is
+# killed by its segment, so the defaults only lengthen a genuinely failing run.
 
 set -euo pipefail
 
@@ -31,6 +40,11 @@ fail() {
   echo "dev-sandbox test failed: $*" >&2
   exit 1
 }
+
+ready_timeout=${SANDBOX_READY_TIMEOUT:-20}
+isolation_window=${SANDBOX_ISOLATION_WINDOW:-120}
+[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] || fail "SANDBOX_READY_TIMEOUT must be a positive integer (got '$ready_timeout')"
+[[ "$isolation_window" =~ ^[1-9][0-9]*$ ]] || fail "SANDBOX_ISOLATION_WINDOW must be a positive integer (got '$isolation_window')"
 
 # errexit exits silently on a plain command failure, leaving an empty log with
 # status 1. Name the command before that happens. The trap stays quiet inside
@@ -85,9 +99,11 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+# The script's own deadline only starts once its preflight has spawned the
+# frontend, so the wait here allows one extra second on top of that budget.
 wait_for_ready() {
   local output=$1
-  for _ in {1..100}; do
+  for ((_attempt = 0; _attempt < (ready_timeout + 1) * 20; _attempt++)); do
     grep -q '^Sandbox ready:' "$output" 2>/dev/null && return 0
     kill -0 "$sandbox_pid" 2>/dev/null || return 1
     sleep 0.05
@@ -178,7 +194,7 @@ chmod +x "$temp_dir/bin/cargo"
 
 busy_port=$(free_port)
 busy_ready="$temp_dir/busy-ready"
-python3 - "$busy_port" "$busy_ready" <<'PY' &
+python3 - "$busy_port" "$busy_ready" "$isolation_window" <<'PY' &
 import pathlib
 import socket
 import sys
@@ -188,7 +204,7 @@ sock = socket.socket()
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+time.sleep(int(sys.argv[3]))
 PY
 listener_pid=$!
 for _ in {1..100}; do
@@ -243,7 +259,7 @@ grep -q "run 'make bootstrap-dev-host'" "$temp_dir/missing-prereq.out" || fail "
 
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_TCP_PORT=43210 \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/ui.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/ui.out" || fail "UI sandbox did not become ready"
@@ -289,7 +305,7 @@ PY
 # it in its 50x0.1s wait loop, so 0.2s later the second TERM lands mid-loop.
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
@@ -335,7 +351,7 @@ PY
 for iteration in $(seq 1 20); do
   port=$(free_port)
   PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
-    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
     bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
   sandbox_pid=$!
   wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
@@ -368,7 +384,7 @@ supervised-ui:
 MAKE
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 SCRIPT="$script" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SCRIPT="$script" \
   setsid make -f "$temp_dir/supervised.mk" supervised-ui >"$temp_dir/supervised.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did not become ready"
@@ -429,7 +445,7 @@ fi
 [[ ! -e "$state_dir/stale.json" ]] || fail "stale state file was not removed"
 grep -q 'Stale sandbox state:' "$temp_dir/stale.err" || fail "stale state file was not reported"
 
-sleep 30 &
+sleep "$isolation_window" &
 foreign_pid=$!
 foreign_port=$(free_port)
 cat >"$state_dir/foreign.json" <<JSON
@@ -452,7 +468,7 @@ kill "$foreign_pid"
 wait "$foreign_pid" 2>/dev/null || true
 foreign_pid=""
 
-sleep 30 &
+sleep "$isolation_window" &
 dummy_pid=$!
 write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
@@ -468,7 +484,7 @@ rm -f "$state_dir/ui.json"
 
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" SANDBOX_STATE_DIR="$state_dir" \
-  SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
+  SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/child-failure.out" || fail "child-failure sandbox did not become ready"
 frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/child-failure.out") \
@@ -490,7 +506,7 @@ grep -qx "DEV_PORT=$port" "$state_dir/ui.port" || fail "pinned port record did n
 pinned_port=$port
 derived_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-restart.out" || fail "pinned restart sandbox did not become ready"
 grep -q "Reusing recorded DEV_PORT=$pinned_port from $state_dir/ui.port" "$temp_dir/pinned-restart.out" \
@@ -508,7 +524,7 @@ sandbox_pid=""
 [[ -f "$state_dir/ui.port" ]] || fail "pinned port record did not survive a TERM exit"
 
 # A busy recorded port falls back to the derived port and names the holder.
-python3 - "$pinned_port" "$busy_ready.pinned" <<'PY' &
+python3 - "$pinned_port" "$busy_ready.pinned" "$isolation_window" <<'PY' &
 import pathlib
 import socket
 import sys
@@ -519,7 +535,7 @@ sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+time.sleep(int(sys.argv[3]))
 PY
 listener_pid=$!
 for _ in {1..100}; do
@@ -528,7 +544,7 @@ for _ in {1..100}; do
 done
 [[ -e "$busy_ready.pinned" ]] || fail "pinned-port listener did not start"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-busy.out" || fail "sandbox with a busy recorded port did not become ready"
 grep -q "recorded DEV_PORT=$pinned_port from $state_dir/ui.port is busy; starting on derived DEV_PORT=$derived_port" "$temp_dir/pinned-busy.out" \
@@ -550,7 +566,7 @@ listener_pid=""
 collide_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$collide_port" DEV_PORT_ORIGIN=file \
   DEV_TCP_PORT="$derived_port" DEV_TCP_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-collide.out" || fail "sandbox with a colliding recorded port did not become ready"
 grep -q "recorded DEV_PORT=$derived_port from $state_dir/ui.port collides with explicit DEV_TCP_PORT=$derived_port; starting on derived DEV_PORT=$collide_port" "$temp_dir/pinned-collide.out" \
@@ -565,7 +581,7 @@ sandbox_pid=""
 # An explicit port always wins over the recorded one.
 explicit_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$explicit_port" DEV_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/explicit-restart.out" || fail "explicit-port sandbox did not become ready"
 grep -q "^Sandbox ready: http://127.0.0.1:$explicit_port/" "$temp_dir/explicit-restart.out" \
@@ -588,7 +604,7 @@ cargo_log="$temp_dir/dev-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
   DEV_TCP_PORT=43211 SANDBOX_STATE_DIR="$state_dir" \
   INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" BUILD_JOBS=8 \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT=5 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/stack.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready"
@@ -628,7 +644,7 @@ cargo_log="$temp_dir/release-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/release-data" \
   SANDBOX_STATE_DIR="$state_dir" \
   INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" INTENTD_PROFILE=release \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT=5 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/release.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/release.out" || fail "release-profile stack did not become ready"
@@ -642,7 +658,7 @@ port=$(free_port)
 override_log="$temp_dir/override-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/override-data" \
   SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT=5 \
+  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/override.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become healthy"
@@ -666,7 +682,7 @@ sandbox_pid=""
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/unhealthy-data" \
   SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" HEALTH_MODE=pending \
-  SANDBOX_READY_TIMEOUT=5 SANDBOX_WARM_TIMEOUT=1 \
+  SANDBOX_READY_TIMEOUT="$ready_timeout" SANDBOX_WARM_TIMEOUT=1 \
   bash "$script" stack >"$temp_dir/unhealthy.out" 2>&1
 status=$?
 set -e
@@ -681,7 +697,7 @@ SH
 chmod +x "$temp_dir/failing-intentd"
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/fail-data" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/failing-intentd" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/failing-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/fail.out" 2>&1
 status=$?
 set -e
@@ -989,7 +1005,7 @@ grep -qx '\[missing\]  frontend package manager: expected pnpm@10.30.3 via Corep
 no_corepack_state="$temp_dir/no-corepack-state"
 set +e
 PATH="$sanitized_bin" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
-  SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/no-corepack-ui.out" 2>&1
 status=$?
 set -e

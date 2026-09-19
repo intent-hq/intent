@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# STATUS_NOGH_BUDGET_MS: wall-clock budget (positive integer ms, default 15000)
+# for the no-gh status report, which must never hang; the report itself allows
+# scripts/dev-ports.sh up to STATUS_PORTS_TIMEOUT (5s) on a loaded host
+# (intent-hq/intent#5411).
 
 set -euo pipefail
 
@@ -14,6 +18,9 @@ fail() {
   echo "dev-status test failed: $*" >&2
   exit 1
 }
+
+nogh_budget_ms=${STATUS_NOGH_BUDGET_MS:-15000}
+[[ "$nogh_budget_ms" =~ ^[1-9][0-9]*$ ]] || fail "STATUS_NOGH_BUDGET_MS must be a positive integer (got '$nogh_budget_ms')"
 
 write_live_state() {
   python3 - "$1" "$2" <<'PY'
@@ -59,7 +66,7 @@ PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
   bash "$script" >"$temp_dir/empty.json"
 finished_ms=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
 elapsed_ms=$((finished_ms - started_ms))
-[[ "$elapsed_ms" -lt 5000 ]] || fail "no-gh status took ${elapsed_ms}ms (expected under 5000ms)"
+[[ "$elapsed_ms" -lt "$nogh_budget_ms" ]] || fail "no-gh status took ${elapsed_ms}ms (expected under ${nogh_budget_ms}ms)"
 python3 - "$temp_dir/empty.json" <<'PY' || fail "empty JSON report shape was incorrect"
 import json
 import sys
@@ -209,5 +216,38 @@ repos = json.loads(sys.argv[1])
 assert repos["cloudlands-fe"][0] is False and repos["cloudlands-fe"][2] is False, repos
 assert isinstance(repos["cloudlands-fe"][1], str), repos
 PY
+
+# Regression for intent-hq/intent#5411: scripts/dev-ports.sh takes 2-3s on a
+# loaded host, past the former hardcoded 2s budget, so the report silently
+# carried an empty ports block. The default budget is 5s; STATUS_PORTS_TIMEOUT
+# overrides it and rejects anything but a positive integer.
+slow_root="$temp_dir/slow-ports"
+mkdir -p "$slow_root/scripts"
+cp "$script" "$slow_root/scripts/dev-status.sh"
+cat >"$slow_root/scripts/dev-ports.sh" <<'SH'
+#!/usr/bin/env bash
+python3 -c 'import time; time.sleep(3)'
+printf 'DEV_PORT=5200\nDEV_TCP_PORT=5201\nBRIDGE_PORT=5202\nCDP_PORT=5203\n'
+SH
+chmod +x "$slow_root/scripts/dev-ports.sh"
+slow_ports() {
+  env PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 "$@" \
+    bash "$slow_root/scripts/dev-status.sh" | python3 -c '
+import json, sys
+print(json.dumps(json.load(sys.stdin)["ports"], sort_keys=True))'
+}
+default_ports=$(slow_ports)
+[[ "$default_ports" == '{"BRIDGE_PORT": 5202, "CDP_PORT": 5203, "DEV_PORT": 5200, "DEV_TCP_PORT": 5201}' ]] \
+  || fail "a 3s dev-ports.sh was cut off by the default ports budget: $default_ports"
+short_ports=$(slow_ports STATUS_PORTS_TIMEOUT=1)
+[[ "$short_ports" == '{}' ]] || fail "STATUS_PORTS_TIMEOUT=1 did not bound dev-ports.sh: $short_ports"
+set +e
+env PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 STATUS_PORTS_TIMEOUT=soon \
+  bash "$slow_root/scripts/dev-status.sh" >/dev/null 2>"$temp_dir/bad-timeout.err"
+status=$?
+set -e
+[[ "$status" -eq 2 ]] || fail "STATUS_PORTS_TIMEOUT=soon returned $status instead of 2"
+grep -q 'STATUS_PORTS_TIMEOUT must be a positive integer' "$temp_dir/bad-timeout.err" \
+  || fail "invalid STATUS_PORTS_TIMEOUT was not reported"
 
 echo "dev-status tests passed (no-gh ${elapsed_ms}ms)"

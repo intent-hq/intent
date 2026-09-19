@@ -7,19 +7,28 @@
 #  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
+#
+# STATUS_PORTS_TIMEOUT: seconds (positive integer, default 5) allowed for
+# scripts/dev-ports.sh before "ports" is reported empty; it takes 2-3s on a
+# loaded host (intent-hq/intent#5411).
 
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 json_output=${STATUS_JSON:-0}
+ports_timeout=${STATUS_PORTS_TIMEOUT:-5}
 if [[ ${1:-} == --json ]]; then
   json_output=1
 elif [[ $# -gt 0 ]]; then
   echo "Usage: $0 [--json]" >&2
   exit 2
 fi
+if [[ ! "$ports_timeout" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: STATUS_PORTS_TIMEOUT must be a positive integer (got '$ports_timeout')." >&2
+  exit 2
+fi
 
-exec python3 - "$repo_root" "$json_output" <<'PY'
+exec python3 - "$repo_root" "$json_output" "$ports_timeout" <<'PY'
 import json
 import os
 import shutil
@@ -29,7 +38,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-root, json_output = sys.argv[1], sys.argv[2] == "1"
+root, json_output, ports_timeout = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3])
 
 
 def run(command, *, cwd=root, env=None, timeout=3):
@@ -81,7 +90,7 @@ def doctor_status():
 
 
 def port_status():
-    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=2)
+    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=ports_timeout)
     ports = {}
     if result is None or result.returncode != 0:
         return ports
