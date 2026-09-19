@@ -433,6 +433,43 @@ fi
 [[ "$status" -eq 143 ]] || fail "fork-window TERM returned $status instead of 143"
 [[ ! -e "$state_dir/ui.json" ]] || fail "UI state file remained after a fork-window TERM"
 
+# Same window on the stack-mode daemon fork (`daemon_pid=$!`). The hold parks
+# the script at the first fork, which in stack mode is the daemon's; the fake
+# intentd binds its socket only after that fork, so the socket gates the pid
+# lookup. The daemon must be torn down even though the frontend never forked.
+port=$(free_port)
+data_dir="$temp_dir/fork-window-data"
+touch "$fork_hold"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  SANDBOX_TEST_FORK_HOLD="$fork_hold" bash "$script" stack >"$temp_dir/fork-window-stack.out" 2>&1 &
+sandbox_pid=$!
+if ! wait_until test -S "$data_dir/intentd.sock"; then
+  rm -f "$fork_hold"
+  fail "fork-window daemon did not bind its socket within ${ready_timeout}s"
+fi
+if ! daemon_pid=$(pgrep -P "$sandbox_pid" -f "$data_dir/intentd.sock"); then
+  rm -f "$fork_hold"
+  fail "could not find the fork-window daemon child"
+fi
+kill -TERM "$sandbox_pid"
+sleep 0.2
+rm -f "$fork_hold"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+if ! wait_until pid_gone "$daemon_pid"; then
+  kill -KILL "$daemon_pid" 2>/dev/null || true
+  echo "fork-window stack sandbox output:" >&2
+  cat "$temp_dir/fork-window-stack.out" >&2 || true
+  fail "TERM inside the daemon fork → pid-capture window leaked intentd $daemon_pid (script exit $status)"
+fi
+[[ "$status" -eq 143 ]] || fail "fork-window daemon TERM returned $status instead of 143"
+[[ ! -e "$state_dir/stack.json" ]] || fail "stack state file remained after a daemon fork-window TERM"
+pgrep -f "python3 - $port" >/dev/null && fail "daemon fork-window TERM left a frontend descendant"
+
 cat >"$temp_dir/supervised.mk" <<'MAKE'
 supervised-ui:
 	@exec bash "$(SCRIPT)" ui
