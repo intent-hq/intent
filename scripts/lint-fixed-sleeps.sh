@@ -156,40 +156,52 @@ function classify_marker(line,   comment, at) {
   return trim(substr(comment, at + length(marker))) == "" ? 2 : 1
 }
 
-# Is offset `at` of the masked line a command position, where the shell reads
-# reserved words? Start of line, after a control operator or after another
-# reserved word; `echo done` and `echo until next time` are arguments.
-function command_position(masked, at,   prefix) {
-  prefix = substr(masked, 1, at - 1)
-  sub(/[ \t]+$/, "", prefix)
-  if (prefix == "" || prefix ~ /[;&|({`!]$/) return 1
-  return prefix ~ /(^|[^A-Za-z0-9_])(do|then|else|elif|if|while|until)$/
-}
-
 # Fill kpos[] / kind[] with every loop reserved word on the masked line, in
 # offset order: "fixed" (a fixed-count `for` header), "open" (any other
 # `for`/`while`/`until`, including a bare `while` whose condition follows on
 # the next line) or "done". Return how many.
-function keyword_tokens(masked, kpos, kind,   n, rest, off, word, at) {
+#
+# The line is split into shell words (quoted text is already blanked by
+# mask(), so `"done"` is never a word). A word is a loop keyword only when it
+# is exactly `for`/`while`/`until`/`do`/`done` AND stands in command position:
+# the first word of the line, the word after `;` `&&` `||` `|` `&` `(` `{`, or
+# the word after a `do`/`then`/`else`/`{` that was itself in command position.
+# A leading `NAME=value` assignment keeps command position for the next word;
+# any other word (`echo do done`, `done=1`) ends it.
+function keyword_tokens(masked, kpos, kind,   n, i, len, c, start, word, cmdpos) {
   n = 0
   split("", kpos); split("", kind)
-  rest = masked
-  off = 0
-  while (match(rest, /(^|[^A-Za-z0-9_])(for|while|until|done)([^A-Za-z0-9_]|$)/)) {
-    at = RSTART
-    if (substr(rest, at, 1) !~ /[A-Za-z]/) at++
-    word = substr(rest, at)
-    if (command_position(masked, off + at)) {
-      if (word ~ /^done/) {
-        n++; kpos[n] = off + at; kind[n] = "done"
-      } else if (word ~ /^for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+[{]-?[0-9]+\.\.-?[0-9]+(\.\.-?[0-9]+)?[}]/) {
-        n++; kpos[n] = off + at; kind[n] = "fixed"
-      } else if (word ~ /^(for|while|until)([ \t(]|$)/) {
-        n++; kpos[n] = off + at; kind[n] = "open"
-      }
+  len = length(masked)
+  cmdpos = 1
+  i = 1
+  while (i <= len) {
+    c = substr(masked, i, 1)
+    if (c == " " || c == "\t") { i++; continue }
+    if (c == ";" || c == "&" || c == "|" || c == "(" || c == ")") {
+      if (i < len && substr(masked, i + 1, 1) == c) i++
+      i++
+      cmdpos = (c != ")")
+      continue
     }
-    off += at + 2
-    rest = substr(rest, at + 3)
+    start = i
+    while (i <= len && substr(masked, i, 1) !~ /[ \t;&|()]/) i++
+    word = substr(masked, start, i - start)
+    if (!cmdpos) continue
+    if (word == "done") {
+      n++; kpos[n] = start; kind[n] = "done"
+      cmdpos = 0
+    } else if (word == "for") {
+      n++; kpos[n] = start
+      kind[n] = (substr(masked, start) ~ /^for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+[{]-?[0-9]+\.\.-?[0-9]+(\.\.-?[0-9]+)?[}]/) ? "fixed" : "open"
+      cmdpos = 0
+    } else if (word == "while" || word == "until") {
+      n++; kpos[n] = start; kind[n] = "open"
+      cmdpos = 0
+    } else if (word == "do" || word == "then" || word == "else" || word == "{") {
+      cmdpos = 1
+    } else if (word !~ /^[A-Za-z_][A-Za-z0-9_]*=/) {
+      cmdpos = 0
+    }
   }
   return n
 }
