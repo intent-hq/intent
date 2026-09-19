@@ -126,7 +126,9 @@ function sleep_positions(line, pos,   n, t, rest, off, at, a, b, v) {
 
 # Blank out the contents of `"…"` / `'…'` literals (keeping offsets) and drop
 # everything from the first `#` comment on; sets comment_at to that `#` offset
-# (0 when the line has no comment).
+# (0 when the line has no comment). As in the shell, an unquoted `#` starts a
+# comment only at the start of a word: first on the line or after a blank or
+# one of `; & | ( ) { }` — `foo#bar` is one word.
 function mask(line,   out, i, n, c, in_dq, in_sq) {
   out = ""; in_dq = 0; in_sq = 0; comment_at = 0
   n = length(line)
@@ -144,7 +146,7 @@ function mask(line,   out, i, n, c, in_dq, in_sq) {
     if (c == "\\") { out = out "  "; i++; continue }
     if (c == "'") { in_sq = 1; out = out c; continue }
     if (c == "\"") { in_dq = 1; out = out c; continue }
-    if (c == "#") { comment_at = i; break }
+    if (c == "#" && (i == 1 || substr(line, i - 1, 1) ~ /[ \t;&|(){}]/)) { comment_at = i; break }
     out = out c
   }
   return out
