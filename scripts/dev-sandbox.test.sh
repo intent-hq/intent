@@ -60,12 +60,20 @@ wait_until() {
   done
 }
 
-# An exited-but-unreaped child is gone for the purposes of these waits.
+# A pid is gone once kill -0 fails, or once it is a zombie: a direct child of
+# this shell stays kill -0-visible until the test's own `wait`, and a
+# reparented supervised script is reaped by whoever inherited it, outside the
+# test's control. A failed or empty ps probe is not evidence of exit — kill -0
+# just succeeded — so it only counts as gone if kill -0 now fails too (the
+# process exited between the two calls).
 pid_gone() {
   local process_state
   kill -0 "$1" 2>/dev/null || return 0
-  process_state=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
-  [[ -z "$process_state" || "$process_state" == Z* ]]
+  if ! process_state=$(ps -o stat= -p "$1" 2>/dev/null) || [[ -z "$process_state" ]]; then
+    ! kill -0 "$1" 2>/dev/null
+    return
+  fi
+  [[ "$process_state" == Z* ]]
 }
 
 free_port() {
