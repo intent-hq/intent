@@ -439,9 +439,12 @@ reject_line "[missing]  cargo-llvm-cov"
 # RUSTUP_AUTO_INSTALL is unset and the cwd pins an absent override. The doctor
 # is read-only: with the pin absent from `rustup toolchain list` the
 # toolchain-specific probes never run, and every rustup invocation sees
-# RUSTUP_AUTO_INSTALL=0. write_rustup_stub [toolchain...]: a rustup that logs
-# each argv line (plus a sentinel when RUSTUP_AUTO_INSTALL is not 0), lists
-# the given toolchains, and answers every probe as if the pin were complete.
+# RUSTUP_AUTO_INSTALL=0. Both sub-cases run the script with
+# RUSTUP_AUTO_INSTALL=1 inherited so the sentinel only passes because the
+# script exports 0 itself, not because the test runner already had it set.
+# write_rustup_stub [toolchain...]: a rustup that logs each argv line (plus a
+# sentinel when RUSTUP_AUTO_INSTALL is not 0), lists the given toolchains, and
+# answers every probe as if the pin were complete.
 rustup_log="$temp_dir/rustup.log"
 rustup_toolchains="$temp_dir/rustup-toolchains"
 write_rustup_stub() {
@@ -468,7 +471,7 @@ EOF
 write_launcher cargo "[ \"\$1\" = llvm-cov ] && { echo \"cargo-llvm-cov 0.9.0\"; exit 0; }; $pinned_cargo"
 write_rustup_stub "stable-x86_64-unknown-linux-gnu" "1.95.0-x86_64-unknown-linux-gnu (active, default)"
 : >"$rustup_log"
-run_doctor
+RUSTUP_AUTO_INSTALL=1 run_doctor
 expect_line "[missing]  Rust toolchain: 1.96.0 with rustfmt and clippy"
 reject_line "[ok]       Rust toolchain:"
 expect_line "$row_no_llvm_tools"
@@ -482,7 +485,7 @@ grep -qx 'toolchain list' "$rustup_log" || fail "doctor did not consult rustup t
 # disable the toolchain and coverage checks.
 write_rustup_stub "stable-x86_64-unknown-linux-gnu" "1.96.0-x86_64-unknown-linux-gnu (active, default)"
 : >"$rustup_log"
-run_doctor
+RUSTUP_AUTO_INSTALL=1 run_doctor
 expect_line "[ok]       Rust toolchain: 1.96.0 with rustfmt and clippy"
 expect_line "[ok]       active Rust toolchain: 1.96.0"
 expect_line "$row_ready"
