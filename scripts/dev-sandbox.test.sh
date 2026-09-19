@@ -353,8 +353,14 @@ PY
 # leaving the state file and the frontend behind (pre-fix ~65% of iterations).
 # The signal traps now run cleanup themselves. Two back-to-back TERMs to the
 # script pid hit that window; the loop makes a regression practically certain.
+# The output file is reused across iterations, and a background job's `>`
+# truncation happens in the forked child, so on a loaded host `wait_for_ready`
+# could read the previous iteration's ready line before the new sandbox had
+# even started; the TERMs then landed mid-startup, where a TERM between the
+# frontend fork and `fe_pid=$!` orphans the frontend. Truncate up front.
 for iteration in $(seq 1 20); do
   port=$(free_port)
+  : >"$temp_dir/signal-window.out"
   PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
     SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
     bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
