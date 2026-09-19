@@ -963,15 +963,18 @@ each with a dedicated change event (§6.5) that carries the new value:
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
-`prStatus`, `activePullRequest`, `pullRequests`, `contextLinks`, `archivedAt`, `cowSupported`,
+`prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
+**List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
 `checkoutMode`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
 **`contextLinks` (new in intentd, migration `0110`).** Issue/PR context links supplied
 at `workspace.create` — the initializer's context mentions — persisted on the workspace
-row and returned on every `Workspace` payload so any client opening the workspace can
-seed its layout from the linked pages. The param is `contextLinks?: ContextLink[]` where
+row and returned on the **detail** `Workspace` payloads (the `workspace.create` result and
+`workspace.get`) so a client opening the workspace can seed its layout from the linked
+pages; `workspace.list` / lite `workspace.subscribe` seq-0 rows omit it (see **List-row
+slimming** below). The param is `contextLinks?: ContextLink[]` where
 `ContextLink = { kind: "issue" | "pr", url: string, owner: string, repo: string,
 number: number }` (`kind` lowercase on the wire; an unknown `kind` — or a negative or
 fractional `number`, which fails the unsigned-integer field type — rejects `-32602` at
@@ -1201,13 +1204,17 @@ step 4, the git-root fold, which also canonicalizes the row's own `activePullReq
 `pullRequests` copies in place on every surface that derives `displayStatus`, `workspace.get`
 included) and the monitored PRs feed them through the monitor signals
 (intentd#1329), so the emitted `pullRequests` array and `displayStatus` agree on what the
-workspace's PRs are. Everything else is unchanged: the stored `workspace.pull_requests` column
-keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
-explicit-null clear below still targets only the stored value), `workspace.get` and the
-write-path responses carry the unmerged workspace-level list (no git-root or monitor entries
-are appended there — only the same-url canonicalization of the workspace's own copies
-applies), and the `pr:*` event
-payloads (§6.5) are untouched.
+workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
+monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
+`pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
+seq-0 rows and deltas) carry that pool capped at the **5** most recent
+(`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
+the recovery surface for the full pool (see the detail-only table below). Everything else is
+unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
+(PR discovery/refresh writes it as before, and the explicit-null clear below still targets
+only the stored value), the write-path responses carry the unmerged workspace-level list
+(no git-root or monitor entries are appended there — only the same-url canonicalization of
+the workspace's own copies applies), and the `pr:*` event payloads (§6.5) are untouched.
 
 **Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
 five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
@@ -1266,7 +1273,8 @@ omitted** (see its bullet below):
   filters archived before reading it; iOS decodes it optionally). Active list rows and
   `workspace.get` — archived included — keep serving it. The slimming runs as a final pass
   over the merged list after enrichment, so a row degraded by an enrichment failure is
-  slimmed the same way.
+  slimmed the same way (see **List-row slimming** below for the full set of list-only
+  omissions).
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
   **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
   `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
@@ -1274,6 +1282,53 @@ omitted** (see its bullet below):
   stays on the wire shape as optional for decoder compatibility; clients that need diff data fetch
   it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
   workspace payload.
+
+**List-row slimming (`workspace.list` / lite `workspace.subscribe` seq-0; extends
+[monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)).** Both list surfaces
+serve each `Workspace` through one final `Workspace::slim_for_list` pass — after the
+aggregate enrichment and the merged-`pullRequests` fold above, so degraded rows and
+externally merged PR entries are slimmed alike — that drops the **detail-only** fields.
+Every stripped optional field is simply **absent** on list rows (never `null`; the v4.2
+`diskUsage` precedent), so this is not a wire-shape change; the one non-optional case is
+`diffSummary.files`, which is always serialized and is emptied to `[]` whenever a list row
+carries a `diffSummary` at all (the aggregate enrichment leaves `diffSummary` absent on the
+normal list paths, so today the whole object is absent). `workspace.get` never slims and
+keeps serving every field. The list-only omissions are:
+
+| Omitted on list rows | Detail read | Rationale |
+| --- | --- | --- |
+| `tokenUsage` | `workspace.get`, `workspace.getTokenUsage` + `workspace:tokenUsage-changed` (§5.23) | Persisted tally dominated large frames; no list consumer reads it |
+| `agentSummary` on **archived** rows only | `workspace.get` | No HUD/coverflow agent card renders for an archived workspace; active rows keep the full summary |
+| `setupScript` | `workspace.get`, `workspace.getSetupScript` (§5.25) | Unbounded script body read only by the open workspace's chat/setup surfaces |
+| `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
+| `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
+| `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
+| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool is the one list-row field with unbounded length in production, and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by `id`) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never touched |
+
+**`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
+lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
+the pre-cap (post-merge) pool length (so a client can render "+N more" and fetch the full pool
+via `workspace.get`, which serves the same merged pool uncapped — every entry the cap dropped is
+recoverable there, whichever source it came from); absent (never `null`) when the pool fit, and
+**never** on `workspace.get`. Derived-field ladder: computed on the list emit path from the row
+already in hand (the length of the pool being truncated — no extra read), never persisted; the
+`workspace.get` merge is two scoped store reads (git roots, non-cancelled monitors — the same
+narrow projection as the list's bulk read), no forge calls.
+
+Fixed-size scalars stay on list rows even when only detail surfaces read them
+(`baseCommitSha`, `path` / `repositoryPath` / `worktreePath`): a 40-hex SHA buys nothing per
+row, and FE stores hydrate the open workspace from list rows. Clients that hydrate a
+workspace from `workspace.get` and later receive a `workspace.list` refresh must preserve the
+detail-only fields across the merge rather than overwrite them with the (absent) list values.
+
+The contract is enforced in intentd by two goldens on a worst-case-realistic active row
+(ten-agent `agentSummary`, an eight-entry stored PR pool capped to five on the row, every
+small optional scalar present):
+a per-row byte budget (`WORKSPACE_LIST_ROW_BUDGET_BYTES` in `intent-core`, with the
+fleet arithmetic in its doc comment) whose failure message attributes bytes per field, and
+a top-level / per-PR key allowlist (`WORKSPACE_LIST_ROW_KEYS` / `WORKSPACE_LIST_PR_KEYS`).
+Adding a field to list rows means adding it to the allowlist, stating which rung of the
+derived-field ladder it sits on, and updating this table.
 
 **Workspace disk usage (`workspace.diskUsage`, on-demand since v4.2).** The **cached**
 whole-workspace disk footprint —
@@ -1767,7 +1822,8 @@ seq-0 snapshot rows (§6.9) **never serve** `tokenUsage` — the field is option
 (`skip_serializing_if`), so it is simply absent (never `null`), following the v4.2
 `diskUsage` precedent. `workspace.get` keeps serving it, and clients that need usage read
 `workspace.getTokenUsage` + `workspace:tokenUsage-changed` as before (the FE already did
-exactly this — no list consumer read the field off list rows).
+exactly this — no list consumer read the field off list rows). The full set of list-only
+omissions is tabulated under **List-row slimming** in the `Workspace` payload notes above.
 
 | Method | Params | Result |
 | --- | --- | --- |
