@@ -223,21 +223,58 @@ function keyword_tokens(masked, kpos, kind,   n, i, len, c, start, word, cmdpos,
 # Append the delimiter of every heredoc operator on the line (`<<` / `<<-`,
 # never the `<<<` here-string) to the hd_delim[] / hd_strip[] queue. The
 # operator is located on the masked line so quoted or commented `<<` never
-# opens one; the delimiter word is read from the raw line so `<<'EOF'`,
-# `<<"EOF"` and `<<\EOF` keep their text once the quoting is dropped.
-function heredoc_openers(masked, raw,   len, i, j, strip, word) {
+# opens one, and neither does the left shift inside an arithmetic `$((…))` /
+# `((…))`: a `(` right after another `(` opens an arithmetic level (parens
+# nest inside it), and `<<` is an operator while any such level is open. The
+# delimiter is read from the raw line as one shell word — `'…'` / `"…"`
+# spans and `\`-escapes included, so `<<'END CODE'` and `<<END\ CODE` name
+# `END CODE` — and stored with the quoting removed, as the shell compares it.
+function heredoc_openers(masked, raw,   len, rlen, i, j, c, pd, na, arith, strip, word) {
   len = length(masked)
+  rlen = length(raw)
+  pd = 0; na = 0
+  split("", arith)
   for (i = 1; i < len; i++) {
-    if (substr(masked, i, 2) != "<<") continue
+    c = substr(masked, i, 1)
+    if (c == "(") {
+      pd++
+      arith[pd] = 0
+      if (pd > 1 && substr(masked, i - 1, 1) == "(") {
+        if (!arith[pd - 1]) { arith[pd - 1] = 1; na++ }
+        arith[pd] = 1; na++
+      }
+      continue
+    }
+    if (c == ")") {
+      if (pd > 0) { if (arith[pd]) na--; pd-- }
+      continue
+    }
+    if (c != "<" || substr(masked, i + 1, 1) != "<") continue
     if (substr(masked, i + 2, 1) == "<") { i += 2; continue }
+    if (na > 0) { i++; continue }
     i += 2
     strip = 0
     if (substr(masked, i, 1) == "-") { strip = 1; i++ }
-    while (i <= len && substr(masked, i, 1) ~ /[ \t]/) i++
-    j = i
-    while (j <= length(raw) && substr(raw, j, 1) !~ /[ \t;&|<>()]/) j++
-    word = substr(raw, i, j - i)
-    gsub(/["'\\]/, "", word)
+    while (i <= rlen && substr(raw, i, 1) ~ /[ \t]/) i++
+    word = ""
+    for (j = i; j <= rlen; j++) {
+      c = substr(raw, j, 1)
+      if (c == "'") {
+        for (j++; j <= rlen && substr(raw, j, 1) != "'"; j++) word = word substr(raw, j, 1)
+      } else if (c == "\"") {
+        for (j++; j <= rlen && (c = substr(raw, j, 1)) != "\""; j++) {
+          if (c == "\\" && substr(raw, j + 1, 1) ~ /["\\$`]/) j++
+          word = word substr(raw, j, 1)
+        }
+      } else if (c == "\\") {
+        j++
+        if (j <= rlen) word = word substr(raw, j, 1)
+      } else if (c ~ /[ \t;&|<>()]/) {
+        break
+      } else {
+        word = word c
+      }
+    }
     if (word != "") { hd_n++; hd_delim[hd_n] = word; hd_strip[hd_n] = strip }
     i = j - 1
   }

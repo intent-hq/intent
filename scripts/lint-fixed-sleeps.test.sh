@@ -476,6 +476,18 @@ harness_case heredoc-marker-still-exempts - 0 - - $'cat <<\'SH\' >stub.sh\nsleep
 harness_case heredoc-dash-strips-tabs - 1 - - $'for i in {1..3}; do\n\tcat <<-EOF\n\tdone\n\tEOF\ndone\nsleep 1' 'scripts/x.test.sh:6:'
 harness_case heredoc-here-string-is-not-a-heredoc - 1 - - $'for i in {1..3}; do\n  read -r x <<<"$y"\n  :\ndone\nsleep 1' 'scripts/x.test.sh:5:'
 harness_case heredoc-quoted-operator-is-text - 1 - - $'for i in {1..3}; do\n  echo "<<EOF"\n  :\ndone\nsleep 1' 'scripts/x.test.sh:5:'
+# `<<` inside `$((…))` / `((…))` is a shift, not a heredoc opener (PR #5433 review)
+harness_case arith-shift-expansion-before-loop - 1 - - $'flags=$((1 << 2))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:2:'
+harness_case arith-shift-statement-before-loop - 1 - - $'((flags = 1 << 2))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:2:'
+harness_case arith-shift-no-space - 1 - - $'x=$((y<<3))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:2:'
+harness_case arith-shift-nested-parens - 1 - - $'x=$(( (y<<3) + (1 << 2) ))\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:2:'
+harness_case arith-then-heredoc-same-line - 1 - - $'x=$((1 << 2)); cat <<EOF\ndone\nEOF\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+# a quoted or escaped delimiter is read as one shell word (PR #5433 review)
+harness_case heredoc-quoted-delimiter-space - 1 - - $'cat <<\'END CODE\'\ndone\nEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+harness_case heredoc-double-quoted-delimiter-space - 1 - - $'cat <<"END CODE"\ndone\nEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+harness_case heredoc-dash-quoted-delimiter-space - 1 - - $'cat <<-\'END CODE\'\n\tdone\n\tEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+harness_case heredoc-escaped-space-delimiter - 1 - - $'cat <<END\\ CODE\ndone\nEND CODE\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
+harness_case heredoc-backslash-delimiter - 1 - - $'cat <<\\EOF\ndone\nEOF\nfor i in {1..3}; do\n  :\n  sleep .1 # timing-guard: poll interval\ndone' 'scripts/x.test.sh:4:'
 
 # ratchet and baseline syntax
 harness_case ratchet-equal - 1 0 $'scripts/x.test.sh 1\n' 'sleep 1'
@@ -497,7 +509,7 @@ harness_case skip-self-test scripts/lint-fixed-sleeps.test.sh 0 - - 'sleep 1'
 harness_case skip-recursive scripts/subdir/x.test.sh 0 - - 'sleep 1'
 harness_case skip-nontest scripts/production.sh 0 - - 'sleep 1'
 
-[[ "$harness_cases" -eq 110 ]] || fail "expected 110 harness cases, ran $harness_cases"
+[[ "$harness_cases" -eq 120 ]] || fail "expected 120 harness cases, ran $harness_cases"
 
 echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0
