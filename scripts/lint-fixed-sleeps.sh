@@ -69,7 +69,7 @@ esac
 # Emit `line:malformed:text` for every fixed sleep in the file that carries no
 # reasoned marker on its own line or the line above; `malformed` is 1 when one
 # of those two lines carries a `timing-guard:` marker with no reason.
-scan_awk=$(cat <<'AWK'
+read -r -d '' scan_awk <<'AWK' || true
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 
 # Is the text after a shell `sleep` the `60 &` stay-alive idiom? The `&` must
@@ -251,7 +251,6 @@ FNR == 1 { depth = 0; m_above = 0 }
 }
 END { while (depth > 0) close_loop() }
 AWK
-)
 
 trim() {
   local s=$1
