@@ -138,6 +138,8 @@ cargo-llvm-cov and llvm-tools-preview are both present), submodule dirty and
 ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
 submodule HEAD has moved off it, and optional PR/check summaries when GitHub
 authentication is available. The report is read-only, including stale sandbox state.
+The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
+(default 10, fractional allowed) and reports `{}` when that budget is exceeded.
 
 ### Chat-motion performance traces
 

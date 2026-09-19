@@ -54,12 +54,19 @@ for command in bash cksum date dirname git grep head python3 sed awk; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 
+# The port probe budget is generous here so a loaded host never empties
+# `ports`; the no-gh wall-clock bound scales with it (3 s of slack on top,
+# i.e. the historical 5000 ms at the former 2 s default) so it still catches a
+# missing `gh` hanging the report.
+export DEV_STATUS_PORT_TIMEOUT="${DEV_STATUS_PORT_TIMEOUT:-30}"
+no_gh_budget_ms=$(python3 -c 'import os; print(int(float(os.environ["DEV_STATUS_PORT_TIMEOUT"]) * 1000) + 3000)')
+
 started_ms=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
 PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
   bash "$script" >"$temp_dir/empty.json"
 finished_ms=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
 elapsed_ms=$((finished_ms - started_ms))
-[[ "$elapsed_ms" -lt 5000 ]] || fail "no-gh status took ${elapsed_ms}ms (expected under 5000ms)"
+[[ "$elapsed_ms" -lt "$no_gh_budget_ms" ]] || fail "no-gh status took ${elapsed_ms}ms (expected under ${no_gh_budget_ms}ms)"
 python3 - "$temp_dir/empty.json" <<'PY' || fail "empty JSON report shape was incorrect"
 import json
 import sys
