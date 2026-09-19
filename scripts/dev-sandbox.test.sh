@@ -7,22 +7,17 @@ script="$repo_root/scripts/dev-sandbox.sh"
 temp_dir=$(mktemp -d)
 sandbox_pid=""
 foreign_pid=""
+dummy_pid=""
 listener_pid=""
 state_dir="$temp_dir/state"
 
 cleanup() {
-  if [[ -n "$sandbox_pid" ]]; then
-    kill "$sandbox_pid" 2>/dev/null || true
-    wait "$sandbox_pid" 2>/dev/null || true
-  fi
-  if [[ -n "$foreign_pid" ]]; then
-    kill "$foreign_pid" 2>/dev/null || true
-    wait "$foreign_pid" 2>/dev/null || true
-  fi
-  if [[ -n "$listener_pid" ]]; then
-    kill "$listener_pid" 2>/dev/null || true
-    wait "$listener_pid" 2>/dev/null || true
-  fi
+  local pid
+  for pid in "$sandbox_pid" "$foreign_pid" "$dummy_pid" "$listener_pid"; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
   rm -rf "$temp_dir"
 }
 trap cleanup EXIT
@@ -44,6 +39,34 @@ report_unexpected_failure() {
 }
 set -o errtrace
 trap 'report_unexpected_failure "$?" "$LINENO" "$BASH_COMMAND" "${PIPESTATUS[*]}"' ERR
+
+# One readiness budget for the whole suite (intent-hq/intent#5411). Fixed poll
+# counts (100x0.05s) and a hard-coded SANDBOX_READY_TIMEOUT=5 expired on a
+# loaded host, so every wait below is a condition poll capped by this value, and
+# the script under test receives the same number so the two deadlines cannot
+# drift apart. Placeholder processes live for the whole suite and are reaped by
+# their case or the EXIT trap instead of expiring on a fixed `sleep N`.
+ready_timeout=${DEV_SANDBOX_TEST_READY_TIMEOUT:-30}
+[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] \
+  || fail "DEV_SANDBOX_TEST_READY_TIMEOUT must be a positive integer (got '$ready_timeout')"
+
+# Poll a condition (a command and its arguments) every 0.02s until it holds or
+# the readiness budget elapses.
+wait_until() {
+  local deadline=$((SECONDS + ready_timeout))
+  while ! "$@"; do
+    (( SECONDS < deadline )) || return 1
+    sleep 0.02
+  done
+}
+
+# An exited-but-unreaped child is gone for the purposes of these waits.
+pid_gone() {
+  local process_state
+  kill -0 "$1" 2>/dev/null || return 0
+  process_state=$(ps -o stat= -p "$1" 2>/dev/null) || return 0
+  [[ -z "$process_state" || "$process_state" == Z* ]]
+}
 
 free_port() {
   python3 - <<'PY'
@@ -85,32 +108,34 @@ with open(path, "w", encoding="utf-8") as handle:
 PY
 }
 
+# The script under test runs with SANDBOX_READY_TIMEOUT=$ready_timeout; the
+# small margin lets it report its own timeout (and exit) before we give up.
 wait_for_ready() {
-  local output=$1
-  for _ in {1..100}; do
-    grep -q '^Sandbox ready:' "$output" 2>/dev/null && return 0
+  local output=$1 deadline=$((SECONDS + ready_timeout + 5))
+  until grep -q '^Sandbox ready:' "$output" 2>/dev/null; do
     kill -0 "$sandbox_pid" 2>/dev/null || return 1
+    (( SECONDS < deadline )) || return 1
     sleep 0.05
   done
-  return 1
 }
 
 # Print the pid of the fake frontend (`python3 - <port>`) running under the
 # sandbox script. A no-match pgrep exits 1, so a bare `$(pgrep -P … | head -1)`
 # assignment tripped errexit/pipefail on a transient miss before the caller's
-# `fail` guard could run; the lookup is retried for up to 2s instead, matching
-# the command line so a transient sibling child is never chosen, and fails only
-# after the deadline (or once the sandbox has died) with the child listing and
-# the sandbox output dumped.
+# `fail` guard could run; the lookup is retried for up to the readiness budget
+# instead, matching the command line so a transient sibling child is never
+# chosen, and fails only after the deadline (or once the sandbox has died) with
+# the child listing and the sandbox output dumped.
 find_frontend_pid() {
-  local parent=$1 port=$2 output=$3 matches
-  for _ in {1..100}; do
+  local parent=$1 port=$2 output=$3 matches deadline=$((SECONDS + ready_timeout))
+  while :; do
     matches=$(pgrep -P "$parent" -f "python3 - $port" 2>/dev/null || true)
     if [[ -n "$matches" ]]; then
       echo "${matches%%$'\n'*}"
       return 0
     fi
     kill -0 "$parent" 2>/dev/null || break
+    (( SECONDS < deadline )) || break
     sleep 0.02
   done
   echo "children of sandbox pid $parent (alive: $(kill -0 "$parent" 2>/dev/null && echo yes || echo no)):" >&2
@@ -188,14 +213,10 @@ sock = socket.socket()
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+time.sleep(3600)
 PY
 listener_pid=$!
-for _ in {1..100}; do
-  [[ -e "$busy_ready" ]] && break
-  sleep 0.01
-done
-[[ -e "$busy_ready" ]] || fail "busy-port listener did not start"
+wait_until test -e "$busy_ready" || fail "busy-port listener did not start"
 if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$busy_port" \
   SANDBOX_STATE_DIR="$state_dir" bash "$script" ui >"$temp_dir/busy-port.out" 2>&1; then
   fail "UI sandbox accepted a busy explicit DEV_PORT"
@@ -243,7 +264,7 @@ grep -q "run 'make bootstrap-dev-host'" "$temp_dir/missing-prereq.out" || fail "
 
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_TCP_PORT=43210 \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/ui.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/ui.out" || fail "UI sandbox did not become ready"
@@ -289,20 +310,16 @@ PY
 # it in its 50x0.1s wait loop, so 0.2s later the second TERM lands mid-loop.
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
 frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/double-term.out") \
   || fail "could not find double-TERM frontend child"
 kill -TERM "$sandbox_pid"
-for _ in {1..100}; do
-  [[ ! -e "$state_dir/ui.json" ]] && break
-  sleep 0.02
-done
-if [[ -e "$state_dir/ui.json" ]]; then
+if ! wait_until test ! -e "$state_dir/ui.json"; then
   kill -KILL "$frontend_pid" 2>/dev/null || true
-  fail "double-TERM cleanup did not remove the state file within 2s"
+  fail "double-TERM cleanup did not remove the state file within ${ready_timeout}s"
 fi
 sleep 0.2
 kill -TERM "$sandbox_pid"
@@ -332,10 +349,15 @@ PY
 # leaving the state file and the frontend behind (pre-fix ~65% of iterations).
 # The signal traps now run cleanup themselves. Two back-to-back TERMs to the
 # script pid hit that window; the loop makes a regression practically certain.
+# The output file is truncated before each launch: the background bash applies
+# its redirect only once scheduled, so on a loaded host wait_for_ready could
+# otherwise match the previous iteration's ready line and TERM the new sandbox
+# mid-startup instead of in its steady state.
 for iteration in $(seq 1 20); do
   port=$(free_port)
+  : >"$temp_dir/signal-window.out"
   PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
-    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 \
+    SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
     bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
   sandbox_pid=$!
   wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
@@ -368,7 +390,7 @@ supervised-ui:
 MAKE
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 SCRIPT="$script" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SCRIPT="$script" \
   setsid make -f "$temp_dir/supervised.mk" supervised-ui >"$temp_dir/supervised.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did not become ready"
@@ -395,19 +417,11 @@ dump_supervised_residue() {
   echo "supervised recipe output:" >&2
   cat "$temp_dir/supervised.out" >&2 || true
 }
-for _ in {1..500}; do
-  kill -0 "$state_pid" 2>/dev/null || break
-  sleep 0.02
-done
-if kill -0 "$state_pid" 2>/dev/null; then
+if ! wait_until pid_gone "$state_pid"; then
   dump_supervised_residue
-  fail "sandbox script pid $state_pid still alive 10s after the supervised recipe exited"
+  fail "sandbox script pid $state_pid still alive ${ready_timeout}s after the supervised recipe exited"
 fi
-for _ in {1..500}; do
-  [[ ! -e "$state_dir/ui.json" ]] && break
-  sleep 0.02
-done
-if [[ -e "$state_dir/ui.json" ]]; then
+if ! wait_until test ! -e "$state_dir/ui.json"; then
   dump_supervised_residue
   fail "state remained after external TERM of the recipe process tree"
 fi
@@ -429,7 +443,7 @@ fi
 [[ ! -e "$state_dir/stale.json" ]] || fail "stale state file was not removed"
 grep -q 'Stale sandbox state:' "$temp_dir/stale.err" || fail "stale state file was not reported"
 
-sleep 30 &
+sleep 3600 &
 foreign_pid=$!
 foreign_port=$(free_port)
 cat >"$state_dir/foreign.json" <<JSON
@@ -452,7 +466,7 @@ kill "$foreign_pid"
 wait "$foreign_pid" 2>/dev/null || true
 foreign_pid=""
 
-sleep 30 &
+sleep 3600 &
 dummy_pid=$!
 write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
@@ -461,14 +475,16 @@ write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 ) &
 restart_writer_pid=$!
 MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/restart-stop.out" 2>"$temp_dir/restart-stop.err"
+wait_until pid_gone "$dummy_pid" || fail "sandbox-stop did not stop the recorded live PID $dummy_pid"
 wait "$dummy_pid" 2>/dev/null || true
+dummy_pid=""
 wait "$restart_writer_pid"
 grep -q 'sandbox ui restarted .* stop it with ws.script.stop instead' "$temp_dir/restart-stop.err" || fail "supervised restart warning was not printed"
 rm -f "$state_dir/ui.json"
 
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" SANDBOX_STATE_DIR="$state_dir" \
-  SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
+  SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/child-failure.out" || fail "child-failure sandbox did not become ready"
 frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/child-failure.out") \
@@ -490,7 +506,7 @@ grep -qx "DEV_PORT=$port" "$state_dir/ui.port" || fail "pinned port record did n
 pinned_port=$port
 derived_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-restart.out" || fail "pinned restart sandbox did not become ready"
 grep -q "Reusing recorded DEV_PORT=$pinned_port from $state_dir/ui.port" "$temp_dir/pinned-restart.out" \
@@ -519,16 +535,12 @@ sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+time.sleep(3600)
 PY
 listener_pid=$!
-for _ in {1..100}; do
-  [[ -e "$busy_ready.pinned" ]] && break
-  sleep 0.01
-done
-[[ -e "$busy_ready.pinned" ]] || fail "pinned-port listener did not start"
+wait_until test -e "$busy_ready.pinned" || fail "pinned-port listener did not start"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-busy.out" || fail "sandbox with a busy recorded port did not become ready"
 grep -q "recorded DEV_PORT=$pinned_port from $state_dir/ui.port is busy; starting on derived DEV_PORT=$derived_port" "$temp_dir/pinned-busy.out" \
@@ -550,7 +562,7 @@ listener_pid=""
 collide_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$collide_port" DEV_PORT_ORIGIN=file \
   DEV_TCP_PORT="$derived_port" DEV_TCP_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-collide.out" || fail "sandbox with a colliding recorded port did not become ready"
 grep -q "recorded DEV_PORT=$derived_port from $state_dir/ui.port collides with explicit DEV_TCP_PORT=$derived_port; starting on derived DEV_PORT=$collide_port" "$temp_dir/pinned-collide.out" \
@@ -565,7 +577,7 @@ sandbox_pid=""
 # An explicit port always wins over the recorded one.
 explicit_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$explicit_port" DEV_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT=5 bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/explicit-restart.out" || fail "explicit-port sandbox did not become ready"
 grep -q "^Sandbox ready: http://127.0.0.1:$explicit_port/" "$temp_dir/explicit-restart.out" \
@@ -588,7 +600,7 @@ cargo_log="$temp_dir/dev-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
   DEV_TCP_PORT=43211 SANDBOX_STATE_DIR="$state_dir" \
   INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" BUILD_JOBS=8 \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT=5 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/stack.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready"
@@ -628,7 +640,7 @@ cargo_log="$temp_dir/release-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/release-data" \
   SANDBOX_STATE_DIR="$state_dir" \
   INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" INTENTD_PROFILE=release \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT=5 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/release.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/release.out" || fail "release-profile stack did not become ready"
@@ -642,7 +654,7 @@ port=$(free_port)
 override_log="$temp_dir/override-cargo.log"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/override-data" \
   SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT=5 \
+  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/override.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become healthy"
@@ -666,7 +678,7 @@ sandbox_pid=""
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/unhealthy-data" \
   SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" HEALTH_MODE=pending \
-  SANDBOX_READY_TIMEOUT=5 SANDBOX_WARM_TIMEOUT=1 \
+  SANDBOX_READY_TIMEOUT="$ready_timeout" SANDBOX_WARM_TIMEOUT=1 \
   bash "$script" stack >"$temp_dir/unhealthy.out" 2>&1
 status=$?
 set -e
@@ -681,7 +693,7 @@ SH
 chmod +x "$temp_dir/failing-intentd"
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/fail-data" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/failing-intentd" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/failing-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" stack >"$temp_dir/fail.out" 2>&1
 status=$?
 set -e
@@ -989,7 +1001,7 @@ grep -qx '\[missing\]  frontend package manager: expected pnpm@10.30.3 via Corep
 no_corepack_state="$temp_dir/no-corepack-state"
 set +e
 PATH="$sanitized_bin" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
-  SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT=5 \
+  SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT="$ready_timeout" \
   bash "$script" ui >"$temp_dir/no-corepack-ui.out" 2>&1
 status=$?
 set -e
