@@ -202,9 +202,10 @@ never a transcript hydration) — so another agent's proposal is never applicabl
 matched proposal must be `kind: "workspace-create"` with
 `payload.operation: "workspace.create"` (anything else is refused naming the kind). The
 proposal's stored idempotency key is reused verbatim, with or without overrides, so agent
-Apply, card Apply and card Retry converge on one workspace: a pending proposal has never
-consumed its key, the first successful apply binds it, and a later replay returns the same
-workspace. The create runs through the same `workspace.create` deserialization as the
+Apply, card Apply and card Retry converge on one workspace: the first successful create
+binds the key, and later retries reuse it and return the same workspace even if the
+resolution write previously failed and the card is still pending. The create runs through
+the same `workspace.create` deserialization as the
 router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
 the same `agent.resolveProposal` path the client-driven Apply uses, requesting
 `outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
@@ -213,21 +214,25 @@ prompt` / ` with overridden title and prompt` when overrides were used) — so t
 `agent:updated` emit carrying `pendingProposals` + `proposalResolutions` and the
 `proposal_resolved` system notice fire identically to a card Apply (§5.5 "Pending
 proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
-promoted to the front of its queue), and the card renders applied. Result:
+promoted to the front of its queue), and on an ordinary successful resolution the card
+renders applied. Result:
 `{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
 initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
 result's initial agent when present (agent-hidden fields stripped), `overrides` is
 `{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
 **`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never
 overwrites a persisted resolution — it echoes the existing one — so when the card was
-resolved from the UI while the create was in flight (e.g. the user dismissed it), that
-persisted outcome is kept, the result reports it as `outcome` (e.g. `"dismissed"`), the
-created `workspace` is retained in the result, and `resolveWarning` states plainly that
-the workspace exists even though the card does not show applied (the agent should tell
-the user). `resolveWarning` also covers a failed resolution write: `outcome` is then
-`"applied"` (the requested value), the workspace exists, and the card may still show
-pending until the user dismisses it; nothing is retried. In the ordinary case (`outcome:
-"applied"`, no concurrent resolution, write succeeded) `resolveWarning` is absent.
+resolved from the UI while the create was in flight, that persisted outcome is kept and
+the result reports it as `outcome`. The warning is added only when the persisted outcome
+is not `applied`: a concurrent non-applied resolution (`dismissed`) yields
+`outcome: "dismissed"` with the created `workspace` retained in the result and a
+`resolveWarning` stating plainly that the workspace exists even though the card does not
+show applied (the agent should tell the user); a concurrent UI Apply yields
+`outcome: "applied"` with no warning, exactly like the ordinary case. `resolveWarning`
+also covers a failed resolution write: `outcome` is then `"applied"` (the requested
+value), the workspace exists, and the card may still show pending until the user
+dismisses it; nothing is retried. In the ordinary case (`outcome: "applied"`, write
+succeeded) `resolveWarning` is absent.
 **Idempotent / refused paths:** an id that is no longer pending but recorded `applied` in
 `proposalResolutions` returns `{ ok: true, proposalId, outcome: "applied",
 alreadyResolved: true }` without creating again; one recorded `dismissed` is an error
