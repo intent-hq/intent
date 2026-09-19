@@ -145,8 +145,10 @@ jobs:
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
           bash scripts/docs-check.test.sh
+          bash scripts/lint-fixed-sleeps.test.sh
           bash scripts/rust-changed-tests.test.sh
           bash scripts/shipped-in.test.sh
+          bash scripts/lint-fixed-sleeps.sh
 
   # Stock macOS /bin/bash is 3.2, and two Bash-3-only regressions shipped
   # (intent-hq/intent#4706, intent-hq/intent#4759) because the ubuntu leg above
@@ -164,6 +166,7 @@ jobs:
       - run: |
           /bin/bash --version
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
+          REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh
 

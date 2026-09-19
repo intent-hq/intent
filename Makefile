@@ -226,7 +226,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -411,7 +411,13 @@ lint-event-types: lint-sources ## Deprecated alias of lint-sources
 lint-fixed-sleeps: lint-sources ## Deprecated alias of lint-sources
 lint-raw-child: lint-sources ## Deprecated alias of lint-sources
 
-check: check-makefile-targets fmt clippy lint-sources ## Makefile target check + fmt + clippy + source lints
+# Fixed sleeps in scripts/*.test.sh must carry a `# timing-guard: <reason>`
+# marker or be grandfathered in scripts/fixed-sleep-baseline.txt, which only
+# ratchets down. Pure shell + awk; needs no submodule.
+lint-shell-sleeps: ## Check scripts/*.test.sh fixed sleeps are marked or baselined
+	@scripts/lint-fixed-sleeps.sh
+
+check: check-makefile-targets lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + shell sleep lint + fmt + clippy + source lints
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
