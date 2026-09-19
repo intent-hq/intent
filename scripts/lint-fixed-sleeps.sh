@@ -156,9 +156,20 @@ function classify_marker(line,   comment, at) {
   return trim(substr(comment, at + length(marker))) == "" ? 2 : 1
 }
 
-# Fill kpos[] / kind[] with every loop keyword on the masked line, in offset
-# order: "fixed" (a fixed-count `for` header), "open" (any other
-# `for`/`while`/`until`) or "done". Return how many.
+# Is offset `at` of the masked line a command position, where the shell reads
+# reserved words? Start of line, after a control operator or after another
+# reserved word; `echo done` and `echo until next time` are arguments.
+function command_position(masked, at,   prefix) {
+  prefix = substr(masked, 1, at - 1)
+  sub(/[ \t]+$/, "", prefix)
+  if (prefix == "" || prefix ~ /[;&|({`!]$/) return 1
+  return prefix ~ /(^|[^A-Za-z0-9_])(do|then|else|elif|if|while|until)$/
+}
+
+# Fill kpos[] / kind[] with every loop reserved word on the masked line, in
+# offset order: "fixed" (a fixed-count `for` header), "open" (any other
+# `for`/`while`/`until`, including a bare `while` whose condition follows on
+# the next line) or "done". Return how many.
 function keyword_tokens(masked, kpos, kind,   n, rest, off, word, at) {
   n = 0
   split("", kpos); split("", kind)
@@ -168,12 +179,14 @@ function keyword_tokens(masked, kpos, kind,   n, rest, off, word, at) {
     at = RSTART
     if (substr(rest, at, 1) !~ /[A-Za-z]/) at++
     word = substr(rest, at)
-    if (word ~ /^done/) {
-      n++; kpos[n] = off + at; kind[n] = "done"
-    } else if (word ~ /^for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+[{]-?[0-9]+\.\.-?[0-9]+(\.\.-?[0-9]+)?[}]/) {
-      n++; kpos[n] = off + at; kind[n] = "fixed"
-    } else if (word ~ /^(for|while|until)[ \t(]/) {
-      n++; kpos[n] = off + at; kind[n] = "open"
+    if (command_position(masked, off + at)) {
+      if (word ~ /^done/) {
+        n++; kpos[n] = off + at; kind[n] = "done"
+      } else if (word ~ /^for[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]+in[ \t]+[{]-?[0-9]+\.\.-?[0-9]+(\.\.-?[0-9]+)?[}]/) {
+        n++; kpos[n] = off + at; kind[n] = "fixed"
+      } else if (word ~ /^(for|while|until)([ \t(]|$)/) {
+        n++; kpos[n] = off + at; kind[n] = "open"
+      }
     }
     off += at + 2
     rest = substr(rest, at + 3)
