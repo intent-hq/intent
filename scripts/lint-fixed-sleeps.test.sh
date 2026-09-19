@@ -307,6 +307,162 @@ fi
 grep -q 'lint-fixed-sleeps.test.sh' <<<"$check_output" &&
   fail "--print-counts listed the lint's own self-test: $check_output"
 
+# ---- verifier harness fixtures ------------------------------------------------
+#
+# The 81 cases the wave-1 verifier accepted the lint against, replayed one
+# per isolated skeleton with the same checks: `--print-counts` exits 0 and its
+# counts sum to <count>; a plain run exits <status> (default: 1 when <count>
+# is above 0, else 0) with nothing on stdout, every <fragment> on stderr and,
+# on failure, the baseline path named on the first stderr line. <source> is
+# the fixture body written to <file> (`-` = scripts/x.test.sh; any other
+# file also gets a `:` x.test.sh), <baseline> is written verbatim (`-` =
+# empty), <status> `-` = default. The 23 prior-* cases are the intentd
+# fixed_sleep_lint.rs table; the prior-adapted-* rows restate the Rust-only
+# rows in shell terms.
+
+harness_cases=0
+harness_case() {
+  local name=$1 file=$2 count=$3 status=$4 baseline_text=$5 source=$6
+  shift 6
+  local dir=$temp_dir/harness/$name run_status=0 counts_status=0 actual=0 fragment line
+  [[ "$file" != - ]] || file=scripts/x.test.sh
+  [[ "$baseline_text" != - ]] || baseline_text=
+  [[ "$status" != - ]] || status=$((count > 0))
+  mkdir -p "$dir/$(dirname "$file")" "$dir/scripts"
+  cp "$script" "$dir/scripts/lint-fixed-sleeps.sh"
+  printf '%s\n' "$source" >"$dir/$file"
+  [[ "$file" == scripts/x.test.sh ]] || printf ':\n' >"$dir/scripts/x.test.sh"
+  printf '%s' "$baseline_text" >"$dir/$baseline"
+  harness_cases=$((harness_cases + 1))
+
+  harness_counts=$(cd "$dir" && "$script_bash" scripts/lint-fixed-sleeps.sh --print-counts 2>"$dir/counts.err") || counts_status=$?
+  harness_stdout=$(cd "$dir" && "$script_bash" scripts/lint-fixed-sleeps.sh 2>"$dir/lint.err") || run_status=$?
+  harness_stderr=$(cat "$dir/lint.err")
+  printf 'harness %s\ncounts exit %s\n%s\n%s\nexit %s\n%s\n%s\n' "$name" "$counts_status" "$harness_counts" \
+    "$(cat "$dir/counts.err")" "$run_status" "$harness_stdout" "$harness_stderr" >>"$transcript"
+
+  [[ "$counts_status" -eq 0 ]] ||
+    fail "harness case $name: --print-counts exited $counts_status: $(cat "$dir/counts.err")"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    actual=$((actual + ${line##* }))
+  done <<<"$harness_counts"
+  [[ "$actual" -eq "$count" ]] ||
+    fail "harness case $name: expected $count unannotated sleep(s), --print-counts summed to $actual:"$'\n'"$harness_counts"
+  [[ "$run_status" -eq "$status" ]] ||
+    fail "harness case $name: expected exit $status, got $run_status:"$'\n'"$harness_stderr"
+  [[ -z "$harness_stdout" ]] ||
+    fail "harness case $name: a plain run printed to stdout: $harness_stdout"
+  for fragment in "$@"; do
+    grep -qF -- "$fragment" "$dir/lint.err" ||
+      fail "harness case $name: stderr lacks '$fragment':"$'\n'"$harness_stderr"
+  done
+  if [[ "$run_status" -eq 1 ]]; then
+    grep -qF -- "$baseline" <<<"${harness_stderr%%$'\n'*}" ||
+      fail "harness case $name: first failure line does not name $baseline: ${harness_stderr%%$'\n'*}"
+  fi
+}
+
+# prior art, literal rows (Rust-only sleeps and `//` comments are not shell)
+harness_case prior-literal-01 - 1 - - 'sleep 0.2'
+harness_case prior-literal-02 - 1 - - 'sleep .2'
+harness_case prior-literal-03 - 1 - - 'sleep  0.2'
+harness_case prior-literal-04 - 1 - - $'sleep\t0.2'
+harness_case prior-literal-05 - 1 - - 'sleep "0.2"'
+harness_case prior-literal-06 - 1 - - "sleep '2'"
+harness_case prior-literal-07 - 1 - - 'sleep {secs}\n\'
+harness_case prior-literal-08 - 1 - - 'while [ ! -e x ]; do sleep 0.05; done'
+harness_case prior-literal-09 - 1 - - 'sleep 0.2; sleep 60 &'
+harness_case prior-literal-10 - 0 - - 'thread::sleep(Duration::from_secs(1)); // sleep 60 &'
+harness_case prior-literal-11 - 0 - - 'sleep 60 &\n\'
+harness_case prior-literal-12 - 0 - - 'while :; do sleep 60 & wait $!; done\n"'
+harness_case prior-literal-13 - 0 - - 'nosleep 10'
+harness_case prior-literal-14 - 0 - - 'thread_sleep 10'
+harness_case prior-literal-15 - 1 - - '// sleep 5'
+harness_case prior-literal-16 - 0 - - 'echo sleep'
+harness_case prior-literal-17 - 0 - - 'tokio::time::sleep(Duration::from_millis(100)).await;'
+harness_case prior-literal-18 - 0 - - 'time::sleep(d).await'
+harness_case prior-literal-19 - 0 - - 'fn sleep_then(after: Duration, f: impl FnOnce()) {'
+harness_case prior-literal-20 - 1 - - 'sleep 60 && echo'
+harness_case prior-literal-21 - 1 - - 'sleep 60 &>/dev/null'
+harness_case prior-literal-22 - 0 - - 'sleep 60 & wait $!'
+harness_case prior-literal-23 - 0 - - 'sleep 60 &'
+# prior art, Rust-only rows restated in shell terms
+harness_case prior-adapted-10 - 1 - - 'time.sleep(1) # sleep 60 &'
+harness_case prior-adapted-15 - 0 - - '# sleep 5'
+harness_case prior-adapted-17 - 1 - - 'time.sleep(.1)'
+harness_case prior-adapted-18 - 1 - - 'sleep 1'
+
+# predicate
+harness_case python-integer - 1 - - 'time.sleep(1)'
+harness_case python-fraction - 1 - - 'time.sleep(.25)'
+harness_case python-variable - 0 - - 'time.sleep(delay)'
+harness_case python-comment - 0 - - '  # time.sleep(1)'
+harness_case shell-variable - 0 - - 'sleep "$interval"'
+harness_case other-sleep-after-stayalive - 1 - - 'sleep 60 & sleep .1'
+harness_case quoted-sixty-not-exempt - 1 - - 'sleep "60" &'
+harness_case stayalive-double-space-not-exempt - 1 - - 'sleep 60  &'
+
+# markers
+harness_case marker-same-line - 0 - - 'sleep 1 # timing-guard: reason'
+harness_case marker-above - 0 - - $'# timing-guard: reason\nsleep 1'
+harness_case marker-two-above - 1 - - $'# timing-guard: reason\n:\nsleep 1'
+harness_case marker-no-hash - 1 - - 'sleep 1; echo "timing-guard: reason"'
+harness_case marker-hash-in-string - 1 - - $'echo "# timing-guard: reason"\nsleep 1'
+harness_case marker-single-string - 1 - - $'echo \'# timing-guard: reason\'\nsleep 1'
+harness_case marker-quoted-before-comment - 0 - - 'echo "# not a marker"; sleep 1 # timing-guard: reason'
+harness_case malformed-same-line - 1 1 $'scripts/x.test.sh 1\n' 'sleep 1 # timing-guard:' 'marker is malformed'
+harness_case malformed-above - 1 1 $'scripts/x.test.sh 1\n' $'# timing-guard:\nsleep 1' 'marker is malformed'
+harness_case malformed-whitespace - 1 1 $'scripts/x.test.sh 1\n' $'sleep 1 # timing-guard:  \t' 'marker is malformed'
+
+# fixed-count loops: the header counts as a site when the body has a sleep
+harness_case loop-inline - 2 - - 'for _ in {1..3}; do sleep .1; done'
+harness_case loop-multiline - 2 - - $'for _ in {1..3}; do\n  sleep .1\ndone'
+harness_case loop-step - 2 - - $'for idx in {3..1..-1}; do\n  time.sleep(.1)\ndone'
+harness_case loop-no-sleep - 0 - - $'for _ in {1..3}; do\n  echo ok\ndone'
+harness_case loop-stayalive-only - 0 - - $'for _ in {1..3}; do\n  sleep 60 &\ndone'
+harness_case loop-sleep-after - 1 - - $'for _ in {1..3}; do\n  :\ndone\nsleep 1'
+harness_case loop-inner-marked - 1 - - $'for _ in {1..3}; do\n  :\n  sleep 1 # timing-guard: interval\ndone'
+harness_case loop-header-marked - 1 - - $'# timing-guard: bounded fixture\nfor _ in {1..3}; do\n  :\n  sleep 1\ndone'
+harness_case loop-nested-while - 2 - - $'for _ in {1..3}; do\n  while :; do\n    break\n  done\n  sleep 1\ndone'
+harness_case loop-nested-until - 2 - - $'for _ in {1..3}; do\n  until false; do\n    sleep 1\n  done\ndone'
+harness_case loop-nested-for - 2 - - $'for _ in {1..3}; do\n  for x in a b; do\n    :\n  done\n  sleep 1\ndone'
+harness_case loop-nested-fixed - 3 - - $'for _ in {1..3}; do\n  for x in {1..2}; do\n    sleep 1\n  done\ndone'
+harness_case loop-quoted-done - 2 - - $'for _ in {1..3}; do\n  echo "done"\n  sleep 1\ndone'
+harness_case loop-comment-done - 2 - - $'for _ in {1..3}; do\n  # done\n  sleep 1\ndone'
+# loop keywords are only keywords in command position (wave-1 regressions)
+harness_case loop-done-argument - 2 - - $'for _ in {1..3}; do\n  echo done\n  sleep 1\ndone'
+harness_case loop-done-argument-marked-sleep - 1 - - $'for _ in {1..3}; do\n  echo done\n  sleep 1 # timing-guard: interval\ndone'
+harness_case loop-nested-bare-while - 2 - - $'for _ in {1..3}; do\n  while\n    false\n  do\n    :\n  done\n  sleep 1\ndone'
+harness_case loop-until-word-argument - 1 - - $'for _ in {1..3}; do\n  echo until next time\ndone\nsleep 1'
+harness_case loop-arguments-after-do-word - 1 - - $'for _ in {1..3}; do\n  echo do done\n  sleep 1 # timing-guard: interval\ndone'
+harness_case loop-done-variable-assignment - 1 - - $'for _ in {1..3}; do\n  done=1\n  sleep 1 # timing-guard: interval\ndone'
+harness_case loop-do-word-until-argument - 1 - - $'for _ in {1..3}; do\n  echo do until next time\ndone\nsleep 1'
+harness_case loop-after-if-then - 2 - - $'if true; then for _ in {1..3}; do\n  sleep 1\ndone; fi'
+harness_case loop-nested-bare-until - 2 - - $'for _ in {1..3}; do\n  until\n    true\n  do\n    :\n  done\n  sleep 1\ndone'
+
+# ratchet and baseline syntax
+harness_case ratchet-equal - 1 0 $'scripts/x.test.sh 1\n' 'sleep 1'
+harness_case ratchet-over - 2 1 $'scripts/x.test.sh 1\n' $'sleep 1\nsleep 2' \
+  'scripts/x.test.sh:1:' 'scripts/x.test.sh:2:' '`scripts/x.test.sh 2`'
+harness_case ratchet-under - 1 1 $'scripts/x.test.sh 2\n' 'sleep 1' 'replace its line with `scripts/x.test.sh 1`'
+harness_case ratchet-zero - 0 1 $'scripts/x.test.sh 2\n' ':' 'remove its line `scripts/x.test.sh 2`'
+harness_case ratchet-stale - 0 1 $'scripts/gone.test.sh 4\n' ':' 'no longer exists; remove its line `scripts/gone.test.sh 4`'
+harness_case baseline-unsorted - 0 1 $'scripts/z.test.sh 1\nscripts/a.test.sh 1\n' ':' \
+  "$baseline:2:" 'sorted by path and unique'
+harness_case baseline-duplicate - 0 1 $'scripts/x.test.sh 1\nscripts/x.test.sh 2\n' ':' \
+  "$baseline:2:" 'sorted by path and unique'
+harness_case baseline-count-zero - 0 1 $'scripts/x.test.sh 0\n' ':' "$baseline:1:" 'remove "scripts/x.test.sh 0"'
+harness_case baseline-nonnumeric - 0 1 $'scripts/x.test.sh many\n' ':' "$baseline:1:" 'is not a number'
+harness_case baseline-no-count - 0 1 $'scripts/x.test.sh\n' ':' "$baseline:1:" 'expected `<path> <count>`'
+
+# only scripts/*.test.sh, one level deep, minus this file
+harness_case skip-self-test scripts/lint-fixed-sleeps.test.sh 0 - - 'sleep 1'
+harness_case skip-recursive scripts/subdir/x.test.sh 0 - - 'sleep 1'
+harness_case skip-nontest scripts/production.sh 0 - - 'sleep 1'
+
+[[ "$harness_cases" -eq 81 ]] || fail "expected 81 harness cases, ran $harness_cases"
+
 echo "lint-fixed-sleeps tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${LINT_FIXED_SLEEPS_TEST_BASH:-}" ]] || exit 0
 
