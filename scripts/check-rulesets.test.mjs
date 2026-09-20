@@ -354,8 +354,9 @@ async function serve(t, handler) {
 }
 
 test('a body cut off after a 200 header is transient, not a malformed response', async (t) => {
+  let status = 200;
   const partial = await serve(t, (request, response) => {
-    response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '4096' });
+    response.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': '4096' });
     response.write('[{"type":"deletion","ruleset_source_type":"Repository",');
     setTimeout(() => request.socket.destroy(), 10);
   });
@@ -369,6 +370,17 @@ test('a body cut off after a 200 header is transient, not a malformed response',
   assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: partial.fetchImpl, ...io }), 0, io.err.join('\n'));
   assert.match(io.out.join('\n'), /^::warning::check-rulesets: could not read live main branch rules for intent-hq\/intent: HTTP 200, body read failed/m);
   assert.equal(io.err.join('\n'), '');
+
+  for (status of [401, 404]) {
+    await assert.rejects(fetchLiveRules('intent', { fetchImpl: fetch, apiBase: partial.apiBase }), {
+      message: `intent-hq/intent: HTTP ${status} reading ${partial.apiBase}/repos/intent-hq/intent/rules/branches/main`,
+      transient: false,
+    });
+    const definite = capture();
+    assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: partial.fetchImpl, ...definite }), 2, `interrupted ${status} body must stay a configuration error`);
+    assert.match(definite.err.join('\n'), new RegExp(`check-rulesets: intent-hq/intent: HTTP ${status} reading`));
+    assert.doesNotMatch(definite.out.join('\n'), /::warning::/);
+  }
 });
 
 test('a complete but non-JSON body is a configuration error (exit 2)', async (t) => {

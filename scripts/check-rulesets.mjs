@@ -314,6 +314,12 @@ export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token
   if (response.status >= 500 || response.status === 429) {
     throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status}`, { transient: true });
   }
+  const notOk = new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status} reading ${rulesUrl(repo, apiBase)}`, {
+    transient: false,
+  });
+  // The status alone settles every other failure except a 403, whose body
+  // message tells a secondary rate limit from a permission error.
+  if (!response.ok && response.status !== 403) throw notOk;
   // fetch resolves once the headers arrive; the connection can still drop while
   // the body streams, which is a transport failure, not a malformed document.
   let text;
@@ -327,11 +333,7 @@ export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token
   if (rateLimited(response, text)) {
     throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status}`, { transient: true });
   }
-  if (!response.ok) {
-    throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status} reading ${rulesUrl(repo, apiBase)}`, {
-      transient: false,
-    });
-  }
+  if (!response.ok) throw notOk;
   let body;
   try {
     body = JSON.parse(text);
