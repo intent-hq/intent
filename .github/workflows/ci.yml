@@ -213,6 +213,28 @@ jobs:
       - run: node --test scripts/check-root-hygiene.test.mjs
       - run: node scripts/check-root-hygiene.mjs
 
+  # The expected `main` rules of intent, intentd and cloudlands-fe (required
+  # `CI Gate`, thread resolution, merge-queue settings) are committed in
+  # .github/rulesets/*.main.json; this compares them with the live effective
+  # rules so a silent ruleset edit fails the PR and the merge_group run
+  # instead of letting the queue land untested trees (intent-hq/intent#5476,
+  # #5455). Public endpoint, so GITHUB_TOKEN only lifts the rate limit;
+  # transient API failures warn and pass. ruleset-drift.yml runs the same
+  # check daily, since a ruleset edit on GitHub triggers no PR.
+  ruleset-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-rulesets.test.mjs
+      - run: node scripts/check-rulesets.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Guard release footer tokens in PR prose and branch commit messages unless
   # the release impact is explicitly acknowledged with a label.
   # pull_request-only: reads the PR body, labels and base_ref, none of which
@@ -290,7 +312,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-tests-bash3, repo-hygiene, breaking-token, submodule-pins, triage-parser-test]
+    needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test]
     steps:
       - uses: actions/checkout@v7
         with:

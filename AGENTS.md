@@ -219,25 +219,25 @@ with no rollback.
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
   (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
   workflows merge their own rolling PRs). All three repos (monorepo, intentd,
-  cloudlands-fe) route `main` merges through a **merge queue** (squash method): once
-  a human has given permission, `gh pr merge --squash` adds the PR to the queue, and
-  the PR lands when the queue's gate passes — so merging no longer requires the
-  branch to be up to date first, and there is no update-branch/re-check treadmill.
-  In all three repos the ruleset requires the `CI Gate` check: a PR whose gate is red
-  cannot enter the queue, and the queue reruns CI on the actual merged tree
-  (`merge_group` runs of the same check) before landing. A monorepo PR also cannot
-  enter the queue while any review thread is unresolved
-  (`required_review_thread_resolution` on the `main` ruleset): auto-merge arms but
+  cloudlands-fe) route `main` merges through a **merge queue**: once a human has
+  given permission, `gh pr merge --squash` adds the PR to the queue, and the PR lands
+  when the queue's gate passes — no update-branch/re-check treadmill. The expected
+  `main` rules of all three repos (required `CI Gate` check, thread resolution,
+  merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
+  compared with the live rules by the `ruleset-check` CI job and daily by
+  `ruleset-drift.yml`; after an intended ruleset change, run
+  `make check-rulesets UPDATE=1` and commit the result in the same PR. A PR whose
+  gate is red cannot enter the queue, and the queue reruns CI on the actual merged
+  tree (`merge_group` runs of the same check) before landing. A monorepo PR also
+  cannot enter the queue while any review thread is unresolved: auto-merge arms but
   the PR stays BLOCKED outside the queue
   ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)), so
   confirm `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
   `--auto` enqueues once still-pending PR checks pass; its "The merge strategy for
-  main is set by the merge queue" output is informational, not an error. All three
-  queues are configured identically: squash method, all-green grouping, at most 5
-  entries built/merged per group, and a 60-minute check-response timeout. A
+  main is set by the merge queue" output is informational, not an error. A
   `merge_group` failure ejects the PR (it does not land): the timeline records a
   `RemovedFromMergeQueueEvent` with `reason: failed_checks` (a check that does not
-  report within the timeout counts as failed), surfaced by `ws.pr.snapshot` /
+  report within the queue's timeout counts as failed), surfaced by `ws.pr.snapshot` /
   `ws.pr.monitor` as `mergeQueueEjection`. An ejected PR is not re-queued on its
   own: fix the cause and re-enqueue with `gh pr merge --squash --auto`. The queue's
   squash uses the same title rules as a direct squash merge: on a single-commit PR

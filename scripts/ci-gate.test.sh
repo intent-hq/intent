@@ -26,7 +26,7 @@ fail() {
   exit 1
 }
 
-always_on="bridge-test docs-check event-catalog-check shell-tests shell-tests-bash3 repo-hygiene triage-parser-test"
+always_on="bridge-test docs-check event-catalog-check shell-tests shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
 pr_only="pr-title breaking-token submodule-pins"
 
 # needs_json <event> [<job>=<result> ...]: the `toJSON(needs)` object for a
