@@ -1,7 +1,23 @@
 name: CI
+# CI is tiered by event. pull_request runs every job; merge_group runs the
+# same jobs on the actual merged tree before the queue lands it, except the
+# three PR-metadata checks (pr-title / breaking-token / submodule-pins),
+# which read `github.event.pull_request.*` / `github.head_ref` /
+# `github.base_ref` — none of which exist on merge_group — and already
+# covered the identical diff on the PR run, so they stay pull_request-only.
+# The `gate` job (CI Gate) aggregates every job into the one context the
+# main ruleset requires and is event-aware about those skips.
+#
+# Incident: intent-hq/intent#5433 and #5446 were each green alone but broke
+# shell-tests together on every PR (intent-hq/intent#5455) for ~14 h — the
+# queue landed both without a check run. No `push: branches: [main]` trigger
+# on purpose: every main commit's tree is identical to one a merge-group run
+# just tested.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -9,7 +25,8 @@ permissions:
 
 jobs:
   # pr-title is seconds-long, so it runs directly on a GitHub-hosted
-  # runner — no tinybox routing.
+  # runner — no tinybox routing. pull_request-only: it validates the PR
+  # title, which merge_group does not carry; the gate accepts its skip there.
   pr-title:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -188,6 +205,8 @@ jobs:
 
   # Guard release footer tokens in PR prose and branch commit messages unless
   # the release impact is explicitly acknowledged with a label.
+  # pull_request-only: reads the PR body, labels and base_ref, none of which
+  # exist on merge_group; the gate accepts its skip there.
   breaking-token:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -212,6 +231,8 @@ jobs:
   # (auto/submodule-bump). Reject gitlink changes in any other PR — a
   # workspace branch that checked out a submodule feature branch can carry
   # one unnoticed — unless the submodule-pin-intended label is applied.
+  # pull_request-only: reads head_ref, base_ref and PR labels, none of which
+  # exist on merge_group; the gate accepts its skip there.
   submodule-pins:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
@@ -243,3 +264,49 @@ jobs:
         with:
           node-version: 22
       - run: node --test .github/scripts/issue-triage/parse-issue.test.js .github/scripts/issue-triage/needs-info.test.js .github/scripts/issue-triage/agentic-triage.test.js
+
+  # Aggregate gate: the single `CI Gate` context the main ruleset requires
+  # (same pattern as intentd's gate job). always() so a failed or cancelled
+  # need still produces a (failing) result rather than a missing check.
+  # Event-aware on purpose: the always-on jobs must succeed outright on every
+  # event; the pull_request-only jobs must succeed outright on pull_request
+  # and must be job-skipped on any other event (merge_group) — a skip on
+  # pull_request or a run on merge_group is a misconfiguration and fails.
+  gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    permissions: {}
+    if: always()
+    needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-tests-bash3, repo-hygiene, breaking-token, submodule-pins, triage-parser-test]
+    steps:
+      - name: Check results
+        run: |
+          fail=0
+          for job in \
+            "bridge-test=${{ needs.bridge-test.result }}" \
+            "docs-check=${{ needs.docs-check.result }}" \
+            "event-catalog-check=${{ needs.event-catalog-check.result }}" \
+            "shell-tests=${{ needs.shell-tests.result }}" \
+            "shell-tests-bash3=${{ needs.shell-tests-bash3.result }}" \
+            "repo-hygiene=${{ needs.repo-hygiene.result }}" \
+            "triage-parser-test=${{ needs.triage-parser-test.result }}"; do
+            if [ "${job#*=}" != "success" ]; then
+              echo "${job%%=*} did not succeed (${job#*=})"
+              fail=1
+            fi
+          done
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            expected=success
+          else
+            expected=skipped
+          fi
+          for job in \
+            "pr-title=${{ needs.pr-title.result }}" \
+            "breaking-token=${{ needs.breaking-token.result }}" \
+            "submodule-pins=${{ needs.submodule-pins.result }}"; do
+            if [ "${job#*=}" != "$expected" ]; then
+              echo "${job%%=*} must be $expected on ${{ github.event_name }} (${job#*=})"
+              fail=1
+            fi
+          done
+          exit "$fail"
