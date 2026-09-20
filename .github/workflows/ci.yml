@@ -158,6 +158,7 @@ jobs:
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
           bash scripts/bootstrap-dev-host.test.sh
+          bash scripts/ci-gate.test.sh
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
@@ -182,6 +183,7 @@ jobs:
       - run: git submodule update --init --depth=1 packages/intentd
       - run: |
           /bin/bash --version
+          REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
@@ -268,10 +270,13 @@ jobs:
   # Aggregate gate: the single `CI Gate` context the main ruleset requires
   # (same pattern as intentd's gate job). always() so a failed or cancelled
   # need still produces a (failing) result rather than a missing check.
-  # Event-aware on purpose: the always-on jobs must succeed outright on every
-  # event; the pull_request-only jobs must succeed outright on pull_request
-  # and must be job-skipped on any other event (merge_group) — a skip on
-  # pull_request or a run on merge_group is a misconfiguration and fails.
+  # The result matrix lives in scripts/ci-gate.sh (covered by
+  # scripts/ci-gate.test.sh in shell-tests): the always-on jobs must succeed
+  # outright on every event; the pull_request-only jobs must succeed outright
+  # on pull_request and must be job-skipped on merge_group — a skip on
+  # pull_request, a run on merge_group, or any other event is a
+  # misconfiguration and fails. The self-test diffs the script's job list
+  # against this `needs` list, so keep both in step.
   gate:
     name: CI Gate
     runs-on: ubuntu-latest
@@ -279,34 +284,11 @@ jobs:
     if: always()
     needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-tests-bash3, repo-hygiene, breaking-token, submodule-pins, triage-parser-test]
     steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
       - name: Check results
-        run: |
-          fail=0
-          for job in \
-            "bridge-test=${{ needs.bridge-test.result }}" \
-            "docs-check=${{ needs.docs-check.result }}" \
-            "event-catalog-check=${{ needs.event-catalog-check.result }}" \
-            "shell-tests=${{ needs.shell-tests.result }}" \
-            "shell-tests-bash3=${{ needs.shell-tests-bash3.result }}" \
-            "repo-hygiene=${{ needs.repo-hygiene.result }}" \
-            "triage-parser-test=${{ needs.triage-parser-test.result }}"; do
-            if [ "${job#*=}" != "success" ]; then
-              echo "${job%%=*} did not succeed (${job#*=})"
-              fail=1
-            fi
-          done
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            expected=success
-          else
-            expected=skipped
-          fi
-          for job in \
-            "pr-title=${{ needs.pr-title.result }}" \
-            "breaking-token=${{ needs.breaking-token.result }}" \
-            "submodule-pins=${{ needs.submodule-pins.result }}"; do
-            if [ "${job#*=}" != "$expected" ]; then
-              echo "${job%%=*} must be $expected on ${{ github.event_name }} (${job#*=})"
-              fail=1
-            fi
-          done
-          exit "$fail"
+        env:
+          GATE_EVENT: ${{ github.event_name }}
+          GATE_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: bash scripts/ci-gate.sh
