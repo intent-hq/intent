@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity event-catalog-check shipped-in rpc
+.PHONY: ports status docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -155,6 +155,14 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 # ignore manifest with a reason; a stale ignore entry also fails the check.
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
 	@node scripts/check-protocol-field-parity.mjs
+
+# The live main-branch rulesets of intent, intentd and cloudlands-fe (required
+# CI Gate check, thread resolution, merge queue) are snapshotted under
+# .github/rulesets/; a silent edit on GitHub shows up as drift. UPDATE=1
+# accepts the live rules into the snapshots; a token avoids the unauthenticated
+# rate limit.
+check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them)
+	@node scripts/check-rulesets.mjs $(if $(UPDATE),--update)
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
 # (source of truth), the protocol sidecar docs/protocol/event-types.json, and
