@@ -8,16 +8,20 @@
 # The monorepo is the source of the check: the catalogs, sidecars and docs the
 # checks compare against live under docs/protocol/ here, and the check list is
 # scripts/consumer-checks.sh — the same runner the monorepo `docs-check` CI job
-# uses, so the two lists cannot drift. This job checks out monorepo `main`,
-# replaces the caller's submodule directory with the caller's PR head, initializes
-# the other public submodule at its pin, and runs the runner in upstream context.
-# packages/ios is private and stays uninitialized; a missing iOS fixture is
-# skipped by check-event-catalog by design.
+# uses, so the two lists cannot drift. This job checks out the monorepo at the
+# commit this workflow file itself came from (`github.job_workflow_sha`; with
+# callers on `@main` that is main's tip at call time), so the workflow and the
+# scripts it runs always come from the same monorepo commit — a caller can never
+# see a workflow whose runner has not landed yet. It then replaces the caller's
+# submodule directory with the caller's PR head, initializes the other public
+# submodule at its pin, and runs the runner in upstream context. packages/ios is
+# private and stays uninitialized; a missing iOS fixture is skipped by
+# check-event-catalog by design.
 #
-# Fix order when this job is red: the checks compare the PR head against
-# monorepo `main`, and every checker tolerates docs that lead the pin, so land
-# the monorepo docs PR first (the summary table names the file to update), then
-# re-run this job; the later submodule bump then lands green.
+# Fix order when this job is red: the checks compare the PR head against the
+# monorepo docs at that commit, and every checker tolerates docs that lead the
+# pin, so land the monorepo docs PR first (the summary table names the file to
+# update), then re-run this job; the later submodule bump then lands green.
 #
 # check-mcp-bindings is advisory here: its generated index must match the
 # pinned help text line for line, so the docs cannot lead an intentd change to
@@ -56,6 +60,9 @@ jobs:
     env:
       COMPONENT: ${{ inputs.component }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
+      # The monorepo commit this reusable workflow file was resolved from;
+      # `main` only if the context is ever empty.
+      MONOREPO_REF: ${{ github.job_workflow_sha || 'main' }}
     steps:
       - name: Validate the component input
         id: component
@@ -69,23 +76,24 @@ jobs:
               ;;
           esac
           echo "other=$other" >> "$GITHUB_OUTPUT"
-          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT against intent-hq/intent@main"
+          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT against intent-hq/intent@${MONOREPO_REF:0:7}"
 
       # A reusable workflow's default checkout is the caller repo; the monorepo
-      # must be named explicitly. Fail-soft: see the guard step below.
-      - name: Check out intent-hq/intent@main
+      # must be named explicitly, at this workflow file's own commit so the
+      # scripts it runs match. Fail-soft: see the guard step below.
+      - name: Check out intent-hq/intent at this workflow's commit
         id: monorepo
         continue-on-error: true
         uses: actions/checkout@v7
         with:
           repository: intent-hq/intent
-          ref: main
+          ref: ${{ env.MONOREPO_REF }}
           submodules: false
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'
         run: |
-          echo "::warning::consumer-checks: could not check out intent-hq/intent@main; skipping the monorepo consumer checks for this run."
+          echo "::warning::consumer-checks: could not check out intent-hq/intent@${MONOREPO_REF:0:7}; skipping the monorepo consumer checks for this run."
 
       - name: Replace packages/${{ inputs.component }} with the caller head
         if: steps.monorepo.outcome == 'success'
@@ -117,7 +125,7 @@ jobs:
           status=0
           scripts/consumer-checks.sh --context upstream --advisory=check-mcp-bindings 2>&1 | tee "$log" || status=$?
           {
-            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@main"
+            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@${MONOREPO_REF:0:7}"
             echo
             echo '```'
             sed -n '/^consumer-checks summary$/,$p' "$log"

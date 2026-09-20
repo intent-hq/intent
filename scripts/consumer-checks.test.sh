@@ -201,7 +201,7 @@ run_step() {
   : >"$summary"
   step_status=0
   step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
-    RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
+    RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef MONOREPO_REF=fedcba9876543210 \
     bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
   step_summary=$(cat "$summary")
 }
@@ -210,7 +210,7 @@ run_step 1 FAILED
   fail "workflow step exited $step_status for a failing runner (expected 1):"$'\n'"$step_output"
 [ "$(cat "$step_dir/args")" = "--context upstream --advisory=check-mcp-bindings" ] ||
   fail "workflow step invoked the runner with unexpected arguments: $(cat "$step_dir/args")"
-grep -q '^### monorepo-consumer-checks — intent-hq/intentd@0123456 vs intent-hq/intent@main$' <<<"$step_summary" ||
+grep -q '^### monorepo-consumer-checks — intent-hq/intentd@0123456 vs intent-hq/intent@fedcba9$' <<<"$step_summary" ||
   fail "failed step did not write the summary heading:"$'\n'"$step_summary"
 grep -q '^consumer-checks: FAILED$' <<<"$step_summary" ||
   fail "failed step did not append the runner's summary table:"$'\n'"$step_summary"
