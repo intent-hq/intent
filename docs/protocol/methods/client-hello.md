@@ -1,4 +1,4 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.17 `client.hello` handshake & stable client identity.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.17 `client.hello` handshake & stable client identity · §5.46 Connection principal — `principal.me`.
 
 ### 5.17 `client.hello` handshake & stable client identity
 
@@ -146,3 +146,49 @@ this capability in its hello before using the connection-owned setup methods.
 See [§5.44](./models-providers.md#544-guided-antigravity-setup). A new hello
 revokes the preceding setup operation on that connection. WSS cannot gain
 setup access by advertising the capability.
+
+### 5.46 Connection principal — `principal.me` *(v10.3; [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869))*
+
+Every connection is bound to a **principal** at admission, for the life of the connection —
+identity is never taken from `client.hello` (§5.17), which carries only the logical client id.
+UDS connections and the legacy bearer token (`server.auth.token`) bind the **primary user**
+as administrator; a hashed per-principal credential (`principal_credential` row, matched by
+the SHA-256 of the presented token) binds **its principal** as a non-administrator.
+`principal.me` returns that binding. Daemon-global — no `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| principal.me | — (no params; daemon-global, no `workspaceId`) | { id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator } |
+
+```json
+// → no params
+{ "jsonrpc":"2.0","id":3,"method":"principal.me" }
+// ← the connection's bound principal
+{ "jsonrpc":"2.0","id":3,"result":{ "id":"prn-9c2e","login":"octocat","displayName":"The Octocat",
+  "avatarUrl":"https://avatars.githubusercontent.com/u/583231","isAdministrator":true } }
+// ← before any GitHub identity has been cached: the profile fields are PRESENT as null
+{ "jsonrpc":"2.0","id":4,"method":"principal.me" }
+{ "jsonrpc":"2.0","id":4,"result":{ "id":"prn-9c2e","login":null,"displayName":null,"avatarUrl":null,"isAdministrator":true } }
+```
+
+**Result:**
+
+- `id: string` — the principal id the connection was bound to.
+- `login`, `displayName`, `avatarUrl: string | null` — the principal's **cached** GitHub
+  identity, served offline from the store. **Always present, `null` when unknown** (the
+  pre-profile state, or a principal whose identity was never fetched); never omitted.
+  Reading the primary principal also triggers a rate-limited, detached background refresh
+  of its identity from GitHub `GET /user` — the read never waits on it, and any failure (not
+  configured, offline, timeout) leaves the cached row untouched, so a later call may return
+  filled fields where an earlier one returned `null`.
+- `isAdministrator: boolean` — `true` for the primary user (UDS / legacy token), `false` for
+  a per-principal-credential connection.
+
+**Caller resolution.** A wire caller resolves to the principal bound at admission. Agent
+callers (MCP) and daemon-internal callers resolve to the primary principal, with
+`isAdministrator` = that principal's `is_primary` flag.
+
+**Errors.** Fail-closed: a request with no bound caller — a connection admitted unbound
+because the composition root exposes no principal store — is `-32603` (`message` "Internal
+error", `data` = `"forbidden: request is not bound to a principal"`; §9). No `-32602` arm:
+params are ignored.

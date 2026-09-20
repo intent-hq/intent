@@ -3,4 +3,3 @@
 # sleeps down (observable-event waits, or a `# timing-guard: <reason>` marker for a
 # justified one) and the lint names the corrected line to write here.
 scripts/bootstrap-dev-host.test.sh 1
-scripts/dev-sandbox.test.sh 3

@@ -1,0 +1,106 @@
+# Stale issues and PRs: the ONLY workflow in this repo that closes anything.
+# issue-triage.yml stays non-destructive (it only adds/clears labels); the
+# closure policy lives here so the two never fight.
+#
+# Policy (intent-hq/intent):
+#   Issues — only those labelled `needs-info` (the reporter never answered;
+#     the triage workflow clears the label on author reply). Marked `stale`
+#     after 14 idle days, closed as not_planned 7 days later. Issues labelled
+#     `launch-blocker` or `oss-launch` are exempt. An issue carrying
+#     `needs-info` IS in scope even when it also carries `needs-triage` or
+#     `agent-filed`: it is closed for an unanswered info request, never for
+#     age — an untriaged report WITHOUT `needs-info` is never touched.
+#     Scoping uses `any-of-issue-labels: needs-info,stale` (not
+#     `only-issue-labels`): once triage clears `needs-info` on a reporter
+#     reply the issue must stay in scope for one more pass so
+#     `remove-stale-when-updated` can clear `stale`.
+#   PRs — non-draft PRs marked `stale` after 14 idle days, closed 7 days
+#     later. Drafts and PRs labelled `dependencies`, `github_actions` or
+#     `launch-blocker` are exempt. Branches are never deleted.
+#   Any comment or push resets the clock and removes `stale`. Adding an
+#     exemption label to an already-stale item makes it exempt but does NOT
+#     clear `stale` — comment or push to clear it. A closed PR is not
+#     reopened by activity: the author must reopen it, then push or comment.
+#
+# Permissions: `actions: write` is required by actions/stale itself — it
+# persists its pagination cursor in the Actions cache and needs the scope to
+# reset that cache; without it a run that hits `operations-per-run` leaves a
+# stale cursor for the next run. No checkout, so `contents: read` only.
+#
+# Dry-run gate: every scheduled run passes `debug-only: true`, so the cron
+# labels, comments on and closes NOTHING — it only logs the decisions it
+# would take. Manual runs default to dry-run too; dispatch with
+# `dry_run=false` for a live pass. Enablement (after reviewing the dry-run
+# logs) changes only the `schedule` side of the `debug-only` expression.
+name: Stale
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log decisions only; do not label, comment or close"
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # SHA-pinned (not tag-pinned): this action holds a token that can
+      # close issues and PRs, and a tag can be moved — a full commit SHA
+      # cannot.
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          debug-only: ${{ github.event_name == 'schedule' || inputs.dry_run }}
+          operations-per-run: 200
+          remove-stale-when-updated: true
+
+          # Issues: needs-info only (`stale` keeps an un-labelled issue in
+          # scope for the pass that clears the stale label — see header).
+          any-of-issue-labels: needs-info,stale
+          exempt-issue-labels: launch-blocker,oss-launch
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          stale-issue-label: stale
+          close-issue-reason: not_planned
+          stale-issue-message: >-
+            This issue is still waiting on information from the reporter
+            (`needs-info`) and has had no activity for 14 days, so it has been
+            marked `stale`. It will be closed in 7 days unless something
+            changes. Any comment keeps it open and clears `stale` — reply with
+            the missing details and the conversation picks up where it left
+            off. If the report is actionable as-is, say so in a comment so a
+            maintainer can drop `needs-info`.
+          close-issue-message: >-
+            Closing as not planned: this issue has been waiting on information
+            from the reporter (`needs-info`) for 21 days with no response. If
+            the problem still exists, reopen the issue (or ask a maintainer
+            to) and reply with the missing details.
+
+          # PRs: non-draft only.
+          exempt-draft-pr: true
+          exempt-pr-labels: dependencies,github_actions,launch-blocker
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          delete-branch: false
+          stale-pr-message: >-
+            This pull request has had no activity for 14 days and has been
+            marked `stale`. It will be closed in 7 days unless something
+            changes. Any comment or push keeps it open and clears `stale` —
+            push a rebase or leave a status note. Marking it as a draft or
+            adding an exemption label stops the clock but does not clear the
+            `stale` label; comment or push to clear it.
+          close-pr-message: >-
+            Closing: this pull request has had no activity for 21 days. The
+            branch is untouched. A push or comment does not reopen a closed
+            PR — reopen it first, then push or comment to pick it back up.

@@ -76,6 +76,16 @@ pid_gone() {
   [[ "$process_state" == Z* ]]
 }
 
+# No process matching any of the given `pgrep -f` patterns is left. KILLed
+# descendants can outlive the script's exit by a scheduler tick, so callers
+# poll this with wait_until instead of sleeping before the pgrep assertions.
+no_process_matches() {
+  local pattern
+  for pattern in "$@"; do
+    ! pgrep -f "$pattern" >/dev/null 2>&1 || return 1
+  done
+}
+
 free_port() {
   python3 - <<'PY'
 import socket
@@ -316,6 +326,8 @@ PY
 # frontend must not abort cleanup; the KILL escalation still has to run. The
 # state file disappearing proves cleanup has started, and the frontend holds
 # it in its 50x0.1s wait loop, so 0.2s later the second TERM lands mid-loop.
+# The pause is not a readiness wait: the script exposes nothing that says "in
+# the wait loop", and a slower host only widens the 5s window it must hit.
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
   SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
@@ -329,7 +341,7 @@ if ! wait_until test ! -e "$state_dir/ui.json"; then
   kill -KILL "$frontend_pid" 2>/dev/null || true
   fail "double-TERM cleanup did not remove the state file within ${ready_timeout}s"
 fi
-sleep 0.2
+sleep 0.2 # timing-guard: second TERM must land inside cleanup's 5s escalation wait
 kill -TERM "$sandbox_pid"
 set +e
 wait "$sandbox_pid"
@@ -397,10 +409,15 @@ done
 # the frontend running. SANDBOX_TEST_FORK_HOLD parks the script inside that
 # window for as long as the hold file exists, so the TERM is delivered there
 # deterministically; the hold is then released and the script must still tear
-# the frontend down. The script's own port probes run `python3 - <port>` too,
-# so the frontend's `Local:` line (printed once it has bound the port, i.e.
-# after the fork) gates the pid lookup — otherwise pgrep can pick the pre-fork
-# port_is_free probe and the TERM lands before the window.
+# the frontend down. The deferral is a shell variable inside the script, so
+# nothing observable marks the TERM as delivered: a short pause before
+# releasing the hold keeps it inside the window (bash runs the trap once the
+# hold loop's current 0.05s sleep returns). A late delivery is still handled
+# by the restored traps, so a slow host loses coverage, not correctness. The
+# script's own port probes run `python3 - <port>` too, so the frontend's
+# `Local:` line (printed once it has bound the port, i.e. after the fork)
+# gates the pid lookup — otherwise pgrep can pick the pre-fork port_is_free
+# probe and the TERM lands before the window.
 port=$(free_port)
 fork_hold="$temp_dir/fork-hold"
 touch "$fork_hold"
@@ -417,7 +434,7 @@ if ! frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/fork-win
   fail "could not find the fork-window frontend child"
 fi
 kill -TERM "$sandbox_pid"
-sleep 0.2
+sleep 0.2 # timing-guard: TERM must be delivered inside the held fork window before the hold is released
 rm -f "$fork_hold"
 set +e
 wait "$sandbox_pid"
@@ -453,7 +470,7 @@ if ! daemon_pid=$(pgrep -P "$sandbox_pid" -f "$data_dir/intentd.sock"); then
   fail "could not find the fork-window daemon child"
 fi
 kill -TERM "$sandbox_pid"
-sleep 0.2
+sleep 0.2 # timing-guard: TERM must be delivered inside the held fork window before the hold is released
 rm -f "$fork_hold"
 set +e
 wait "$sandbox_pid"
@@ -558,7 +575,7 @@ sleep 3600 &
 dummy_pid=$!
 write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
 (
-  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done
+  while [[ -e "$state_dir/ui.json" ]]; do sleep 0.05; done # timing-guard: poll interval
   printf '%s\n' '{"mode":"ui","pid":99999999,"devPort":1}' >"$state_dir/ui.json"
 ) &
 restart_writer_pid=$!
@@ -719,7 +736,7 @@ set -e
 sandbox_pid=""
 [[ "$status" -eq 143 ]] || fail "stack SIGTERM returned $status instead of 143"
 [[ ! -e "$state_dir/stack.json" ]] || fail "stack state file remained after SIGTERM"
-sleep 0.2
+wait_until no_process_matches "$temp_dir/fake-intentd|$data_dir/intentd.sock" "python3 - $port" || true
 pgrep -f "$temp_dir/fake-intentd|$data_dir/intentd.sock" >/dev/null && fail "stack left an intentd descendant"
 pgrep -f "python3 - $port" >/dev/null && fail "stack left a frontend descendant"
 

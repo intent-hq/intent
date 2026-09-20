@@ -115,9 +115,14 @@ monorepo pin advance (Phase 2) then happens automatically.
    human** (see Conventions → Merging). Approved + green checks is not enough.
 
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
-`Fixes intent-hq/intent#N` — in the squash-commit message or PR body. GitHub
-auto-closes the issue on merge, and the release notifier (see Release Process) comments
-on it once a release actually contains the complete fix.
+`Fixes intent-hq/intent#N` — in the PR body or squash-commit message, on **every** PR of
+a cross-component fix (intentd and cloudlands-fe alike); never downgrade to `Refs` /
+`Part of` to avoid an early close. GitHub closing the issue when the first PR merges is
+expected: the cloudlands-fe release notifier (see Release Process) holds its shipped-version
+comment until every *linked* fix PR is merged and contained, and mention-only references
+are invisible to it — an all-`Refs` fix gets no auto-close and no comment (as happened to
+[intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383): intentd#2001 +
+cloudlands-fe#2687), and a mixed one can be announced before it has fully shipped.
 
 ### Phase 2 — Monorepo pin advance (automated)
 
@@ -377,10 +382,8 @@ for all components.
   (`gh issue list --repo intent-hq/intent --search "<keywords>" --state all`) and
   comment on / link the existing issue instead of filing a duplicate.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
-  `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
-  `Fixes intent-hq/intent#N` so the issue auto-closes on merge and the release
-  notifier comments on it once a release contains the complete fix (see Release
-  Process).
+  `fix: correct panel focus (#123)`); in submodule PRs use the closing keyword on
+  every PR of the fix, per Phase 1 — Submodule PRs.
 
 ## Working on Issues
 
