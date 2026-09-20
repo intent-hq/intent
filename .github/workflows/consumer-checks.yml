@@ -1,0 +1,147 @@
+# Reusable consumer checks for the component repos (intent-hq/intentd,
+# intent-hq/cloudlands-fe). Their PR CI calls this workflow so a PR that would
+# break a monorepo consumer check — method catalog, event catalog, protocol→FE
+# field parity, docs-check, check-makefile-targets — is red in that repo before
+# it merges, instead of turning monorepo `main` red or stalling the rolling
+# `auto/submodule-bump` PR after the fact.
+#
+# The monorepo is the source of the check: the catalogs, sidecars and docs the
+# checks compare against live under docs/protocol/ here, and the check list is
+# scripts/consumer-checks.sh — the same runner the monorepo `docs-check` CI job
+# uses, so the two lists cannot drift. This job checks out the monorepo at the
+# commit this workflow file itself came from — `job.workflow_sha` /
+# `job.workflow_repository` from the `job` context (with callers on `@main` that
+# is main's tip at call time) — so the workflow and the scripts it runs always
+# come from the same monorepo commit; a caller can never see a workflow whose
+# runner has not landed yet. Do not use `github.job_workflow_sha` for this: it
+# is an OIDC token claim, not a `github` context property, and an unknown
+# context property silently evaluates to "" in expressions (cloudlands-fe#2702
+# ran with the fallback). The `|| 'main'` fallback keeps the workflow valid
+# where `job.workflow_*` is unavailable (GHES). It then replaces the caller's
+# submodule directory with the caller's PR head, initializes the other public
+# submodule at its pin, and runs the runner in upstream context. packages/ios is
+# private and stays uninitialized; a missing iOS fixture is skipped by
+# check-event-catalog by design.
+#
+# Fix order when this job is red: the checks compare the PR head against the
+# monorepo docs at that commit, and every checker tolerates docs that lead the
+# pin. For an addition, land the monorepo docs PR first (the summary table
+# names the file to update; the checks only warn until the component catches
+# up), then re-run this job; the later submodule bump then lands green. For a
+# removal, land the component PR first (this job warns about the now-extra
+# docs entry; a docs-first removal is rejected as a component extra) and remove
+# the docs entry after the bump. A rename is an addition: document the new name
+# first (keep the old entry), rename in the component, then drop the old entry
+# after the bump.
+#
+# check-mcp-bindings is advisory here: its generated index must match the
+# pinned help text line for line, so the docs cannot lead an intentd change to
+# a binding's help line; the regeneration is mechanical (`make mcp-bindings-doc`)
+# and stays a hard error in the monorepo. A failed monorepo checkout is
+# fail-soft (::warning::, job green) so a monorepo outage never blocks the
+# component repos.
+#
+# Caller sketch (pull_request + merge_group):
+#   monorepo-consumer-checks:
+#     uses: intent-hq/intent/.github/workflows/consumer-checks.yml@main
+#     with:
+#       component: intentd
+#       head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+name: Consumer checks
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        description: "Calling component: intentd or cloudlands-fe"
+        required: true
+        type: string
+      head-sha:
+        description: "Caller commit to check; defaults to github.sha (on pull_request pass the PR head sha)"
+        required: false
+        type: string
+        default: ""
+
+jobs:
+  consumer-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      COMPONENT: ${{ inputs.component }}
+      HEAD_SHA: ${{ inputs.head-sha || github.sha }}
+    steps:
+      - name: Validate the component input
+        id: component
+        run: |
+          case "$COMPONENT" in
+            intentd) other=cloudlands-fe ;;
+            cloudlands-fe) other=intentd ;;
+            *)
+              echo "::error::consumer-checks: unknown component '$COMPONENT' (expected intentd or cloudlands-fe)"
+              exit 1
+              ;;
+          esac
+          echo "other=$other" >> "$GITHUB_OUTPUT"
+          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT"
+
+      # A reusable workflow's default checkout is the caller repo; the monorepo
+      # must be named explicitly, at this workflow file's own commit so the
+      # scripts it runs match (the `job` context is read here directly, not via
+      # job-level env). Fail-soft: see the guard step below.
+      - name: Check out the monorepo at this workflow's commit
+        id: monorepo
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository || 'intent-hq/intent' }}
+          ref: ${{ job.workflow_sha || 'main' }}
+          submodules: false
+
+      - name: Skip when the monorepo checkout failed
+        if: steps.monorepo.outcome != 'success'
+        env:
+          MONOREPO_REF: ${{ job.workflow_sha || 'main' }}
+        run: |
+          echo "::warning::consumer-checks: could not check out intent-hq/intent@${MONOREPO_REF:0:7}; skipping the monorepo consumer checks for this run."
+
+      - name: Replace packages/${{ inputs.component }} with the caller head
+        if: steps.monorepo.outcome == 'success'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ inputs.head-sha || github.sha }}
+          path: packages/${{ inputs.component }}
+          fetch-depth: 1
+          submodules: false
+
+      - name: Initialize packages/${{ steps.component.outputs.other }} at its pin
+        if: steps.monorepo.outcome == 'success'
+        run: git submodule update --init --depth=1 "packages/${{ steps.component.outputs.other }}"
+
+      - uses: actions/setup-node@v7
+        if: steps.monorepo.outcome == 'success'
+        with:
+          node-version: 22
+
+      # `shell: bash` runs the body under `bash -eo pipefail`; the default
+      # `run` shell is `bash -e` only, and the `| tee` below would then mask a
+      # failing runner behind tee's exit 0.
+      - name: Run the consumer checks (upstream context)
+        if: steps.monorepo.outcome == 'success'
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/consumer-checks.log"
+          monorepo_sha=$(git rev-parse --short HEAD)
+          echo "Checking against intent-hq/intent@$monorepo_sha"
+          status=0
+          scripts/consumer-checks.sh --context upstream --advisory=check-mcp-bindings 2>&1 | tee "$log" || status=$?
+          {
+            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@$monorepo_sha"
+            echo
+            echo '```'
+            sed -n '/^consumer-checks summary$/,$p' "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"

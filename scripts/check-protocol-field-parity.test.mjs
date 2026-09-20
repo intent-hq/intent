@@ -2,12 +2,18 @@
 // Run: node --test scripts/check-protocol-field-parity.test.mjs
 
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
-import { PAIRS, comparePair, extractRustFields, extractTsKeys, formatError, runChecks, toCamelCase } from './check-protocol-field-parity.mjs';
+import { PAIRS, comparePair, extractRustFields, extractTsKeys, formatDiagnostic, runChecks, toCamelCase } from './check-protocol-field-parity.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./check-protocol-field-parity.mjs', import.meta.url));
 
 const RUST = `
 /// Doc comment.
@@ -243,7 +249,8 @@ test('comparePair reports an emitted field missing from the TS type with both fi
   assert.equal(errors.length, 1);
   assert.equal(errors[0].file, 'model.rs');
   assert.equal(errors[0].line, 10);
-  const text = formatError(errors[0]);
+  assert.equal(errors[0].severity, undefined);
+  const text = formatDiagnostic(errors[0]);
   assert.match(text, /^model\.rs:10: error: Row → Row: emitted field Row\.lastActivity \(Rust last_activity\) is missing from Row \(types\.ts:2-9\)/);
   assert.match(text, /add it to the TS type .* or add an ignore entry with a reason/);
 });
@@ -263,29 +270,31 @@ test('comparePair does not treat Object.prototype names as ignore entries', () =
   );
 });
 
-test('comparePair reports a stale ignore entry whose field is no longer emitted', () => {
-  const errors = comparePair(pair({ ignore: { gone: 'reason' } }), RUST, TS_FULL);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].file, 'model.rs');
-  assert.equal(errors[0].line, 5);
-  assert.match(errors[0].message, /stale ignore entry gone \("reason"\) — Row no longer emits it; remove the entry/);
+test('comparePair warns about a stale ignore entry whose field is no longer emitted', () => {
+  const diags = comparePair(pair({ ignore: { gone: 'reason' } }), RUST, TS_FULL);
+  assert.equal(diags.length, 1);
+  assert.equal(diags[0].severity, 'warning');
+  assert.equal(diags[0].file, 'model.rs');
+  assert.equal(diags[0].line, 5);
+  assert.match(formatDiagnostic(diags[0]), /^model\.rs:5: warning: Row → Row: stale ignore entry gone \("reason"\) — Row no longer emits it; remove the entry from PAIRS$/);
 });
 
-test('comparePair reports a stale ignore entry whose field is now declared by the TS type', () => {
-  const errors = comparePair(pair({ ignore: { kind: 'reason' } }), RUST, TS_FULL);
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].file, 'types.ts');
-  assert.equal(errors[0].line, 6);
-  assert.match(errors[0].message, /stale ignore entry kind .* Row now declares it; remove the entry/);
+test('comparePair warns about a stale ignore entry whose field is now declared by the TS type', () => {
+  const diags = comparePair(pair({ ignore: { kind: 'reason' } }), RUST, TS_FULL);
+  assert.equal(diags.length, 1);
+  assert.equal(diags[0].severity, 'warning');
+  assert.equal(diags[0].file, 'types.ts');
+  assert.equal(diags[0].line, 6);
+  assert.match(formatDiagnostic(diags[0]), /^types\.ts:6: warning: Row → Row: stale ignore entry kind \("reason"\) — Row now declares it; remove the entry from PAIRS$/);
 });
 
 test('comparePair reports a struct or type that cannot be found', () => {
   const noStruct = comparePair(pair({ rust: { file: 'model.rs', struct: 'Missing' } }), RUST, TS_FULL);
   assert.equal(noStruct.length, 1);
-  assert.equal(formatError(noStruct[0]), 'model.rs:1: error: Missing → Row: pub struct Missing not found');
+  assert.equal(formatDiagnostic(noStruct[0]), 'model.rs:1: error: Missing → Row: pub struct Missing not found');
   const noType = comparePair(pair({ ts: { file: 'types.ts', type: 'Missing' } }), RUST, TS_FULL);
   assert.equal(noType.length, 1);
-  assert.match(formatError(noType[0]), /^types\.ts:1: error: Row → Missing: export interface Missing \/ export const Missing = z\.object\(\{ not found$/);
+  assert.match(formatDiagnostic(noType[0]), /^types\.ts:1: error: Row → Missing: export interface Missing \/ export const Missing = z\.object\(\{ not found$/);
 });
 
 test('comparePair surfaces flatten and rename_all errors instead of comparing', () => {
@@ -319,9 +328,74 @@ test('runChecks skips a pair whose submodule is not initialized and checks the r
   });
   const result = await runChecks(root, pairs);
   assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
   assert.deepEqual(result.checked, ['Row → Row']);
   assert.equal(result.skipped.length, 1);
   assert.match(result.skipped[0], /^skipped: Row → Row \(packages\/ios\/Types\.ts missing — submodule not initialized\)$/);
+});
+
+const FIXTURE_PAIR = { rust: { file: 'packages/intentd/model.rs', struct: 'Row' }, ts: { file: 'packages/cloudlands-fe/types.ts', type: 'Row' }, ignore: {} };
+
+test('runChecks separates stale-ignore warnings from errors', async (t) => {
+  const root = await fixture(t, {
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+    'packages/cloudlands-fe/.git': 'gitdir: x\n',
+    'packages/cloudlands-fe/types.ts': TS_FULL,
+  });
+  const result = await runChecks(root, [{ ...FIXTURE_PAIR, ignore: { gone: 'reason', kind: 'reason' } }]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.checked, ['Row → Row']);
+  assert.deepEqual(
+    result.warnings.map((w) => [w.severity, w.file, w.line]),
+    [['warning', 'packages/intentd/model.rs', 5], ['warning', 'packages/cloudlands-fe/types.ts', 6]],
+  );
+});
+
+const run = promisify(execFile);
+async function runCli(root) {
+  try {
+    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root]);
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    return { code: err.code, stdout: err.stdout, stderr: err.stderr };
+  }
+}
+
+// The CLI reads the real PAIRS manifest, so the fixture root is derived from
+// it: every Rust struct emits only `id` (plus `extraRust` on the first pair's
+// struct) and every TS type declares only `id`, which makes each ignore entry
+// stale (its field is no longer emitted).
+function cliFixtureFiles(extraRust = '') {
+  const files = { 'packages/intentd/.git': 'gitdir: x\n', 'packages/cloudlands-fe/.git': 'gitdir: x\n' };
+  const staleCount = PAIRS.reduce((n, p) => n + Object.keys(p.ignore).length, 0);
+  PAIRS.forEach((p, i) => {
+    assert.ok(!Object.hasOwn(p.ignore, 'id'));
+    files[p.rust.file] = (files[p.rust.file] ?? '') + `#[serde(rename_all = "camelCase")]\npub struct ${p.rust.struct} {\n    pub id: String,\n${i === 0 ? extraRust : ''}}\n\n`;
+    files[p.ts.file] = (files[p.ts.file] ?? '') + `export interface ${p.ts.type} {\n  id: string;\n}\n\n`;
+  });
+  return { files, staleCount };
+}
+
+test('CLI: stale ignore entries print warnings to stderr and exit 0', async (t) => {
+  const { files, staleCount } = cliFixtureFiles();
+  const root = await fixture(t, files);
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.ok(staleCount > 0);
+  assert.equal(stderr.match(/^.*: warning: .*stale ignore entry .*; remove the entry from PAIRS$/gm)?.length, staleCount, stderr);
+  assert.doesNotMatch(stderr, /: error: /);
+  assert.match(stdout, new RegExp(`^Protocol field parity holds for ${PAIRS.length} pair\\(s\\): .* ${staleCount} warning\\(s\\): stale ignore entries`, 'm'));
+});
+
+test('CLI: a missing field still exits 1 with an error', async (t) => {
+  const { files, staleCount } = cliFixtureFiles('    pub parent_agent_id: String,\n');
+  const root = await fixture(t, files);
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  const [{ rust, ts }] = PAIRS;
+  assert.match(stderr, new RegExp(`^${rust.file.replace(/[./]/g, '\\$&')}:4: error: ${rust.struct} → ${ts.type}: emitted field ${rust.struct}\\.parentAgentId \\(Rust parent_agent_id\\) is missing from ${ts.type}`, 'm'));
+  assert.match(stderr, new RegExp(`^check-protocol-field-parity: 1 error\\(s\\), ${staleCount} warning\\(s\\): stale ignore entries$`, 'm'));
 });
 
 test('runChecks treats a submodule directory without .git as uninitialized', async (t) => {

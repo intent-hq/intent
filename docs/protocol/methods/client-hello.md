@@ -16,7 +16,10 @@ bookkeeping and never crosses the wire.
 - **Client-persisted `clientId`.** The client **generates and persists its own `clientId`** (a
   UUID in its local storage) and **re-presents it on every (re)connect**. If the client omits
   `clientId`, the server generates one and returns it for the client to persist and reuse from
-  then on.
+  then on. On a connection bound to a **non-administrator principal** (§2.4 / §5.48) the returned
+  `clientId` is namespaced as `{principalId}:{presented}` — idempotent, so a client that persists
+  the returned id re-hellos to the same identity — and a collaborator can only ever act as a
+  client id inside its own namespace; the administrator, agents and the daemon keep the raw id.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).

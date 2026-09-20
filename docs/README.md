@@ -35,8 +35,10 @@ members of the cloudlands-fe type that consumes it — today `AgentLite` ↔ `Ag
 (`src/shared/types.ts`) — and fails when an emitted field is missing on the FE side. To
 cover another row, add a pair to the manifest constant at the top of the script; to
 exempt a field the FE intentionally does not consume, add it to that pair's `ignore`
-map with a one-line reason (a stale entry, one whose field is no longer emitted or is
-now present in the FE type, also fails the check).
+map with a one-line reason. A stale entry — one whose field is no longer emitted or is
+now present in the FE type — is reported as a warning, not a failure, so an FE PR that
+declares a previously ignored field does not have to wait for the monorepo entry to be
+removed; remove the entry in a follow-up.
 
 ## Harness Versioning — `HARNESS.md`
 
