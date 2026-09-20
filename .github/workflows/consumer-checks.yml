@@ -106,8 +106,12 @@ jobs:
         with:
           node-version: 22
 
+      # `shell: bash` runs the body under `bash -eo pipefail`; the default
+      # `run` shell is `bash -e` only, and the `| tee` below would then mask a
+      # failing runner behind tee's exit 0.
       - name: Run the consumer checks (upstream context)
         if: steps.monorepo.outcome == 'success'
+        shell: bash
         run: |
           log="$RUNNER_TEMP/consumer-checks.log"
           status=0

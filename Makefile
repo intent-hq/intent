@@ -156,8 +156,11 @@ mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from inten
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
 # depends on an unmerged intentd PR must wait for the auto-bump.
+# CHECK_MAKEFILE_TARGETS_GITLINK=<rev> checks another intentd commit instead
+# (the upstream consumer-checks job passes HEAD, the caller's own head).
+CHECK_MAKEFILE_TARGETS_GITLINK ?=
 check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced intentd crates and --test targets exist at the pinned gitlink
-	@node scripts/check-makefile-targets.mjs
+	@node scripts/check-makefile-targets.mjs $(if $(CHECK_MAKEFILE_TARGETS_GITLINK),--gitlink $(CHECK_MAKEFILE_TARGETS_GITLINK))
 
 # Every wire field an intentd row struct emits (AgentLite, Workspace) must be
 # present in the cloudlands-fe type that consumes it, or listed in the script's

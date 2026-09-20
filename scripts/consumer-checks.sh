@@ -78,15 +78,25 @@ fix_path() {
     check-mcp-bindings) echo "docs/protocol/methods/mcp-bindings.md (make mcp-bindings-doc) + prose under docs/protocol/" ;;
     docs-check) echo "AGENTS.md / README.md / docs/fe/DEVELOPER_GUIDE.md (make targets, sandbox knobs) + docs/protocol/methods/files-terminal-browser.md (browser errorCode contract)" ;;
     check-protocol-catalog) echo "docs/protocol/05-method-catalog.md + docs/protocol/methods/*.md" ;;
-    check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink)" ;;
+    check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "scripts/check-protocol-field-parity.mjs PAIRS (ignore manifest) or the cloudlands-fe type that consumes the row struct" ;;
     *) echo "unknown check" ;;
   esac
 }
 
+# Upstream, packages/intentd is the caller's own checkout (a PR head, not the
+# pin), so check-makefile-targets asks whether that head still provides the
+# Makefile's crates / --test targets; in fe upstream context intentd sits at
+# the pin, so HEAD == pin. The monorepo keeps the strict pinned-gitlink read.
 make_args() {
   case "$1" in
     docs-check) echo "-o event-catalog-check -o check-mcp-bindings docs-check" ;;
+    check-makefile-targets)
+      if [ "$context" = "upstream" ]; then
+        echo "CHECK_MAKEFILE_TARGETS_GITLINK=HEAD $1"
+      else
+        echo "$1"
+      fi ;;
     *) echo "$1" ;;
   esac
 }

@@ -76,6 +76,10 @@ expect_all_ran "all-green run"
 grep -q -- '--no-print-directory -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
 [ "$(grep -c . "$stub_log")" -eq 6 ] || fail "expected 6 make invocations: $(cat "$stub_log")"
+grep -q -- '--no-print-directory check-makefile-targets$' "$stub_log" ||
+  fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
+grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
+  fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
 [ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 6 ] ||
   fail "summary table did not list 6 passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
@@ -134,12 +138,20 @@ fi
 [ "$(tail -n 1 <<<"$check_output")" = "Fix order: land the monorepo docs change first (docs may lead the pin), then re-run this job." ] ||
   fail "upstream context did not end with the fix-order line: $check_output"
 [ "$(grep -c '^Fix order:' <<<"$check_output")" -eq 1 ] || fail "fix-order line printed more than once: $check_output"
+# Upstream, packages/intentd is the caller's PR head rather than the pin, so
+# check-makefile-targets must read that head instead of the monorepo gitlink.
+grep -q -- '--no-print-directory CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
+  fail "upstream context did not point check-makefile-targets at the caller head: $(cat "$stub_log")"
+[ "$(grep -c 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log")" -eq 1 ] ||
+  fail "the gitlink override leaked into another make invocation: $(cat "$stub_log")"
 
 if run_check STUB_FAIL=docs-check CONSUMER_CHECKS_CONTEXT=upstream; then
   fail "upstream context masked a non-advisory failure"
 fi
 [ "$(tail -n 1 <<<"$check_output")" = "Fix order: land the monorepo docs change first (docs may lead the pin), then re-run this job." ] ||
   fail "CONSUMER_CHECKS_CONTEXT=upstream did not end a failed run with the fix-order line: $check_output"
+grep -q -- 'CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
+  fail "CONSUMER_CHECKS_CONTEXT=upstream did not point check-makefile-targets at the caller head: $(cat "$stub_log")"
 
 if run_check --context=elsewhere; then
   fail "unknown context was accepted"
@@ -150,6 +162,65 @@ if run_check --bogus; then
   fail "unknown argument was accepted"
 fi
 grep -q "unknown argument '--bogus'" <<<"$check_output" || fail "unknown argument was not named: $check_output"
+
+# The reusable workflow pipes the runner through `tee`, so its step must run
+# under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
+# the default `run` shell is `bash -e` only and would report tee's exit 0.
+# Extract the step as written and execute its body under that shell against
+# a stubbed runner: a failing runner must fail the step with the summary
+# still appended, a passing one must exit 0.
+workflow=$repo_root/.github/workflows/consumer-checks.yml
+step_name='Run the consumer checks (upstream context)'
+step_block=$(awk -v name="$step_name" '
+  /^      - / { in_step = index($0, "- name: " name) > 0 }
+  in_step { print }
+' "$workflow")
+[[ -n "$step_block" ]] || fail "workflow step '$step_name' not found in $workflow"
+grep -q '^        shell: bash$' <<<"$step_block" ||
+  fail "workflow step '$step_name' does not declare 'shell: bash' (its piped run body needs pipefail):"$'\n'"$step_block"
+grep -q '| tee ' <<<"$step_block" || fail "workflow step '$step_name' no longer pipes the runner; update this test"
+run_body=$(awk 'body { sub(/^          /, ""); print } /^        run: \|$/ { body = 1 }' <<<"$step_block" |
+  sed 's/\${{ github\.repository }}/intent-hq\/intentd/g')
+grep -q '\${{' <<<"$run_body" && fail "workflow run body has an unsubstituted expression:"$'\n'"$run_body"
+step_dir=$temp_dir/workflow-step
+mkdir -p "$step_dir/scripts" "$step_dir/tmp"
+printf '%s\n' "$run_body" >"$step_dir/step.sh"
+cat >"$step_dir/scripts/consumer-checks.sh" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >"$STUB_ARGS"
+echo "==> make stub-check"
+echo "consumer-checks summary"
+echo "  stub-check  FAIL  stub/fix/path"
+echo "consumer-checks: ${STUB_RESULT}"
+exit "${STUB_STATUS}"
+EOF
+chmod +x "$step_dir/scripts/consumer-checks.sh"
+# run_step <status> <result word>; sets step_status and step_summary.
+run_step() {
+  local summary=$step_dir/summary.md
+  : >"$summary"
+  step_status=0
+  step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
+    RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
+    bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
+  step_summary=$(cat "$summary")
+}
+run_step 1 FAILED
+[ "$step_status" -eq 1 ] ||
+  fail "workflow step exited $step_status for a failing runner (expected 1):"$'\n'"$step_output"
+[ "$(cat "$step_dir/args")" = "--context upstream --advisory=check-mcp-bindings" ] ||
+  fail "workflow step invoked the runner with unexpected arguments: $(cat "$step_dir/args")"
+grep -q '^### monorepo-consumer-checks — intent-hq/intentd@0123456 vs intent-hq/intent@main$' <<<"$step_summary" ||
+  fail "failed step did not write the summary heading:"$'\n'"$step_summary"
+grep -q '^consumer-checks: FAILED$' <<<"$step_summary" ||
+  fail "failed step did not append the runner's summary table:"$'\n'"$step_summary"
+grep -q '^==> make stub-check$' <<<"$step_summary" &&
+  fail "step summary included runner output above the summary table:"$'\n'"$step_summary"
+run_step 0 "all checks passed"
+[ "$step_status" -eq 0 ] ||
+  fail "workflow step exited $step_status for a passing runner (expected 0):"$'\n'"$step_output"
+grep -q '^consumer-checks: all checks passed$' <<<"$step_summary" ||
+  fail "passing step did not append the runner's summary table:"$'\n'"$step_summary"
 
 echo "consumer-checks tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"
 [[ -z "${CONSUMER_CHECKS_TEST_BASH:-}" ]] || exit 0
