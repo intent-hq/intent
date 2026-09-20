@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  API_BASE,
   CI_WORKFLOW,
   REPOS,
   crossCheckWorkflow,
@@ -290,6 +292,17 @@ test('transient failures warn and exit 0', async (t) => {
     { status: 503, body: { message: 'unavailable' } },
     { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: { message: 'rate limited' } },
     { status: 429, headers: { 'retry-after': '30' }, body: { message: 'slow down' } },
+    { status: 429, body: { message: 'slow down' } },
+    {
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '4000' },
+      body: { message: 'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.' },
+    },
+    {
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '4000' },
+      body: { message: 'You have triggered an abuse detection mechanism. Please wait a few minutes before you try again.' },
+    },
     { error: 'getaddrinfo ENOTFOUND api.github.com' },
   ]) {
     const result = await runWith(t, fixtureFor({ intentd: failure }));
@@ -313,15 +326,68 @@ test('a transient failure on one repository does not hide drift on another', asy
 });
 
 test('404, 401 and a non-rate-limited 403 are configuration errors (exit 2)', async (t) => {
-  for (const status of [404, 401, 403]) {
-    const result = await runWith(t, fixtureFor({ 'cloudlands-fe': { status, body: { message: 'nope' } } }));
-    assert.equal(result.exitCode, 2, `status ${status}`);
-    assert.match(result.stderr, new RegExp(`check-rulesets: intent-hq/cloudlands-fe: HTTP ${status}`));
+  for (const failure of [
+    { status: 404, body: { message: 'nope' } },
+    { status: 401, body: { message: 'nope' } },
+    { status: 403, body: { message: 'nope' } },
+    { status: 403, headers: { 'x-ratelimit-remaining': '4000' }, body: { message: 'Resource not accessible by integration' } },
+    { status: 403, body: '<html>forbidden</html>' },
+  ]) {
+    const result = await runWith(t, fixtureFor({ 'cloudlands-fe': failure }));
+    assert.equal(result.exitCode, 2, `status ${failure.status}`);
+    assert.match(result.stderr, new RegExp(`check-rulesets: intent-hq/cloudlands-fe: HTTP ${failure.status}`));
     assert.doesNotMatch(result.stdout, /::warning::/);
   }
   const missing = await runWith(t, {});
   assert.equal(missing.exitCode, 2);
   assert.match(missing.stderr, /HTTP 404/);
+});
+
+// A real server, because fetch resolves on headers: the failure under test
+// happens while the body is read, which a canned Response cannot reproduce.
+async function serve(t, handler) {
+  const server = http.createServer(handler);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const apiBase = `http://127.0.0.1:${server.address().port}`;
+  return { apiBase, fetchImpl: (url, init) => fetch(String(url).replace(API_BASE, apiBase), init) };
+}
+
+test('a body cut off after a 200 header is transient, not a malformed response', async (t) => {
+  const partial = await serve(t, (request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '4096' });
+    response.write('[{"type":"deletion","ruleset_source_type":"Repository",');
+    setTimeout(() => request.socket.destroy(), 10);
+  });
+  await assert.rejects(fetchLiveRules('intent', { fetchImpl: fetch, apiBase: partial.apiBase }), (error) => {
+    assert.equal(error.transient, true, error.message);
+    assert.match(error.message, /^intent-hq\/intent: HTTP 200, body read failed \(/);
+    return true;
+  });
+  const cwd = makeRepo(t);
+  const io = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: partial.fetchImpl, ...io }), 0, io.err.join('\n'));
+  assert.match(io.out.join('\n'), /^::warning::check-rulesets: could not read live main branch rules for intent-hq\/intent: HTTP 200, body read failed/m);
+  assert.equal(io.err.join('\n'), '');
+});
+
+test('a complete but non-JSON body is a configuration error (exit 2)', async (t) => {
+  const html = await serve(t, (request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html' });
+    response.end('<html><body>maintenance</body></html>');
+  });
+  await assert.rejects(fetchLiveRules('intent', { fetchImpl: fetch, apiBase: html.apiBase }), {
+    message: 'intent-hq/intent: response is not JSON',
+    transient: false,
+  });
+  const cwd = makeRepo(t);
+  const io = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: html.fetchImpl, ...io }), 2);
+  assert.match(io.err.join('\n'), /check-rulesets: intent-hq\/intent: response is not JSON/);
+  assert.doesNotMatch(io.out.join('\n'), /::warning::/);
+  const truncatedJson = await runWith(t, fixtureFor({ intent: { status: 200, body: '[{"type":"deletion"' } }));
+  assert.equal(truncatedJson.exitCode, 2, 'a fixture body that ends early is a complete document, so still exit 2');
+  assert.match(truncatedJson.stderr, /response is not JSON/);
 });
 
 test('a missing or malformed committed snapshot is a configuration error', async (t) => {

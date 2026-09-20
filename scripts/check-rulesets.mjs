@@ -12,8 +12,9 @@
 // leave the queue waiting on a check nothing produces.
 //
 // Exit codes: 0 match, 1 drift, 2 usage / configuration error (bad snapshot,
-// 401, 404). Transient failures (network, 5xx, exhausted rate limit) print a
-// `::warning::` and exit 0 so a GitHub hiccup does not redden a PR.
+// 401, 404, permission 403). Transient failures (network, a body cut off
+// mid-read, 5xx, primary or secondary rate limit) print a `::warning::` and
+// exit 0 so a GitHub hiccup does not redden a PR.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -274,10 +275,26 @@ export class RulesFetchError extends Error {
   }
 }
 
-function rateLimited(response) {
+function errorMessage(bodyText) {
+  try {
+    const body = JSON.parse(bodyText);
+    return isPlainObject(body) && typeof body.message === 'string' ? body.message : '';
+  } catch {
+    return '';
+  }
+}
+
+// GitHub reports an exhausted primary limit as 403 with x-ratelimit-remaining:
+// 0, and a secondary limit as 403 or 429 — sometimes with retry-after, but
+// documented to arrive with neither header and a nonzero remaining count and
+// only the body message telling it apart from a permission 403.
+function rateLimited(response, bodyText) {
+  if (response.status === 429) return true;
+  if (response.status !== 403) return false;
   return (
-    (response.status === 403 || response.status === 429) &&
-    (response.headers.get('x-ratelimit-remaining') === '0' || response.headers.has('retry-after'))
+    response.headers.get('x-ratelimit-remaining') === '0' ||
+    response.headers.has('retry-after') ||
+    /rate limit|abuse detection/i.test(errorMessage(bodyText))
   );
 }
 
@@ -294,7 +311,20 @@ export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token
   } catch (error) {
     throw new RulesFetchError(`${OWNER}/${repo}: network error (${error?.message ?? error})`, { transient: true });
   }
-  if (response.status >= 500 || rateLimited(response)) {
+  if (response.status >= 500 || response.status === 429) {
+    throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status}`, { transient: true });
+  }
+  // fetch resolves once the headers arrive; the connection can still drop while
+  // the body streams, which is a transport failure, not a malformed document.
+  let text;
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status}, body read failed (${error?.message ?? error})`, {
+      transient: true,
+    });
+  }
+  if (rateLimited(response, text)) {
     throw new RulesFetchError(`${OWNER}/${repo}: HTTP ${response.status}`, { transient: true });
   }
   if (!response.ok) {
@@ -304,7 +334,7 @@ export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token
   }
   let body;
   try {
-    body = await response.json();
+    body = JSON.parse(text);
   } catch {
     throw new RulesFetchError(`${OWNER}/${repo}: response is not JSON`, { transient: false });
   }
