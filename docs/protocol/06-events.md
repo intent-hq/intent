@@ -69,14 +69,20 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 
 > **Machine-readable catalog.** The complete type list, plus the discriminated payload values
 > (`task:ready-tasks-changed` reasons, `workspace:updated` change keys), is published as the
-> sidecar [`event-types.json`](./event-types.json) — a byte-identical copy of the intentd golden
+> sidecar [`event-types.json`](./event-types.json) — a copy of the intentd golden
 > `crates/intent-core/tests/goldens/event_types.json` (generated from
 > `intent_core::events::ALL_EVENT_TYPES`; regenerate with `INTENTD_UPDATE_GOLDENS=1 cargo test -p
-> intent-core --test events`). To add or rename a type: land it in intentd (catalog + golden), copy
-> the regenerated golden here, then copy it into the iOS fixture
-> `IntentTests/Fixtures/event_types.json`. `make event-catalog-check` (part of `make docs-check`;
-> `scripts/check-event-catalog.mjs`) fails when the three copies diverge or when a sidecar type is
-> not mentioned in this file.
+> intent-core --test events`) that is also vendored as the iOS fixture
+> `IntentTests/Fixtures/event_types.json`. **The sidecar may lead the pinned copies.** To add a
+> type: land the monorepo PR first (add it to this sidecar in the golden's byte layout and mention
+> it in this file), then merge the intentd PR (catalog + golden) and the iOS fixture; the submodule
+> bump lands green. `make event-catalog-check` (part of `make docs-check`;
+> `scripts/check-event-catalog.mjs`) **warns** while a vendored copy lacks a type, discriminator,
+> or discriminator value the sidecar carries ("docs lead the pin"), and **fails** when a copy
+> carries something the sidecar lacks or differs in `version` / `path` / `kind` / `absent` (update
+> `event-types.json` from the golden and mention the type here), when a copy that agrees with the
+> sidecar is not byte-identical to it (ordering / formatting drift), or when a sidecar type is not
+> mentioned in this file.
 
 | Namespace | Types (selected) | Notes |
 | --- | --- | --- |

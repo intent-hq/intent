@@ -158,7 +158,8 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
 # (source of truth), the protocol sidecar docs/protocol/event-types.json, and
-# the iOS test fixture. A copy whose submodule is not initialized is skipped.
+# the iOS test fixture. A copy whose submodule is not initialized is skipped;
+# a copy lagging the sidecar is a warning (docs lead the pin), not an error.
 event-catalog-check: ## Check the protocol event-type sidecar against the intentd golden, the iOS fixture, and 06-events.md
 	@node scripts/check-event-catalog.mjs
 
