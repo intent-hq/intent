@@ -141,11 +141,15 @@ the notify step logs a warning and skips, and the cron backstop still advances t
 
 The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
 whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
-or it carries the `submodule-pin-intended` label, and `check-makefile-targets` (run by
-the `docs-check` job and as part of `make check`) fails a PR whose Makefile references
-an intentd crate or `--test` target absent at the pinned gitlink, so a Makefile change
-that depends on an intentd PR must wait for the auto-bump. For an urgent bump, dispatch
-the workflow instead of filing a PR:
+or it carries the `submodule-pin-intended` label. The consumer checks — `make consumer-checks`
+(method and event catalogs, protocol→FE field parity, docs-check, check-makefile-targets) —
+run against the pins in the monorepo `docs-check` job and, through the reusable
+`.github/workflows/consumer-checks.yml`, as `monorepo-consumer-checks` on every intentd and
+cloudlands-fe PR against that PR's head. Docs lead the pin: when the upstream job is red,
+land the monorepo docs PR its table names first, then re-run it; `check-mcp-bindings` is
+advisory there (`make mcp-bindings-doc` regenerates its index in the monorepo), and a
+Makefile change that depends on an intentd PR still waits for the auto-bump
+(`check-makefile-targets`). For an urgent bump, dispatch the workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml
