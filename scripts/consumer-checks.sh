@@ -21,6 +21,15 @@
 #                          `upstream`, which appends the fix-order line
 #   MAKE                   make binary (defaults to `make`; tests stub it)
 #
+# Every make call carries `RUSTUP_CARGO=` on its command line: the Makefile
+# otherwise resolves cargo from packages/intentd/rust-toolchain.toml and puts
+# that toolchain's bin/ first on every recipe's PATH. Upstream that file is the
+# caller's PR head, so a `[toolchain] path = ...` entry there would let the
+# caller substitute the `node` (and cargo) the checks run. A command-line
+# variable beats the Makefile's assignment, and none of these checks needs
+# cargo, so the checkers run with the caller's PATH untouched; the Makefile's
+# own development toolchain pinning is unchanged.
+#
 # Exit status: 1 iff a non-advisory check failed; 2 on a usage error.
 # Bash 3.2 compatible (stock macOS /bin/bash).
 
@@ -33,6 +42,7 @@ checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
+make_overrides="RUSTUP_CARGO="
 
 usage() {
   echo "usage: $0 [--advisory=<targets>] [--context monorepo|upstream]" >&2
@@ -106,9 +116,9 @@ failed=0
 # shellcheck disable=SC2086
 for target in $checks; do
   args=$(make_args "$target")
-  echo "==> make $args"
+  echo "==> make $make_overrides $args"
   status=0
-  $make_bin --no-print-directory $args || status=$?
+  $make_bin --no-print-directory $make_overrides $args || status=$?
   if [ "$status" -eq 0 ]; then
     result=pass
   elif is_listed "$target" $advisory; then

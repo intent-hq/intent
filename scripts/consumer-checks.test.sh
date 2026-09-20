@@ -73,10 +73,15 @@ if ! run_check; then
   fail "all-green run exited non-zero: $check_output"
 fi
 expect_all_ran "all-green run"
-grep -q -- '--no-print-directory -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
+grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
 [ "$(grep -c . "$stub_log")" -eq 6 ] || fail "expected 6 make invocations: $(cat "$stub_log")"
-grep -q -- '--no-print-directory check-makefile-targets$' "$stub_log" ||
+# The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
+# recipe's PATH; upstream that file is the caller's PR head, so every make
+# call must empty the probe on its command line (see the real-make run below).
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 6 ] ||
+  fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
+grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
@@ -140,7 +145,7 @@ fi
 [ "$(grep -c '^Fix order:' <<<"$check_output")" -eq 1 ] || fail "fix-order line printed more than once: $check_output"
 # Upstream, packages/intentd is the caller's PR head rather than the pin, so
 # check-makefile-targets must read that head instead of the monorepo gitlink.
-grep -q -- '--no-print-directory CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
+grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
   fail "upstream context did not point check-makefile-targets at the caller head: $(cat "$stub_log")"
 [ "$(grep -c 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log")" -eq 1 ] ||
   fail "the gitlink override leaked into another make invocation: $(cat "$stub_log")"
@@ -162,6 +167,77 @@ if run_check --bogus; then
   fail "unknown argument was accepted"
 fi
 grep -q "unknown argument '--bogus'" <<<"$check_output" || fail "unknown argument was not named: $check_output"
+
+# Real make against a copy of the repo Makefile. The Makefile resolves cargo
+# from packages/intentd/rust-toolchain.toml (`rustup which cargo`) and puts
+# that toolchain's bin/ first on every recipe's PATH. Upstream that file is the
+# caller's PR head, so a `[toolchain] path = <dir>` entry there names a bin/
+# the caller controls: without the RUSTUP_CARGO= override every
+# `node scripts/...` recipe ran the caller's node and a failing trusted checker
+# came back green. The fixture's trusted PATH carries a node that fails
+# check-protocol-catalog, a rustup stub that answers `which cargo` from that
+# path entry (as rustup does for a path toolchain), and marker cargo/node
+# executables in the attacker dir. CARGO_BIN_DIR is the Makefile's other PATH
+# prepend (default ~/.cargo/bin); pointing it at the trusted dir keeps the
+# host's tools out of the run.
+make_bin=$(command -v make 2>/dev/null) || fail "make not found; the real-make consumer run needs it"
+fixture=$temp_dir/real-make
+mkdir -p "$fixture/scripts" "$fixture/packages/intentd" "$fixture/packages/cloudlands-fe" \
+  "$fixture/attacker/bin" "$fixture/trusted/bin"
+cp "$repo_root/Makefile" "$fixture/Makefile"
+cp "$script" "$fixture/scripts/consumer-checks.sh"
+# The ensure-*-submodule prerequisites only look for the .git entry.
+: >"$fixture/packages/intentd/.git"
+: >"$fixture/packages/cloudlands-fe/.git"
+printf '[toolchain]\npath = "%s"\n' "$fixture/attacker" >"$fixture/packages/intentd/rust-toolchain.toml"
+marker_log=$fixture/marker.log
+trusted_log=$fixture/trusted.log
+for tool in cargo node; do
+  printf '#!/bin/sh\necho "attacker %s $*" >>"%s"\n' "$tool" "$marker_log" >"$fixture/attacker/bin/$tool"
+done
+cat >"$fixture/trusted/bin/node" <<EOF
+#!/bin/sh
+echo "trusted node \$*" >>"$trusted_log"
+case "\$1" in
+  scripts/check-protocol-catalog.mjs) echo "trusted checker: catalog drift" >&2; exit 1 ;;
+esac
+EOF
+cat >"$fixture/trusted/bin/rustup" <<'EOF'
+#!/bin/sh
+[ "$1" = which ] && [ "$2" = cargo ] || exit 1
+toolchain_path=$(sed -n 's/^path = "\(.*\)"$/\1/p' rust-toolchain.toml)
+[ -n "$toolchain_path" ] || exit 1
+echo "$toolchain_path/bin/cargo"
+EOF
+printf '#!/bin/sh\necho "trusted docs-check" >>"%s"\n' "$trusted_log" >"$fixture/scripts/docs-check.sh"
+chmod +x "$fixture/attacker/bin/cargo" "$fixture/attacker/bin/node" "$fixture/trusted/bin/node" \
+  "$fixture/trusted/bin/rustup" "$fixture/scripts/docs-check.sh"
+run_real_make() {
+  : >"$marker_log"
+  : >"$trusted_log"
+  real_status=0
+  real_output=$(cd "$fixture" && PATH="$fixture/trusted/bin:$PATH" CARGO_BIN_DIR="$fixture/trusted/bin" \
+    "$@" 2>&1) || real_status=$?
+}
+# Control: without the override this make runs the attacker's node, so the
+# assertions on the runner below are not vacuous.
+run_real_make "$make_bin" --no-print-directory check-protocol-catalog
+{ [ "$real_status" -eq 0 ] && grep -q '^attacker node scripts/check-protocol-catalog.mjs$' "$marker_log"; } ||
+  fail "fixture control: an unhardened make did not run the attacker's node (rustup stub or Makefile PATH prepend changed?); exit $real_status:"$'\n'"$real_output"$'\n'"$(cat "$marker_log")"
+run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --context upstream
+[ "$real_status" -eq 1 ] ||
+  fail "real-make run exited $real_status (expected 1: the trusted check-protocol-catalog fails):"$'\n'"$real_output"
+[ ! -s "$marker_log" ] ||
+  fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
+grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
+  fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 5 ] ||
+  fail "expected the 5 node checks to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
+grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
+  fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 5 ] ||
+  fail "real-make run did not list the other 5 checks as pass:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
@@ -191,6 +267,70 @@ grep -qE "^          ref: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<
   fail "monorepo checkout step must use ref: \${{ job.workflow_sha || 'main' }}:"$'\n'"$checkout_block"
 grep -qE "^          repository: \\$\\{\\{ job\\.workflow_repository \\|\\| 'intent-hq/intent' \\}\\}$" <<<"$checkout_block" ||
   fail "monorepo checkout step must use repository: \${{ job.workflow_repository || 'intent-hq/intent' }}:"$'\n'"$checkout_block"
+
+# Workflow contract the callers rely on: a `workflow_call` trigger and nothing
+# else, `contents: read` as the only permission (the callers pass no secrets
+# and the job never writes), and the fail-soft monorepo checkout — the
+# checkout continues on error, a guard step warns when it did not succeed,
+# and every later step is gated on its success so a monorepo outage yields a
+# green job with a ::warning:: instead of a red caller PR.
+triggers=$(awk '/^on:/ { on = 1; next } /^jobs:/ { on = 0 } on && /^  [a-z_]+:/ { sub(/^  /, ""); sub(/:.*/, ""); print }' "$workflow")
+[ "$triggers" = "workflow_call" ] || fail "consumer-checks.yml must be triggered by workflow_call only; found: $triggers"
+permissions=$(awk '
+  /^[[:blank:]]*permissions:/ {
+    indent = match($0, /[^ ]/)
+    in_block = 1
+    if ($0 !~ /permissions:[[:blank:]]*$/) print "inline " $0
+    next
+  }
+  in_block {
+    if (match($0, /[^ ]/) > indent) { sub(/^[[:blank:]]*/, ""); print } else { in_block = 0 }
+  }
+' "$workflow")
+[ "$permissions" = "contents: read" ] ||
+  fail "consumer-checks.yml must grant exactly 'permissions: contents: read'; found:"$'\n'"${permissions:-<none>}"
+grep -q '^        continue-on-error: true$' <<<"$checkout_block" ||
+  fail "monorepo checkout step lost continue-on-error: true (the job must stay green when the monorepo cannot be checked out):"$'\n'"$checkout_block"
+guard_name='Skip when the monorepo checkout failed'
+guard_block=$(workflow_step "$guard_name")
+[[ -n "$guard_block" ]] || fail "workflow step '$guard_name' not found in $workflow"
+grep -q "^        if: steps\.monorepo\.outcome != 'success'$" <<<"$guard_block" ||
+  fail "guard step must run when steps.monorepo.outcome != 'success':"$'\n'"$guard_block"
+grep -qE "^          MONOREPO_REF: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$guard_block" ||
+  fail "guard step must name the same ref the checkout used (MONOREPO_REF: \${{ job.workflow_sha || 'main' }}):"$'\n'"$guard_block"
+guard_body=$(awk 'body { sub(/^          /, ""); print } /^        run: \|$/ { body = 1 }' <<<"$guard_block")
+[[ -n "$guard_body" ]] || fail "guard step has no run body:"$'\n'"$guard_block"
+grep -q '\${{' <<<"$guard_body" && fail "guard step run body has an unsubstituted expression:"$'\n'"$guard_body"
+printf '%s\n' "$guard_body" >"$temp_dir/guard.sh"
+# GitHub's default `run` shell is `bash -e {0}`; the guard's exit code is the
+# job's, so the body must succeed and emit exactly the ::warning:: line, for a
+# resolved workflow sha and for the `main` fallback alike.
+for monorepo_ref in 0123456789abcdef0123456789abcdef01234567 main; do
+  guard_status=0
+  guard_output=$(MONOREPO_REF="$monorepo_ref" bash --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+  [ "$guard_status" -eq 0 ] || fail "guard step exited $guard_status for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
+  [ "$guard_output" = "::warning::consumer-checks: could not check out intent-hq/intent@${monorepo_ref:0:7}; skipping the monorepo consumer checks for this run." ] ||
+    fail "guard step output for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
+done
+gate_line="        if: steps.monorepo.outcome == 'success'"
+downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
+  function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
+  /^      - / {
+    flush()
+    name = $0
+    sub(/^      - (name: )?/, "", name)
+    gated = 0
+    if (guard_seen) after_guard = 1
+    if (index($0, guard)) guard_seen = 1
+    next
+  }
+  $0 == gate { gated = 1 }
+  END { flush() }
+' "$workflow")
+grep -q '^ungated ' <<<"$downstream_gates" &&
+  fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 4 ] ||
+  fail "expected 4 gated steps after the guard (component checkout, sibling submodule, setup-node, runner):"$'\n'"$downstream_gates"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")
