@@ -12,6 +12,7 @@ import {
   collectDocumentedMethods,
   extractRustCatalog,
   formatError,
+  formatWarning,
   methodNamesInFirstCell,
   parseCatalog,
   runChecks,
@@ -118,10 +119,15 @@ async function makeRoot({ catalog = CATALOG, methods = { 'agents.md': METHODS_DO
 }
 
 const messages = (result) => result.errors.map(formatError);
+const warningMessages = (result) => result.warnings.map(formatWarning);
 
-test('passing fixture: both layers run and report no errors', async () => {
+const LEAD_HINT_RE =
+  /expected while the docs lead the intentd pin \(the submodule pin advances automatically once the intentd PR merges; rebase onto main if it already has\); if no intentd change is adding it, treat this as an error and remove the entry$/;
+
+test('passing fixture: both layers run and report no errors or warnings', async () => {
   const result = await runChecks(await makeRoot());
   assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result), []);
   assert.equal(result.skipped, null);
   assert.equal(result.layer2Ran, true);
 });
@@ -190,36 +196,113 @@ test('Layer 2: a router method in catalog.rs missing from its namespace row fail
   ]);
 });
 
-test('Layer 2: a row Count that disagrees with catalog.rs fails', async () => {
+test('Layer 2: a row Count above catalog.rs with a matching token list is not a Count error (docs lead the pin)', async () => {
   const rust = RUST.replace('    "agent.stop",\n', '');
   const catalog = CATALOG.replace('create, list, stop — live agents', 'create, list — live agents');
   const result = await runChecks(await makeRoot({ catalog, rust, methods: { 'agents.md': METHODS_DOC.replace('| agent.stop | agentId (req) | { ok } |\n', '') } }));
   const line = catalog.split('\n').findIndex((l) => l.startsWith('| agent |')) + 1;
   assert.deepEqual(messages(result), [
-    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but ${INTENTD_CATALOG_PATH} ROUTER_METHODS has 2`,
     `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but lists 2 (create, list)`,
   ]);
+  assert.deepEqual(warningMessages(result), []);
 });
 
-test('Layer 2: catalog entries absent from catalog.rs are orphans with the rebase hint', async () => {
+test('Layer 2: a row Count below the catalog.rs method count fails (pin ahead of docs)', async () => {
+  const catalog = CATALOG.replace('| agent | 3 |', '| agent | 2 |').replace('(6 total)', '(5 total)').replace('**10 dispatchable', '**9 dispatchable').replace('**Router methods:** 6', '**Router methods:** 5');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| agent |')) + 1;
+  assert.deepEqual(messages(result), [
+    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 2 methods but ${INTENTD_CATALOG_PATH} ROUTER_METHODS has 3`,
+    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 2 methods but lists 3 (create, list, stop)`,
+  ]);
+  assert.deepEqual(warningMessages(result), []);
+});
+
+test('Layer 2: catalog entries absent from catalog.rs are warnings, not errors, with the docs-lead hint', async () => {
   const rust = RUST.replace('    "github.relatedRepos.list",\n', '').replace('    "client.hello",\n', '');
   const result = await runChecks(await makeRoot({ rust }));
-  const msgs = messages(result);
-  assert.equal(msgs.length, 4, msgs.join('\n'));
-  assert.match(msgs[0], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github row says 2 methods but .* has 1$/);
-  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the github row but is not a router method in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
-  assert.match(msgs[2], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
-  assert.match(msgs[3], /client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs/);
+  assert.deepEqual(messages(result), []);
+  const msgs = warningMessages(result);
+  assert.equal(msgs.length, 3, msgs.join('\n'));
+  assert.match(msgs[0], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: github\.relatedRepos\.list is listed in the github row but is not a router method in the pinned intentd catalog\.rs — /);
+  assert.match(msgs[0], LEAD_HINT_RE);
+  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — /);
+  assert.match(msgs[1], LEAD_HINT_RE);
+  assert.match(msgs[2], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs — /);
 });
 
-test('Layer 2: a fake suffix in a row whose Count still matches catalog.rs fails naming it', async () => {
+test('Layer 2: a row listing one extra not-yet-pinned method is one warning and zero errors', async () => {
+  const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 3 | pulls.list, relatedRepos.list, issues.list |')
+    .replace('(6 total)', '(7 total)').replace('**10 dispatchable', '**11 dispatchable').replace('**Router methods:** 6', '**Router methods:** 7');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: github\\.issues\\.list is listed in the github row but is not a router method in the pinned intentd catalog\\.rs — `));
+});
+
+test('Layer 2: a whole not-yet-pinned namespace row is a warning only', async () => {
+  const catalog = CATALOG.replace('| system (router) |', '| widget | 2 | list, get |\n| system (router) |')
+    .replace('(6 total)', '(8 total)').replace('**10 dispatchable', '**12 dispatchable').replace('**Router methods:** 6', '**Router methods:** 8');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| widget |')) + 1;
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: router namespace widget is listed in the catalog but not in the pinned intentd catalog\\.rs — `));
+});
+
+test('Layer 2: a catalog.rs router method with no docs row is still an error', async () => {
+  const rust = RUST.replace('    "system.capabilities",\n', '    "system.capabilities",\n    "widget.list",\n');
+  const result = await runChecks(await makeRoot({ rust }));
+  assert.deepEqual(result.errors.map((e) => e.message), [
+    `router namespace widget (1 methods in ${INTENTD_CATALOG_PATH}) has no row in the router table`,
+  ]);
+  assert.deepEqual(warningMessages(result), []);
+});
+
+test('Layer 2: fast-path, alias, and reverse-RPC orphans are warnings; their Rust-only twins stay errors', async () => {
+  const catalog = CATALOG.replace('client.hello, host.openInEditor, system.status', 'client.hello, host.openInEditor, system.status, system.ping')
+    .replace('### Fast-path methods (3 total)', '### Fast-path methods (4 total)')
+    .replace('**Fast-path methods:** 3', '**Fast-path methods:** 4')
+    .replace('**10 dispatchable', '**11 dispatchable')
+    .replace('- `git.diff` → `git.diffs`', '- `git.diff` → `git.diffs`\n- `git.log` → `git.history`')
+    .replace('### Method aliases (1 total)', '### Method aliases (2 total)')
+    .replace('**11 dispatchable', '**12 dispatchable')
+    .replace('- `host.openExternal` — open a URL (daemon→client only)', '- `host.openExternal` — open a URL (daemon→client only)\n- `host.prompt` — ask the user')
+    .replace('### Client-served reverse RPCs (2 total)', '### Client-served reverse RPCs (3 total)');
+  const result = await runChecks(await makeRoot({ catalog }));
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(
+    result.warnings.map((w) => w.message.split(' — ')[0]),
+    [
+      'system.ping is listed in the catalog but not in the pinned intentd catalog.rs',
+      'alias git.log → git.history is listed in the catalog but not in the pinned intentd catalog.rs',
+      'host.prompt is listed in the catalog but not in the pinned intentd catalog.rs',
+    ],
+  );
+
+  const rust = RUST.replace('    "system.status",\n', '    "system.status",\n    "system.ping",\n')
+    .replace('&[("git.diff", "git.diffs")]', '&[("git.diff", "git.diffs"), ("git.log", "git.history")]')
+    .replace('    "host.openInEditor",\n];', '    "host.openInEditor",\n    "host.prompt",\n];');
+  const rustAhead = await runChecks(await makeRoot({ rust }));
+  assert.deepEqual(rustAhead.errors.map((e) => e.message), [
+    `system.ping is in ${INTENTD_CATALOG_PATH} FASTPATH_METHODS but missing from the fast-path list`,
+    `alias git.log → git.history is in ${INTENTD_CATALOG_PATH} METHOD_ALIASES but missing from the alias list`,
+    `host.prompt is in ${INTENTD_CATALOG_PATH} REVERSE_METHODS but missing from the reverse-RPC list`,
+  ]);
+  assert.deepEqual(warningMessages(rustAhead), []);
+});
+
+test('Layer 2: a fake suffix in a row whose Count still matches catalog.rs fails on the token count and warns on the suffix', async () => {
   const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 2 | pulls.list, relatedRepos.list, fake |');
   const result = await runChecks(await makeRoot({ catalog }));
   const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
   assert.deepEqual(messages(result), [
     `docs/protocol/05-method-catalog.md:${line}: error: github row says 2 methods but lists 3 (pulls.list, relatedRepos.list, fake)`,
-    `docs/protocol/05-method-catalog.md:${line}: error: github.fake is listed in the github row but is not a router method in the pinned intentd catalog.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run`,
   ]);
+  assert.equal(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: github\\.fake is listed in the github row but is not a router method in the pinned intentd catalog\\.rs — `));
+  assert.match(warningMessages(result)[0], LEAD_HINT_RE);
 });
 
 test('Layer 2: a row whose token count disagrees with its Count fails even when catalog.rs agrees with Count', async () => {
@@ -247,15 +330,17 @@ test('tokenizeRowSuffixes stops at the first em dash and tolerates surrounding w
   assert.deepEqual(tokenizeRowSuffixes('a, b (x), c'), { tokens: ['a', 'b (x)', 'c'], invalid: ['b (x)'] });
 });
 
-test('Layer 2: a whole documented namespace absent from catalog.rs is an orphan row', async () => {
+test('Layer 2: a whole documented namespace absent from catalog.rs is an orphan-row warning', async () => {
   const rust = RUST.replace('    "github.pulls.list",\n    "github.relatedRepos.list",\n', '');
   const result = await runChecks(await makeRoot({ rust }));
-  assert.match(messages(result)[0], /router namespace github is listed in the catalog but not in the pinned intentd catalog\.rs/);
+  assert.deepEqual(messages(result), []);
+  assert.match(warningMessages(result)[0], /warning: router namespace github is listed in the catalog but not in the pinned intentd catalog\.rs/);
 });
 
 test('Layer 2 is skipped (exit 0 on Layer 1 alone) when catalog.rs is absent', async () => {
   const result = await runChecks(await makeRoot({ rust: null }));
   assert.deepEqual(messages(result), []);
+  assert.deepEqual(result.warnings, []);
   assert.equal(result.layer2Ran, false);
   assert.equal(result.skipped, `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`);
 });
