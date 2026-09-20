@@ -214,6 +214,17 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   the issue picks it up. When completeness cannot be determined (API error, token
   cannot see a repo), the notifier skips with a warning rather than post a
   possibly-false claim.
+- How to link a multi-PR fix: put `Fixes intent-hq/intent#N` on **every** PR of the fix
+  (intentd and cloudlands-fe alike). GitHub auto-closes the issue when the first PR
+  merges; that early close is expected, because the completeness gate above holds the
+  cloudlands-fe comment — the user-facing signal — until every linked fix PR is merged
+  and contained (the component-scoped intentd notifier may comment earlier, as the gate
+  bullet describes). Do not downgrade the other PRs to `Refs` / `Part of` to avoid the
+  early close: mention-only references are invisible to the gate. All-mention-only
+  linkage → no auto-close and no comment at all
+  ([intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383)); mixed
+  linkage (one `Fixes`, one `Refs`) → the gate cannot account for the unlinked PR and
+  may post the comment before the fix has fully shipped.
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on

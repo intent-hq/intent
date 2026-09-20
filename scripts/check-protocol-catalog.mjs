@@ -30,6 +30,10 @@ export function formatError({ file, line, message }) {
   return `${file}:${line}: error: ${message}`;
 }
 
+export function formatWarning({ file, line, message }) {
+  return `${file}:${line}: warning: ${message}`;
+}
+
 function sliceSection(lines, headingRe) {
   const start = lines.findIndex((l) => headingRe.test(l));
   if (start === -1) return null;
@@ -215,10 +219,12 @@ export function extractRustCatalog(text) {
   return result;
 }
 
-const REBASE_HINT =
-  'if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run';
-const ORPHAN_HINT = `is listed in the catalog but not in the pinned intentd catalog.rs — ${REBASE_HINT}`;
-const ORPHAN_HINT_TAIL = `is not a router method in the pinned intentd catalog.rs — ${REBASE_HINT}`;
+// "Docs ahead of pin" is the intended ordering (document first, then merge the intentd PR), so these
+// findings are warnings; they only signal a real problem if no intentd change ever ships the method.
+const LEAD_HINT =
+  'expected while the docs lead the intentd pin (the submodule pin advances automatically once the intentd PR merges; rebase onto main if it already has); if no intentd change is adding it, treat this as an error and remove the entry';
+const ORPHAN_HINT = `is listed in the catalog but not in the pinned intentd catalog.rs — ${LEAD_HINT}`;
+const ORPHAN_HINT_TAIL = `is not a router method in the pinned intentd catalog.rs — ${LEAD_HINT}`;
 
 /** Layer 1: methods/*.md coverage, section counts, summary formula. `docs` is `[{ file, methods: [{ name, line }] }]`. */
 export function checkLayer1(catalog, docs, { catalogPath = CATALOG_PATH, allowlist = DOCUMENTED_NOT_DISPATCHABLE } = {}) {
@@ -265,12 +271,18 @@ export function checkLayer1(catalog, docs, { catalogPath = CATALOG_PATH, allowli
   return errors;
 }
 
-/** Layer 2: the catalog doc against intentd's frozen `catalog.rs` constants. */
+/**
+ * Layer 2: the catalog doc against intentd's frozen `catalog.rs` constants. Returns `{ errors, warnings }`:
+ * "pin ahead of docs" (a Rust entry with no docs entry) is an error; "docs ahead of pin" (a documented entry
+ * the pinned catalog.rs does not carry yet) is a warning.
+ */
 export function checkLayer2(catalog, rust, docs, { catalogPath = CATALOG_PATH, rustPath = INTENTD_CATALOG_PATH } = {}) {
   const errors = [];
+  const warnings = [];
   const err = (file, line, message) => errors.push({ file, line, message });
+  const warn = (file, line, message) => warnings.push({ file, line, message });
   for (const name of rust.missing) err(rustPath, 1, `could not extract the ${name} constant`);
-  if (rust.missing.length) return errors;
+  if (rust.missing.length) return { errors, warnings };
 
   const byNs = new Map();
   for (const name of rust.routerMethods) {
@@ -288,7 +300,8 @@ export function checkLayer2(catalog, rust, docs, { catalogPath = CATALOG_PATH, r
     for (const name of names) {
       if (!cellHasSuffix(row.cell, splitMethodName(name).suffix)) err(catalogPath, row.line, `${name} is in ${rustPath} ROUTER_METHODS but missing from the ${ns} row`);
     }
-    if (row.count !== names.length) err(catalogPath, row.line, `${ns} row says ${row.count} methods but ${rustPath} ROUTER_METHODS has ${names.length}`);
+    // A Count above the Rust total is the docs leading the pin; the token checks below cover it.
+    if (row.count < names.length) err(catalogPath, row.line, `${ns} row says ${row.count} methods but ${rustPath} ROUTER_METHODS has ${names.length}`);
     const { tokens, invalid } = tokenizeRowSuffixes(row.cell);
     if (invalid.length) {
       for (const t of invalid) err(catalogPath, row.line, `${ns} row method list contains "${t}", which is not a method suffix — list the suffixes first, comma-separated, and put prose after " — "`);
@@ -296,11 +309,11 @@ export function checkLayer2(catalog, rust, docs, { catalogPath = CATALOG_PATH, r
     }
     if (tokens.length !== row.count) err(catalogPath, row.line, `${ns} row says ${row.count} methods but lists ${tokens.length} (${tokens.join(', ')})`);
     for (const t of tokens) {
-      if (!names.includes(`${ns}.${t}`)) err(catalogPath, row.line, `${ns}.${t} is listed in the ${ns} row but ${ORPHAN_HINT_TAIL}`);
+      if (!names.includes(`${ns}.${t}`)) warn(catalogPath, row.line, `${ns}.${t} is listed in the ${ns} row but ${ORPHAN_HINT_TAIL}`);
     }
   }
   for (const row of catalog.routerRows) {
-    if (!byNs.has(row.ns)) err(catalogPath, row.line, `router namespace ${row.ns} ${ORPHAN_HINT}`);
+    if (!byNs.has(row.ns)) warn(catalogPath, row.line, `router namespace ${row.ns} ${ORPHAN_HINT}`);
   }
 
   const rustAll = new Set([...rust.routerMethods, ...rust.fastPathMethods, ...rust.reverseMethods, ...rust.aliases.flat()]);
@@ -311,27 +324,27 @@ export function checkLayer2(catalog, rust, docs, { catalogPath = CATALOG_PATH, r
       const hit = findInCatalog(catalog, name);
       if (!hit || hit.section !== 'router') continue;
       seen.add(name);
-      err(catalogPath, hit.line, `${name} ${ORPHAN_HINT}`);
+      warn(catalogPath, hit.line, `${name} ${ORPHAN_HINT}`);
     }
   }
 
   const setDiff = (a, b) => a.filter((x) => !b.includes(x));
   if (catalog.fastPath) {
     for (const n of setDiff(rust.fastPathMethods, catalog.fastPath.names)) err(catalogPath, catalog.fastPath.line, `${n} is in ${rustPath} FASTPATH_METHODS but missing from the fast-path list`);
-    for (const n of setDiff(catalog.fastPath.names, rust.fastPathMethods)) err(catalogPath, catalog.fastPath.line, `${n} ${ORPHAN_HINT}`);
+    for (const n of setDiff(catalog.fastPath.names, rust.fastPathMethods)) warn(catalogPath, catalog.fastPath.line, `${n} ${ORPHAN_HINT}`);
   }
   if (catalog.aliases) {
     const docPairs = catalog.aliases.pairs.map((p) => `${p.alias} → ${p.canonical}`);
     const rustPairs = rust.aliases.map(([a, b]) => `${a} → ${b}`);
     for (const p of setDiff(rustPairs, docPairs)) err(catalogPath, catalog.aliases.headingLine, `alias ${p} is in ${rustPath} METHOD_ALIASES but missing from the alias list`);
-    for (const p of setDiff(docPairs, rustPairs)) err(catalogPath, catalog.aliases.headingLine, `alias ${p} ${ORPHAN_HINT}`);
+    for (const p of setDiff(docPairs, rustPairs)) warn(catalogPath, catalog.aliases.headingLine, `alias ${p} ${ORPHAN_HINT}`);
   }
   if (catalog.reverse) {
     const docNames = catalog.reverse.names.map((r) => r.name);
     for (const n of setDiff(rust.reverseMethods, docNames)) err(catalogPath, catalog.reverse.headingLine, `${n} is in ${rustPath} REVERSE_METHODS but missing from the reverse-RPC list`);
-    for (const r of catalog.reverse.names) if (!rust.reverseMethods.includes(r.name)) err(catalogPath, r.line, `${r.name} ${ORPHAN_HINT}`);
+    for (const r of catalog.reverse.names) if (!rust.reverseMethods.includes(r.name)) warn(catalogPath, r.line, `${r.name} ${ORPHAN_HINT}`);
   }
-  return errors;
+  return { errors, warnings };
 }
 
 async function readIfExists(file) {
@@ -343,7 +356,7 @@ async function readIfExists(file) {
   }
 }
 
-/** Run both layers against `root`; returns `{ errors, skipped, layer2Ran }`. */
+/** Run both layers against `root`; returns `{ errors, warnings, skipped, layer2Ran }`. */
 export async function runChecks(root) {
   const catalogText = await fs.readFile(path.join(root, CATALOG_PATH), 'utf8');
   const catalog = parseCatalog(catalogText);
@@ -356,21 +369,24 @@ export async function runChecks(root) {
   );
   const errors = checkLayer1(catalog, docs);
   const rustText = await readIfExists(path.join(root, INTENTD_CATALOG_PATH));
-  if (rustText === null) return { errors, skipped: `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`, layer2Ran: false };
-  errors.push(...checkLayer2(catalog, extractRustCatalog(rustText), docs));
-  return { errors, skipped: null, layer2Ran: true };
+  if (rustText === null) return { errors, warnings: [], skipped: `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`, layer2Ran: false };
+  const layer2 = checkLayer2(catalog, extractRustCatalog(rustText), docs);
+  errors.push(...layer2.errors);
+  return { errors, warnings: layer2.warnings, skipped: null, layer2Ran: true };
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { errors, skipped, layer2Ran } = await runChecks(root);
+  const { errors, warnings, skipped, layer2Ran } = await runChecks(root);
   if (skipped) console.log(skipped);
+  for (const w of warnings) console.error(formatWarning(w));
   if (errors.length === 0) {
-    console.log(`Protocol method catalog is consistent (Layer 1${layer2Ran ? ' + Layer 2' : ''}).`);
+    const suffix = warnings.length ? `; ${warnings.length} warning(s): docs lead the intentd pin` : '';
+    console.log(`Protocol method catalog is consistent (Layer 1${layer2Ran ? ' + Layer 2' : ''}${suffix}).`);
     return;
   }
   for (const e of errors) console.error(formatError(e));
-  console.error(`${errors.length} protocol catalog error(s).`);
+  console.error(`${errors.length} protocol catalog error(s)${warnings.length ? `, ${warnings.length} warning(s)` : ''}.`);
   process.exitCode = 1;
 }
 

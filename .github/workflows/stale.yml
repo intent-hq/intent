@@ -27,11 +27,11 @@
 # reset that cache; without it a run that hits `operations-per-run` leaves a
 # stale cursor for the next run. No checkout, so `contents: read` only.
 #
-# Dry-run gate: every scheduled run passes `debug-only: true`, so the cron
-# labels, comments on and closes NOTHING — it only logs the decisions it
-# would take. Manual runs default to dry-run too; dispatch with
-# `dry_run=false` for a live pass. Enablement (after reviewing the dry-run
-# logs) changes only the `schedule` side of the `debug-only` expression.
+# Live/dry-run gate: scheduled runs are LIVE — the cron labels, comments on
+# and closes items per the policy above. Manual runs default to dry-run
+# (`debug-only: true`, decisions are logged and nothing is touched); dispatch
+# with `dry_run=false` for a live manual pass. To pause closure, set
+# `debug-only: true` (or revert this file).
 name: Stale
 
 on:
@@ -60,7 +60,7 @@ jobs:
       # cannot.
       - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
         with:
-          debug-only: ${{ github.event_name == 'schedule' || inputs.dry_run }}
+          debug-only: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
           operations-per-run: 200
           remove-stale-when-updated: true
 

@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets event-catalog-check shipped-in rpc
+.PHONY: ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -128,6 +128,15 @@ ports: ## Print this worktree's resolved development ports
 status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe, default 10)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
+
+# Every monorepo consumer check the ci.yml docs-check job runs, as one runner
+# that keeps going past a failure and ends with a per-check table naming the
+# monorepo file(s) to update. The upstream (intentd / cloudlands-fe) consumer
+# job calls the same script, so the two lists cannot drift. Advisory checks:
+# CONSUMER_CHECKS_ADVISORY="<targets>"; CONSUMER_CHECKS_CONTEXT=upstream adds
+# the fix-order line. See scripts/consumer-checks.sh for the mechanism.
+consumer-checks: ## Run every monorepo consumer check (docs, catalogs, field parity) and print a per-check fix-path summary
+	@MAKE="$(MAKE)" scripts/consumer-checks.sh
 
 docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
@@ -147,8 +156,25 @@ mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from inten
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
 # depends on an unmerged intentd PR must wait for the auto-bump.
+# CHECK_MAKEFILE_TARGETS_GITLINK=<rev> checks another intentd commit instead
+# (the upstream consumer-checks job passes HEAD, the caller's own head).
+CHECK_MAKEFILE_TARGETS_GITLINK ?=
 check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced intentd crates and --test targets exist at the pinned gitlink
-	@node scripts/check-makefile-targets.mjs
+	@node scripts/check-makefile-targets.mjs $(if $(CHECK_MAKEFILE_TARGETS_GITLINK),--gitlink $(CHECK_MAKEFILE_TARGETS_GITLINK))
+
+# Every wire field an intentd row struct emits (AgentLite, Workspace) must be
+# present in the cloudlands-fe type that consumes it, or listed in the script's
+# ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
+check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
+	@node scripts/check-protocol-field-parity.mjs
+
+# The live main-branch rulesets of intent, intentd and cloudlands-fe (required
+# CI Gate check, thread resolution, merge queue) are snapshotted under
+# .github/rulesets/; a silent edit on GitHub shows up as drift. UPDATE=1
+# accepts the live rules into the snapshots; a token avoids the unauthenticated
+# rate limit.
+check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them)
+	@node scripts/check-rulesets.mjs $(if $(UPDATE),--update)
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
 # (source of truth), the protocol sidecar docs/protocol/event-types.json, and
@@ -426,7 +452,7 @@ lint-raw-child: lint-sources ## Deprecated alias of lint-sources
 lint-shell-sleeps: ## Check scripts/*.test.sh fixed sleeps are marked or baselined
 	@scripts/lint-fixed-sleeps.sh
 
-check: check-makefile-targets lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + shell sleep lint + fmt + clippy + source lints
+check: check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test

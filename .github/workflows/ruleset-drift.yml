@@ -1,0 +1,33 @@
+# Daily main-branch ruleset drift check for intent, intentd and cloudlands-fe.
+# ci.yml's `ruleset-check` job runs the same comparison on every pull_request
+# and merge_group run, but a ruleset edit on GitHub opens no PR, so this
+# schedule is what notices drift between PRs (GitHub's default failed-workflow
+# email is the alert). The check itself lives in scripts/check-rulesets.mjs;
+# the expected rules are .github/rulesets/*.main.json. The schedule stays out
+# of ci.yml on purpose: its CI Gate fails on any event other than
+# pull_request / merge_group.
+name: Ruleset drift
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruleset-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-rulesets.test.mjs
+      - run: node scripts/check-rulesets.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
