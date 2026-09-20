@@ -101,6 +101,7 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
+| github.users.search | query (req), limit? | { users: { id, login, avatarUrl, htmlUrl }[] } — **administrator-only** login-prefix user search over `GET /search/users` for the collaborator picker (v10.3). Missing `query` → `-32602`; a blank query, or one with no leading run of login characters (ASCII alphanumerics and `-`), answers `{ users: [] }` without a forge call — only that leading run reaches GitHub's search parser, so qualifiers / booleans typed after it are dropped. `limit` defaults to **8** and is clamped into `[1, 10]` |
 
 #### Pulls
 
