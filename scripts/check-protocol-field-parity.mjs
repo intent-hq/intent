@@ -23,8 +23,8 @@ export const PAIRS = [
     ts: { file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts', type: 'AgentSession' },
     ignore: {
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
-      contextReferences: 'rides the wire row untyped; carried forward by DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts, never declared on the type',
-      fileBlocks: 'rides the wire row untyped; carried forward by DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts, never declared on the type',
+      contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
+      fileBlocks: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS and data.fileBlocks in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
     },
   },
   {
@@ -91,6 +91,48 @@ function parseSerdeAttrs(attrs) {
 const STRUCT_RE = (name) => new RegExp(`^\\s*pub(?:\\([^)]*\\))?\\s+struct\\s+${name}\\s*(?:<[^{]*>)?\\s*\\{\\s*$`);
 const FIELD_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?),?\s*$/;
 
+// Update `[` / `]` depth for one line of an attribute, ignoring brackets inside
+// string literals (with escapes). Returns the new depth; `state.inStr` carries
+// an open string across lines.
+function attrBracketDepth(line, depth, state) {
+  for (let k = 0; k < line.length; k += 1) {
+    const ch = line[k];
+    if (state.inStr) {
+      if (ch === '\\') k += 1;
+      else if (ch === '"') state.inStr = false;
+    } else if (ch === '"') state.inStr = true;
+    else if (ch === '[') depth += 1;
+    else if (ch === ']') depth -= 1;
+  }
+  return depth;
+}
+
+// Split `source` into logical lines: a `#[...]` attribute spanning several
+// physical lines is joined into one entry so multi-line serde attributes parse
+// like single-line ones. `line` is the 1-based number of the first physical line.
+function logicalLines(source) {
+  const lines = source.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!lines[i].trim().startsWith('#[')) {
+      out.push({ text: lines[i], line: i + 1 });
+      continue;
+    }
+    const start = i;
+    const state = { inStr: false };
+    let depth = 0;
+    const parts = [];
+    for (;;) {
+      depth = attrBracketDepth(lines[i], depth, state);
+      parts.push(lines[i].trim());
+      if (depth <= 0 || i + 1 >= lines.length) break;
+      i += 1;
+    }
+    out.push({ text: parts.join(' '), line: start + 1 });
+  }
+  return out;
+}
+
 function flattenTarget(rustType) {
   const inner = rustType.match(/^Option\s*<\s*(.+)\s*>$/);
   const ty = (inner ? inner[1] : rustType).trim();
@@ -103,11 +145,11 @@ function flattenTarget(rustType) {
  * `null` when the struct is not found. `errors` names unsupported constructs.
  */
 export function extractRustFields(source, structName, file, seen = new Set()) {
-  const lines = source.split('\n');
-  const idx = lines.findIndex((l) => STRUCT_RE(structName).test(l));
+  const lines = logicalLines(source);
+  const idx = lines.findIndex((l) => STRUCT_RE(structName).test(l.text));
   const errors = [];
   if (idx === -1) return { fields: null, structLine: null, errors };
-  const structLine = idx + 1;
+  const structLine = lines[idx].line;
   if (seen.has(structName)) {
     errors.push({ file, line: structLine, message: `struct ${structName} flattens itself (cycle)` });
     return { fields: [], structLine, errors };
@@ -116,7 +158,7 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
 
   const structAttrs = [];
   for (let i = idx - 1; i >= 0; i -= 1) {
-    const l = lines[i].trim();
+    const l = lines[i].text.trim();
     if (l.startsWith('#[')) structAttrs.push(l);
     else if (l.startsWith('//') || l === '') continue;
     else break;
@@ -132,7 +174,7 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
   const fields = [];
   let attrs = [];
   for (let i = idx + 1; i < lines.length; i += 1) {
-    const raw = lines[i];
+    const raw = lines[i].text;
     const l = raw.trim();
     if (l === '}') break;
     if (l === '' || l.startsWith('//')) continue;
@@ -145,7 +187,7 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
     const [, rustName, rustType] = m;
     const serde = parseSerdeAttrs(attrs);
     attrs = [];
-    const line = i + 1;
+    const line = lines[i].line;
     if (serde.skip) continue;
     if (serde.flatten) {
       const target = flattenTarget(rustType);
@@ -167,8 +209,9 @@ const TS_BLOCK_RE = (name) =>
   new RegExp(`^\\s*export\\s+(?:interface\\s+${name}\\b[^{]*\\{|const\\s+${name}\\s*(?::[^=]*)?=\\s*z\\.object\\(\\{)`);
 const TS_KEY_RE = /^\s*(?:readonly\s+)?(?:([A-Za-z_$][A-Za-z0-9_$]*)|'([^']*)'|"([^"]*)")\s*\??\s*[:(]/;
 
-// Strip `//` and `/* */` comments plus string/template contents so braces
-// inside them do not affect depth tracking. `state` carries an open block
+// Strip `//` and `/* */` comments and template contents, and drop braces inside
+// string literals (escapes honored), so braces in them do not affect depth
+// tracking while quoted keys stay matchable. `state` carries an open block
 // comment or template literal across lines.
 function stripNoise(line, state) {
   let out = '';
@@ -202,9 +245,19 @@ function stripNoise(line, state) {
       continue;
     }
     if (ch === "'" || ch === '"') {
-      const end = line.indexOf(ch, i + 1);
-      out += ch + (end === -1 ? line.slice(i + 1) : line.slice(i + 1, end)) + ch;
-      i = end === -1 ? line.length : end + 1;
+      out += ch;
+      i += 1;
+      while (i < line.length && line[i] !== ch) {
+        if (line[i] === '\\') {
+          out += line.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
+        if (line[i] !== '{' && line[i] !== '}') out += line[i];
+        i += 1;
+      }
+      out += ch;
+      i += 1;
       continue;
     }
     out += ch;
@@ -267,7 +320,7 @@ export function comparePair(pair, rustSource, tsSource) {
   const tsRange = `${tsFile}:${ts.startLine}-${ts.endLine}`;
   const emitted = new Map(rust.fields.map((f) => [f.wire, f]));
   for (const f of rust.fields) {
-    if (tsKeys.has(f.wire) || f.wire in pair.ignore) continue;
+    if (tsKeys.has(f.wire) || Object.hasOwn(pair.ignore, f.wire)) continue;
     errors.push({
       file: rustFile,
       line: f.line,

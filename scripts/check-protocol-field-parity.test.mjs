@@ -77,6 +77,41 @@ test('extractRustFields rejects a struct without a supported rename_all', () => 
   assert.match(extractRustFields(snake, 'S', 'x.rs').errors[0].message, /rename_all = "snake_case".*only camelCase/);
 });
 
+test('extractRustFields parses serde attributes that span several lines', () => {
+  const src = [
+    '#[derive(Serialize)]',
+    '#[serde(',
+    '    rename_all = "camelCase",',
+    ')]',
+    'pub struct Row {',
+    '    #[serde(',
+    '        rename = "parentAgentId",',
+    '    )]',
+    '    pub owner_id: String,',
+    '    #[serde(',
+    '        default,',
+    '        skip_serializing_if = "Option::is_none",',
+    '        skip,',
+    '    )]',
+    '    pub hidden: Option<String>,',
+    '    pub kept: u8,',
+    '}',
+    '',
+  ].join('\n');
+  const { fields, errors } = extractRustFields(src, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['parentAgentId', 'kept']);
+  assert.equal(fields[0].rustName, 'owner_id');
+  assert.equal(fields[0].line, 9);
+});
+
+test('extractRustFields does not close an attribute on a bracket inside a string literal', () => {
+  const src = '#[serde(rename_all = "camelCase")]\npub struct Row {\n    #[serde(\n        rename = "a]b",\n    )]\n    pub x: u8,\n}\n';
+  const { fields, errors } = extractRustFields(src, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['a]b']);
+});
+
 test('extractRustFields rejects flatten of a struct not defined in the same file', () => {
   const src = '#[serde(rename_all = "camelCase")]\npub struct Outer {\n    #[serde(flatten)]\n    pub inner: other::Inner,\n}\n';
   const { fields, errors } = extractRustFields(src, 'Outer', 'x.rs');
@@ -139,6 +174,33 @@ test('extractTsKeys returns null for an unknown block', () => {
   assert.equal(extractTsKeys(TS_INTERFACE, 'Missing'), null);
 });
 
+const TS_STRING_BRACES = `
+export const RowSchema = z.object({
+  id: z.string(),
+  metadata: z.object({
+    marker: z.literal("}"),
+    parentAgentId: z.string(),
+  }),
+  single: z.literal('{'),
+  escaped: z.literal("\\"}"),
+  'quoted-key': z.string(),
+});
+export const After = z.object({ afterKey: z.string() });
+`;
+
+test('extractTsKeys ignores braces inside string literals when tracking depth', () => {
+  const result = extractTsKeys(TS_STRING_BRACES, 'RowSchema');
+  assert.deepEqual(result.keys.map((k) => k.name), ['id', 'metadata', 'single', 'escaped', 'quoted-key']);
+  assert.equal(result.endLine, 11);
+});
+
+test('comparePair reports a field that only appears inside a nested object next to a string brace', () => {
+  const rust = '#[serde(rename_all = "camelCase")]\npub struct Row {\n    pub id: String,\n    pub metadata: Meta,\n    pub parent_agent_id: String,\n}\n';
+  const errors = comparePair(pair(), rust, TS_STRING_BRACES.replace('RowSchema', 'Row'));
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/);
+});
+
 const TS_FULL = `
 export interface Row {
   id: string;
@@ -169,6 +231,16 @@ test('comparePair reports an emitted field missing from the TS type with both fi
 test('comparePair accepts an ignore entry for a missing field', () => {
   const ts = TS_FULL.replace('  lastActivity?: string;\n', '');
   assert.deepEqual(comparePair(pair({ ignore: { lastActivity: 'not consumed' } }), RUST, ts), []);
+});
+
+test('comparePair does not treat Object.prototype names as ignore entries', () => {
+  const rust = '#[serde(rename_all = "camelCase")]\npub struct Row {\n    pub id: String,\n    pub to_string: String,\n    pub constructor: String,\n}\n';
+  const ts = 'export interface Row {\n  id: string;\n}\n';
+  const errors = comparePair(pair({ ignore: {} }), rust, ts);
+  assert.deepEqual(
+    errors.map((e) => e.message.match(/emitted field Row\.(\w+)/)[1]),
+    ['toString', 'constructor'],
+  );
 });
 
 test('comparePair reports a stale ignore entry whose field is no longer emitted', () => {
