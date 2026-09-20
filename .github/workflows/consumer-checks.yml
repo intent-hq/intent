@@ -25,8 +25,12 @@
 #
 # Fix order when this job is red: the checks compare the PR head against the
 # monorepo docs at that commit, and every checker tolerates docs that lead the
-# pin, so land the monorepo docs PR first (the summary table names the file to
-# update), then re-run this job; the later submodule bump then lands green.
+# pin. For an addition, land the monorepo docs PR first (the summary table
+# names the file to update; the checks only warn until the component catches
+# up), then re-run this job; the later submodule bump then lands green. For a
+# removal or rename, land the component PR first (this job warns about the
+# now-extra docs entry; a docs-first removal is rejected as a component extra)
+# and remove the docs entry after the bump.
 #
 # check-mcp-bindings is advisory here: its generated index must match the
 # pinned help text line for line, so the docs cannot lead an intentd change to
