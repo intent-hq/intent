@@ -14,7 +14,7 @@ wss://<host>:<port>/ws
 - **Scheme:** `wss://` (TLS) in the default secure posture — there is no plaintext `ws://` listener unless insecure dev mode is opted into. With `serve --insecure` (or `INTENTD_INSECURE=1`) the daemon serves plain `ws://` with TLS and bearer-token enforcement skipped; this is a development-only posture (`make dev-daemon` uses it) and logs a prominent startup warning.
 - A plain HTTPS `GET /health` returns `{"status":"ok","clients":<n>}` for liveness probing.
 - The same listener also serves the non-JSON-RPC `/tunnel` WebSocket endpoint — the binary loopback port-forwarding surface (§1.4).
-- Any path other than `/ws` and `/tunnel` is rejected at upgrade time (socket destroyed).
+- Any path other than `/ws`, `/tunnel` and `/invite` (§2.4; the unauthenticated invite-join endpoint, within 10.3) is rejected at upgrade time with `404` (socket destroyed).
 
 > Local transport (UDS / Windows named pipe): The daemon **always** serves a local transport as the local-first default — a **Unix-domain socket** on Unix, a **named pipe** on Windows (where UDS is unavailable); the TCP/WSS listener is optional and toggled at runtime by the `server.wsApi.enabled` setting (the former `server.listenMode` setting and `--listen` serve flag are retired). The JSON-RPC envelope, method catalog, event semantics, and the newline-delimited framing are **identical** across UDS, the named pipe, and TCP/TLS — only the listener differs; everywhere this document says "UDS" the Windows named pipe is implied. `system.status` reports a derived `listenMode` field (`"both"` while the WSS listener is up, `"uds"` otherwise) reflecting the live listener state.
 >
