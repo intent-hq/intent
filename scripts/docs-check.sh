@@ -176,7 +176,8 @@ done
 # on one surface but not the others is drift (intent-hq/intent#4835, #4867).
 # The docs lead the pin: a canonical token a pinned component does not carry
 # yet is a warning, so the monorepo docs change can land before the component
-# PR; a component token with no canonical bullet is an error.
+# PR; an FE union/alias token absent from the canonical documentation is an
+# error. The intentd overview is checked only for documented tokens it lacks.
 browser_protocol_doc=docs/protocol/methods/files-terminal-browser.md
 browser_fe_executor=packages/cloudlands-fe/src/features/browser/main/browser-action-executor.ts
 browser_fe_cdp=packages/cloudlands-fe/src/features/browser/main/embedded-browser-cdp-service.ts
@@ -258,8 +259,9 @@ if ((browser_token_count == 0)); then
   fail "$browser_protocol_doc" 1 'expected a backticked errorCode bullet list after "additive structured `errorCode` when the cause is one of:"; found none'
 fi
 
-# Component tokens with no canonical bullet: errors. The intentd overview is
-# not compared here — a canonical token it lacks is already warned above.
+# FE union/alias tokens with no canonical bullet: errors. The intentd overview
+# is not reverse-checked — it is compared only for documented tokens it lacks
+# (warned above).
 browser_fe_reverse() {
   local file=$1 start=$2 count=0 line token
   while IFS=: read -r line token; do
