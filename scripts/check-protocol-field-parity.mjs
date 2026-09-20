@@ -35,9 +35,6 @@ export const PAIRS = [
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
-      ownerPrincipalId: 'multiplayer w1 membership summary; not consumed by the FE today',
-      myRole: 'multiplayer w1 membership summary; not consumed by the FE today',
-      memberCount: 'multiplayer w1 membership summary; not consumed by the FE today',
       openInviteCount: 'multiplayer w1 membership summary; not consumed by the FE today',
     },
   },
