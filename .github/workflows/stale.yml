@@ -1,0 +1,89 @@
+# Stale issues and PRs: the ONLY workflow in this repo that closes anything.
+# issue-triage.yml stays non-destructive (it only adds/clears labels); the
+# closure policy lives here so the two never fight.
+#
+# Policy (intent-hq/intent):
+#   Issues — only those labelled `needs-info` (the reporter never answered;
+#     the triage workflow clears the label on author reply). Marked `stale`
+#     after 14 idle days, closed as not_planned 7 days later. Issues labelled
+#     `launch-blocker` or `oss-launch` are exempt. `needs-triage` and
+#     `agent-filed` issues are NOT in scope: untriaged reports are never
+#     closed for age alone.
+#   PRs — non-draft PRs marked `stale` after 14 idle days, closed 7 days
+#     later. Drafts and PRs labelled `dependencies`, `github_actions` or
+#     `launch-blocker` are exempt. Branches are never deleted.
+#   Any comment, push, or label change resets the clock and removes `stale`.
+#
+# Dry-run gate: every scheduled run passes `debug-only: true`, so the cron
+# labels, comments on and closes NOTHING — it only logs the decisions it
+# would take. Manual runs default to dry-run too; dispatch with
+# `dry_run=false` for a live pass. Enablement (after reviewing the dry-run
+# logs) changes only the `schedule` side of the `debug-only` expression.
+name: Stale
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Log decisions only; do not label, comment or close"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # SHA-pinned (not tag-pinned): this action holds a token that can
+      # close issues and PRs, and a tag can be moved — a full commit SHA
+      # cannot.
+      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          debug-only: ${{ github.event_name == 'schedule' || inputs.dry_run }}
+          operations-per-run: 200
+          remove-stale-when-updated: true
+
+          # Issues: needs-info only.
+          only-issue-labels: needs-info
+          exempt-issue-labels: launch-blocker,oss-launch
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          stale-issue-label: stale
+          close-issue-reason: not_planned
+          stale-issue-message: >-
+            This issue is still waiting on information from the reporter
+            (`needs-info`) and has had no activity for 14 days, so it has been
+            marked `stale`. It will be closed in 7 days unless something
+            changes. Any comment, push, or label change keeps it open — reply
+            with the missing details and the conversation reopens, or remove
+            the `needs-info` label if the report is actionable as-is.
+          close-issue-message: >-
+            Closing as not planned: this issue has been waiting on information
+            from the reporter (`needs-info`) for 21 days with no response.
+            If the problem still exists, reply with the missing details and
+            the issue can be reopened.
+
+          # PRs: non-draft only.
+          exempt-draft-pr: true
+          exempt-pr-labels: dependencies,github_actions,launch-blocker
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
+          stale-pr-label: stale
+          delete-branch: false
+          stale-pr-message: >-
+            This pull request has had no activity for 14 days and has been
+            marked `stale`. It will be closed in 7 days unless something
+            changes. Any comment, push, or label change keeps it open — push a
+            rebase, leave a status note, or mark it as a draft if it is not
+            ready for review yet.
+          close-pr-message: >-
+            Closing: this pull request has had no activity for 21 days. The
+            branch is untouched, so it can be reopened at any time — push a
+            commit or leave a comment and it comes back to life.
