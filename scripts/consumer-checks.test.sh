@@ -195,9 +195,19 @@ trusted_log=$fixture/trusted.log
 for tool in cargo node; do
   printf '#!/bin/sh\necho "attacker %s $*" >>"%s"\n' "$tool" "$marker_log" >"$fixture/attacker/bin/$tool"
 done
+# A metacharacter-free recipe like `node scripts/x.mjs` skips the shell: stock
+# GNU make execvp()s it against the recipe PATH (attacker node runs), while
+# Apple's make posix_spawnp()s it, which searches the parent's PATH (trusted
+# node runs with the attacker dir still first on its PATH). The trusted node
+# records that second shape so the control and the hardened assertion observe
+# the recipe PATH itself on both.
 cat >"$fixture/trusted/bin/node" <<EOF
 #!/bin/sh
 echo "trusted node \$*" >>"$trusted_log"
+case ":\$PATH:" in
+  *":$fixture/attacker/bin:"*|*":$fixture/attacker/bin/:"*)
+    echo "attacker bin on recipe PATH: node \$*" >>"$marker_log" ;;
+esac
 case "\$1" in
   scripts/check-protocol-catalog.mjs) echo "trusted checker: catalog drift" >&2; exit 1 ;;
 esac
@@ -219,11 +229,13 @@ run_real_make() {
   real_output=$(cd "$fixture" && PATH="$fixture/trusted/bin:$PATH" CARGO_BIN_DIR="$fixture/trusted/bin" \
     "$@" 2>&1) || real_status=$?
 }
-# Control: without the override this make runs the attacker's node, so the
-# assertions on the runner below are not vacuous.
+# Control: without the override this make puts the attacker's bin first on the
+# recipe PATH (and runs the attacker's node where the recipe is execvp()ed), so
+# the assertions on the runner below are not vacuous.
 run_real_make "$make_bin" --no-print-directory check-protocol-catalog
-{ [ "$real_status" -eq 0 ] && grep -q '^attacker node scripts/check-protocol-catalog.mjs$' "$marker_log"; } ||
-  fail "fixture control: an unhardened make did not run the attacker's node (rustup stub or Makefile PATH prepend changed?); exit $real_status:"$'\n'"$real_output"$'\n'"$(cat "$marker_log")"
+grep -q -e '^attacker node scripts/check-protocol-catalog.mjs$' \
+  -e '^attacker bin on recipe PATH: node scripts/check-protocol-catalog.mjs$' "$marker_log" ||
+  fail "fixture control: an unhardened make did not expose the attacker's bin to the recipe (rustup stub or Makefile PATH prepend changed?); exit $real_status:"$'\n'"$real_output"$'\n'"$(cat "$marker_log")"
 run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --context upstream
 [ "$real_status" -eq 1 ] ||
   fail "real-make run exited $real_status (expected 1: the trusted check-protocol-catalog fails):"$'\n'"$real_output"
