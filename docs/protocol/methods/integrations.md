@@ -118,17 +118,19 @@ row — the additive `sourceControl.*` fields (`provider`, `host`, `method`, `us
 #### Provider-generic auth — `sourceControl.*` *(v10.4)*
 
 > **Auth model.** One connection model for every forge: an **OAuth device grant** run by the daemon
-> (GitHub's device flow; GitLab's device authorization grant, GitLab ≥ 17.1, scope `api`) and, where
-> the grant is unavailable, a **personal access token** handed over in-band. The stored credential
+> (GitHub's device flow; GitLab's device authorization grant — introduced in GitLab 17.2 behind a
+> feature flag, enabled by default from 17.3, GA in 17.9 — scope `api`) and, where the grant is
+> unavailable, a **personal access token** handed over in-band. The stored credential
 > lives in the secret store under `sourceControl.<provider>.token` — the **first slot** of each
 > provider's resolution chain, ahead of the env-var fallback (`GITHUB_TOKEN` / `GH_TOKEN` and the `gh`
 > CLI for GitHub; `GITLAB_TOKEN` for GitLab). GitLab connections are **host-bound**: `host` selects the
 > instance (default `sourceControl.gitlab.host`, itself defaulting to `gitlab.com`) and a successful
 > connect persists it to `sourceControl.gitlab.host`. Device grants need a public OAuth client id for
-> the host — `sourceControl.<provider>.oauthClientId`, or, for `gitlab.com` only, the client id
-> built into the daemon (empty until the Intent application is registered, in which case gitlab.com
-> also reports `deviceGrantSupported: false`). No code path on the GitLab side shells out to `gh` or
-> `glab`.
+> the host — `sourceControl.<provider>.oauthClientId`, or, for `gitlab.com` only, the public client
+> id of the registered Intent application compiled into the daemon, so `gitlab.com` is
+> **device-first by default**; a self-managed instance without a configured client id reports
+> `deviceGrantSupported: false` and takes the PAT path. No code path on the GitLab side shells out to
+> `gh` or `glab`.
 >
 > **🔒 Secret guardrail.** A PAT travels **once**, as the `token` param over the authenticated RPC
 > channel, is persisted immediately and is **never logged, echoed or returned**. No `sourceControl.*`
@@ -147,7 +149,7 @@ with a descriptive `message`.
 
 | Code (`error.data.code`) | Numeric | When |
 | --- | --- | --- |
-| device-grant-unsupported | -32603 | `sourceControl.connect` with `method: "device"` (or `method` absent) against a host that cannot run a device grant: no client id resolves for it, or the instance rejected the grant (GitLab < 17.1). `error.data = { code: "device-grant-unsupported", provider, host }`. The FE keys its PAT fallback on this code (and pre-empts it via `authStatus.deviceGrantSupported`). |
+| device-grant-unsupported | -32603 | `sourceControl.connect` with `method: "device"` (or `method` absent) against a host that cannot run a device grant. Exactly three conditions map here: no client id resolves for the host; the instance answers `/oauth/authorize_device` with **HTTP 404** (no device-grant endpoint — GitLab < 17.2, or the flag off on 17.2); or it answers with the OAuth error **`unauthorized_client`** (the application lacks the `device_code` grant type). Any other grant failure (network error, `access_denied`, `expired_token`, a 5xx) is **not** this code — it surfaces as a plain `-32603` or as the `denied` / `expired` / `error` event status. `error.data = { code: "device-grant-unsupported", provider, host }`. The FE keys its PAT fallback on this code (and pre-empts it via `authStatus.deviceGrantSupported`). |
 | source-control-unauthorized | -32603 | The credential was **rejected** by the forge: a `token` offered to `connect { method: "pat" }` that fails the host's user probe (nothing is stored), or a stored/env credential that the host rejects on `getUser`. `error.data = { code: "source-control-unauthorized", provider, host }`. A merely *absent* credential is not an error — `authStatus` reports `isConfigured: false` and `getUser` returns `{ user: null }`. |
 
 | Method | Params | Result |
