@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **366 dispatchable method names** across the following categories:
+The API exposes **367 dispatchable method names** across the following categories:
 
-- **Router methods:** 315 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 316 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 49 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 366 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 367 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 366 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 367 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (315 total)
+### Router methods by namespace (316 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -42,6 +42,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
+| principal | 1 | me — the principal this connection was bound to at admission (`{ id, login?, displayName?, avatarUrl?, isAdministrator }`; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails when no caller is bound |
 | providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
