@@ -370,6 +370,77 @@ test('runChecks only skips a pair when the submodule directory itself is absent'
 const RUST_HEADER = '#[derive(Serialize)]\n#[serde(rename_all = "camelCase")]\n';
 const TS_ID_ONLY = 'export interface Row {\n  id: string;\n}\n';
 
+// Verbatim minimal fixtures recorded by the PR #5488 reviewer (note 5ed38dab). Each
+// returned [] at 2bfacd2; none may establish parity.
+const REVIEWER_FIXTURES = [
+  {
+    name: 'rust-block-comment-skip',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub id: u8,\n  /*\n  #[serde(skip)]\n  */\n  pub parent_agent_id: String,\n}\n",
+    ts: "export interface Row {\n  id: number;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/,
+  },
+  {
+    name: 'rust-block-comment-brace',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub id: u8,\n  /* Example: {\n  }\n  */\n  pub parent_agent_id: String,\n}\n",
+    ts: "export interface Row {\n  id: number;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/,
+  },
+  {
+    name: 'ts-method-parameter',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub id: u8,\n  pub parent_agent_id: String,\n}\n",
+    ts: "export interface Row {\n  id: number;\n  describe(\n    parentAgentId: string,\n  ): void;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/,
+  },
+  {
+    name: 'ts-tuple-label',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub id: u8,\n  pub parent_agent_id: String,\n}\n",
+    ts: "export interface Row {\n  id: number;\n  metadata: [\n    parentAgentId: string,\n  ];\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/,
+  },
+  {
+    name: 'ts-commented-declaration',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub id: u8,\n  pub parent_agent_id: String,\n}\n",
+    ts: "/* obsolete example\nexport interface Row {\n  id: number;\n  parentAgentId: string;\n}\n*/\nexport interface Row {\n  id: number;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row \(types\.ts:7-9\)/,
+  },
+  {
+    name: 'rust-cfg-attr-rename',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  #[cfg_attr(all(), serde(rename = \"parentAgentId\"))]\n  pub owner_id: String,\n}\n",
+    ts: "export interface Row {\n  ownerId: string;\n}\n",
+    expect: /unsupported attribute #\[cfg_attr\(all\(\), serde\(rename = "parentAgentId"\)\)\] on Row\.owner_id/,
+  },
+  {
+    name: 'rust-serialize-rename',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  #[serde(rename(serialize = \"parentAgentId\"))]\n  pub owner_id: String,\n}\n",
+    ts: "export interface Row {\n  ownerId: string;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust owner_id\) is missing from Row/,
+  },
+  {
+    name: 'rust-trailing-comment-rename',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  #[serde(rename = \"parentAgentId\")] // wire name\n  pub owner_id: String,\n}\n",
+    ts: "export interface Row {\n  ownerId: string;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust owner_id\) is missing from Row/,
+  },
+  {
+    name: 'ts-generic-bound',
+    rust: "#[serde(rename_all = \"camelCase\")]\npub struct Row {\n  pub parent_agent_id: String,\n}\n",
+    ts: "export interface Row<T extends {\n  parentAgentId: string;\n}> {\n  id: string;\n}\n",
+    expect: /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row \(types\.ts:1-5\)/,
+  },
+];
+
+for (const fx of REVIEWER_FIXTURES) {
+  test(`reviewer fixture ${fx.name} does not establish parity`, () => {
+    const errors = comparePair(
+      { rust: { file: 'model.rs', struct: 'Row' }, ts: { file: 'types.ts', type: 'Row' }, ignore: {} },
+      fx.rust,
+      fx.ts,
+    );
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.match(errors[0].message, fx.expect);
+  });
+}
+
 test('comparePair: a #[serde(skip)] inside a Rust block comment cannot suppress a missing field', () => {
   const rust = [
     RUST_HEADER + 'pub struct Row {',
