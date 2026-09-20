@@ -140,7 +140,7 @@ grep -q "unknown advisory target 'not-a-check'" <<<"$check_output" || fail "unkn
 if ! run_check --context upstream; then
   fail "upstream context run exited non-zero: $check_output"
 fi
-[ "$(tail -n 1 <<<"$check_output")" = "Fix order: land the monorepo docs change first (docs may lead the pin), then re-run this job." ] ||
+[ "$(tail -n 1 <<<"$check_output")" = "Fix order: additions land the monorepo docs change first (docs may lead the pin); removals land the component first and drop the docs entry after the bump; then re-run this job." ] ||
   fail "upstream context did not end with the fix-order line: $check_output"
 [ "$(grep -c '^Fix order:' <<<"$check_output")" -eq 1 ] || fail "fix-order line printed more than once: $check_output"
 # Upstream, packages/intentd is the caller's PR head rather than the pin, so
@@ -153,7 +153,7 @@ grep -q -- '--no-print-directory RUSTUP_CARGO= CHECK_MAKEFILE_TARGETS_GITLINK=HE
 if run_check STUB_FAIL=docs-check CONSUMER_CHECKS_CONTEXT=upstream; then
   fail "upstream context masked a non-advisory failure"
 fi
-[ "$(tail -n 1 <<<"$check_output")" = "Fix order: land the monorepo docs change first (docs may lead the pin), then re-run this job." ] ||
+[ "$(tail -n 1 <<<"$check_output")" = "Fix order: additions land the monorepo docs change first (docs may lead the pin); removals land the component first and drop the docs entry after the bump; then re-run this job." ] ||
   fail "CONSUMER_CHECKS_CONTEXT=upstream did not end a failed run with the fix-order line: $check_output"
 grep -q -- 'CHECK_MAKEFILE_TARGETS_GITLINK=HEAD check-makefile-targets$' "$stub_log" ||
   fail "CONSUMER_CHECKS_CONTEXT=upstream did not point check-makefile-targets at the caller head: $(cat "$stub_log")"

@@ -149,13 +149,14 @@ run against the pins in the monorepo `docs-check` job and, through the reusable
 `.github/workflows/consumer-checks.yml`, as `monorepo-consumer-checks` on every intentd and
 cloudlands-fe PR against that PR's head. Docs lead the pin, by direction: for an
 **addition** the monorepo docs PR its table names lands first (the checks only warn until
-the component catches up), then re-run the upstream job; for a **removal or rename** the
-component PR lands first (the upstream check warns about the now-extra docs entry; a
-docs-first removal is rejected as a component extra) and the docs entry is removed after
-the bump. `check-mcp-bindings` is advisory upstream (`make mcp-bindings-doc` regenerates
-its index in the monorepo), and a Makefile change that depends on an intentd PR still
-waits for the auto-bump (`check-makefile-targets`). For an urgent bump, dispatch the
-workflow instead of filing a PR:
+the component catches up), then re-run the upstream job; for a **removal** the component
+PR lands first (the upstream check warns about the now-extra docs entry; a docs-first
+removal is rejected as a component extra) and the docs entry is removed after the bump. A
+**rename** is an addition: document the new name first, keeping the old entry, rename in
+the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
+upstream (`make mcp-bindings-doc` regenerates its index in the monorepo), and a Makefile
+change that depends on an intentd PR still waits for the auto-bump
+(`check-makefile-targets`). For an urgent bump, dispatch the workflow instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml

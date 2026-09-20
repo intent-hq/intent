@@ -144,6 +144,6 @@ else
   echo "consumer-checks: all checks passed"
 fi
 if [ "$context" = "upstream" ]; then
-  echo "Fix order: land the monorepo docs change first (docs may lead the pin), then re-run this job."
+  echo "Fix order: additions land the monorepo docs change first (docs may lead the pin); removals land the component first and drop the docs entry after the bump; then re-run this job."
 fi
 exit "$failed"
