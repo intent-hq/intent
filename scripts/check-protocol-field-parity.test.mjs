@@ -194,6 +194,26 @@ test('extractTsKeys ignores braces inside string literals when tracking depth', 
   assert.equal(result.endLine, 11);
 });
 
+test('extractTsKeys ignores escaped braces inside string literals', () => {
+  const src = [
+    'export const Row = z.object({',
+    '  metadata: z.object({',
+    '    marker: z.literal("' + String.fromCharCode(92) + '}"),',
+    '    parentAgentId: z.string(),',
+    '  }),',
+    "  other: z.literal('" + String.fromCharCode(92) + "{'),",
+    '});',
+    '',
+  ].join('\n');
+  const result = extractTsKeys(src, 'Row');
+  assert.deepEqual(result.keys.map((k) => k.name), ['metadata', 'other']);
+  assert.equal(result.endLine, 7);
+  const rust = '#[serde(rename_all = "camelCase")]\npub struct Row {\n    pub metadata: Meta,\n    pub parent_agent_id: String,\n    pub other: u8,\n}\n';
+  const errors = comparePair(pair(), rust, src);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /emitted field Row\.parentAgentId \(Rust parent_agent_id\) is missing from Row/);
+});
+
 test('comparePair reports a field that only appears inside a nested object next to a string brace', () => {
   const rust = '#[serde(rename_all = "camelCase")]\npub struct Row {\n    pub id: String,\n    pub metadata: Meta,\n    pub parent_agent_id: String,\n}\n';
   const errors = comparePair(pair(), rust, TS_STRING_BRACES.replace('RowSchema', 'Row'));

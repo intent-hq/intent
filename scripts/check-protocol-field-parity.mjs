@@ -248,13 +248,10 @@ function stripNoise(line, state) {
       out += ch;
       i += 1;
       while (i < line.length && line[i] !== ch) {
-        if (line[i] === '\\') {
-          out += line.slice(i, i + 2);
-          i += 2;
-          continue;
-        }
-        if (line[i] !== '{' && line[i] !== '}') out += line[i];
-        i += 1;
+        const escaped = line[i] === '\\';
+        const c = escaped ? line[i + 1] : line[i];
+        if (c !== '{' && c !== '}' && c !== undefined) out += escaped ? '\\' + c : c;
+        i += escaped ? 2 : 1;
       }
       out += ch;
       i += 1;
