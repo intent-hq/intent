@@ -98,6 +98,10 @@ jobs:
   # by the intentd row structs must be present in the cloudlands-fe type that
   # consumes it (check-protocol-field-parity). Initialize only those
   # submodules; packages/ios is private and intentionally untouched.
+  # `make consumer-checks` (scripts/consumer-checks.sh) runs that whole set
+  # as individual make targets and ends with a per-check table naming the
+  # monorepo file(s) to update; the upstream intentd / cloudlands-fe consumer
+  # job runs the same script, so the two lists cannot drift.
   docs-check:
     runs-on: ubuntu-latest
     steps:
@@ -108,14 +112,11 @@ jobs:
         with:
           node-version: 22
       - run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
-      - run: make docs-check
       - run: node --test scripts/check-protocol-catalog.test.mjs
-      - run: make check-protocol-catalog
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
-      - run: make check-makefile-targets
       - run: node --test scripts/check-protocol-field-parity.test.mjs
-      - run: make check-protocol-field-parity
+      - run: make consumer-checks
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
   # protocol sidecar, iOS test fixture). The public intentd copy is checked out
@@ -167,6 +168,7 @@ jobs:
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
+          bash scripts/consumer-checks.test.sh
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
@@ -192,6 +194,7 @@ jobs:
       - run: |
           /bin/bash --version
           REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
+          REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh

@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity event-catalog-check shipped-in rpc
+.PHONY: ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -128,6 +128,15 @@ ports: ## Print this worktree's resolved development ports
 status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe, default 10)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
+
+# Every monorepo consumer check the ci.yml docs-check job runs, as one runner
+# that keeps going past a failure and ends with a per-check table naming the
+# monorepo file(s) to update. The upstream (intentd / cloudlands-fe) consumer
+# job calls the same script, so the two lists cannot drift. Advisory checks:
+# CONSUMER_CHECKS_ADVISORY="<targets>"; CONSUMER_CHECKS_CONTEXT=upstream adds
+# the fix-order line. See scripts/consumer-checks.sh for the mechanism.
+consumer-checks: ## Run every monorepo consumer check (docs, catalogs, field parity) and print a per-check fix-path summary
+	@MAKE="$(MAKE)" scripts/consumer-checks.sh
 
 docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
