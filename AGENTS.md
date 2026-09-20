@@ -218,28 +218,27 @@ with no rollback.
   a human has given permission, `gh pr merge --squash` adds the PR to the queue, and
   the PR lands when the queue's gate passes — so merging no longer requires the
   branch to be up to date first, and there is no update-branch/re-check treadmill.
-  In intentd and cloudlands-fe the queue runs CI on the actual merged tree
-  (`merge_group` runs of the same required check) before landing; the monorepo
-  ruleset has no required status checks, so its queue serializes merges but lands
-  entries without a check run. A monorepo PR still cannot enter the queue while any
-  review thread is unresolved (`required_review_thread_resolution` on the `main`
-  ruleset): auto-merge arms but the PR stays BLOCKED outside the queue
+  In all three repos the ruleset requires the `CI Gate` check: a PR whose gate is red
+  cannot enter the queue, and the queue reruns CI on the actual merged tree
+  (`merge_group` runs of the same check) before landing. A monorepo PR also cannot
+  enter the queue while any review thread is unresolved
+  (`required_review_thread_resolution` on the `main` ruleset): auto-merge arms but
+  the PR stays BLOCKED outside the queue
   ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)), so
   confirm `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
-  `--auto` remains useful to enqueue once still-pending PR checks pass — with a
-  queue enabled, `gh pr merge --squash --auto` prints "The merge strategy for main is
-  set by the merge queue"; that is informational (the queue's own squash method
-  applies), not an error. All three queues are configured identically: squash
-  method, all-green grouping, at most 5 entries built/merged per group, and a
-  60-minute check-response timeout. A queue failure ejects the PR from the queue (it
-  does not land): the PR timeline records a `RemovedFromMergeQueueEvent` with a
-  `reason` (`failed_checks` when the `merge_group` run fails; a check that does not
-  report within the timeout is treated as failed), which `ws.pr.snapshot` /
-  `ws.pr.monitor` surface as `mergeQueueEjection`. An ejected PR is not re-queued on its own: fix the cause and
-  re-enqueue by re-running `gh pr merge --squash --auto`. The queue's squash uses the
-  same title rules as a direct squash merge: on a single-commit PR the commit title
-  defaults to that commit's message headline; on a multi-commit PR it defaults to the
-  PR title. The commit message includes all commit messages from the PR either way.
+  `--auto` enqueues once still-pending PR checks pass; its "The merge strategy for
+  main is set by the merge queue" output is informational, not an error. All three
+  queues are configured identically: squash method, all-green grouping, at most 5
+  entries built/merged per group, and a 60-minute check-response timeout. A
+  `merge_group` failure ejects the PR (it does not land): the timeline records a
+  `RemovedFromMergeQueueEvent` with `reason: failed_checks` (a check that does not
+  report within the timeout counts as failed), surfaced by `ws.pr.snapshot` /
+  `ws.pr.monitor` as `mergeQueueEjection`. An ejected PR is not re-queued on its
+  own: fix the cause and re-enqueue with `gh pr merge --squash --auto`. The queue's
+  squash uses the same title rules as a direct squash merge: on a single-commit PR
+  the commit title defaults to that commit's message headline; on a multi-commit PR
+  it defaults to the PR title. The commit message includes all commit messages from
+  the PR either way.
   On single-commit PRs, ensure the branch commit message is itself a valid
   conventional commit (amend auto-commits like "Coordinator" before pushing) to
   prevent non-conventional commits from landing on main (e.g., PR #102 incident); on
