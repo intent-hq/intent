@@ -7,7 +7,9 @@
 // same-file struct), then compared with the top-level property names of the
 // named TS `interface` / `z.object` block. Each manifest pair carries an
 // `ignore` map for fields the FE intentionally does not consume; a stale
-// ignore entry (field no longer emitted, or now present in the TS type) fails.
+// ignore entry (field no longer emitted, or now present in the TS type) is a
+// warning, not an error, so an FE PR that declares a previously ignored field
+// is not deadlocked against the monorepo entry (intent-hq/intent#5497).
 // Attributes the scanner cannot interpret but that may change the wire shape
 // (`cfg_attr`, `cfg`, unknown serde arguments) fail closed. A pair whose
 // submodule is not initialized is skipped; a manifest path missing from an
@@ -40,8 +42,10 @@ export const PAIRS = [
   },
 ];
 
-export function formatError({ file, line, message }) {
-  return `${file}:${line}: error: ${message}`;
+// A diagnostic is `{ file, line, message, severity? }`; `severity` is
+// `'warning'` for stale ignore entries and absent for errors.
+export function formatDiagnostic({ file, line, message, severity }) {
+  return `${file}:${line}: ${severity ?? 'error'}: ${message}`;
 }
 
 export function pairLabel(pair) {
@@ -475,7 +479,11 @@ export function extractTsKeys(source, typeName) {
   return { keys, startLine: idx + 1, endLine };
 }
 
-/** Compare one pair's emitted fields with its TS keys; returns `{ file, line, message }` errors. */
+/**
+ * Compare one pair's emitted fields with its TS keys; returns diagnostics
+ * (`{ file, line, message, severity? }`). Missing fields and parse failures are
+ * errors; stale ignore entries carry `severity: 'warning'`.
+ */
 export function comparePair(pair, rustSource, tsSource) {
   const label = pairLabel(pair);
   const rustFile = pair.rust.file;
@@ -504,9 +512,9 @@ export function comparePair(pair, rustSource, tsSource) {
   }
   for (const [wire, reason] of Object.entries(pair.ignore)) {
     if (!emitted.has(wire)) {
-      errors.push({ file: rustFile, line: rust.structLine, message: `${label}: stale ignore entry ${wire} ("${reason}") — ${pair.rust.struct} no longer emits it; remove the entry from PAIRS` });
+      errors.push({ file: rustFile, line: rust.structLine, severity: 'warning', message: `${label}: stale ignore entry ${wire} ("${reason}") — ${pair.rust.struct} no longer emits it; remove the entry from PAIRS` });
     } else if (tsKeys.has(wire)) {
-      errors.push({ file: tsFile, line: tsKeys.get(wire), message: `${label}: stale ignore entry ${wire} ("${reason}") — ${pair.ts.type} now declares it; remove the entry from PAIRS` });
+      errors.push({ file: tsFile, line: tsKeys.get(wire), severity: 'warning', message: `${label}: stale ignore entry ${wire} ("${reason}") — ${pair.ts.type} now declares it; remove the entry from PAIRS` });
     }
   }
   return errors;
@@ -539,9 +547,13 @@ async function readManifestFile(root, file) {
   return { source: await fs.readFile(path.join(root, file), 'utf8') };
 }
 
-/** Run every manifest pair against `root`; returns `{ errors, checked, skipped }`. */
+/**
+ * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped }`.
+ * `warnings` are the stale ignore entries; only `errors` fail the check.
+ */
 export async function runChecks(root, pairs = PAIRS) {
   const errors = [];
+  const warnings = [];
   const checked = [];
   const skipped = [];
   for (const pair of pairs) {
@@ -553,22 +565,25 @@ export async function runChecks(root, pairs = PAIRS) {
       continue;
     }
     if (rust.error || ts.error) continue;
-    errors.push(...comparePair(pair, rust.source, ts.source));
+    for (const d of comparePair(pair, rust.source, ts.source)) (d.severity === 'warning' ? warnings : errors).push(d);
     checked.push(pairLabel(pair));
   }
-  return { errors, checked, skipped };
+  return { errors, warnings, checked, skipped };
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { errors, checked, skipped } = await runChecks(root);
+  const { errors, warnings, checked, skipped } = await runChecks(root);
   for (const s of skipped) console.log(s);
+  for (const w of warnings) console.error(formatDiagnostic(w));
+  const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries` : '';
   if (errors.length === 0) {
-    console.log(`Protocol field parity holds for ${checked.length} pair(s): ${checked.join('; ')}.`);
+    const suffix = warningSummary ? ` ${warningSummary}; remove them from PAIRS.` : '';
+    console.log(`Protocol field parity holds for ${checked.length} pair(s): ${checked.join('; ')}.${suffix}`);
     return;
   }
-  for (const e of errors) console.error(formatError(e));
-  console.error(`check-protocol-field-parity: ${errors.length} error(s)`);
+  for (const e of errors) console.error(formatDiagnostic(e));
+  console.error(`check-protocol-field-parity: ${errors.length} error(s)${warningSummary ? `, ${warningSummary}` : ''}`);
   process.exitCode = 1;
 }
 

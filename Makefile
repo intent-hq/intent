@@ -152,7 +152,7 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 
 # Every wire field an intentd row struct emits (AgentLite, Workspace) must be
 # present in the cloudlands-fe type that consumes it, or listed in the script's
-# ignore manifest with a reason; a stale ignore entry also fails the check.
+# ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
 	@node scripts/check-protocol-field-parity.mjs
 
