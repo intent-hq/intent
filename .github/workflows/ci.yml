@@ -77,7 +77,9 @@ jobs:
   # run by make docs-check). The root Makefile's intentd crate / `--test`
   # references must also exist at the pinned intentd gitlink
   # (check-makefile-targets), so a Makefile change that depends on an unmerged
-  # intentd PR fails here until the auto-bump lands. Initialize only those
+  # intentd PR fails here until the auto-bump lands. Every wire field emitted
+  # by the intentd row structs must be present in the cloudlands-fe type that
+  # consumes it (check-protocol-field-parity). Initialize only those
   # submodules; packages/ios is private and intentionally untouched.
   docs-check:
     runs-on: ubuntu-latest
@@ -95,6 +97,8 @@ jobs:
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: make check-makefile-targets
+      - run: node --test scripts/check-protocol-field-parity.test.mjs
+      - run: make check-protocol-field-parity
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
   # protocol sidecar, iOS test fixture). The public intentd copy is checked out
