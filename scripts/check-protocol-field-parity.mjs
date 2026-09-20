@@ -8,7 +8,10 @@
 // named TS `interface` / `z.object` block. Each manifest pair carries an
 // `ignore` map for fields the FE intentionally does not consume; a stale
 // ignore entry (field no longer emitted, or now present in the TS type) fails.
-// A pair whose submodule is not initialized is skipped.
+// Attributes the scanner cannot interpret but that may change the wire shape
+// (`cfg_attr`, `cfg`, unknown serde arguments) fail closed. A pair whose
+// submodule is not initialized is skipped; a manifest path missing from an
+// initialized submodule fails.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -54,42 +57,163 @@ export function toCamelCase(name) {
 
 const SUPPORTED_RENAME_ALL = { camelCase: toCamelCase };
 
-// Split the body of one `#[serde(...)]` attribute on top-level commas.
-function serdeArgs(attr) {
-  const m = attr.match(/^#\[serde\((.*)\)\]$/);
-  if (!m) return null;
-  const args = [];
+// Split `text` on commas outside string literals and parentheses.
+function splitTopLevel(text) {
+  const parts = [];
   let cur = '';
   let inStr = false;
-  for (const ch of m[1]) {
+  let paren = 0;
+  for (const ch of text) {
     if (ch === '"') inStr = !inStr;
-    if (ch === ',' && !inStr) {
-      args.push(cur.trim());
+    else if (!inStr && ch === '(') paren += 1;
+    else if (!inStr && ch === ')') paren -= 1;
+    if (ch === ',' && !inStr && paren === 0) {
+      parts.push(cur.trim());
       cur = '';
     } else cur += ch;
   }
-  if (cur.trim()) args.push(cur.trim());
-  return args;
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
 }
 
-function parseSerdeAttrs(attrs) {
-  const out = { renameAll: null, rename: null, skip: false, flatten: false };
-  for (const attr of attrs) {
-    const args = serdeArgs(attr);
+// Arguments of one `#[serde(...)]` attribute, or `null` for any other attribute.
+function serdeArgs(attr) {
+  const m = attr.match(/^#\[serde\((.*)\)\]$/);
+  return m ? splitTopLevel(m[1]) : null;
+}
+
+// Parse `serialize = "x", deserialize = "y"` (either, both, any order);
+// `null` when the body is anything else.
+function directionalRename(inner) {
+  const out = {};
+  for (const part of splitTopLevel(inner)) {
+    const m = part.match(/^(serialize|deserialize)\s*=\s*"([^"]*)"$/);
+    if (!m || m[1] in out) return null;
+    out[m[1]] = m[2];
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+// serde arguments that never change the emitted field names.
+const HARMLESS_SERDE_ARGS = {
+  struct: new Set(['default', 'bound', 'deny_unknown_fields', 'crate', 'from', 'into', 'try_from', 'remote', 'expecting', 'rename']),
+  field: new Set(['default', 'bound', 'skip_serializing_if', 'skip_deserializing', 'deserialize_with', 'serialize_with', 'with', 'alias', 'borrow', 'getter']),
+};
+const SIMPLE_ARG_RE = /^([A-Za-z_]+)(?:\s*=\s*"[^"]*")?$/;
+
+// Interpret the attributes on a struct (`level = "struct"`) or field
+// (`level = "field"`). `attrs` are `{ text, line }`. Anything wire-affecting
+// that is not understood lands in `unsupported` instead of being guessed.
+function parseSerdeAttrs(attrs, level) {
+  const out = { renameAll: null, rename: null, skip: false, flatten: false, unsupported: [] };
+  for (const { text, line } of attrs) {
+    if (/^#\[cfg(?:_attr)?\(/.test(text)) {
+      out.unsupported.push({ line, text, detail: 'conditional attributes cannot be evaluated' });
+      continue;
+    }
+    const args = serdeArgs(text);
     if (!args) continue;
     for (const arg of args) {
       let m;
-      if ((m = arg.match(/^rename_all\s*=\s*"([^"]*)"$/))) out.renameAll = m[1];
-      else if ((m = arg.match(/^rename\s*=\s*"([^"]*)"$/))) out.rename = m[1];
-      else if (arg === 'skip' || arg === 'skip_serializing') out.skip = true;
-      else if (arg === 'flatten') out.flatten = true;
+      let dir;
+      if (level === 'struct' && (m = arg.match(/^rename_all\s*=\s*"([^"]*)"$/))) out.renameAll = m[1];
+      else if (level === 'struct' && (m = arg.match(/^rename_all\s*\((.*)\)$/)) && (dir = directionalRename(m[1]))) {
+        if (dir.serialize !== undefined) out.renameAll = dir.serialize;
+      } else if (level === 'field' && (m = arg.match(/^rename\s*=\s*"([^"]*)"$/))) out.rename = m[1];
+      else if (level === 'field' && (m = arg.match(/^rename\s*\((.*)\)$/)) && (dir = directionalRename(m[1]))) {
+        if (dir.serialize !== undefined) out.rename = dir.serialize;
+      } else if (level === 'field' && (arg === 'skip' || arg === 'skip_serializing')) out.skip = true;
+      else if (level === 'field' && arg === 'flatten') out.flatten = true;
+      else if ((m = arg.match(SIMPLE_ARG_RE)) && HARMLESS_SERDE_ARGS[level].has(m[1])) continue;
+      else out.unsupported.push({ line, text, detail: `serde argument \`${arg}\` is not understood and may change the emitted name` });
     }
   }
   return out;
 }
 
+function unsupportedError(file, target, { line, text, detail }) {
+  return {
+    file,
+    line,
+    message: `unsupported attribute ${text} on ${target}: ${detail}; use a plain #[serde(rename / rename(serialize = ..) / skip / skip_serializing / flatten)] form or extend scripts/check-protocol-field-parity.mjs`,
+  };
+}
+
 const STRUCT_RE = (name) => new RegExp(`^\\s*pub(?:\\([^)]*\\))?\\s+struct\\s+${name}\\s*(?:<[^{]*>)?\\s*\\{\\s*$`);
 const FIELD_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?),?\s*$/;
+const RUST_CHAR_RE = /^'(?:[^'\\\n]|\\(?:[nrt0'"\\]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}))'/;
+
+// Blank out `//` line comments and `/* */` block comments (nested) while
+// keeping every newline, so line numbers survive. String, raw-string and char
+// literals are copied through so comment markers inside them are kept.
+export function stripRustComments(source) {
+  let out = '';
+  let i = 0;
+  let depth = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const two = source.slice(i, i + 2);
+    if (depth > 0) {
+      if (two === '/*') {
+        depth += 1;
+        i += 2;
+      } else if (two === '*/') {
+        depth -= 1;
+        i += 2;
+      } else {
+        if (ch === '\n') out += '\n';
+        i += 1;
+      }
+      continue;
+    }
+    if (two === '/*') {
+      depth = 1;
+      i += 2;
+      continue;
+    }
+    if (two === '//') {
+      const end = source.indexOf('\n', i);
+      if (end === -1) return out;
+      i = end;
+      continue;
+    }
+    const raw = source.slice(i).match(/^b?r(#*)"/);
+    if (raw) {
+      const close = `"${raw[1]}`;
+      const end = source.indexOf(close, i + raw[0].length);
+      const stop = end === -1 ? source.length : end + close.length;
+      out += source.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (ch === '"') {
+      out += ch;
+      i += 1;
+      while (i < source.length && source[i] !== '"') {
+        if (source[i] === '\\' && i + 1 < source.length) {
+          out += source[i];
+          i += 1;
+        }
+        out += source[i];
+        i += 1;
+      }
+      out += '"';
+      i += 1;
+      continue;
+    }
+    if (ch === "'") {
+      const m = source.slice(i).match(RUST_CHAR_RE);
+      if (m) {
+        out += m[0];
+        i += m[0].length;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
 
 // Update `[` / `]` depth for one line of an attribute, ignoring brackets inside
 // string literals (with escapes). Returns the new depth; `state.inStr` carries
@@ -145,7 +269,7 @@ function flattenTarget(rustType) {
  * `null` when the struct is not found. `errors` names unsupported constructs.
  */
 export function extractRustFields(source, structName, file, seen = new Set()) {
-  const lines = logicalLines(source);
+  const lines = logicalLines(stripRustComments(source));
   const idx = lines.findIndex((l) => STRUCT_RE(structName).test(l.text));
   const errors = [];
   if (idx === -1) return { fields: null, structLine: null, errors };
@@ -159,17 +283,18 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
   const structAttrs = [];
   for (let i = idx - 1; i >= 0; i -= 1) {
     const l = lines[i].text.trim();
-    if (l.startsWith('#[')) structAttrs.push(l);
-    else if (l.startsWith('//') || l === '') continue;
+    if (l.startsWith('#[')) structAttrs.push({ text: l, line: lines[i].line });
+    else if (l === '') continue;
     else break;
   }
-  const { renameAll } = parseSerdeAttrs(structAttrs);
+  const { renameAll, unsupported } = parseSerdeAttrs(structAttrs, 'struct');
+  for (const u of unsupported) errors.push(unsupportedError(file, `struct ${structName}`, u));
   const renamer = SUPPORTED_RENAME_ALL[renameAll];
   if (!renamer) {
     const have = renameAll === null ? 'no #[serde(rename_all)]' : `#[serde(rename_all = "${renameAll}")]`;
     errors.push({ file, line: structLine, message: `struct ${structName} has ${have}; only ${Object.keys(SUPPORTED_RENAME_ALL).join(', ')} is supported` });
-    return { fields: [], structLine, errors };
   }
+  if (errors.length > 0) return { fields: [], structLine, errors };
 
   const fields = [];
   let attrs = [];
@@ -177,17 +302,21 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
     const raw = lines[i].text;
     const l = raw.trim();
     if (l === '}') break;
-    if (l === '' || l.startsWith('//')) continue;
+    if (l === '') continue;
     if (l.startsWith('#[')) {
-      attrs.push(l);
+      attrs.push({ text: l, line: lines[i].line });
       continue;
     }
     const m = raw.match(FIELD_RE);
     if (!m) continue;
     const [, rustName, rustType] = m;
-    const serde = parseSerdeAttrs(attrs);
+    const serde = parseSerdeAttrs(attrs, 'field');
     attrs = [];
     const line = lines[i].line;
+    if (serde.unsupported.length > 0) {
+      for (const u of serde.unsupported) errors.push(unsupportedError(file, `${structName}.${rustName}`, u));
+      continue;
+    }
     if (serde.skip) continue;
     if (serde.flatten) {
       const target = flattenTarget(rustType);
@@ -205,14 +334,14 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
   return { fields, structLine, errors };
 }
 
-const TS_BLOCK_RE = (name) =>
-  new RegExp(`^\\s*export\\s+(?:interface\\s+${name}\\b[^{]*\\{|const\\s+${name}\\s*(?::[^=]*)?=\\s*z\\.object\\(\\{)`);
+const TS_ZOD_RE = (name) => new RegExp(`^\\s*export\\s+const\\s+${name}\\s*(?::[^=]*)?=\\s*z\\.object\\(\\{`);
+const TS_INTERFACE_RE = (name) => new RegExp(`^\\s*export\\s+interface\\s+${name}\\b`);
 const TS_KEY_RE = /^\s*(?:readonly\s+)?(?:([A-Za-z_$][A-Za-z0-9_$]*)|'([^']*)'|"([^"]*)")\s*\??\s*[:(]/;
 
-// Strip `//` and `/* */` comments and template contents, and drop braces inside
-// string literals (escapes honored), so braces in them do not affect depth
-// tracking while quoted keys stay matchable. `state` carries an open block
-// comment or template literal across lines.
+// Strip `//` and `/* */` comments and template contents, and drop brackets
+// (`{}()[]`) inside string literals (escapes honored), so they do not affect
+// depth tracking while quoted keys stay matchable. `state` carries an open
+// block comment or template literal across lines.
 function stripNoise(line, state) {
   let out = '';
   let i = 0;
@@ -250,7 +379,7 @@ function stripNoise(line, state) {
       while (i < line.length && line[i] !== ch) {
         const escaped = line[i] === '\\';
         const c = escaped ? line[i + 1] : line[i];
-        if (c !== '{' && c !== '}' && c !== undefined) out += escaped ? '\\' + c : c;
+        if (c !== undefined && !'{}()[]'.includes(c)) out += escaped ? '\\' + c : c;
         i += escaped ? 2 : 1;
       }
       out += ch;
@@ -263,33 +392,70 @@ function stripNoise(line, state) {
   return out;
 }
 
+// Locate the `{` opening the declaration body on cleaned lines starting at
+// `idx`: for `z.object({` it is on the declaration line; for an interface it
+// is the first `{` outside the generic parameters / `extends` type arguments
+// (angle brackets balanced, `=>` skipped), possibly lines later. `null` when
+// no body opens.
+function findTsBodyOpen(clean, idx, typeName) {
+  const zod = clean[idx].match(TS_ZOD_RE(typeName));
+  if (zod) return { line: idx, col: zod.index + zod[0].length - 1 };
+  const head = clean[idx].match(TS_INTERFACE_RE(typeName));
+  let angle = 0;
+  for (let i = idx, col = head.index + head[0].length; i < clean.length; i += 1, col = 0) {
+    const text = clean[i];
+    for (; col < text.length; col += 1) {
+      const ch = text[col];
+      if (ch === '=' && text[col + 1] === '>') col += 1;
+      else if (ch === '<') angle += 1;
+      else if (ch === '>') angle -= 1;
+      else if (ch === '{' && angle === 0) return { line: i, col };
+    }
+  }
+  return null;
+}
+
 /**
- * Collect the top-level property names of `export interface <typeName> {` or
+ * Collect the top-level property names of `export interface <typeName>` or
  * `export const <typeName> = z.object({` in `source`. Returns
  * `{ keys: [{ name, line }], startLine, endLine }`, or `null` when the block
- * is not found.
+ * is not found. Declarations inside comments or template literals are not
+ * candidates; names inside parameter lists `( )` and tuples `[ ]` are not keys.
  */
 export function extractTsKeys(source, typeName) {
   const lines = source.split('\n');
-  const re = TS_BLOCK_RE(typeName);
-  const idx = lines.findIndex((l) => re.test(l));
-  if (idx === -1) return null;
-  const keys = [];
+  const zodRe = TS_ZOD_RE(typeName);
+  const interfaceRe = TS_INTERFACE_RE(typeName);
   const state = { block: false, template: false };
-  let depth = 0;
+  const clean = [];
+  let idx = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    clean.push(stripNoise(lines[i], state));
+    if (idx === -1 && (zodRe.test(clean[i]) || interfaceRe.test(clean[i]))) idx = i;
+  }
+  if (idx === -1) return null;
+  const open = findTsBodyOpen(clean, idx, typeName);
+  if (open === null) return null;
+  const keys = [];
+  let brace = 1;
+  let paren = 0;
+  let bracket = 0;
   let endLine = lines.length;
-  for (let i = idx; i < lines.length; i += 1) {
-    const clean = stripNoise(lines[i], state);
-    const body = i === idx ? clean.slice(clean.indexOf('{')) : clean;
-    if (i > idx && depth === 1) {
+  for (let i = open.line; i < lines.length; i += 1) {
+    const body = i === open.line ? clean[i].slice(open.col + 1) : clean[i];
+    if (i > open.line && brace === 1 && paren === 0 && bracket === 0) {
       const m = body.match(TS_KEY_RE);
       if (m) keys.push({ name: m[1] ?? m[2] ?? m[3], line: i + 1 });
     }
     for (const ch of body) {
-      if (ch === '{') depth += 1;
-      else if (ch === '}') depth -= 1;
+      if (ch === '{') brace += 1;
+      else if (ch === '}') brace -= 1;
+      else if (ch === '(') paren += 1;
+      else if (ch === ')') paren -= 1;
+      else if (ch === '[') bracket += 1;
+      else if (ch === ']') bracket -= 1;
     }
-    if (depth <= 0) {
+    if (brace <= 0) {
       endLine = i + 1;
       break;
     }
@@ -348,11 +514,17 @@ function submoduleOf(file) {
   return m ? m[1] : null;
 }
 
-async function readIfAvailable(root, file) {
+// `{ source }` when readable, `{ skipped: true }` when the file's submodule is
+// not initialized, `{ error }` when the path is stale inside an initialized
+// submodule (or outside any submodule).
+async function readManifestFile(root, file) {
   const sub = submoduleOf(file);
-  if (sub && !(await exists(path.join(root, sub, '.git')))) return null;
-  if (!(await exists(path.join(root, file)))) return null;
-  return fs.readFile(path.join(root, file), 'utf8');
+  if (sub && !(await exists(path.join(root, sub, '.git')))) return { skipped: true };
+  if (!(await exists(path.join(root, file)))) {
+    const where = sub ? `submodule ${sub} is initialized` : 'not inside a submodule';
+    return { error: { file, line: 1, message: `manifest path ${file} does not exist (${where}); update PAIRS in scripts/check-protocol-field-parity.mjs` } };
+  }
+  return { source: await fs.readFile(path.join(root, file), 'utf8') };
 }
 
 /** Run every manifest pair against `root`; returns `{ errors, checked, skipped }`. */
@@ -361,13 +533,15 @@ export async function runChecks(root, pairs = PAIRS) {
   const checked = [];
   const skipped = [];
   for (const pair of pairs) {
-    const [rustSource, tsSource] = await Promise.all([readIfAvailable(root, pair.rust.file), readIfAvailable(root, pair.ts.file)]);
-    const missing = [rustSource === null && pair.rust.file, tsSource === null && pair.ts.file].filter(Boolean);
+    const [rust, ts] = await Promise.all([readManifestFile(root, pair.rust.file), readManifestFile(root, pair.ts.file)]);
+    for (const r of [rust, ts]) if (r.error) errors.push(r.error);
+    const missing = [rust.skipped && pair.rust.file, ts.skipped && pair.ts.file].filter(Boolean);
     if (missing.length > 0) {
       skipped.push(`skipped: ${pairLabel(pair)} (${missing.join(', ')} missing — submodule not initialized)`);
       continue;
     }
-    errors.push(...comparePair(pair, rustSource, tsSource));
+    if (rust.error || ts.error) continue;
+    errors.push(...comparePair(pair, rust.source, ts.source));
     checked.push(pairLabel(pair));
   }
   return { errors, checked, skipped };

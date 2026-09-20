@@ -336,6 +336,261 @@ test('runChecks treats a submodule directory without .git as uninitialized', asy
   assert.match(result.skipped[0], /packages\/intentd\/model\.rs missing/);
 });
 
+test('runChecks fails closed when the submodule is initialized but a manifest path is missing', async (t) => {
+  const root = await fixture(t, {
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+    'packages/cloudlands-fe/.git': 'gitdir: x\n',
+    'packages/cloudlands-fe/other.ts': TS_FULL,
+  });
+  const pairs = [{ rust: { file: 'packages/intentd/model.rs', struct: 'Row' }, ts: { file: 'packages/cloudlands-fe/types.ts', type: 'Row' }, ignore: {} }];
+  const result = await runChecks(root, pairs);
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.checked, []);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].file, 'packages/cloudlands-fe/types.ts');
+  assert.equal(result.errors[0].line, 1);
+  assert.match(result.errors[0].message, /packages\/cloudlands-fe\/types\.ts does not exist .*packages\/cloudlands-fe is initialized.*PAIRS/);
+});
+
+test('runChecks only skips a pair when the submodule directory itself is absent', async (t) => {
+  const root = await fixture(t, {
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+  });
+  const pairs = [{ rust: { file: 'packages/intentd/model.rs', struct: 'Row' }, ts: { file: 'packages/cloudlands-fe/types.ts', type: 'Row' }, ignore: {} }];
+  const result = await runChecks(root, pairs);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.checked, []);
+  assert.match(result.skipped[0], /packages\/cloudlands-fe\/types\.ts missing — submodule not initialized/);
+});
+
+// ---- Regressions from the PR #5488 review ----
+
+const RUST_HEADER = '#[derive(Serialize)]\n#[serde(rename_all = "camelCase")]\n';
+const TS_ID_ONLY = 'export interface Row {\n  id: string;\n}\n';
+
+test('comparePair: a #[serde(skip)] inside a Rust block comment cannot suppress a missing field', () => {
+  const rust = [
+    RUST_HEADER + 'pub struct Row {',
+    '    pub id: String,',
+    '    /* disabled:',
+    '    #[serde(skip)]',
+    '    */',
+    '    pub reviewer_new_field: String,',
+    '}',
+    '',
+  ].join('\n');
+  const errors = comparePair(pair(), rust, TS_ID_ONLY);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].line, 8);
+  assert.match(errors[0].message, /emitted field Row\.reviewerNewField \(Rust reviewer_new_field\) is missing from Row/);
+});
+
+test('comparePair: a standalone } inside a Rust block comment does not end the struct walk', () => {
+  const rust = [
+    RUST_HEADER + 'pub struct Row {',
+    '    pub id: String,',
+    '    /* old:',
+    '    }',
+    '    */',
+    '    pub parent_agent_id: String,',
+    '    /* outer /* nested */ still a comment',
+    '    }',
+    '    */',
+    '    pub other: u8,',
+    '}',
+    '',
+  ].join('\n');
+  const errors = comparePair(pair(), rust, TS_ID_ONLY);
+  assert.deepEqual(
+    errors.map((e) => e.message.match(/emitted field Row\.(\w+)/)[1]),
+    ['parentAgentId', 'other'],
+  );
+});
+
+test('extractRustFields keeps a rename followed by a trailing line comment', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    #[serde(rename = "parentAgentId")] // wire name\n    pub owner_id: String, // trailing\n}\n';
+  const { fields, errors } = extractRustFields(rust, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['parentAgentId']);
+});
+
+test('comparePair: a block-commented copy of the Rust struct does not mask the live struct', () => {
+  const rust = [
+    '/*',
+    RUST_HEADER + 'pub struct Row {',
+    '    pub id: String,',
+    '}',
+    '*/',
+    RUST_HEADER + 'pub struct Row {',
+    '    pub id: String,',
+    '    pub parent_agent_id: String,',
+    '}',
+    '',
+  ].join('\n');
+  const errors = comparePair(pair(), rust, TS_ID_ONLY);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Row\.parentAgentId .* is missing from Row/);
+});
+
+test('comparePair: a block-commented copy of the TS interface does not mask the live interface', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    pub id: String,\n    pub parent_agent_id: String,\n}\n';
+  const ts = [
+    '/*',
+    'export interface Row {',
+    '  id: string;',
+    '  parentAgentId: string;',
+    '}',
+    '*/',
+    'const doc = `',
+    'export interface Row {',
+    '  parentAgentId: string;',
+    '}`;',
+    'export interface Row {',
+    '  id: string;',
+    '}',
+    '',
+  ].join('\n');
+  const result = extractTsKeys(ts, 'Row');
+  assert.equal(result.startLine, 11);
+  assert.equal(result.endLine, 13);
+  const errors = comparePair(pair(), rust, ts);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Row\.parentAgentId .* is missing from Row \(types\.ts:11-13\)/);
+});
+
+test('comparePair: a multiline method parameter named like the field does not satisfy it', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    pub id: String,\n    pub parent_agent_id: String,\n}\n';
+  const ts = [
+    'export interface Row {',
+    '  id: string;',
+    '  describe(',
+    '    parentAgentId: string,',
+    '    depth: number,',
+    '  ): void;',
+    '  handler: (',
+    '    parentAgentId: string,',
+    '  ) => void;',
+    '}',
+    '',
+  ].join('\n');
+  assert.deepEqual(extractTsKeys(ts, 'Row').keys.map((k) => k.name), ['id', 'describe', 'handler']);
+  const errors = comparePair(pair(), rust, ts);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Row\.parentAgentId .* is missing from Row/);
+});
+
+test('comparePair: a labelled tuple member named like the field does not satisfy it', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    pub id: String,\n    pub parent_agent_id: String,\n}\n';
+  const ts = [
+    'export interface Row {',
+    '  id: string;',
+    '  pair: [',
+    '    parentAgentId: string,',
+    '    other: number,',
+    '  ];',
+    "  marker: z.literal(')') | z.literal('[');",
+    '}',
+    '',
+  ].join('\n');
+  assert.deepEqual(extractTsKeys(ts, 'Row').keys.map((k) => k.name), ['id', 'pair', 'marker']);
+  const errors = comparePair(pair(), rust, ts);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Row\.parentAgentId .* is missing from Row/);
+});
+
+test('comparePair: properties of a generic constraint do not satisfy row fields', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    pub id: String,\n    pub parent_agent_id: String,\n}\n';
+  const ts = [
+    'export interface Row<T extends {',
+    '  parentAgentId: string;',
+    '}> {',
+    '  id: string;',
+    '}',
+    '',
+  ].join('\n');
+  const result = extractTsKeys(ts, 'Row');
+  assert.deepEqual(result.keys.map((k) => k.name), ['id']);
+  assert.equal(result.startLine, 1);
+  assert.equal(result.endLine, 5);
+  const errors = comparePair(pair(), rust, ts);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Row\.parentAgentId .* is missing from Row \(types\.ts:1-5\)/);
+
+  const oneLine = 'export interface Row<T extends () => void> extends Base<{ parentAgentId: string }> {\n  id: string;\n}\n';
+  assert.deepEqual(extractTsKeys(oneLine, 'Row').keys.map((k) => k.name), ['id']);
+  assert.equal(comparePair(pair(), rust, oneLine).length, 1);
+});
+
+test('extractRustFields honors the directional rename(serialize = ...) form', () => {
+  const rust = [
+    RUST_HEADER + 'pub struct Row {',
+    '    #[serde(rename(serialize = "parentAgentId"))]',
+    '    pub owner_id: String,',
+    '    #[serde(rename(serialize = "wireA", deserialize = "inputA"))]',
+    '    pub a: u8,',
+    '    #[serde(rename(deserialize = "inputB", serialize = "wireB"))]',
+    '    pub b: u8,',
+    '    #[serde(rename(deserialize = "inputC"))]',
+    '    pub c_name: u8,',
+    '}',
+    '',
+  ].join('\n');
+  const { fields, errors } = extractRustFields(rust, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['parentAgentId', 'wireA', 'wireB', 'cName']);
+});
+
+test('comparePair: cfg_attr-wrapped serde attributes fail with an actionable unsupported-attribute error', () => {
+  const rust = RUST_HEADER + 'pub struct Row {\n    pub id: String,\n    #[cfg_attr(all(), serde(rename = "parentAgentId"))]\n    pub owner_id: String,\n}\n';
+  const ts = 'export interface Row {\n  id: string;\n  ownerId: string;\n}\n';
+  const errors = comparePair(pair(), rust, ts);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].file, 'model.rs');
+  assert.equal(errors[0].line, 5);
+  assert.match(errors[0].message, /unsupported attribute .*cfg_attr.* on Row\.owner_id/);
+});
+
+test('comparePair: other uninterpretable wire-affecting attributes fail instead of asserting parity', () => {
+  const ts = 'export interface Row {\n  id: string;\n  ownerId: string;\n}\n';
+  const cases = [
+    ['#[cfg(feature = "x")]', /unsupported attribute .*#\[cfg\(feature = "x"\)\] on Row\.owner_id/],
+    ['#[serde(rename(bogus = "parentAgentId"))]', /unsupported attribute .*rename\(bogus = "parentAgentId"\).* on Row\.owner_id/],
+    ['#[serde(rename_all(serialize = "PascalCase"))]', /unsupported attribute .*rename_all\(serialize = "PascalCase"\).* on Row\.owner_id/],
+    ['#[serde(getter_of_wire_name = "parentAgentId")]', /unsupported attribute .*getter_of_wire_name.* on Row\.owner_id/],
+  ];
+  for (const [attr, re] of cases) {
+    const rust = RUST_HEADER + `pub struct Row {\n    pub id: String,\n    ${attr}\n    pub owner_id: String,\n}\n`;
+    const errors = comparePair(pair(), rust, ts);
+    assert.equal(errors.length, 1, attr);
+    assert.equal(errors[0].line, 5, attr);
+    assert.match(errors[0].message, re);
+  }
+  const structLevel = '#[derive(Serialize)]\n#[serde(rename_all = "camelCase", tag = "kind")]\npub struct Row {\n    pub id: String,\n    pub owner_id: String,\n}\n';
+  const errors = comparePair(pair(), structLevel, ts);
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].line, 2);
+  assert.match(errors[0].message, /unsupported attribute .*tag = "kind".* on struct Row/);
+});
+
+test('extractRustFields still accepts the harmless serde arguments used in model.rs', () => {
+  const rust = [
+    '#[derive(Serialize)]',
+    '#[serde(rename_all = "camelCase", deny_unknown_fields, default)]',
+    'pub struct Row {',
+    '    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "de", alias = "legacy")]',
+    '    pub a: Option<u8>,',
+    '    #[serde(default = "default_b", with = "m", serialize_with = "s", skip_deserializing, borrow)]',
+    '    pub b: u8,',
+    '}',
+    '',
+  ].join('\n');
+  const { fields, errors } = extractRustFields(rust, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['a', 'b']);
+});
+
 test('manifest pairs have a reason for every ignore entry', () => {
   assert.equal(PAIRS.length, 2);
   for (const p of PAIRS) {
