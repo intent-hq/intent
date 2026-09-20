@@ -118,10 +118,11 @@ When the change fixes a monorepo issue, reference it with the full cross-repo fo
 `Fixes intent-hq/intent#N` — in the PR body or squash-commit message, on **every** PR of
 a cross-component fix (intentd and cloudlands-fe alike); never downgrade to `Refs` /
 `Part of` to avoid an early close. GitHub closing the issue when the first PR merges is
-expected: the release notifier (see Release Process) holds its shipped-version comment
-until every linked fix PR is merged and contained, and it ignores mention-only references,
-so `Refs` / `Part of` forfeits that comment permanently — as happened to
-[intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383) (intentd#2001 + cloudlands-fe#2687).
+expected: the cloudlands-fe release notifier (see Release Process) holds its shipped-version
+comment until every *linked* fix PR is merged and contained, and mention-only references
+are invisible to it — an all-`Refs` fix gets no auto-close and no comment (as happened to
+[intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383): intentd#2001 +
+cloudlands-fe#2687), and a mixed one can be announced before it has fully shipped.
 
 ### Phase 2 — Monorepo pin advance (automated)
 
