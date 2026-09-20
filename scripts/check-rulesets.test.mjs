@@ -210,6 +210,49 @@ test('a second rule of the same source and type is not collapsed', async (t) => 
   ]);
 });
 
+test('a repeated check context with a different integration id is not collapsed', async (t) => {
+  const base = liveRules('intent');
+  const withDuplicate = withRule(base, 'required_status_checks', (rule) => {
+    rule.parameters.required_status_checks.push({ context: 'CI Gate', integration_id: 100 });
+  });
+  const prefix = 'Repository intent-hq/intent rule required_status_checks parameters.required_status_checks[] context "CI Gate"';
+
+  const added = await runWith(t, fixtureFor({ intent: withDuplicate }));
+  assert.equal(added.exitCode, 1, 'an added duplicate context must be drift');
+  assert.match(added.stderr, /context "CI Gate" \{"context":"CI Gate","integration_id":100\} unexpected/);
+  assert.match(added.stderr, /^\+\s+"integration_id": 100$/m);
+  assert.deepEqual(diffRules(base, withDuplicate), [`${prefix} {"context":"CI Gate","integration_id":100} unexpected`]);
+  assert.deepEqual(diffRules(withDuplicate, base), [`${prefix} {"context":"CI Gate","integration_id":100} missing`]);
+
+  const changed = withRule(withDuplicate, 'required_status_checks', (rule) => {
+    rule.parameters.required_status_checks[1].integration_id = 101;
+  });
+  assert.deepEqual(diffRules(withDuplicate, changed), [
+    `${prefix} {"context":"CI Gate","integration_id":100}.integration_id expected 100, live 101`,
+  ]);
+
+  const reordered = withRule(withDuplicate, 'required_status_checks', (rule) => rule.parameters.required_status_checks.reverse());
+  assert.deepEqual(diffRules(withDuplicate, reordered), []);
+  const cwd = makeRepo(t);
+  fs.writeFileSync(path.join(cwd, snapshotPath('intent')), formatSnapshot(withDuplicate));
+  const io = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: fetchFromFixture({ intent: reordered }), ...io }), 0, io.err.join('\n'));
+});
+
+test('normalized snapshots that differ never compare clean', () => {
+  const base = liveRules('intent');
+  const live = clone(base);
+  live.find((rule) => rule.type === 'required_status_checks').parameters.required_status_checks.push({ context: 'CI Gate', integration_id: 100 });
+  const extraRule = clone(base.find((rule) => rule.type === 'required_status_checks'));
+  extraRule.parameters.required_status_checks = [{ context: 'Additional Required Check', integration_id: 15368 }];
+  for (const candidate of [live, [...base, extraRule], [...base, clone(base[0])]]) {
+    assert.notEqual(formatSnapshot(base), formatSnapshot(candidate));
+    assert.ok(diffRules(base, candidate).length > 0, formatSnapshot(candidate));
+    assert.ok(diffRules(candidate, base).length > 0, formatSnapshot(candidate));
+  }
+  assert.deepEqual(diffRules([...base, clone(base[0])], base), ['Organization intent-hq rule deletion {} missing']);
+});
+
 test('key order, array order and ruleset ids do not count as drift', async (t) => {
   const shuffled = clone(liveRules('intent')).reverse();
   for (const rule of shuffled) {

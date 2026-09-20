@@ -101,6 +101,44 @@ export function ruleKey(rule) {
   return `${rule.ruleset_source_type} ${rule.ruleset_source} rule ${rule.type}`;
 }
 
+function groupBy(items, keyOf) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+// Compares two lists whose entries share a grouping key (rules by source and
+// type, required checks by context) without collapsing repeated keys: within a
+// group identical entries pair off first, the remainder pair in normalized
+// order for field-level diagnostics, and any leftover is reported whole.
+function diffGroups(expected, actual, keyOf, { label, at, compared = (item) => item }) {
+  const expectedGroups = groupBy(expected, keyOf);
+  const actualGroups = groupBy(actual, keyOf);
+  const differences = [];
+  for (const key of new Set([...expectedGroups.keys(), ...actualGroups.keys()])) {
+    const expectedItems = expectedGroups.get(key) ?? [];
+    const actualItems = [...(actualGroups.get(key) ?? [])];
+    const repeated = Math.max(expectedItems.length, actualItems.length) > 1;
+    const unmatched = [];
+    for (const item of expectedItems) {
+      const index = actualItems.findIndex((candidate) => stableJson(candidate) === stableJson(item));
+      if (index === -1) unmatched.push(item);
+      else actualItems.splice(index, 1);
+    }
+    while (unmatched.length > 0 && actualItems.length > 0) {
+      const item = unmatched.shift();
+      differences.push(...diffValues(compared(item), compared(actualItems.shift()), at(key, item, repeated)));
+    }
+    for (const item of unmatched) differences.push(`${label(key, item, repeated)} missing`);
+    for (const item of actualItems) differences.push(`${label(key, item, repeated)} unexpected`);
+  }
+  return differences;
+}
+
 // Human-readable differences, each naming the divergent path. Arrays whose
 // elements carry a `context` (required_status_checks) are matched by context so
 // a dropped check is reported by name rather than by index.
@@ -108,17 +146,11 @@ export function diffValues(expected, actual, at) {
   if (Array.isArray(expected) && Array.isArray(actual)) {
     const byContext = (items) => items.every((item) => isPlainObject(item) && typeof item.context === 'string');
     if (expected.length + actual.length > 0 && byContext(expected) && byContext(actual)) {
-      const differences = [];
-      const actualByContext = new Map(actual.map((item) => [item.context, item]));
-      const expectedByContext = new Map(expected.map((item) => [item.context, item]));
-      for (const [context, item] of expectedByContext) {
-        if (!actualByContext.has(context)) differences.push(`${at}[] context ${JSON.stringify(context)} missing`);
-        else differences.push(...diffValues(item, actualByContext.get(context), `${at}[context ${JSON.stringify(context)}]`));
-      }
-      for (const context of actualByContext.keys()) {
-        if (!expectedByContext.has(context)) differences.push(`${at}[] context ${JSON.stringify(context)} unexpected`);
-      }
-      return differences;
+      const name = (context, item, repeated) => (repeated ? `${at}[] context ${JSON.stringify(context)} ${stableJson(item)}` : `${at}[] context ${JSON.stringify(context)}`);
+      return diffGroups(expected, actual, (item) => item.context, {
+        label: name,
+        at: (context, item, repeated) => (repeated ? name(context, item, repeated) : `${at}[context ${JSON.stringify(context)}]`),
+      });
     }
     if (expected.every((item) => !isPlainObject(item)) && actual.every((item) => !isPlainObject(item))) {
       return stableJson(expected) === stableJson(actual)
@@ -147,41 +179,20 @@ export function diffValues(expected, actual, at) {
   return stableJson(expected) === stableJson(actual) ? [] : [`${at} expected ${stableJson(expected)}, live ${stableJson(actual)}`];
 }
 
-function groupRules(rules) {
-  const groups = new Map();
-  for (const rule of normalizeRules(rules)) {
-    const key = ruleKey(rule);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(rule);
-  }
-  return groups;
-}
-
 // A repository (or the organization) may impose several rules of one type, so
-// rules are grouped by source and type rather than keyed: identical entries
-// pair off first, the remainder pair in normalized order for field-level
-// diagnostics, and any leftover is reported whole as missing or unexpected.
+// rules are grouped by source and type rather than keyed. Whatever the
+// diagnostics miss, two normalized snapshots that differ never compare clean.
 export function diffRules(expected, actual) {
-  const expectedGroups = groupRules(expected);
-  const actualGroups = groupRules(actual);
-  const differences = [];
-  const label = (key, rule, total) => (total > 1 ? `${key} ${stableJson(rule.parameters ?? {})}` : key);
-  for (const key of new Set([...expectedGroups.keys(), ...actualGroups.keys()])) {
-    const expectedRules = expectedGroups.get(key) ?? [];
-    const actualRules = [...(actualGroups.get(key) ?? [])];
-    const total = Math.max(expectedRules.length, actualRules.length);
-    const unmatched = [];
-    for (const rule of expectedRules) {
-      const index = actualRules.findIndex((candidate) => stableJson(candidate) === stableJson(rule));
-      if (index === -1) unmatched.push(rule);
-      else actualRules.splice(index, 1);
-    }
-    while (unmatched.length > 0 && actualRules.length > 0) {
-      const rule = unmatched.shift();
-      differences.push(...diffValues(rule.parameters ?? {}, actualRules.shift().parameters ?? {}, `${label(key, rule, total)} parameters`));
-    }
-    for (const rule of unmatched) differences.push(`${label(key, rule, total)} missing`);
-    for (const rule of actualRules) differences.push(`${label(key, rule, total)} unexpected`);
+  const expectedRules = normalizeRules(expected);
+  const actualRules = normalizeRules(actual);
+  const label = (key, rule, repeated) => (repeated ? `${key} ${stableJson(rule.parameters ?? {})}` : key);
+  const differences = diffGroups(expectedRules, actualRules, ruleKey, {
+    label,
+    at: (key, rule, repeated) => `${label(key, rule, repeated)} parameters`,
+    compared: (rule) => rule.parameters ?? {},
+  });
+  if (differences.length === 0 && stableJson(expectedRules) !== stableJson(actualRules)) {
+    differences.push('normalized rules differ (see diff below)');
   }
   return differences;
 }
