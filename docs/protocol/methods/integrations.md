@@ -31,6 +31,13 @@
 > (`ws` → owner/repo/number) and are left **untouched**;
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
+>
+> **Provider-generic auth (v10.4).** The auth & identity quintet — `github.authStatus` /
+> `github.connect` / `github.cancelAuth` / `github.revoke` / `github.getUser` — is served as
+> **aliases** of the provider-generic `sourceControl.*` auth methods with `provider: "github"`
+> pinned (see "Provider-generic auth — `sourceControl.*`" below). The `github.*` names, params and
+> result shapes are unchanged **byte-for-byte** (golden-tested); the `sourceControl.*` surface is
+> where a second forge (GitLab, self-hosted included) connects with the same device-flow / PAT model.
 
 > **Auth model — OAuth device flow, daemon-owned (with env-PAT fallbacks).** `github.connect`
 > starts GitHub's **OAuth device flow** (no client secret, no callback URL — only a public OAuth
@@ -101,6 +108,67 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
+
+Since v10.4 each of the five rows above is an **alias**: `github.<name>` ≡ `sourceControl.<name>`
+with `provider: "github"` (any `provider` / `host` / `method` / `token` param on a `github.*` alias is
+ignored — the alias never reads params). The alias result is the **projection** documented in the
+row — the additive `sourceControl.*` fields (`provider`, `host`, `method`, `user`,
+`deviceGrantSupported`) are stripped so the `github.*` shapes stay byte-identical.
+
+#### Provider-generic auth — `sourceControl.*` *(v10.4)*
+
+> **Auth model.** One connection model for every forge: an **OAuth device grant** run by the daemon
+> (GitHub's device flow; GitLab's device authorization grant, GitLab ≥ 17.1, scope `api`) and, where
+> the grant is unavailable, a **personal access token** handed over in-band. The stored credential
+> lives in the secret store under `sourceControl.<provider>.token` — the **first slot** of each
+> provider's resolution chain, ahead of the env-var fallback (`GITHUB_TOKEN` / `GH_TOKEN` and the `gh`
+> CLI for GitHub; `GITLAB_TOKEN` for GitLab). GitLab connections are **host-bound**: `host` selects the
+> instance (default `sourceControl.gitlab.host`, itself defaulting to `gitlab.com`) and a successful
+> connect persists it to `sourceControl.gitlab.host`. Device grants need a public OAuth client id for
+> the host — `sourceControl.<provider>.oauthClientId`, or, for `gitlab.com` only, the client id
+> built into the daemon (empty until the Intent application is registered, in which case gitlab.com
+> also reports `deviceGrantSupported: false`). No code path on the GitLab side shells out to `gh` or
+> `glab`.
+>
+> **🔒 Secret guardrail.** A PAT travels **once**, as the `token` param over the authenticated RPC
+> channel, is persisted immediately and is **never logged, echoed or returned**. No `sourceControl.*`
+> result, event or error ever carries a token, device code or client secret — only derived identity
+> (`user`) and connection state cross the wire.
+
+**Conventions.** `provider` is **(req)** on every method: `"github"` | `"gitlab"`; any other value
+→ `-32602`. `host` is optional and **gitlab-only** (a non-empty `host` with `provider: "github"` →
+`-32602`); it is a bare host name or `host[:port]` (no scheme, no path). `sourceControl.gitlab.apiBaseUrl`
+(§5.12) overrides the API origin for that host (test seam); it never changes the reported `host`.
+Beyond the two typed errors below, error conventions match `github.*` (§9): missing/invalid params →
+`-32602`; an unreachable host, a missing client id, or any other forge/service failure → `-32603`
+with a descriptive `message`.
+
+**Typed errors (stable `error.data.code` contract, §9 style).** Clients exact-match `data.code`:
+
+| Code (`error.data.code`) | Numeric | When |
+| --- | --- | --- |
+| device-grant-unsupported | -32603 | `sourceControl.connect` with `method: "device"` (or `method` absent) against a host that cannot run a device grant: no client id resolves for it, or the instance rejected the grant (GitLab < 17.1). `error.data = { code: "device-grant-unsupported", provider, host }`. The FE keys its PAT fallback on this code (and pre-empts it via `authStatus.deviceGrantSupported`). |
+| source-control-unauthorized | -32603 | The credential was **rejected** by the forge: a `token` offered to `connect { method: "pat" }` that fails the host's user probe (nothing is stored), or a stored/env credential that the host rejects on `getUser`. `error.data = { code: "source-control-unauthorized", provider, host }`. A merely *absent* credential is not an error — `authStatus` reports `isConfigured: false` and `getUser` returns `{ user: null }`. |
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sourceControl.authStatus | provider (req), host? | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow, provider, host, method, user?, deviceGrantSupported } — the `github.authStatus` shape **plus** additive fields. `isConfigured` = a credential resolves for `(provider, host)` **and** the host's user probe succeeds (`GET /user` on GitHub, `GET /api/v4/user` on GitLab); `deviceFlow` / `oauthUrl` / `configuredButNeedsUpdate` / `updatedScopes` exactly as the `github.authStatus` row (device-grant state of *this* provider+host). `provider` echoes the param; `host` is the resolved host (`"github.com"` for github; the requested or configured instance for gitlab). `method` is the provenance of the credential in use — `"device"` (device grant), `"pat"` (in-band PAT, or a token written straight to `sourceControl.<provider>.token` / stored before v10.4), `"env"` (env-var / CLI fallback, nothing stored) — or `null` when not configured. `user` is present **iff** `isConfigured`: `SourceControlUser` (below). `deviceGrantSupported` is `true` when a device-grant client id resolves for the host and the host has not reported the grant unsupported; the FE renders device-first when `true`, PAT-first when `false` |
+| sourceControl.connect | provider (req), host?, method? ("device" \| "pat", default "device"), token? | `method: "device"` → { ok: true, userCode, verificationUri, expiresIn, interval } — starts the device grant for `(provider, host)` (or returns the SAME codes while one is pending — idempotent, like `github.connect`); the daemon polls the host in the background and terminal transitions arrive as `sourceControl:auth-changed` (§6.5). A host without device support → `device-grant-unsupported`. `method: "pat"` (`token` **req**, non-empty; `token` with `method: "device"` → `-32602`) → { ok: true, method: "pat" } — validates the token against the host's user probe, persists it under `sourceControl.<provider>.token` (and the host under `sourceControl.gitlab.host`), emits `sourceControl:auth-changed { status: "authorized" }` and returns; a rejected token → `source-control-unauthorized` and nothing is stored. In v10.4 the PAT method is accepted for `gitlab` only — `provider: "github", method: "pat"` → `-32602` (`settings.update` on `sourceControl.github.token` remains the GitHub PAT path, §5.12). A PAT connect also aborts any pending device grant for the same provider+host |
+| sourceControl.cancelAuth | provider (req), host? | { ok: true, cancelled } — aborts the pending device grant for `(provider, host)` (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
+| sourceControl.revoke | provider (req), host? | { ok: true } — deletes the **stored** `sourceControl.<provider>.token`, aborts any in-flight grant and emits `sourceControl:auth-changed { status: "revoked" }` (plus `github:auth-changed` for github). Idempotent; env / CLI fallbacks are untouched. The github alias keeps its best-effort `gh` logout behavior |
+| sourceControl.getUser | provider (req), host? | { user: SourceControlUser \| null } — the authenticated identity from the host's user probe; `null` when no credential resolves; a rejected credential → `source-control-unauthorized`. Never includes the token |
+
+```ts
+interface SourceControlUser {  // derived identity — never carries a token
+  id: string;                  // the forge's user id, rendered as a string (GitLab numeric ids included)
+  login: string;               // GitHub `login` / GitLab `username`
+  displayName?: string;        // GitHub `name` / GitLab `name` — omitted when the forge returns none
+  avatarUrl?: string;          // omitted when the forge returns none
+}
+```
+
+`SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
+returning `GithubUser`.
 
 #### Pulls
 

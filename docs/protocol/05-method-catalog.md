@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **378 dispatchable method names** across the following categories:
+The API exposes **383 dispatchable method names** across the following categories:
 
-- **Router methods:** 323 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 328 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 53 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 378 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 383 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 378 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 383 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.46) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (323 total)
+### Router methods by namespace (328 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -54,6 +54,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
+| sourceControl | 5 | authStatus, cancelAuth, connect, getUser, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.4, daemon-global — no `workspaceId`). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.4 projections |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
 | system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
