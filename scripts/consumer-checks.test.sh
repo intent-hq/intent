@@ -170,11 +170,30 @@ grep -q "unknown argument '--bogus'" <<<"$check_output" || fail "unknown argumen
 # a stubbed runner: a failing runner must fail the step with the summary
 # still appended, a passing one must exit 0.
 workflow=$repo_root/.github/workflows/consumer-checks.yml
+# workflow_step <name> prints that step's YAML block.
+workflow_step() {
+  awk -v name="$1" '
+    /^      - / { in_step = index($0, "- name: " name) > 0 }
+    in_step { print }
+  ' "$workflow"
+}
+
+# The monorepo checkout must pin the reusable workflow's own commit via the
+# `job` context. `github.job_workflow_sha` / `github.job_workflow_ref` are OIDC
+# claims, not `github` context properties, and evaluate to "" in expressions
+# (cloudlands-fe#2702 silently ran the `main` fallback).
+grep -nE '^[^#]*github\.job_workflow_(sha|ref)' "$workflow" &&
+  fail "consumer-checks.yml references github.job_workflow_*; use job.workflow_sha / job.workflow_repository (see the lines above)"
+checkout_block=$(workflow_step "Check out the monorepo at this workflow's commit")
+[[ -n "$checkout_block" ]] || fail "monorepo checkout step not found in $workflow"
+grep -q '^        id: monorepo$' <<<"$checkout_block" || fail "monorepo checkout step lost its id:"$'\n'"$checkout_block"
+grep -qE "^          ref: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$checkout_block" ||
+  fail "monorepo checkout step must use ref: \${{ job.workflow_sha || 'main' }}:"$'\n'"$checkout_block"
+grep -qE "^          repository: \\$\\{\\{ job\\.workflow_repository \\|\\| 'intent-hq/intent' \\}\\}$" <<<"$checkout_block" ||
+  fail "monorepo checkout step must use repository: \${{ job.workflow_repository || 'intent-hq/intent' }}:"$'\n'"$checkout_block"
+
 step_name='Run the consumer checks (upstream context)'
-step_block=$(awk -v name="$step_name" '
-  /^      - / { in_step = index($0, "- name: " name) > 0 }
-  in_step { print }
-' "$workflow")
+step_block=$(workflow_step "$step_name")
 [[ -n "$step_block" ]] || fail "workflow step '$step_name' not found in $workflow"
 grep -q '^        shell: bash$' <<<"$step_block" ||
   fail "workflow step '$step_name' does not declare 'shell: bash' (its piped run body needs pipefail):"$'\n'"$step_block"
@@ -185,6 +204,11 @@ grep -q '\${{' <<<"$run_body" && fail "workflow run body has an unsubstituted ex
 step_dir=$temp_dir/workflow-step
 mkdir -p "$step_dir/scripts" "$step_dir/tmp"
 printf '%s\n' "$run_body" >"$step_dir/step.sh"
+# The body names the checked-out monorepo commit (`git rev-parse --short HEAD`
+# in the workspace root), so the fixture is a repository with one commit.
+git -C "$step_dir" init -q
+git -C "$step_dir" -c user.name=test -c user.email=test@example.invalid commit -q --allow-empty -m fixture
+monorepo_short=$(git -C "$step_dir" rev-parse --short HEAD)
 cat >"$step_dir/scripts/consumer-checks.sh" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >"$STUB_ARGS"
@@ -201,7 +225,7 @@ run_step() {
   : >"$summary"
   step_status=0
   step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
-    RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef MONOREPO_REF=fedcba9876543210 \
+    RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
     bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
   step_summary=$(cat "$summary")
 }
@@ -210,7 +234,7 @@ run_step 1 FAILED
   fail "workflow step exited $step_status for a failing runner (expected 1):"$'\n'"$step_output"
 [ "$(cat "$step_dir/args")" = "--context upstream --advisory=check-mcp-bindings" ] ||
   fail "workflow step invoked the runner with unexpected arguments: $(cat "$step_dir/args")"
-grep -q '^### monorepo-consumer-checks — intent-hq/intentd@0123456 vs intent-hq/intent@fedcba9$' <<<"$step_summary" ||
+grep -q "^### monorepo-consumer-checks — intent-hq/intentd@0123456 vs intent-hq/intent@$monorepo_short\$" <<<"$step_summary" ||
   fail "failed step did not write the summary heading:"$'\n'"$step_summary"
 grep -q '^consumer-checks: FAILED$' <<<"$step_summary" ||
   fail "failed step did not append the runner's summary table:"$'\n'"$step_summary"

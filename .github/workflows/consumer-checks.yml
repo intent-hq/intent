@@ -9,10 +9,15 @@
 # checks compare against live under docs/protocol/ here, and the check list is
 # scripts/consumer-checks.sh — the same runner the monorepo `docs-check` CI job
 # uses, so the two lists cannot drift. This job checks out the monorepo at the
-# commit this workflow file itself came from (`github.job_workflow_sha`; with
-# callers on `@main` that is main's tip at call time), so the workflow and the
-# scripts it runs always come from the same monorepo commit — a caller can never
-# see a workflow whose runner has not landed yet. It then replaces the caller's
+# commit this workflow file itself came from — `job.workflow_sha` /
+# `job.workflow_repository` from the `job` context (with callers on `@main` that
+# is main's tip at call time) — so the workflow and the scripts it runs always
+# come from the same monorepo commit; a caller can never see a workflow whose
+# runner has not landed yet. Do not use `github.job_workflow_sha` for this: it
+# is an OIDC token claim, not a `github` context property, and an unknown
+# context property silently evaluates to "" in expressions (cloudlands-fe#2702
+# ran with the fallback). The `|| 'main'` fallback keeps the workflow valid
+# where `job.workflow_*` is unavailable (GHES). It then replaces the caller's
 # submodule directory with the caller's PR head, initializes the other public
 # submodule at its pin, and runs the runner in upstream context. packages/ios is
 # private and stays uninitialized; a missing iOS fixture is skipped by
@@ -60,9 +65,6 @@ jobs:
     env:
       COMPONENT: ${{ inputs.component }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
-      # The monorepo commit this reusable workflow file was resolved from;
-      # `main` only if the context is ever empty.
-      MONOREPO_REF: ${{ github.job_workflow_sha || 'main' }}
     steps:
       - name: Validate the component input
         id: component
@@ -76,22 +78,25 @@ jobs:
               ;;
           esac
           echo "other=$other" >> "$GITHUB_OUTPUT"
-          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT against intent-hq/intent@${MONOREPO_REF:0:7}"
+          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT"
 
       # A reusable workflow's default checkout is the caller repo; the monorepo
       # must be named explicitly, at this workflow file's own commit so the
-      # scripts it runs match. Fail-soft: see the guard step below.
-      - name: Check out intent-hq/intent at this workflow's commit
+      # scripts it runs match (the `job` context is read here directly, not via
+      # job-level env). Fail-soft: see the guard step below.
+      - name: Check out the monorepo at this workflow's commit
         id: monorepo
         continue-on-error: true
         uses: actions/checkout@v7
         with:
-          repository: intent-hq/intent
-          ref: ${{ env.MONOREPO_REF }}
+          repository: ${{ job.workflow_repository || 'intent-hq/intent' }}
+          ref: ${{ job.workflow_sha || 'main' }}
           submodules: false
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'
+        env:
+          MONOREPO_REF: ${{ job.workflow_sha || 'main' }}
         run: |
           echo "::warning::consumer-checks: could not check out intent-hq/intent@${MONOREPO_REF:0:7}; skipping the monorepo consumer checks for this run."
 
@@ -122,10 +127,12 @@ jobs:
         shell: bash
         run: |
           log="$RUNNER_TEMP/consumer-checks.log"
+          monorepo_sha=$(git rev-parse --short HEAD)
+          echo "Checking against intent-hq/intent@$monorepo_sha"
           status=0
           scripts/consumer-checks.sh --context upstream --advisory=check-mcp-bindings 2>&1 | tee "$log" || status=$?
           {
-            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@${MONOREPO_REF:0:7}"
+            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@$monorepo_sha"
             echo
             echo '```'
             sed -n '/^consumer-checks summary$/,$p' "$log"
