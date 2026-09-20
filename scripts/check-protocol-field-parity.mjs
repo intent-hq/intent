@@ -76,9 +76,17 @@ function splitTopLevel(text) {
   return parts;
 }
 
+// Canonical `#[name(` head of an attribute: Rust allows whitespace between `#`,
+// `[`, the path and `(`, so `# [serde (..)]` is the same attribute as `#[serde(..)]`.
+function attrHead(attr) {
+  const m = attr.match(/^#\s*\[\s*([A-Za-z_][A-Za-z0-9_:]*)\s*(\(|\]|=)/);
+  return m ? m[1] : null;
+}
+
 // Arguments of one `#[serde(...)]` attribute, or `null` for any other attribute.
 function serdeArgs(attr) {
-  const m = attr.match(/^#\[serde\((.*)\)\]$/);
+  if (attrHead(attr) !== 'serde') return null;
+  const m = attr.match(/^#\s*\[\s*serde\s*\((.*)\)\s*\]$/);
   return m ? splitTopLevel(m[1]) : null;
 }
 
@@ -94,9 +102,11 @@ function directionalRename(inner) {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-// serde arguments that never change the emitted field names.
+// serde arguments that never change the emitted field names. Container
+// `into` / `try_into` / `remote` serialize a different type, so the struct's
+// own fields are not the wire shape and they are deliberately absent here.
 const HARMLESS_SERDE_ARGS = {
-  struct: new Set(['default', 'bound', 'deny_unknown_fields', 'crate', 'from', 'into', 'try_from', 'remote', 'expecting', 'rename']),
+  struct: new Set(['default', 'bound', 'deny_unknown_fields', 'crate', 'from', 'try_from', 'expecting', 'rename']),
   field: new Set(['default', 'bound', 'skip_serializing_if', 'skip_deserializing', 'deserialize_with', 'serialize_with', 'with', 'alias', 'borrow', 'getter']),
 };
 const SIMPLE_ARG_RE = /^([A-Za-z_]+)(?:\s*=\s*"[^"]*")?$/;
@@ -107,12 +117,16 @@ const SIMPLE_ARG_RE = /^([A-Za-z_]+)(?:\s*=\s*"[^"]*")?$/;
 function parseSerdeAttrs(attrs, level) {
   const out = { renameAll: null, rename: null, skip: false, flatten: false, unsupported: [] };
   for (const { text, line } of attrs) {
-    if (/^#\[cfg(?:_attr)?\(/.test(text)) {
+    const head = attrHead(text);
+    if (head === 'cfg' || head === 'cfg_attr') {
       out.unsupported.push({ line, text, detail: 'conditional attributes cannot be evaluated' });
       continue;
     }
     const args = serdeArgs(text);
-    if (!args) continue;
+    if (!args) {
+      if (head === 'serde') out.unsupported.push({ line, text, detail: 'serde attribute form is not understood' });
+      continue;
+    }
     for (const arg of args) {
       let m;
       let dir;
@@ -139,6 +153,7 @@ function unsupportedError(file, target, { line, text, detail }) {
   };
 }
 
+const ATTR_START_RE = /^\s*#\s*\[/;
 const STRUCT_RE = (name) => new RegExp(`^\\s*pub(?:\\([^)]*\\))?\\s+struct\\s+${name}\\s*(?:<[^{]*>)?\\s*\\{\\s*$`);
 const FIELD_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?),?\s*$/;
 const RUST_CHAR_RE = /^'(?:[^'\\\n]|\\(?:[nrt0'"\\]|x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]+\}))'/;
@@ -238,7 +253,7 @@ function logicalLines(source) {
   const lines = source.split('\n');
   const out = [];
   for (let i = 0; i < lines.length; i += 1) {
-    if (!lines[i].trim().startsWith('#[')) {
+    if (!ATTR_START_RE.test(lines[i])) {
       out.push({ text: lines[i], line: i + 1 });
       continue;
     }
@@ -283,7 +298,7 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
   const structAttrs = [];
   for (let i = idx - 1; i >= 0; i -= 1) {
     const l = lines[i].text.trim();
-    if (l.startsWith('#[')) structAttrs.push({ text: l, line: lines[i].line });
+    if (ATTR_START_RE.test(l)) structAttrs.push({ text: l, line: lines[i].line });
     else if (l === '') continue;
     else break;
   }
@@ -303,7 +318,7 @@ export function extractRustFields(source, structName, file, seen = new Set()) {
     const l = raw.trim();
     if (l === '}') break;
     if (l === '') continue;
-    if (l.startsWith('#[')) {
+    if (ATTR_START_RE.test(l)) {
       attrs.push({ text: l, line: lines[i].line });
       continue;
     }

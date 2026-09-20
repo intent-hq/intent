@@ -645,6 +645,46 @@ test('comparePair: other uninterpretable wire-affecting attributes fail instead 
   assert.match(errors[0].message, /unsupported attribute .*tag = "kind".* on struct Row/);
 });
 
+test('comparePair: container attributes that replace the serialized shape fail instead of asserting parity', () => {
+  const ts = 'export interface Row {\n  ownerId: string;\n}\n';
+  for (const arg of ['into = "WireRow"', 'try_into = "WireRow"', 'remote = "WireRow"']) {
+    const rust = `#[derive(Serialize)]\n#[serde(rename_all = "camelCase", ${arg})]\npub struct Row {\n    pub owner_id: String,\n}\n`;
+    const errors = comparePair(pair(), rust, ts);
+    assert.equal(errors.length, 1, arg);
+    assert.equal(errors[0].file, 'model.rs', arg);
+    assert.equal(errors[0].line, 2, arg);
+    assert.match(errors[0].message, new RegExp(`unsupported attribute .*${arg.replace(/[()"]/g, '\\$&')}.* on struct Row`));
+  }
+});
+
+test('comparePair: whitespace inside an attribute does not hide a wire-affecting serde argument', () => {
+  const ts = 'export interface Row {\n  ownerId: string;\n}\n';
+  const missing = /emitted field Row\.parentAgentId \(Rust owner_id\) is missing from Row/;
+  const cases = [
+    ['#[serde (rename = "parentAgentId")]', missing, 5],
+    ['# [serde(rename = "parentAgentId")]', missing, 5],
+    ['#[ serde( rename = "parentAgentId" ) ]', missing, 5],
+    ['#[cfg_attr (all(), serde(rename = "parentAgentId"))]', /unsupported attribute .*cfg_attr .*on Row\.owner_id/, 4],
+    ['# [cfg(feature = "x")]', /unsupported attribute .*cfg\(feature.*on Row\.owner_id/, 4],
+  ];
+  for (const [attr, re, line] of cases) {
+    const rust = `#[derive(Serialize)]\n#[serde(rename_all = "camelCase")]\npub struct Row {\n    ${attr}\n    pub owner_id: String,\n}\n`;
+    const errors = comparePair(pair(), rust, ts);
+    assert.equal(errors.length, 1, attr);
+    assert.equal(errors[0].line, line, attr);
+    assert.match(errors[0].message, re, attr);
+  }
+  const skipped = '#[derive(Serialize)]\n#[serde(rename_all = "camelCase")]\npub struct Row {\n    pub owner_id: String,\n    # [serde (skip)]\n    pub hidden: u8,\n}\n';
+  assert.deepEqual(comparePair(pair(), skipped, ts), []);
+});
+
+test('extractRustFields accepts a spaced struct-level rename_all attribute', () => {
+  const rust = '#[derive(Serialize)]\n# [serde (rename_all = "camelCase")]\npub struct Row {\n    pub owner_id: String,\n}\n';
+  const { fields, errors } = extractRustFields(rust, 'Row', 'x.rs');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(fields.map((f) => f.wire), ['ownerId']);
+});
+
 test('extractRustFields still accepts the harmless serde arguments used in model.rs', () => {
   const rust = [
     '#[derive(Serialize)]',
