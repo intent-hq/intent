@@ -27,7 +27,7 @@
 
 set -euo pipefail
 
-always_on_jobs="bridge-test docs-check event-catalog-check shell-tests shell-tests-bash3 repo-hygiene triage-parser-test"
+always_on_jobs="bridge-test docs-check event-catalog-check shell-tests shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
 pull_request_only_jobs="pr-title breaking-token submodule-pins"
 
 if [ "${1:-}" = "--list-jobs" ]; then
