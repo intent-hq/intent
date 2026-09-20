@@ -15,7 +15,7 @@ Additionally, the protocol includes:
 
 **Total:** 367 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.46) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
 ### Router methods by namespace (316 total)
 
@@ -42,7 +42,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
-| principal | 1 | me — the principal this connection was bound to at admission (`{ id, login?, displayName?, avatarUrl?, isAdministrator }`; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails when no caller is bound |
+| principal | 1 | me — the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator }` — the profile fields are always present, `null` until a GitHub identity is cached; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound |
 | providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
@@ -632,4 +632,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.45) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.46) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
