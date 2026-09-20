@@ -147,16 +147,41 @@ export function diffValues(expected, actual, at) {
   return stableJson(expected) === stableJson(actual) ? [] : [`${at} expected ${stableJson(expected)}, live ${stableJson(actual)}`];
 }
 
-export function diffRules(expected, actual) {
-  const expectedRules = new Map(normalizeRules(expected).map((rule) => [ruleKey(rule), rule]));
-  const actualRules = new Map(normalizeRules(actual).map((rule) => [ruleKey(rule), rule]));
-  const differences = [];
-  for (const [key, rule] of expectedRules) {
-    if (!actualRules.has(key)) differences.push(`${key} missing`);
-    else differences.push(...diffValues(rule.parameters ?? {}, actualRules.get(key).parameters ?? {}, `${key} parameters`));
+function groupRules(rules) {
+  const groups = new Map();
+  for (const rule of normalizeRules(rules)) {
+    const key = ruleKey(rule);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(rule);
   }
-  for (const key of actualRules.keys()) {
-    if (!expectedRules.has(key)) differences.push(`${key} unexpected`);
+  return groups;
+}
+
+// A repository (or the organization) may impose several rules of one type, so
+// rules are grouped by source and type rather than keyed: identical entries
+// pair off first, the remainder pair in normalized order for field-level
+// diagnostics, and any leftover is reported whole as missing or unexpected.
+export function diffRules(expected, actual) {
+  const expectedGroups = groupRules(expected);
+  const actualGroups = groupRules(actual);
+  const differences = [];
+  const label = (key, rule, total) => (total > 1 ? `${key} ${stableJson(rule.parameters ?? {})}` : key);
+  for (const key of new Set([...expectedGroups.keys(), ...actualGroups.keys()])) {
+    const expectedRules = expectedGroups.get(key) ?? [];
+    const actualRules = [...(actualGroups.get(key) ?? [])];
+    const total = Math.max(expectedRules.length, actualRules.length);
+    const unmatched = [];
+    for (const rule of expectedRules) {
+      const index = actualRules.findIndex((candidate) => stableJson(candidate) === stableJson(rule));
+      if (index === -1) unmatched.push(rule);
+      else actualRules.splice(index, 1);
+    }
+    while (unmatched.length > 0 && actualRules.length > 0) {
+      const rule = unmatched.shift();
+      differences.push(...diffValues(rule.parameters ?? {}, actualRules.shift().parameters ?? {}, `${label(key, rule, total)} parameters`));
+    }
+    for (const rule of unmatched) differences.push(`${label(key, rule, total)} missing`);
+    for (const rule of actualRules) differences.push(`${label(key, rule, total)} unexpected`);
   }
   return differences;
 }

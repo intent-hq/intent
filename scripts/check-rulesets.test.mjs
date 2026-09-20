@@ -176,6 +176,40 @@ test('an extra live rule is drift and a dropped rule is named', async (t) => {
   assert.match(removed.stderr, /Repository intent-hq\/intent rule merge_queue missing/);
 });
 
+test('a second rule of the same source and type is not collapsed', async (t) => {
+  const base = liveRules('intent');
+  const checksRule = base.find((rule) => rule.type === 'required_status_checks');
+  const second = clone(checksRule);
+  second.ruleset_id = 2;
+  second.parameters.required_status_checks = [{ context: 'Additional Required Check', integration_id: 15368 }];
+
+  const added = await runWith(t, fixtureFor({ intent: [...base, second] }));
+  assert.equal(added.exitCode, 1, 'an additional same-type rule must be drift');
+  assert.match(added.stderr, /Repository intent-hq\/intent rule required_status_checks .*"context":"Additional Required Check".* unexpected/);
+  assert.match(added.stderr, /^\+\s+"context": "Additional Required Check",$/m);
+
+  const cwd = makeRepo(t, { workflowText: `${workflow}\n  extra:\n    name: Additional Required Check` });
+  fs.writeFileSync(path.join(cwd, snapshotPath('intent')), formatSnapshot([...base, second]));
+  const dropped = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: fetchFromFixture({ intent: base }), ...dropped }), 1);
+  assert.match(dropped.err.join('\n'), /rule required_status_checks .*"Additional Required Check".* missing/);
+
+  const changed = clone(second);
+  changed.parameters.required_status_checks[0].context = 'Renamed Check';
+  const renamed = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: fetchFromFixture({ intent: [...base, changed] }), ...renamed }), 1);
+  assert.match(renamed.err.join('\n'), /required_status_checks\[\] context "Additional Required Check" missing/);
+  assert.match(renamed.err.join('\n'), /required_status_checks\[\] context "Renamed Check" unexpected/);
+
+  const reordered = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: fetchFromFixture({ intent: [second, ...base] }), ...reordered }), 0, reordered.err.join('\n'));
+  assert.deepEqual(diffRules([...base, second], [second, ...base]), []);
+  assert.deepEqual(diffRules([...base, second, second], [second, ...base, second]), []);
+  assert.deepEqual(diffRules([...base, second, second], [second, ...base]), [
+    `Repository intent-hq/intent rule required_status_checks ${JSON.stringify(normalizeRules([second])[0].parameters)} missing`,
+  ]);
+});
+
 test('key order, array order and ruleset ids do not count as drift', async (t) => {
   const shuffled = clone(liveRules('intent')).reverse();
   for (const rule of shuffled) {
