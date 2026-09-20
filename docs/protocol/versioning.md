@@ -2,7 +2,9 @@
 
 ## Protocol Version & Compatibility
 
-**Version:** `10.3`
+**Version:** `10.4`
+
+Version 10.4 is an **additive** minor bump over 10.3: it adds **agent memory attribution** (§5.5, §5.7) — the daemon-global `agent.memoryUsage` router method (no `workspaceId`; `{ sampledAt, totalBytes, agents: [{ agentId, agentName, workspaceId, provider, model?, rootPid, processCount, memoryBytes, processes: [{ pid, parentPid, name, cmdline, memoryBytes }] }] }`, rows sorted by `memoryBytes` descending — one row per spawned agent the descendant-tree sampler bucketed, with the per-process rows behind the bucket, so a client can name WHICH agent holds the memory that `system.status`'s `childMemoryBytes` only totals; exactly `{ sampledAt: null, totalBytes: null, agents: [] }` before the first sample lands or when no tree probe is installed) and two **always-present** `system.status` result fields from the same sweep — `agentMemoryBytes` (the agent-attributed share of `childMemoryBytes`: the sum of the per-agent buckets; descendants under no registered agent root count only in the aggregate, so it never exceeds `childMemoryBytes`) and `agentProcessCount` (the number of buckets — spawned agents with a live root pid in the sweep) — both `null`, never `0`, until the first sample lands, following the v6.13 child-tree convention. Owner-only on the transport allowlist (daemon-wide read, no membership filter), like `system.status`. Method catalog grows by one router method — 324 router methods, 53 fast-path, 379 total.
 
 Version 10.3 adds the optional `system.requestUpdate.targetVersion` parameter and the `system.status.exactUpdateSupported` and `targetUpdate` fields. Clients must capability-check before sending a target; older daemons ignore unknown params. Fixed-release updates install asynchronously, report failures through status, and restart through the sitter without a channel check.
 
@@ -79,8 +81,8 @@ Also within 10.3 (behavior only, no method-catalog or wire-shape change, so no v
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.3", server: { protocolVersion: "10.3", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.3", ... }`
+- `client.hello` response: `{ protocolVersion: "10.4", server: { protocolVersion: "10.4", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.4", ... }`
 
 ### Compatibility Policy
 
