@@ -112,6 +112,7 @@
     "search:result",
     "settings:changed",
     "skills:changed",
+    "sourceControl:auth-changed",
     "spec:updated",
     "specialists:changed",
     "task:agent-linked",
