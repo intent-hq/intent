@@ -184,6 +184,15 @@ write_launcher corepack 'echo "SyntaxError: bad launcher" >&2; exit 1'
 run_doctor
 expect_line "[missing]  Corepack: 'corepack --version' failed with exit 1 via $bin_dir/corepack: SyntaxError: bad launcher"
 
+# A host that injects tracing into Node logs its startup configuration to stdout
+# before the launcher answers --version (intent-hq/intent#5509): the version is
+# the semver-shaped line, not the first line.
+dd_banner='DATADOG TRACER CONFIGURATION - {"date":"2026-09-20T00:00:00.000Z","lang":"nodejs","service":"intent"}'
+write_launcher corepack "echo '$dd_banner'; echo 0.35.0"
+run_doctor
+expect_line "[ok]       Corepack: 0.35.0"
+reject_line "[ok]       Corepack: DATADOG"
+
 # node_modules without a pty.node for this platform is an incomplete install, not a pass.
 write_launcher corepack 'echo 0.35.0'
 set_pty_binaries
@@ -525,5 +534,24 @@ run_install_coverage 1
 expect_line "[skip] cargo-llvm-cov 0.9.0 with llvm-tools-preview already installed"
 reject_line "[install]"
 rm -f "$bin_dir/cargo" "$bin_dir/rustup"
+
+# pnpm_ready (install mode) probes `pnpm --version` and compares the pinned
+# version against the semver-shaped output line, so a tracer's startup log
+# ahead of it (intent-hq/intent#5509) does not report pnpm as not ready.
+run_pnpm_ready() {
+  PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= BOOTSTRAP_PROBE_TIMEOUT=2 \
+    bash -c 'funcs=$1; set --; source "$funcs"; load_versions; pnpm_ready; status=$?; printf "%s\n" "$PROBE_OUTPUT"; exit "$status"' bash "$bootstrap_funcs" >"$output" 2>&1
+}
+write_launcher corepack 'echo 0.35.0'
+write_launcher pnpm "echo '$dd_banner'; echo 10.30.3"
+run_pnpm_ready || fail "pnpm_ready rejected the pinned pnpm behind a startup banner: $(cat "$output")"
+expect_line "10.30.3"
+write_launcher pnpm "echo '$dd_banner'; echo 10.29.0"
+! run_pnpm_ready || fail "pnpm_ready accepted pnpm 10.29.0 against the 10.30.3 pin"
+expect_line "10.29.0"
+write_launcher pnpm "echo '$dd_banner'"
+! run_pnpm_ready || fail "pnpm_ready accepted a launcher that printed only a startup banner"
+rm -f "$bin_dir/pnpm"
 
 echo "bootstrap-dev-host tests passed"
