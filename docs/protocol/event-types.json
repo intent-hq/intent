@@ -104,6 +104,7 @@
     "prMonitor:emitted",
     "prMonitor:registered",
     "presence:changed",
+    "principal:identity-changed",
     "script:changed",
     "script:output",
     "script:state",

@@ -109,12 +109,16 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token |
 | github.users.search | query (req), limit? | { users: { id, login, avatarUrl, htmlUrl }[] } — **administrator-only** login-prefix user search over `GET /search/users` for the collaborator picker (v10.3). Missing `query` → `-32602`; a blank query, or one with no leading run of login characters (ASCII alphanumerics and `-`), answers `{ users: [] }` without a forge call — only that leading run reaches GitHub's search parser, so qualifiers / booleans typed after it are dropped. `limit` defaults to **8** and is clamped into `[1, 10]` |
+| github.identityProof.create | nonce (req), hostLabel (req) | { gistId, login } — the **guest half** of the invite identity proof (§5.48 "The identity proof"; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), within v10.3): publishes the host-issued `nonce` in a **secret gist** created with the **stored** device-flow token (env / `gh` fallbacks do not count) — one file `intent-join-proof.txt` whose first line is the nonce and second names `hostLabel` — and returns the gist id and the account's `login` for the guest's `invite.prove`. Both params are trimmed, non-empty, free of control characters (`-32602`). **Administrator-only** (the guest's own daemon). Typed refusals `-32603 { code: "github-not-connected" \| "github-scope-missing" \| "github-unreachable" }` (no stored token or GitHub rejected it; the token lacks the `gist` scope — re-run `github.connect`; transport failure). Never returns the token. Since v10.6 an alias of `sourceControl.identityProof.create { provider: "github" }` (below) |
+| github.identityProof.delete | gistId (req) | { ok: true } — deletes a proof gist `create` made; **idempotent** (an already-deleted gist is `ok`). The gist is read back first and must be a proof gist (exactly one file, `intent-join-proof.txt`) — any other gist of the account is refused `-32602` and nothing is deleted. Same typed refusals as `create`, the `gist`-scope check included. **Administrator-only**. Since v10.6 an alias of `sourceControl.identityProof.delete { provider: "github" }` |
 
-Since v10.5 each of the five rows above is an **alias**: `github.<name>` ≡ `sourceControl.<name>`
+Since v10.5 each of the five auth rows above is an **alias**: `github.<name>` ≡ `sourceControl.<name>`
 with `provider: "github"` (any `provider` / `host` / `method` / `token` param on a `github.*` alias is
 ignored — the alias never reads params). The alias result is the **projection** documented in the
 row — the additive `sourceControl.*` fields (`provider`, `host`, `method`, `user`,
-`deviceGrantSupported`) are stripped so the `github.*` shapes stay byte-identical.
+`deviceGrantSupported`) are stripped so the `github.*` shapes stay byte-identical. Since v10.6 the two
+`github.identityProof.*` rows are aliases of `sourceControl.identityProof.*` the same way (params
+forwarded with `provider: "github"`; the result projected to the documented `github.*` shape).
 
 #### Provider-generic auth — `sourceControl.*` *(v10.5)*
 
@@ -172,6 +176,23 @@ interface SourceControlUser {  // derived identity — never carries a token
 
 `SourceControlUser` is deliberately narrower than `GithubUser` (no `htmlUrl`); `github.getUser` keeps
 returning `GithubUser`.
+
+#### Identity proof — `sourceControl.identityProof.*` *(v10.6)*
+
+The **guest half** of the invite identity proof (§5.48 "The identity proof"), generalized over the
+provider seam: a guest publishes the nonce an `invite.challenge` issued under its own forge account,
+using the credential its **own** daemon stores for `(provider, host)`, and hands the proof's id to
+`invite.prove { provider, host, proofId }` on the host. The host's verification side is §5.48; nothing
+here talks to the host daemon. Same conventions as the `sourceControl.*` table above (`provider`
+**req**, `host` gitlab-only, `-32602` on malformed params); **administrator-only** like the `github.*`
+rows they generalize. Never returns a token.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| sourceControl.identityProof.create | provider (req), host?, nonce (req), hostLabel (req) | { proofId, login, provider, host, gistId? } — publishes `nonce` (first line of the proof file; `hostLabel` names the inviting host on the second, as `github.identityProof.create`) under the stored credential for `(provider, host)`. **github**: a **secret gist** with the single file `intent-join-proof.txt`, exactly the `github.identityProof.create` gist; the result also carries `gistId` (= `proofId`) for compatibility. **gitlab**: a **public personal snippet** (`POST /api/v4/snippets`, `visibility: "public"`, title naming Intent, one file whose first line is the nonce) — public because the host verifies it by an anonymous read; the guest's token must carry the `api` scope (the device grant requests it; PAT instructions say so). `login` is the account's GitHub `login` / GitLab `username`, the value the guest passes as `invite.prove.login`. Typed refusals `-32603 { code: "github-not-connected" \| "github-scope-missing" \| "github-unreachable" }` keep their codes for both providers (no stored credential for `(provider, host)`; the credential lacks the scope the proof needs — `gist` on GitHub, `api` on GitLab; the forge unreachable) |
+| sourceControl.identityProof.delete | provider (req), host?, proofId (req) | { ok: true } — deletes the proof `create` published; **idempotent** (a proof already gone — GitHub 404, GitLab 404 — is `ok`). The proof is read back first and must be a proof of this shape (GitHub: exactly one file `intent-join-proof.txt`; GitLab: a snippet whose single file is the proof file) — anything else of the account is refused `-32602` and nothing is deleted. Same typed refusals as `create` |
+
+`github.identityProof.create { nonce, hostLabel }` ≡ `sourceControl.identityProof.create { provider: "github", nonce, hostLabel }` projected to `{ gistId, login }`, and `github.identityProof.delete { gistId }` ≡ `sourceControl.identityProof.delete { provider: "github", proofId: gistId }` — the aliases keep their documented shapes byte-identical (§5.48 flow, step 2 and 4).
 
 #### Pulls
 
