@@ -2,27 +2,27 @@
 
 ## 5. Method Catalog
 
-The API exposes **383 dispatchable method names** across the following categories:
+The API exposes **385 dispatchable method names** across the following categories:
 
-- **Router methods:** 328 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 330 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 53 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 383 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 385 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 383 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 385 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.48) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (328 total)
+### Router methods by namespace (330 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 5 | addRemote, execute, getStatus, mergePR, prepare — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 46 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
+| agent | 47 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
@@ -32,7 +32,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file-tracking | 6 | getAgentLocks, getChanges, getLineStats, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 26 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| github | 27 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 12 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update, testConnection |
@@ -140,6 +140,22 @@ The `system.status` result additionally reports the daemon's **whole descendant 
 - `childMemoryPeakBytes` is the high-water mark of the daemon's **sampled** descendant-tree memory since daemon start. It is **not** simply the maximum of the `childMemoryBytes` values a client has seen: the tree is swept every **500 ms** while an ephemeral ACP adapter chain holds a slot in the daemon-wide adapter bound (`agents.maxConcurrentAdapters`, §5.12) — one-shot `agent.completeOnce` on ACP providers, and model probes — against the 5 s cadence `childProcesses` / `childMemoryBytes` are published at, so **the peak can legitimately exceed every instantaneous value ever published**. That is deliberate: those chains live only seconds, so by the time a debug bundle is captured the instantaneous value has drained back to baseline (intentd#1139, monorepo#2107; fast cadence introduced by [intent-hq/intentd#1167](https://github.com/intent-hq/intentd/pull/1167) — measured, a 16-chain burst peaked at 6.97 GB while `childMemoryBytes` read 0 at every published sample).
 - The fast cadence applies **only** to descendants spawned through the ephemeral-adapter bound — the one-shot ACP runner and the model probe. Everything else in the tree — the **auggie** route of the same quick actions (it spawns its CLI directly and takes no slot), `host.exec` children, PTY sessions, MCP bridge servers, the Unsloth server, and the tool children a long-lived agent runs — is sampled at the 5 s baseline only, so a burst from one of those that spikes and drains inside one baseline interval may not appear in the peak.
 - The tree's baseline sampling cadence is **5s**. All three keys are always present on the wire and are `null` — never `0` — until the first sample lands (~5s after daemon start); `0` is a real measurement meaning an empty tree. Clients must detect them by **presence**, not by protocol version.
+
+#### `system.status` — agent-attributed share of the tree (additive, v10.4)
+
+The `system.status` result additionally reports how much of the descendant tree above belongs to **spawned agents**, from the same sweep:
+
+```jsonc
+{
+  "agentMemoryBytes": 4831838208, // sum of the per-agent subtree buckets, in bytes; null until first sample
+  "agentProcessCount": 3          // spawned agents with a live root pid in the sweep; null until first sample
+  // ...existing status fields (childProcesses, childMemoryBytes, childMemoryPeakBytes, ...)
+}
+```
+
+- `agentMemoryBytes` is the share of `childMemoryBytes` attributable to agents: each descendant's RSS is credited to its nearest registered agent root (the same buckets behind `agent.diagnostics`' `subtreeMemoryBytes`, §5.5, and the per-agent rows of `agent.memoryUsage`, §5.5). Descendants under no registered root — one-shot adapter chains, `host.exec` children, PTY sessions, the Unsloth server — count only in the aggregate, so `agentMemoryBytes ≤ childMemoryBytes` always; the difference is the daemon's non-agent tree cost.
+- `agentProcessCount` is the number of buckets — spawned agents whose root pid was alive in the sweep — **not** a process count (the per-agent process rows live on `agent.memoryUsage`).
+- Both keys follow the child-tree convention: always present on the wire, `null` — never `0` — until the first sample lands, `0` a real measurement (no live agent). Clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — aggregate memory budget fields (additive)
 
