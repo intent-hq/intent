@@ -2,22 +2,22 @@
 
 ## 5. Method Catalog
 
-The API exposes **394 dispatchable method names** across the following categories:
+The API exposes **395 dispatchable method names** across the following categories:
 
-- **Router methods:** 335 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 336 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 57 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 394 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 395 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 394 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 395 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.48) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (335 total)
+### Router methods by namespace (336 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary, transcribe — `getWorkspaceVocabulary` is the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req); `transcribe` is daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 44 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.leave, members.list, members.remove, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (secrets never included) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
+| workspace | 45 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (secrets never included) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
