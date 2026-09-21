@@ -293,10 +293,13 @@ run_bounded() {
 }
 
 # launcher_probe <dir> <launcher> <args...>: runs a package-manager launcher under
-# PROBE_TIMEOUT. On success PROBE_OUTPUT holds its first output line; otherwise
+# PROBE_TIMEOUT. On success PROBE_OUTPUT holds the last semver-shaped output
+# line (falling back to the first line when there is none): a host that injects
+# tracing into Node (Datadog, intent-hq/intent#5509) logs its startup
+# configuration to stdout before the launcher answers `--version`. Otherwise
 # PROBE_ERROR names the launcher path and what went wrong.
 launcher_probe() {
-  local dir=$1 launcher=$2 path status
+  local dir=$1 launcher=$2 path status version
   shift 2
   PROBE_OUTPUT=""
   PROBE_ERROR=""
@@ -305,7 +308,8 @@ launcher_probe() {
   status=$?
   case "$status" in
     0)
-      PROBE_OUTPUT=$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)
+      version=$(printf '%s\n' "$PROBE_OUTPUT" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+' | sed -n '$p')
+      PROBE_OUTPUT=${version:-$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)}
       return 0
       ;;
     124)
