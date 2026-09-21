@@ -2,7 +2,9 @@
 
 ## Protocol Version & Compatibility
 
-**Version:** `10.4`
+**Version:** `10.5`
+
+Version 10.5 is an **additive** minor bump over 10.4: it adds the **`sourceControl.*` provider-generic forge auth surface** (§5.27 "Provider-generic auth — `sourceControl.*`") — five router methods, `sourceControl.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser`, taking `{ provider: "github" | "gitlab", host?, method?: "device" | "pat", token? }` — and the `sourceControl:auth-changed { provider, host, status }` event (§6.5). The existing `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` methods become **aliases** of the generic methods with `provider: "github"` pinned; their params, result shapes and `github:auth-changed` payload are unchanged byte-for-byte (golden-tested). `sourceControl.authStatus` is the `github.authStatus` shape plus the additive `provider`, `host`, `method`, `user?` and `deviceGrantSupported` fields; two stable typed errors (`error.data.code` = `device-grant-unsupported` / `source-control-unauthorized`) key the FE's PAT fallback. New settings keys: `sourceControl.gitlab.host`, `sourceControl.gitlab.oauthClientId`, `sourceControl.gitlab.apiBaseUrl`, and the sensitive `sourceControl.gitlab.token` secret account (§5.12). Older clients keep calling `github.*` unchanged; a client that needs GitLab capability-checks `protocolVersion >= 10.5`.
 
 Version 10.4 is an **additive** minor bump over 10.3 carrying two independent additions ([intent-hq/intentd#2022](https://github.com/intent-hq/intentd/pull/2022) and [intent-hq/intentd#2026](https://github.com/intent-hq/intentd/pull/2026)).
 
@@ -94,8 +96,8 @@ Also within 10.3 (additive; the intentd multiplayer stack — principals and cal
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.4", server: { protocolVersion: "10.4", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.4", ... }`
+- `client.hello` response: `{ protocolVersion: "10.5", server: { protocolVersion: "10.5", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.5", ... }`
 
 ### Compatibility Policy
 
