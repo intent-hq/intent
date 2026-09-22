@@ -132,7 +132,10 @@ line and writes state only after this gate succeeds; older frontend branches fal
 socket and HTTP readiness probes.
 
 `STATUS_JSON=1 make status` consumes these files and health responses into
-`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, `host.coverageTooling`
+`{setup, host, ports, sandboxes, repos, docs}`. `setup` is `{running, markers}`: `running`
+is true while a `<worktree>/.intent/setup-<uuid>.sh` marker exists (the daemon keeps it
+for the duration of the workspace setup script), and the human form then leads with a
+provisional banner. It adds doctor gaps, `host.coverageTooling`
 (`{ready, detail}` from the doctor's `[optional] cargo-llvm-cov` row; `ready` only when
 cargo-llvm-cov and llvm-tools-preview are both present), submodule dirty and
 ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
