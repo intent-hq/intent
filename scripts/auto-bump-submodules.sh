@@ -17,10 +17,12 @@
 # packages/ios is best-effort: if its remote tip cannot be read (private repo,
 # no token access), it is skipped with a warning and never fails the run.
 #
-# When no pin is behind but an auto/submodule-bump PR is still open (main
-# already carries its pins, e.g. a labeled pin PR landed the same SHA), the
-# stale PR is closed with a comment and its branch deleted, so it never sits
-# open and red. A missing gh or a failed close only warns.
+# When every pin was read and none is behind but an auto/submodule-bump PR is
+# still open (main already carries its pins, e.g. a labeled pin PR landed the
+# same SHA), the stale PR is closed with a comment and its branch deleted, so
+# it never sits open and red. A missing gh or a failed close only warns. If
+# any pin read was skipped (unreadable ios tip, missing gitlink), the PR may
+# still carry an unlanded pin for it, so it is left untouched.
 #
 # Usage: auto-bump-submodules.sh [--dry-run]
 #   --dry-run  Report which pins are behind; never writes, pushes, or
@@ -46,13 +48,15 @@ fi
 
 warn() { echo "warning: $*" >&2; }
 
-# Collect drifted submodules (parallel arrays).
+# Collect drifted submodules (parallel arrays) and the paths whose pin could
+# not be compared.
 paths=()
 names=()
 olds=()
 news=()
 repos=()
 urls=()
+skipped=()
 while read -r key path; do
   name=${key#submodule.}
   name=${name%.path}
@@ -62,12 +66,14 @@ while read -r key path; do
 
   if ! old=$(git rev-parse --verify --quiet "HEAD:$path"); then
     warn "$path: no gitlink recorded in HEAD; skipping"
+    skipped+=("$path")
     continue
   fi
 
   if ! tip_line=$(git ls-remote "$url" "refs/heads/$branch") || [ -z "$tip_line" ]; then
     if [ "$path" = "packages/ios" ]; then
       warn "$path: cannot read remote tip (no token access?); skipping"
+      skipped+=("$path")
       continue
     fi
     echo "error: $path: git ls-remote $url refs/heads/$branch failed" >&2
@@ -117,6 +123,10 @@ if [ ${#paths[@]} -eq 0 ]; then
   echo "All submodule pins match their remote tips; nothing to do."
   if [ "$DRY_RUN" = 1 ]; then
     echo "dry-run: skipping the stale $BRANCH PR check (requires gh)."
+    exit 0
+  fi
+  if [ ${#skipped[@]} -gt 0 ]; then
+    echo "Skipped ${skipped[*]}: an open $BRANCH PR may still carry its pin, so it cannot be proven stale; leaving it untouched."
     exit 0
   fi
   close_stale_pr

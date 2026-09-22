@@ -257,6 +257,24 @@ run_script
 [[ "$stdout" != *"Closed stale PR"* ]] || fail "no-drift no-PR reported a close: $stdout"
 [[ "$(<"$temp_dir/gh.log")" == "pr list --head $branch --state open --json number --jq .[0].number // empty" ]] || fail "no-drift no-PR gh calls: $(<"$temp_dir/gh.log")"
 
+# Regression: intentd is current but the packages/ios tip cannot be read, so
+# the open rolling PR may still carry an unlanded ios pin; it is not closed.
+printf '[submodule "ios"]\n\tpath = packages/ios\n\turl = file://%s/missing-ios.git\n' "$temp_dir" >>"$mono/.gitmodules"
+git_fx -C "$mono" add .gitmodules
+git_fx -C "$mono" update-index --add --cacheinfo "160000,$intentd_c0,packages/ios"
+git_fx -C "$mono" commit -qm "add ios submodule"
+reset_stub
+echo 7 >"$stub_dir/pr"
+run_script
+[[ "$status" -eq 0 ]] || fail "skipped ios read exited $status: $stderr"
+[[ "$stderr" == *"warning: packages/ios: cannot read remote tip"* ]] || fail "skipped ios read did not warn: $stderr"
+[[ "$stdout" == *"packages/intentd: up to date at ${intentd_c2:0:7}"*"Skipped packages/ios: "*"leaving it untouched."* ]] || fail "skipped ios read output: $stdout"
+[[ "$stdout" != *"Closed stale PR"* ]] || fail "skipped ios read reported a close: $stdout"
+! grep -q '^pr close' "$temp_dir/gh.log" || fail "skipped ios read closed the PR: $(<"$temp_dir/gh.log")"
+[[ -f "$stub_dir/pr" ]] || fail "skipped ios read closed PR 7 in the stub"
+[[ "$(bump_commit)" == "$bump2" ]] || fail "skipped ios read moved $branch"
+git_fx -C "$mono" reset -q --hard HEAD~1
+
 # Case 4: --dry-run with a stale PR present never calls gh.
 reset_stub
 echo 7 >"$stub_dir/pr"
