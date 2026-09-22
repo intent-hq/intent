@@ -42,12 +42,16 @@ not reset the TTL (a resumed hook keeps its original `expiresAt`; a hook whose d
 passed while the daemon was down is expired at boot, owner woken then too). Workspace
 teardown also ends hooks ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896)):
 `workspace.archive` cancels every ACTIVE hook in the workspace (`hook:cancelled`
-emitted, owner woken with an archive notice; the wake itself parks behind the §5.1
-archived gate, and under the `"all"` flush mode a later user message into the archived
-workspace flushes it FIFO in the same combined auto-unarchiving turn as that message —
+emitted per hook, no per-hook wake; the owner instead gets ONE consolidated
+post-unarchive notice naming every cancelled hook and PR monitor — metadata
+`{ type: "workspace_archive_wake", hookIds, prMonitorIds }`,
+[intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074) — which parks
+behind the §5.1 archived gate and is delivered by the unarchive drain kick, or under
+the `"all"` flush mode FIFO in the same combined auto-unarchiving turn as a later user
+message into the archived workspace —
 [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587); unarchive
-does not resurrect the hooks — §5.1
-archive active-work teardown), and `workspace.delete` eagerly aborts live hook
+does not resurrect the hooks; `ws.hook.get(hookId)` recovers a cancelled hook's script
+for re-arming — §5.1 archive active-work teardown), and `workspace.delete` eagerly aborts live hook
 scheduler tasks before the store cascade drops their rows (no event, no wake — §5.1
 delete cascade). The FE
 **reads, triggers, and cancels**:
@@ -234,7 +238,8 @@ optional caller:
 - **Wire `hook.cancel` (no agent caller, the FE/system path).** Unchanged: it may cancel
   **any** hook in the workspace, and the owning agent **is** woken with a cancellation
   notice so the model learns its watch stopped. The archive sweep (§5.1) rides the same
-  unscoped path.
+  unscoped cancel transition but without the per-hook wake — its owners get the
+  consolidated post-unarchive notice instead.
 
 The wire contract is untouched (`hook.cancel` params/result unchanged); the scoping is
 purely on the agent-facing MCP binding. Cross-agent hook cleanup is therefore a

@@ -904,7 +904,8 @@ the pending-questions derivation, and queue persistence/rehydration are all unto
   signal; a pre-archive parked user entry does not qualify, and with no qualifying entry
   everything stays parked (no regression on the intentd#1293 archive/auto-unarchive
   loop fix). In `"all"` mode the flush then carries EVERY ready entry — parked
-  archive-cancellation wakes included — FIFO in the user-led combined turn, whose claim
+  consolidated `workspace_archive_wake` notice for cancelled hooks / PR monitors
+  included (§5.1 archive active-work teardown) — FIFO in the user-led combined turn, whose claim
   performs the §5.1 auto-unarchive at the turn-start choke point, so an older parked wake
   is never bypassed by a newer user message; the batch and single-entry dequeues require
   user-origin under this exemption. In `"systemOnly"` mode no batching occurs under the
