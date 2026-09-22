@@ -1620,7 +1620,12 @@ attention is never fabricated.
       (`workspace_git_root.pull_requests`, the sweep's per-root discovery — §5.6), a
       **same-rung input** folded in by URL (see the git-root fold below) — yields `pr_queued`
       (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
-      not draft); else `pr_ready` only when the PR is **truly mergeable** — not draft,
+      not draft; caveat: GitHub's REST `mergeable_state` never reports `"queued"` — a
+      queued PR reads `"clean"` — so the pool path yields `pr_queued` only when a host
+      reports that value, and carrying the merge-queue signal onto pooled entries is
+      tracked as [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654);
+      the monitor path below already keys on `isInMergeQueue`); else `pr_ready` only
+      when the PR is **truly mergeable** — not draft,
       `mergeable == true` AND `mergeable_state == "clean"`
       ([intent-hq/intentd#1402](https://github.com/intent-hq/intentd/pull/1402);
       GitHub's `mergeable` flag alone only rules out conflicts, so a `blocked` /
