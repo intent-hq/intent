@@ -8,16 +8,24 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  ADMIN_TOKEN_VARIABLE,
   API_BASE,
   CI_WORKFLOW,
   REPOS,
+  bypassAllowListPath,
   crossCheckWorkflow,
+  diffBypassActors,
   diffRules,
   fetchFromFixture,
   fetchLiveRules,
+  fetchLiveRulesets,
+  formatBypassAllowList,
   formatSnapshot,
+  nextPageUrl,
+  normalizeBypassActors,
   normalizeRules,
   run,
+  rulesetsListUrl,
   snapshotPath,
   workflowJobNames,
 } from './check-rulesets.mjs';
@@ -92,16 +100,42 @@ function fixtureFor(overrides = {}) {
   return Object.fromEntries(REPOS.map((repo) => [repo, overrides[repo] ?? liveRules(repo)]));
 }
 
-// A repository root holding committed snapshots that match `liveRules` and a
-// ci.yml whose gate job is named CI Gate.
-function makeRepo(t, { snapshots = true, workflowText = workflow } = {}) {
+const orgRuleset = { id: 21072618, name: 'Default Branch', target: 'branch', source_type: 'Organization', source: 'intent-hq', enforcement: 'active' };
+const repoRuleset = (repo) => ({ id: 100, name: 'Default', target: 'branch', source_type: 'Repository', source: `intent-hq/${repo}`, enforcement: 'active' });
+const teamActor = { actor_id: 7, actor_type: 'Team', bypass_mode: 'pull_request' };
+const roleActor = { actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' };
+const adminEnv = { [ADMIN_TOKEN_VARIABLE]: 'admin-token' };
+
+// The rulesets endpoints of one repository: the list plus each ruleset's
+// detail keyed by id, as fetchFromFixture serves them.
+function liveRulesets(repo, { orgActors = [], repoActors = [], extra = [] } = {}) {
+  const org = orgRuleset;
+  const own = repoRuleset(repo);
+  return {
+    list: [org, own, ...extra.map(({ detail, ...summary }) => summary)],
+    [org.id]: { ...org, bypass_actors: orgActors },
+    [own.id]: { ...own, bypass_actors: repoActors },
+    ...Object.fromEntries(extra.map(({ detail, ...summary }) => [summary.id, detail ?? { ...summary, bypass_actors: [] }])),
+  };
+}
+
+function fixtureWithRulesets(overrides = {}, rules = {}) {
+  return { ...fixtureFor(rules), rulesets: Object.fromEntries(REPOS.map((repo) => [repo, overrides[repo] ?? liveRulesets(repo)])) };
+}
+
+// A repository root holding committed snapshots that match `liveRules`, empty
+// bypass allow-lists and a ci.yml whose gate job is named CI Gate.
+function makeRepo(t, { snapshots = true, workflowText = workflow, allowLists = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'check-rulesets-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, path.dirname(CI_WORKFLOW)), { recursive: true });
   fs.writeFileSync(path.join(root, CI_WORKFLOW), `${workflowText}\n`);
   if (snapshots) {
     fs.mkdirSync(path.join(root, path.dirname(snapshotPath('intent'))), { recursive: true });
-    for (const repo of REPOS) fs.writeFileSync(path.join(root, snapshotPath(repo)), formatSnapshot(liveRules(repo)));
+    for (const repo of REPOS) {
+      fs.writeFileSync(path.join(root, snapshotPath(repo)), formatSnapshot(liveRules(repo)));
+      fs.writeFileSync(path.join(root, bypassAllowListPath(repo)), allowLists[repo] ?? '{}\n');
+    }
   }
   return root;
 }
@@ -112,12 +146,12 @@ function capture() {
   return { out, err, stdout: { log: (line) => out.push(String(line)) }, stderr: { error: (line) => err.push(String(line)) } };
 }
 
-async function runWith(t, fixture, argv = [], repoOptions = {}) {
+async function runWith(t, fixture, argv = [], repoOptions = {}, env = {}) {
   const cwd = makeRepo(t, repoOptions);
   const io = capture();
   const exitCode = await run(argv, {
     cwd,
-    env: {},
+    env,
     fetchImpl: fetchFromFixture(fixture),
     stdout: io.stdout,
     stderr: io.stderr,
@@ -336,7 +370,7 @@ test('404, 401 and a non-rate-limited 403 are configuration errors (exit 2)', as
     const result = await runWith(t, fixtureFor({ 'cloudlands-fe': failure }));
     assert.equal(result.exitCode, 2, `status ${failure.status}`);
     assert.match(result.stderr, new RegExp(`check-rulesets: intent-hq/cloudlands-fe: HTTP ${failure.status}`));
-    assert.doesNotMatch(result.stdout, /::warning::/);
+    assert.doesNotMatch(result.stdout, /::warning::check-rulesets: could not read/);
   }
   const missing = await runWith(t, {});
   assert.equal(missing.exitCode, 2);
@@ -379,7 +413,7 @@ test('a body cut off after a 200 header is transient, not a malformed response',
     const definite = capture();
     assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: partial.fetchImpl, ...definite }), 2, `interrupted ${status} body must stay a configuration error`);
     assert.match(definite.err.join('\n'), new RegExp(`check-rulesets: intent-hq/intent: HTTP ${status} reading`));
-    assert.doesNotMatch(definite.out.join('\n'), /::warning::/);
+    assert.doesNotMatch(definite.out.join('\n'), /::warning::check-rulesets: could not read/);
   }
 });
 
@@ -396,7 +430,7 @@ test('a complete but non-JSON body is a configuration error (exit 2)', async (t)
   const io = capture();
   assert.equal(await run(['--repo', 'intent'], { cwd, env: {}, fetchImpl: html.fetchImpl, ...io }), 2);
   assert.match(io.err.join('\n'), /check-rulesets: intent-hq\/intent: response is not JSON/);
-  assert.doesNotMatch(io.out.join('\n'), /::warning::/);
+  assert.doesNotMatch(io.out.join('\n'), /::warning::check-rulesets: could not read/);
   const truncatedJson = await runWith(t, fixtureFor({ intent: { status: 200, body: '[{"type":"deletion"' } }));
   assert.equal(truncatedJson.exitCode, 2, 'a fixture body that ends early is a complete document, so still exit 2');
   assert.match(truncatedJson.stderr, /response is not JSON/);
@@ -525,4 +559,354 @@ test('the CLI reads a --fixture file and reports the exit code', (t) => {
   const transient = spawn(fixtureFor({ intent: { status: 500 } }));
   assert.equal(transient.status, 0, transient.stderr);
   assert.match(transient.stdout, /::warning::/);
+});
+
+test('without RULESET_ADMIN_TOKEN the bypass actors are not checked: one warning naming the gap, exit 0', async (t) => {
+  const seen = [];
+  const fixture = fetchFromFixture(fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: [teamActor] }) }));
+  const cwd = makeRepo(t);
+  const io = capture();
+  const exitCode = await run([], {
+    cwd,
+    env: {},
+    fetchImpl: async (url, init) => {
+      seen.push(url);
+      return fixture(url, init);
+    },
+    ...io,
+  });
+  assert.equal(exitCode, 0, io.err.join('\n'));
+  const warnings = io.out.filter((line) => line.startsWith('::warning::'));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /RULESET_ADMIN_TOKEN is not set; the bypass actors of the intent-hq\/intent, intent-hq\/intentd, intent-hq\/cloudlands-fe rulesets are not checked/);
+  assert.equal(io.err.length, 0);
+  assert.ok(seen.every((url) => !/\/rulesets/.test(url)), 'no rulesets endpoint is read without the admin token');
+  const one = await runWith(t, fixtureWithRulesets(), ['--repo', 'intentd']);
+  assert.match(one.stdout, /the bypass actors of the intent-hq\/intentd rulesets are not checked/);
+});
+
+test('on a pull_request or merge_group run the token-absent message is a notice, not a warning', async (t) => {
+  const cwd = makeRepo(t);
+  for (const event of ['pull_request', 'merge_group']) {
+    const io = capture();
+    const exitCode = await run([], { cwd, env: { GITHUB_EVENT_NAME: event }, fetchImpl: fetchFromFixture(fixtureWithRulesets()), ...io });
+    assert.equal(exitCode, 0, io.err.join('\n'));
+    assert.equal(io.out.filter((line) => line.startsWith('::warning::')).length, 0, event);
+    const notices = io.out.filter((line) => line.startsWith('::notice::'));
+    assert.equal(notices.length, 1, event);
+    assert.match(notices[0], /RULESET_ADMIN_TOKEN is not set; the bypass actors of the .* rulesets are not checked/);
+  }
+  const scheduled = capture();
+  await run([], { cwd, env: { GITHUB_EVENT_NAME: 'schedule' }, fetchImpl: fetchFromFixture(fixtureWithRulesets()), ...scheduled });
+  assert.equal(scheduled.out.filter((line) => /^::warning::check-rulesets: RULESET_ADMIN_TOKEN is not set/.test(line)).length, 1);
+});
+
+test('a ruleset detail without bypass_actors warns and is skipped, and --update leaves the allow-list alone', async (t) => {
+  const partial = liveRulesets('intent');
+  delete partial[orgRuleset.id].bypass_actors;
+  const result = await runWith(t, fixtureWithRulesets({ intent: partial }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    /::warning::check-rulesets: intent-hq\/intent: Organization intent-hq ruleset Default Branch \(id 21072618\) did not return bypass_actors \(the token lacks write access to it\); its bypass actors are not checked\./,
+  );
+  assert.match(result.stdout, /intent-hq\/intent: bypass actors of 1 active ruleset\(s\) match \.github\/rulesets\/intent\.bypass\.json\./);
+  assert.equal(result.stderr, '');
+
+  const updated = await runWith(t, fixtureWithRulesets({ intent: partial }), ['--update', '--repo', 'intent'], { allowLists: { intent: '{"stale": []}\n' } }, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.match(updated.stdout, /did not return bypass_actors/);
+  assert.doesNotMatch(updated.stdout, /Wrote \.github\/rulesets\/intent\.bypass\.json/);
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8'), '{"stale": []}\n');
+});
+
+test('empty live bypass actors match the empty allow-list, with the admin token sent only to the rulesets endpoints', async (t) => {
+  const seen = [];
+  const fixture = fetchFromFixture(fixtureWithRulesets());
+  const cwd = makeRepo(t);
+  const io = capture();
+  const exitCode = await run([], {
+    cwd,
+    env: { GITHUB_TOKEN: 'read-token', ...adminEnv },
+    fetchImpl: async (url, init) => {
+      seen.push({ url, authorization: init.headers.Authorization });
+      return fixture(url, init);
+    },
+    ...io,
+  });
+  assert.equal(exitCode, 0, io.err.join('\n'));
+  assert.equal(io.err.length, 0);
+  assert.equal(io.out.filter((line) => line.startsWith('::warning::')).length, 0);
+  for (const repo of REPOS) {
+    assert.match(io.out.join('\n'), new RegExp(`intent-hq/${repo}: bypass actors of 2 active ruleset\\(s\\) match \\.github/rulesets/${repo}\\.bypass\\.json\\.`));
+  }
+  const rulesReads = seen.filter(({ url }) => /\/rules\/branches\//.test(url));
+  const rulesetReads = seen.filter(({ url }) => /\/rulesets/.test(url));
+  assert.equal(rulesReads.length, REPOS.length);
+  assert.ok(rulesReads.every(({ authorization }) => authorization === 'Bearer read-token'));
+  assert.equal(rulesetReads.length, REPOS.length * 3, 'one list plus two details per repository');
+  assert.ok(rulesetReads.every(({ authorization }) => authorization === 'Bearer admin-token'));
+});
+
+test('a disabled ruleset is not read and its bypass actors do not count', async (t) => {
+  const disabled = { id: 300, name: 'Evaluate', target: 'branch', source_type: 'Repository', source: 'intent-hq/intent', enforcement: 'disabled', detail: { bypass_actors: [teamActor] } };
+  const seen = [];
+  const fixture = fetchFromFixture(fixtureWithRulesets({ intent: liveRulesets('intent', { extra: [disabled] }) }));
+  const cwd = makeRepo(t);
+  const io = capture();
+  const exitCode = await run(['--repo', 'intent'], {
+    cwd,
+    env: adminEnv,
+    fetchImpl: async (url, init) => {
+      seen.push(url);
+      return fixture(url, init);
+    },
+    ...io,
+  });
+  assert.equal(exitCode, 0, io.err.join('\n'));
+  assert.ok(seen.every((url) => !url.endsWith('/rulesets/300')));
+  assert.match(io.out.join('\n'), /bypass actors of 2 active ruleset\(s\) match/);
+});
+
+test('a bypass actor that is not allow-listed is drift naming the repository, ruleset and actor', async (t) => {
+  const result = await runWith(t, fixtureWithRulesets({ intentd: liveRulesets('intentd', { repoActors: [teamActor] }) }), [], {}, adminEnv);
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /^intent-hq\/intentd: live ruleset bypass actors differ from \.github\/rulesets\/intentd\.bypass\.json:$/m);
+  assert.match(result.stderr, /^  - Repository intent-hq\/intentd ruleset Default bypass actor Team 7 unexpected$/m);
+  assert.match(result.stderr, /Remove the bypass actors on GitHub, or allow-list them with `make check-rulesets UPDATE=1` \(RULESET_ADMIN_TOKEN set\)/);
+  assert.doesNotMatch(result.stderr, /intent-hq\/intent:/);
+  assert.doesNotMatch(result.stderr, /intent-hq\/cloudlands-fe:/);
+  assert.match(result.stdout, /intent-hq\/intent: bypass actors of 2 active ruleset\(s\) match/);
+
+  const org = await runWith(t, fixtureWithRulesets({ intent: liveRulesets('intent', { orgActors: [roleActor] }) }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(org.exitCode, 1);
+  assert.match(org.stderr, /^  - Organization intent-hq ruleset Default Branch bypass actor RepositoryRole 5 unexpected$/m);
+});
+
+test('allow-listed bypass actors match in any order; a changed mode or a stale entry is drift', async (t) => {
+  const allowLists = { intent: JSON.stringify({ 'Repository intent-hq/intent ruleset Default': [roleActor, teamActor] }, null, 2) };
+  const match = await runWith(t, fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: [teamActor, roleActor] }) }), ['--repo', 'intent'], { allowLists }, adminEnv);
+  assert.equal(match.exitCode, 0, match.stderr);
+  assert.match(match.stdout, /intent-hq\/intent: bypass actors of 2 active ruleset\(s\) match/);
+
+  const changedMode = await runWith(
+    t,
+    fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: [{ ...teamActor, bypass_mode: 'always' }, roleActor] }) }),
+    ['--repo', 'intent'],
+    { allowLists },
+    adminEnv,
+  );
+  assert.equal(changedMode.exitCode, 1);
+  assert.match(changedMode.stderr, /Repository intent-hq\/intent ruleset Default bypass actor Team 7\.bypass_mode expected "pull_request", live "always"/);
+
+  const missing = await runWith(t, fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: [roleActor] }) }), ['--repo', 'intent'], { allowLists }, adminEnv);
+  assert.equal(missing.exitCode, 1);
+  assert.match(missing.stderr, /Repository intent-hq\/intent ruleset Default bypass actor Team 7 missing/);
+
+  const stale = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], { allowLists: { intent: JSON.stringify({ 'Repository intent-hq/intent ruleset Retired': [teamActor] }) } }, adminEnv);
+  assert.equal(stale.exitCode, 1);
+  assert.match(stale.stderr, /Repository intent-hq\/intent ruleset Retired is allow-listed but is not an active ruleset/);
+});
+
+test('--update writes the bypass allow-list that a re-run accepts, and `{}` when no actor is granted', async (t) => {
+  const fixture = fixtureWithRulesets({ intent: liveRulesets('intent', { orgActors: [teamActor], repoActors: [roleActor, teamActor] }) });
+  const updated = await runWith(t, fixture, ['--update'], { snapshots: false }, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.match(updated.stdout, /Wrote \.github\/rulesets\/intent\.bypass\.json from the bypass actors of the live intent-hq\/intent rulesets\./);
+  const written = fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8');
+  assert.deepEqual(JSON.parse(written), {
+    'Organization intent-hq ruleset Default Branch': normalizeBypassActors([teamActor]),
+    'Repository intent-hq/intent ruleset Default': normalizeBypassActors([roleActor, teamActor]),
+  });
+  assert.equal(written, formatBypassAllowList([{ ...orgRuleset, bypass_actors: [teamActor] }, { ...repoRuleset('intent'), bypass_actors: [teamActor, roleActor] }]));
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intentd')), 'utf8'), '{}\n');
+
+  const io = capture();
+  assert.equal(await run([], { cwd: updated.cwd, env: adminEnv, fetchImpl: fetchFromFixture(fixture), ...io }), 0, io.err.join('\n'));
+  assert.equal(io.err.length, 0);
+});
+
+test('bypass-actor reads are classified like rules reads: 401 is a configuration error, 503 a warning', async (t) => {
+  const denied = await runWith(t, fixtureWithRulesets({ intent: { list: { status: 401 } } }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(denied.exitCode, 2);
+  assert.match(denied.stderr, /check-rulesets: intent-hq\/intent rulesets: HTTP 401 reading/);
+
+  const detailDenied = await runWith(t, fixtureWithRulesets({ intent: { ...liveRulesets('intent'), 100: { status: 404 } } }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(detailDenied.exitCode, 2);
+  assert.match(detailDenied.stderr, /check-rulesets: intent-hq\/intent ruleset 100: HTTP 404 reading/);
+
+  const transient = await runWith(
+    t,
+    fixtureWithRulesets({ intent: { list: { status: 503 } }, intentd: liveRulesets('intentd', { repoActors: [teamActor] }) }),
+    [],
+    {},
+    adminEnv,
+  );
+  assert.equal(transient.exitCode, 1, 'a transient failure on one repository does not hide bypass drift on another');
+  assert.match(transient.stdout, /::warning::check-rulesets: could not read the rulesets of intent-hq\/intent rulesets: HTTP 503; skipping the bypass actors of intent\./);
+  assert.match(transient.stderr, /intent-hq\/intentd: live ruleset bypass actors differ/);
+  assert.match(transient.stdout, /intent-hq\/intent: live main branch rules match/, 'the branch rules of that repository are still checked');
+});
+
+test('a missing or malformed bypass allow-list is a configuration error', async (t) => {
+  const missing = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], {}, adminEnv);
+  fs.rmSync(path.join(missing.cwd, bypassAllowListPath('intent')));
+  const io = capture();
+  assert.equal(await run(['--repo', 'intent'], { cwd: missing.cwd, env: adminEnv, fetchImpl: fetchFromFixture(fixtureWithRulesets()), ...io }), 2);
+  assert.match(io.err.join('\n'), /intent\.bypass\.json is missing; commit `\{\}` \(no bypass actors allowed\)/);
+
+  const array = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], { allowLists: { intent: '[]\n' } }, adminEnv);
+  assert.equal(array.exitCode, 2);
+  assert.match(array.stderr, /expected a JSON object mapping rulesets to arrays of bypass actors/);
+
+  const invalid = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], { allowLists: { intent: '{\n' } }, adminEnv);
+  assert.equal(invalid.exitCode, 2);
+  assert.match(invalid.stderr, /intent\.bypass\.json: invalid JSON/);
+});
+
+test('diffBypassActors names actors by type and id and ignores order', () => {
+  assert.deepEqual(diffBypassActors([teamActor, roleActor], [roleActor, teamActor]), []);
+  assert.deepEqual(diffBypassActors([], [teamActor]), ['bypass actor Team 7 unexpected']);
+  assert.deepEqual(diffBypassActors([teamActor], []), ['bypass actor Team 7 missing']);
+  assert.deepEqual(diffBypassActors([teamActor], [{ ...teamActor, bypass_mode: 'always' }]), ['bypass actor Team 7.bypass_mode expected "pull_request", live "always"']);
+  const deployKey = { actor_type: 'DeployKey', bypass_mode: 'always' };
+  assert.deepEqual(diffBypassActors([], [deployKey]), ['bypass actor DeployKey unexpected']);
+  assert.deepEqual(normalizeBypassActors([deployKey]), [{ actor_id: null, actor_type: 'DeployKey', bypass_mode: 'always' }]);
+  assert.throws(() => normalizeBypassActors({}), /bypass_actors must be an array/);
+});
+
+test('fetchLiveRulesets reads the list then each active ruleset in full', async () => {
+  const seen = [];
+  const fixture = fetchFromFixture({ rulesets: { intent: liveRulesets('intent', { extra: [{ id: 9, name: 'Off', enforcement: 'disabled', source_type: 'Repository', source: 'intent-hq/intent' }] }) } });
+  const rulesets = await fetchLiveRulesets('intent', {
+    token: 'tok',
+    fetchImpl: async (url, init) => {
+      seen.push({ url, authorization: init.headers.Authorization });
+      return fixture(url, init);
+    },
+  });
+  assert.deepEqual(
+    seen.map(({ url }) => url),
+    [`${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100`, `${API_BASE}/repos/intent-hq/intent/rulesets/21072618`, `${API_BASE}/repos/intent-hq/intent/rulesets/100`],
+  );
+  assert.ok(seen.every(({ authorization }) => authorization === 'Bearer tok'));
+  assert.deepEqual(rulesets.map((ruleset) => [ruleset.id, ruleset.bypass_actors]), [[21072618, []], [100, []]]);
+  await assert.rejects(fetchLiveRulesets('intent', { fetchImpl: async () => Response.json({}) }), {
+    message: 'intent-hq/intent rulesets: response is not a rulesets array',
+    transient: false,
+  });
+});
+
+// A two-page rulesets list: the first page is canned so it can carry the Link
+// header GitHub uses for pagination; the second page holds one more ruleset.
+const secondPageRuleset = (repo, actors = []) => ({
+  id: 200,
+  name: 'Release tags',
+  target: 'tag',
+  source_type: 'Repository',
+  source: `intent-hq/${repo}`,
+  enforcement: 'active',
+  detail: { id: 200, name: 'Release tags', target: 'tag', source_type: 'Repository', source: `intent-hq/${repo}`, enforcement: 'active', bypass_actors: actors },
+});
+
+function pagedRulesets(repo, { secondPageActors = [], secondPage } = {}) {
+  const single = liveRulesets(repo, { extra: [secondPageRuleset(repo, secondPageActors)] });
+  const { detail, ...later } = secondPageRuleset(repo, secondPageActors);
+  const nextUrl = `${rulesetsListUrl(repo)}&page=2`;
+  return {
+    ...single,
+    list: { status: 200, body: single.list.filter((ruleset) => ruleset.id !== later.id), headers: { link: `<${nextUrl}>; rel="next", <${nextUrl}>; rel="last"` } },
+    'list page 2': secondPage ?? [later],
+  };
+}
+
+test('nextPageUrl reads rel="next" from a Link header and nothing else', () => {
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=5>; rel="last"'), 'https://api.github.com/x?page=2');
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?page=1>; rel="first"'), undefined);
+  assert.equal(nextPageUrl(null), undefined);
+});
+
+test('fetchLiveRulesets follows the Link header to later pages of the list', async () => {
+  const seen = [];
+  const fixture = fetchFromFixture({ rulesets: { intent: pagedRulesets('intent') } });
+  const rulesets = await fetchLiveRulesets('intent', {
+    fetchImpl: async (url, init) => {
+      seen.push(url);
+      return fixture(url, init);
+    },
+  });
+  assert.deepEqual(seen.slice(0, 2), [`${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100`, `${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100&page=2`]);
+  assert.deepEqual(rulesets.map((ruleset) => ruleset.id).sort(), [100, 200, 21072618]);
+
+  const looping = fetchFromFixture({ rulesets: { intent: { list: { status: 200, body: [], headers: { link: `<${rulesetsListUrl('intent')}&page=1>; rel="next"` } } } } });
+  await assert.rejects(fetchLiveRulesets('intent', { fetchImpl: looping }), { message: /more than 10 pages of rulesets/, transient: false });
+});
+
+test('a bypass actor on a later page of the rulesets list is drift, and --update records it', async (t) => {
+  const drifted = await runWith(t, fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor] }) }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(drifted.exitCode, 1);
+  assert.match(drifted.stderr, /Repository intent-hq\/intent ruleset Release tags bypass actor Team 7 unexpected/);
+
+  const updated = await runWith(t, fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor] }) }), ['--update', '--repo', 'intent'], {}, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8')), {
+    'Repository intent-hq/intent ruleset Release tags': [teamActor],
+  });
+});
+
+test('a transient failure on a later page skips the bypass actors, and --update leaves the allow-list alone', async (t) => {
+  const fixture = fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor], secondPage: { status: 503 } }) });
+  const checked = await runWith(t, fixture, ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(checked.exitCode, 0, checked.stderr);
+  assert.match(checked.stdout, /::warning::check-rulesets: could not read the rulesets of intent-hq\/intent rulesets page 2: HTTP 503; skipping the bypass actors of intent\./);
+
+  const before = '{\n  "Repository intent-hq/intent ruleset Release tags": []\n}\n';
+  const updated = await runWith(t, fixture, ['--update', '--repo', 'intent'], { allowLists: { intent: before } }, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8'), before, 'no partial allow-list is written');
+});
+
+test('a malformed bypass actor, in the allow-list or live, is a configuration error that does not stop the other repositories', async (t) => {
+  const nullEntry = await runWith(t, fixtureWithRulesets(), [], { allowLists: { intent: '{\n  "Repository intent-hq/intent ruleset Default": [null]\n}\n' } }, adminEnv);
+  assert.equal(nullEntry.exitCode, 2);
+  assert.match(nullEntry.stderr, /intent\.bypass\.json: Repository intent-hq\/intent ruleset Default: bypass actor null is not an object with string actor_type and bypass_mode/);
+  assert.match(nullEntry.stdout, /intent-hq\/intentd: live main branch rules match/, 'the other repositories are still checked');
+
+  const noMode = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], { allowLists: { intent: '{\n  "Repository intent-hq/intent ruleset Default": [{"actor_id": 7, "actor_type": "Team"}]\n}\n' } }, adminEnv);
+  assert.equal(noMode.exitCode, 2);
+  assert.match(noMode.stderr, /bypass actor \{"actor_id":7,"actor_type":"Team"\} is not an object/);
+
+  const live = fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: ['Team 7'] }), intentd: liveRulesets('intentd', { repoActors: [teamActor] }) });
+  const malformed = await runWith(t, live, [], {}, adminEnv);
+  assert.equal(malformed.exitCode, 2);
+  assert.match(malformed.stderr, /check-rulesets: intent-hq\/intent rulesets: bypass actor "Team 7" is not an object/);
+  assert.match(malformed.stderr, /intent-hq\/intentd: live ruleset bypass actors differ/, 'drift on another repository is still reported');
+
+  const updated = await runWith(t, live, ['--update', '--repo', 'intent'], {}, adminEnv);
+  assert.equal(updated.exitCode, 2);
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8'), '{}\n', 'the allow-list is not rewritten from a malformed response');
+});
+
+test('the CLI checks bypass actors from a --fixture file when RULESET_ADMIN_TOKEN is set', (t) => {
+  const cwd = makeRepo(t);
+  const fixtureFile = path.join(cwd, 'fixture.json');
+  fs.writeFileSync(fixtureFile, JSON.stringify(fixtureWithRulesets({ 'cloudlands-fe': liveRulesets('cloudlands-fe', { repoActors: [teamActor] }) })));
+  let result;
+  try {
+    result = { status: 0, stdout: execFileSync('node', [scriptPath, '--fixture', fixtureFile], { cwd, encoding: 'utf8', env: { ...cleanNodeEnv(), ...adminEnv }, stdio: ['ignore', 'pipe', 'pipe'] }), stderr: '' };
+  } catch (error) {
+    result = { status: error.status, stdout: error.stdout, stderr: error.stderr };
+  }
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Repository intent-hq\/cloudlands-fe ruleset Default bypass actor Team 7 unexpected/);
+  assert.doesNotMatch(result.stdout, /RULESET_ADMIN_TOKEN is not set/);
+});
+
+test('RULESET_ADMIN_TOKEN only meets main: ruleset-drift.yml checks out ref main and ci.yml never passes the token', () => {
+  const workflows = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
+  const drift = fs.readFileSync(path.join(workflows, 'ruleset-drift.yml'), 'utf8');
+  assert.match(drift, /uses: actions\/checkout@\S+\n\s+with:\n(?:\s+\S.*\n)*?\s+ref: main\n/);
+  assert.match(drift, /RULESET_ADMIN_TOKEN: \$\{\{ secrets\.RULESET_ADMIN_TOKEN \}\}/);
+  const ci = fs.readFileSync(path.join(workflows, 'ci.yml'), 'utf8');
+  assert.doesNotMatch(ci, /secrets\.RULESET_ADMIN_TOKEN/);
 });

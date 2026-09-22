@@ -237,8 +237,16 @@ jobs:
   # rules so a silent ruleset edit fails the PR and the merge_group run
   # instead of letting the queue land untested trees (intent-hq/intent#5476,
   # #5455). Public endpoint, so GITHUB_TOKEN only lifts the rate limit;
-  # transient API failures warn and pass. ruleset-drift.yml runs the same
-  # check daily, since a ruleset edit on GitHub triggers no PR.
+  # transient API failures warn and pass. The effective rules omit each
+  # ruleset's bypass_actors, which GitHub returns only to a caller with
+  # administration read; their comparison with .github/rulesets/*.bypass.json
+  # (#5510) is deliberately confined to ruleset-drift.yml, which runs main's
+  # code on a schedule: this job runs scripts/check-rulesets.mjs from the PR
+  # head or the merged tree, so RULESET_ADMIN_TOKEN (administration read on all
+  # three repositories) is never passed to it. Without the token the script
+  # skips the bypass actors with a notice and still checks the rules.
+  # ruleset-drift.yml also covers the rules daily, since a ruleset edit on
+  # GitHub triggers no PR.
   ruleset-check:
     runs-on: ubuntu-latest
     steps:

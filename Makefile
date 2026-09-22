@@ -176,8 +176,10 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 # CI Gate check, thread resolution, merge queue) are snapshotted under
 # .github/rulesets/; a silent edit on GitHub shows up as drift. UPDATE=1
 # accepts the live rules into the snapshots; a token avoids the unauthenticated
-# rate limit.
-check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them)
+# rate limit. With RULESET_ADMIN_TOKEN set (administration read on the three
+# repositories) the rulesets' bypass actors are compared with
+# .github/rulesets/*.bypass.json too; without it they are skipped with a warning.
+check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them; RULESET_ADMIN_TOKEN adds bypass actors)
 	@node scripts/check-rulesets.mjs $(if $(UPDATE),--update)
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
