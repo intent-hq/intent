@@ -27,10 +27,11 @@
 # misses); 5 = same, but the active Release Alpha run on intent-hq/cloudlands-fe
 # looks stalled (a job queued longer than SHIPPED_IN_STALL_MINUTES, default 30;
 # 0 disables the probe) -- stderr names the run, job and queue age; 4 =
-# transient GitHub failure (rate limit, 5xx, network) -- retry later; 2 = usage
-# error; 1 = any other gh/API or manifest failure. gh's own error text is
-# appended to the message on 1 and 4. The stall probe is best-effort: when it
-# fails the script still exits 3 and notes why on stderr.
+# transient GitHub failure (rate limit, 5xx, network, or `release not found`
+# for a tag this run just listed -- a REST rate limit in disguise) -- retry
+# later; 2 = usage error; 1 = any other gh/API or manifest failure. gh's own
+# error text is appended to the message on 1 and 4. The stall probe is
+# best-effort: when it fails the script still exits 3 and notes why on stderr.
 
 set -euo pipefail
 
@@ -96,7 +97,7 @@ fail() {
 gh_err=$(mktemp)
 trap 'rm -f "$gh_err"' EXIT
 
-transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
+transient_pattern='rate limit|secondary rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
 gh_fail() {
@@ -132,11 +133,21 @@ cache_get() {
 
 manifest_versions=""
 manifest_version() {
-  local tag=$1 manifest version
+  local tag=$1 manifest version detail
   if ! version=$(cache_get "$manifest_versions" "$tag"); then
-    manifest=$(gh release download "$tag" --repo "$releases_repo" \
-      --pattern release-manifest.json --output - 2>"$gh_err") ||
+    if ! manifest=$(gh release download "$tag" --repo "$releases_repo" \
+      --pattern release-manifest.json --output - 2>"$gh_err"); then
+      # Every tag reaching here came from this run's `gh release list`, so a
+      # `release not found` is never a real miss: under REST rate limiting gh
+      # prints only that text (no "rate limit" / "HTTP 403").
+      if grep -qi 'release not found' "$gh_err"; then
+        detail=$(<"$gh_err")
+        detail=${detail//$'\n'/ }
+        echo "shipped-in: gh release download release-manifest.json for $tag on $releases_repo failed: $detail -- $tag was just listed by gh release list, treating the miss as transient (retry later)" >&2
+        exit 4
+      fi
       gh_fail "gh release download release-manifest.json for $tag on $releases_repo failed"
+    fi
     version=$(printf '%s\n' "$manifest" |
       python3 -c 'import json, sys; print(json.load(sys.stdin)["intentdVersion"])' 2>/dev/null) ||
       fail "could not read intentdVersion from release-manifest.json for $tag on $releases_repo"

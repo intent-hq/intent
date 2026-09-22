@@ -29,8 +29,9 @@ done
 # from $GH_STUB_DIR/runs.json and its jobs from $GH_STUB_DIR/jobs/<run id>.json.
 # Every invocation is appended to GH_TEST_LOG.
 # GH_STUB_FAIL selects a failure mode (1 = generic, or one of the gh error
-# texts below); GH_STUB_FAIL_ON narrows it to one subcommand ("release list",
-# "api", "release download", "run list"), default every call.
+# texts below, `notfound` being gh's bare "release not found"); GH_STUB_FAIL_ON
+# narrows it to one subcommand ("release list", "api", "release download",
+# "run list"), default every call.
 cat >"$bin_dir/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
@@ -42,7 +43,9 @@ if [[ -n "${GH_STUB_FAIL:-}" && ( -z "$fail_on" || "$fail_on" == "$1" || "$fail_
     ratelimit-rest) echo "HTTP 403: API rate limit exceeded for user ID 526899. (https://api.github.com/repos/intent-hq/cloudlands-releases/releases/tags/v2.3.0)" >&2 ;;
     5xx) echo "gh: Server Error (HTTP 502)" >&2 ;;
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
+    secondary) echo "gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID 1234:ABCD. (HTTP 403)" >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
+    notfound) echo "release not found" >&2 ;;
     *) echo "stub: unknown GH_STUB_FAIL $GH_STUB_FAIL" >&2 ;;
   esac
   exit 1
@@ -166,14 +169,15 @@ GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 
 # Transient GitHub failures exit 4 and surface gh's text so a polling hook can
 # retry instead of evicting itself (intent-hq/intent rate-limit incident).
-for mode in ratelimit ratelimit-rest 5xx network; do
+for mode in ratelimit ratelimit-rest 5xx network secondary; do
   reset_stub
   GH_STUB_FAIL=$mode run_script cloudlands-fe "$sha"
   [[ "$status" -eq 4 ]] || fail "$mode on release list exited $status (expected 4): $stderr"
   [[ -z "$stdout" ]] || fail "$mode on release list printed '$stdout'"
   [[ "$stderr" == "shipped-in: gh release list on intent-hq/cloudlands-releases failed: "* ]] || fail "$mode on release list message: $stderr"
+  [[ "$mode" != network || "$stderr" == *"error connecting to api.github.com check your internet connection"* ]] || fail "multi-line gh stderr was not surfaced on one line: $stderr"
 done
-[[ "$stderr" == *"error connecting to api.github.com check your internet connection"* ]] || fail "multi-line gh stderr was not surfaced on one line: $stderr"
+[[ "$stderr" == *"exceeded a secondary rate limit"* ]] || fail "secondary rate limit hid gh stderr: $stderr"
 
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"
@@ -197,6 +201,39 @@ GH_STUB_FAIL=ratelimit GH_STUB_FAIL_ON="release download" run_script intentd "$s
 [[ "$status" -eq 4 ]] || fail "rate-limited intentd manifest download exited $status (expected 4): $stderr"
 [[ "$stderr" == *"release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: gh: API rate limit exceeded"* ]] || fail "rate-limited intentd manifest message: $stderr"
 ! grep -q '^api ' "$temp_dir/gh.log" || fail "rate-limited intentd manifest download went on to compare"
+
+reset_stub
+GH_STUB_FAIL=5xx GH_STUB_FAIL_ON="release download" run_script intentd "$sha"
+[[ "$status" -eq 4 ]] || fail "5xx intentd manifest download exited $status (expected 4): $stderr"
+[[ -z "$stdout" ]] || fail "5xx intentd manifest download printed '$stdout'"
+[[ "$stderr" == *"release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: gh: Server Error (HTTP 502)" ]] || fail "5xx intentd manifest message: $stderr"
+
+# Every tag handed to `gh release download` came from this run's own
+# `gh release list`, so gh's bare `release not found` there is a REST rate
+# limit in disguise (the v2.173.0 incident: `gh release list` listed the tag
+# while the releases/tags lookup 403'd) and must exit 4, not evict the hook.
+reset_stub
+GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script intentd "$sha"
+[[ "$status" -eq 4 ]] || fail "release-not-found intentd manifest download exited $status (expected 4): $stderr"
+[[ -z "$stdout" ]] || fail "release-not-found intentd manifest download printed '$stdout'"
+[[ "$stderr" == "shipped-in: gh release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: release not found -- v2.3.0 was just listed by gh release list, treating the miss as transient (retry later)" ]] || fail "release-not-found intentd manifest message: $stderr"
+! grep -q '^api ' "$temp_dir/gh.log" || fail "release-not-found intentd manifest download went on to compare"
+
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-fe "$sha"
+[[ "$status" -eq 4 ]] || fail "release-not-found fe manifest download exited $status (expected 4): $stderr"
+[[ -z "$stdout" ]] || fail "release-not-found fe manifest download printed '$stdout'"
+[[ "$stderr" == *"for v2.3.0 on intent-hq/cloudlands-releases failed: release not found -- v2.3.0 was just listed"*"(retry later)" ]] || fail "release-not-found fe manifest message: $stderr"
+
+# Only an enumerated tag gets that treatment: `release not found` from the
+# listing itself is still a hard failure.
+reset_stub
+GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release list" run_script cloudlands-fe "$sha"
+[[ "$status" -eq 1 ]] || fail "release-not-found on release list exited $status (expected 1, not transient): $stderr"
+[[ "$stderr" == "shipped-in: gh release list on intent-hq/cloudlands-releases failed: release not found" ]] || fail "release-not-found on release list message: $stderr"
 
 reset_stub
 GH_STUB_FAIL=forbidden run_script cloudlands-fe "$sha"
