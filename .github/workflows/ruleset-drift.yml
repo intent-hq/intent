@@ -3,9 +3,14 @@
 # and merge_group run, but a ruleset edit on GitHub opens no PR, so this
 # schedule is what notices drift between PRs (GitHub's default failed-workflow
 # email is the alert). The check itself lives in scripts/check-rulesets.mjs;
-# the expected rules are .github/rulesets/*.main.json. The schedule stays out
-# of ci.yml on purpose: its CI Gate fails on any event other than
-# pull_request / merge_group.
+# the expected rules are .github/rulesets/*.main.json and the allowed bypass
+# actors .github/rulesets/*.bypass.json. The schedule stays out of ci.yml on
+# purpose: its CI Gate fails on any event other than pull_request / merge_group.
+#
+# RULESET_ADMIN_TOKEN is a fine-grained PAT with administration read on
+# intent, intentd and cloudlands-fe: GitHub returns a ruleset's bypass_actors
+# only to such a caller. It is fail-soft — when the secret is absent the
+# bypass actors are skipped with a warning and the rules are still checked.
 name: Ruleset drift
 
 on:
@@ -31,3 +36,4 @@ jobs:
       - run: node scripts/check-rulesets.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RULESET_ADMIN_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}

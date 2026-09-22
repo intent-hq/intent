@@ -235,9 +235,14 @@ with no rollback.
   when the queue's gate passes — no update-branch/re-check treadmill. The expected
   `main` rules of all three repos (required `CI Gate` check, thread resolution,
   merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
+  and their allowed bypass actors (none by default) in `.github/rulesets/*.bypass.json`,
   compared with the live rules by the `ruleset-check` CI job and daily by
   `ruleset-drift.yml`; after an intended ruleset change, run
-  `make check-rulesets UPDATE=1` and commit the result in the same PR. A PR whose
+  `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
+  half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
+  read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to
+  such a caller) and is fail-soft: without it the bypass actors are skipped with a
+  warning, so set it locally too when running `UPDATE=1` for a bypass change. A PR whose
   gate is red cannot enter the queue, and the queue reruns CI on the actual merged
   tree (`merge_group` runs of the same check) before landing. A monorepo PR also
   cannot enter the queue while any review thread is unresolved: auto-merge arms but
