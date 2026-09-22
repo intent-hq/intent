@@ -21,9 +21,11 @@ import {
   fetchLiveRulesets,
   formatBypassAllowList,
   formatSnapshot,
+  nextPageUrl,
   normalizeBypassActors,
   normalizeRules,
   run,
+  rulesetsListUrl,
   snapshotPath,
   workflowJobNames,
 } from './check-rulesets.mjs';
@@ -769,7 +771,7 @@ test('fetchLiveRulesets reads the list then each active ruleset in full', async 
   });
   assert.deepEqual(
     seen.map(({ url }) => url),
-    [`${API_BASE}/repos/intent-hq/intent/rulesets`, `${API_BASE}/repos/intent-hq/intent/rulesets/21072618`, `${API_BASE}/repos/intent-hq/intent/rulesets/100`],
+    [`${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100`, `${API_BASE}/repos/intent-hq/intent/rulesets/21072618`, `${API_BASE}/repos/intent-hq/intent/rulesets/100`],
   );
   assert.ok(seen.every(({ authorization }) => authorization === 'Bearer tok'));
   assert.deepEqual(rulesets.map((ruleset) => [ruleset.id, ruleset.bypass_actors]), [[21072618, []], [100, []]]);
@@ -777,6 +779,96 @@ test('fetchLiveRulesets reads the list then each active ruleset in full', async 
     message: 'intent-hq/intent rulesets: response is not a rulesets array',
     transient: false,
   });
+});
+
+// A two-page rulesets list: the first page is canned so it can carry the Link
+// header GitHub uses for pagination; the second page holds one more ruleset.
+const secondPageRuleset = (repo, actors = []) => ({
+  id: 200,
+  name: 'Release tags',
+  target: 'tag',
+  source_type: 'Repository',
+  source: `intent-hq/${repo}`,
+  enforcement: 'active',
+  detail: { id: 200, name: 'Release tags', target: 'tag', source_type: 'Repository', source: `intent-hq/${repo}`, enforcement: 'active', bypass_actors: actors },
+});
+
+function pagedRulesets(repo, { secondPageActors = [], secondPage } = {}) {
+  const single = liveRulesets(repo, { extra: [secondPageRuleset(repo, secondPageActors)] });
+  const { detail, ...later } = secondPageRuleset(repo, secondPageActors);
+  const nextUrl = `${rulesetsListUrl(repo)}&page=2`;
+  return {
+    ...single,
+    list: { status: 200, body: single.list.filter((ruleset) => ruleset.id !== later.id), headers: { link: `<${nextUrl}>; rel="next", <${nextUrl}>; rel="last"` } },
+    'list page 2': secondPage ?? [later],
+  };
+}
+
+test('nextPageUrl reads rel="next" from a Link header and nothing else', () => {
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=5>; rel="last"'), 'https://api.github.com/x?page=2');
+  assert.equal(nextPageUrl('<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?page=1>; rel="first"'), undefined);
+  assert.equal(nextPageUrl(null), undefined);
+});
+
+test('fetchLiveRulesets follows the Link header to later pages of the list', async () => {
+  const seen = [];
+  const fixture = fetchFromFixture({ rulesets: { intent: pagedRulesets('intent') } });
+  const rulesets = await fetchLiveRulesets('intent', {
+    fetchImpl: async (url, init) => {
+      seen.push(url);
+      return fixture(url, init);
+    },
+  });
+  assert.deepEqual(seen.slice(0, 2), [`${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100`, `${API_BASE}/repos/intent-hq/intent/rulesets?per_page=100&page=2`]);
+  assert.deepEqual(rulesets.map((ruleset) => ruleset.id).sort(), [100, 200, 21072618]);
+
+  const looping = fetchFromFixture({ rulesets: { intent: { list: { status: 200, body: [], headers: { link: `<${rulesetsListUrl('intent')}&page=1>; rel="next"` } } } } });
+  await assert.rejects(fetchLiveRulesets('intent', { fetchImpl: looping }), { message: /more than 10 pages of rulesets/, transient: false });
+});
+
+test('a bypass actor on a later page of the rulesets list is drift, and --update records it', async (t) => {
+  const drifted = await runWith(t, fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor] }) }), ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(drifted.exitCode, 1);
+  assert.match(drifted.stderr, /Repository intent-hq\/intent ruleset Release tags bypass actor Team 7 unexpected/);
+
+  const updated = await runWith(t, fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor] }) }), ['--update', '--repo', 'intent'], {}, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8')), {
+    'Repository intent-hq/intent ruleset Release tags': [teamActor],
+  });
+});
+
+test('a transient failure on a later page skips the bypass actors, and --update leaves the allow-list alone', async (t) => {
+  const fixture = fixtureWithRulesets({ intent: pagedRulesets('intent', { secondPageActors: [teamActor], secondPage: { status: 503 } }) });
+  const checked = await runWith(t, fixture, ['--repo', 'intent'], {}, adminEnv);
+  assert.equal(checked.exitCode, 0, checked.stderr);
+  assert.match(checked.stdout, /::warning::check-rulesets: could not read the rulesets of intent-hq\/intent rulesets page 2: HTTP 503; skipping the bypass actors of intent\./);
+
+  const before = '{\n  "Repository intent-hq/intent ruleset Release tags": []\n}\n';
+  const updated = await runWith(t, fixture, ['--update', '--repo', 'intent'], { allowLists: { intent: before } }, adminEnv);
+  assert.equal(updated.exitCode, 0, updated.stderr);
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8'), before, 'no partial allow-list is written');
+});
+
+test('a malformed bypass actor, in the allow-list or live, is a configuration error that does not stop the other repositories', async (t) => {
+  const nullEntry = await runWith(t, fixtureWithRulesets(), [], { allowLists: { intent: '{\n  "Repository intent-hq/intent ruleset Default": [null]\n}\n' } }, adminEnv);
+  assert.equal(nullEntry.exitCode, 2);
+  assert.match(nullEntry.stderr, /intent\.bypass\.json: Repository intent-hq\/intent ruleset Default: bypass actor null is not an object with string actor_type and bypass_mode/);
+  assert.match(nullEntry.stdout, /intent-hq\/intentd: live main branch rules match/, 'the other repositories are still checked');
+
+  const noMode = await runWith(t, fixtureWithRulesets(), ['--repo', 'intent'], { allowLists: { intent: '{\n  "Repository intent-hq/intent ruleset Default": [{"actor_id": 7, "actor_type": "Team"}]\n}\n' } }, adminEnv);
+  assert.equal(noMode.exitCode, 2);
+  assert.match(noMode.stderr, /bypass actor \{"actor_id":7,"actor_type":"Team"\} is not an object/);
+
+  const live = fixtureWithRulesets({ intent: liveRulesets('intent', { repoActors: ['Team 7'] }), intentd: liveRulesets('intentd', { repoActors: [teamActor] }) });
+  const malformed = await runWith(t, live, [], {}, adminEnv);
+  assert.equal(malformed.exitCode, 2);
+  assert.match(malformed.stderr, /check-rulesets: intent-hq\/intent rulesets: bypass actor "Team 7" is not an object/);
+  assert.match(malformed.stderr, /intent-hq\/intentd: live ruleset bypass actors differ/, 'drift on another repository is still reported');
+
+  const updated = await runWith(t, live, ['--update', '--repo', 'intent'], {}, adminEnv);
+  assert.equal(updated.exitCode, 2);
+  assert.equal(fs.readFileSync(path.join(updated.cwd, bypassAllowListPath('intent')), 'utf8'), '{}\n', 'the allow-list is not rewritten from a malformed response');
 });
 
 test('the CLI checks bypass actors from a --fixture file when RULESET_ADMIN_TOKEN is set', (t) => {

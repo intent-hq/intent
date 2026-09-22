@@ -51,8 +51,25 @@ export function rulesetsUrl(repo, apiBase = API_BASE) {
   return `${apiBase}/repos/${OWNER}/${repo}/rulesets`;
 }
 
+// The list is paginated (30 per page by default); the first page asks for the
+// maximum and the Link header's rel="next" is followed from there.
+export const RULESETS_PER_PAGE = 100;
+export const MAX_RULESETS_PAGES = 10;
+
+export function rulesetsListUrl(repo, apiBase = API_BASE) {
+  return `${rulesetsUrl(repo, apiBase)}?per_page=${RULESETS_PER_PAGE}`;
+}
+
 export function rulesetUrl(repo, rulesetId, apiBase = API_BASE) {
   return `${rulesetsUrl(repo, apiBase)}/${rulesetId}`;
+}
+
+export function nextPageUrl(linkHeader) {
+  for (const part of String(linkHeader ?? '').split(',')) {
+    const match = /<([^>]+)>\s*;\s*rel="next"/.exec(part.trim());
+    if (match) return match[1];
+  }
+  return undefined;
 }
 
 export function snapshotPath(repo) {
@@ -377,7 +394,12 @@ function rateLimited(response, bodyText) {
 // whose `transient` flag decides between a warning and a configuration error.
 // `subject` prefixes every message (`intent-hq/intent`, `intent-hq/intent
 // ruleset 42`).
-export async function fetchJson(url, subject, { fetchImpl = globalThis.fetch, token } = {}) {
+export async function fetchJson(url, subject, options = {}) {
+  return (await fetchJsonPage(url, subject, options)).body;
+}
+
+// The same read keeping the Link header's next page, for paginated lists.
+export async function fetchJsonPage(url, subject, { fetchImpl = globalThis.fetch, token } = {}) {
   const headers = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
@@ -411,11 +433,13 @@ export async function fetchJson(url, subject, { fetchImpl = globalThis.fetch, to
     throw new RulesFetchError(`${subject}: HTTP ${response.status}`, { transient: true });
   }
   if (!response.ok) throw notOk;
+  let body;
   try {
-    return JSON.parse(text);
+    body = JSON.parse(text);
   } catch {
     throw new RulesFetchError(`${subject}: response is not JSON`, { transient: false });
   }
+  return { body, next: nextPageUrl(response.headers.get('link')) };
 }
 
 export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token, apiBase = API_BASE } = {}) {
@@ -427,13 +451,25 @@ export async function fetchLiveRules(repo, { fetchImpl = globalThis.fetch, token
 }
 
 // The rulesets that apply to the repository (its own and the organization's,
-// as the endpoint includes parents by default), then each active one in full
-// — the list omits `bypass_actors`. A ruleset whose detail lacks the field is
-// returned as is; the caller reports the gap.
+// as the endpoint includes parents by default), every page of the list, then
+// each active one in full — the list omits `bypass_actors`. A ruleset whose
+// detail lacks the field is returned as is; the caller reports the gap. Any
+// page failing fails the whole read, so a later page's actors are never
+// silently dropped.
 export async function fetchLiveRulesets(repo, { fetchImpl = globalThis.fetch, token, apiBase = API_BASE } = {}) {
-  const list = await fetchJson(rulesetsUrl(repo, apiBase), `${OWNER}/${repo} rulesets`, { fetchImpl, token });
-  if (!Array.isArray(list)) {
-    throw new RulesFetchError(`${OWNER}/${repo} rulesets: response is not a rulesets array`, { transient: false });
+  const listSubject = `${OWNER}/${repo} rulesets`;
+  const list = [];
+  let url = rulesetsListUrl(repo, apiBase);
+  for (let page = 1; url !== undefined; page += 1) {
+    if (page > MAX_RULESETS_PAGES) {
+      throw new RulesFetchError(`${listSubject}: more than ${MAX_RULESETS_PAGES} pages of rulesets`, { transient: false });
+    }
+    const { body, next } = await fetchJsonPage(url, page === 1 ? listSubject : `${listSubject} page ${page}`, { fetchImpl, token });
+    if (!Array.isArray(body)) {
+      throw new RulesFetchError(`${listSubject}: response is not a rulesets array`, { transient: false });
+    }
+    list.push(...body);
+    url = next;
   }
   const rulesets = [];
   for (const summary of activeRulesets(list)) {
@@ -449,8 +485,10 @@ export async function fetchLiveRulesets(repo, { fetchImpl = globalThis.fetch, to
 // whose values are either a rules array (HTTP 200) or a canned response
 // `{ status, headers?, body? }`; `{ error: "..." }` simulates a network error.
 // An optional `rulesets` object keyed by repository serves the rulesets
-// endpoints the same way: `list` for GET .../rulesets and a ruleset id for
-// GET .../rulesets/{id}, each a document (HTTP 200) or a canned response.
+// endpoints the same way: `list` for GET .../rulesets (`list page 2` for a
+// later page, reached through a canned first page's `link` header) and a
+// ruleset id for GET .../rulesets/{id}, each a document (HTTP 200) or a canned
+// response.
 function isCanned(entry) {
   return isPlainObject(entry) && ('status' in entry || 'error' in entry);
 }
@@ -458,10 +496,14 @@ function isCanned(entry) {
 export function fetchFromFixture(fixture) {
   return async (url) => {
     const rules = /\/repos\/[^/]+\/([^/]+)\/rules\//.exec(url);
-    const rulesets = /\/repos\/[^/]+\/([^/]+)\/rulesets(?:\/([^/?]+))?$/.exec(url);
+    const rulesets = /\/repos\/[^/]+\/([^/]+)\/rulesets(?:\/([^/?]+))?(?:\?(.*))?$/.exec(url);
     let entry;
     if (rules) entry = fixture[rules[1]];
-    else if (rulesets) entry = fixture.rulesets?.[rulesets[1]]?.[rulesets[2] ?? 'list'];
+    else if (rulesets) {
+      const page = Number(new URLSearchParams(rulesets[3] ?? '').get('page') ?? '1');
+      const key = rulesets[2] ?? (page > 1 ? `list page ${page}` : 'list');
+      entry = fixture.rulesets?.[rulesets[1]]?.[key];
+    }
     if (entry === undefined) return new Response('{"message":"Not Found"}', { status: 404 });
     if (!isCanned(entry)) return Response.json(entry);
     if (entry.error) throw new Error(entry.error);
@@ -523,6 +565,15 @@ async function readBypassAllowList(filePath) {
   }
   if (!isPlainObject(allowList) || !Object.values(allowList).every(Array.isArray)) {
     throw new Error(`${filePath}: expected a JSON object mapping rulesets to arrays of bypass actors`);
+  }
+  for (const [key, actors] of Object.entries(allowList)) {
+    for (const actor of actors) {
+      if (!isPlainObject(actor) || typeof actor.actor_type !== 'string' || typeof actor.bypass_mode !== 'string') {
+        throw new Error(
+          `${filePath}: ${key}: bypass actor ${stableJson(actor)} is not an object with string actor_type and bypass_mode`,
+        );
+      }
+    }
   }
   return allowList;
 }
@@ -680,11 +731,26 @@ async function checkBypassActors(repo, { cwd, adminToken, fetchImpl, update, std
     }
   };
 
+  // A live actor that is not an object is a malformed response, reported as a
+  // configuration error for this repository only.
+  const malformed = (error) => {
+    if (!(error instanceof TypeError)) throw error;
+    stderr.error(`check-rulesets: ${OWNER}/${repo} rulesets: ${error.message}`);
+    fail(2);
+    return false;
+  };
+
   if (update) {
     warnSkipped(rulesets.filter((ruleset) => ruleset.bypass_actors === undefined));
     if (withActors.length < rulesets.length) return false;
+    let text;
+    try {
+      text = formatBypassAllowList(rulesets);
+    } catch (error) {
+      return malformed(error);
+    }
     await fs.mkdir(path.dirname(allowListAbsolute), { recursive: true });
-    await fs.writeFile(allowListAbsolute, formatBypassAllowList(rulesets));
+    await fs.writeFile(allowListAbsolute, text);
     stdout.log(`Wrote ${allowListFile} from the bypass actors of the live ${OWNER}/${repo} rulesets.`);
     return false;
   }
@@ -697,7 +763,13 @@ async function checkBypassActors(repo, { cwd, adminToken, fetchImpl, update, std
     fail(2);
     return false;
   }
-  const { differences, skipped } = diffBypassAllowList(allowList, rulesets);
+  let differences;
+  let skipped;
+  try {
+    ({ differences, skipped } = diffBypassAllowList(allowList, rulesets));
+  } catch (error) {
+    return malformed(error);
+  }
   warnSkipped(skipped);
   if (differences.length === 0) {
     if (withActors.length > 0) {
