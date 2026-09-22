@@ -93,9 +93,11 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > v10.2 — [intentd#1945](https://github.com/intent-hq/intentd/pull/1945),
 > [intentd#1954](https://github.com/intent-hq/intentd/pull/1954))* is the RFC 3339
 > deadline of the daemon's global forge rate-limit pause (§5.42), present **only** while
-> that pause is closed and omitted (never `null`) otherwise: the snapshot itself is
-> fresh — this one-shot read is not gated — but no PR monitor's checklist is refreshed
-> while the pause is closed (until that deadline, or the early lift). The gate is sampled **after** the snapshot's awaited forge reads,
+> that pause is closed and omitted (never `null`) otherwise: this one-shot read is not
+> gated — it is served from the shared cache when the entry is younger than
+> `prCache.maxAgeSeconds` (so the answer is at most that old, and a pause cannot make it
+> older) and refreshed from the forge otherwise — but no PR monitor's checklist is refreshed
+> while the pause is closed (until that deadline, or the early lift). The gate is sampled **after** any forge reads the snapshot awaited,
 > so the value describes the pause as of the read's completion: a pause opened while the
 > reads were in flight is present, one lifted meanwhile is not. `mergeBlockedReason` is a human-readable
 > reason and is non-`null` exactly when the PR is open (draft included) and cannot be

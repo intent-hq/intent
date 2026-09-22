@@ -1298,6 +1298,27 @@ persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) s
 alongside `activePullRequest` and carries the reconciliation candidates the FE matches
 `activePullRequest` against.
 
+**`PullRequestInfo.isInMergeQueue?: boolean`** (additive, presence-detected — within 10.6;
+[intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)): the PR sits in the
+host's merge queue (GitHub GraphQL `isInMergeQueue`). The key is present as `true` exactly
+when a **signal-bearing** read — the on-demand fold (§5.27), which rides every read served
+through the shared PR cache by `github.pulls.get` or `ws.pr.snapshot`, cache hit or miss (a
+hit projects only this field, onto a same-head copy, §5.27), not only a read that reached the
+forge — reported the PR queued, and **omitted** (never `null` / `false`)
+otherwise; a reported `false` and an unreported state both land as absent, matching the
+presence-only `MergeRequirements.isInMergeQueue` (§5.42). The field exists because a
+merge-queued PR reads `mergeableState: "clean"` on GitHub's REST API (REST never reports
+`"queued"`), so the REST-only refresh paths — the branch sweep, the git-root sweep,
+`pr.refresh`, the stale-pool heal — cannot observe the queue. **Preservation rule:** such a
+REST-only refresh inherits a persisted `isInMergeQueue: true` onto its snapshot while the PR
+stays **open, non-draft and on the same known `headSha`**; it lapses when the PR leaves open
+(merged / closed / draft), when `headSha` changes (a new push after a queue ejection) or is
+unknown on either side, and whenever a signal-bearing read lands (the fold writes what it
+observed — a fold that sees the PR no longer queued clears the key). The persisted
+`activePullRequest` and the same-numbered `pullRequests` entry always carry one coherent copy,
+and the field stays on list rows (like `mergeable` / `mergeableState`) since the step-4
+`pr_queued` derivation below keys on it. Rows persisted before the field existed read absent.
+
 **Merged `pullRequests` on the list emit paths (new in intentd;
 [intent-hq/intentd#1330](https://github.com/intent-hq/intentd/pull/1330)).** On
 `workspace.list` and the lite `workspace.subscribe` seq-0 snapshot (§6.9) — the two list
@@ -1320,15 +1341,17 @@ PR is fresher). The **lifecycle** of a duplicate follows its source:
   entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
   is selected — the maximum of the **same-url tie key** (lifecycle rank: `Open`/`Draft` <
   `Closed` < `Merged`; `updatedAt`; readiness rank, with *draft* meaning `status: draft` or
-  `isDraft: true`: non-draft `mergeableState: queued` 5 > non-draft `mergeable: true` and
+  `isDraft: true`: non-draft merge-queued (`isInMergeQueue: true`, or a host-reported
+  `mergeableState: queued`) 5 > non-draft `mergeable: true` and
   `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
-  `mergeable: false` 1, mirroring step 4; non-draft over draft; `mergeableState`; `mergeable`;
+  `mergeable: false` 1, mirroring step 4; non-draft over draft; `isInMergeQueue`;
+  `mergeableState`; `mergeable`;
   `isDraft`; `status` — the trailing raw fields ordered unknown < set, `false` < `true`,
   strings lexicographic, and `open` over `draft`, the only equal-rank statuses), compared
   lexicographically in that order, which is total over every lifecycle field; `Merged` is
   irreversible — and its `status`, `updatedAt`,
-  `isDraft`, `mergeable`
-  and `mergeableState` are written together, as one coherent snapshot, onto **both** the
+  `isDraft`, `mergeable`, `mergeableState`
+  and `isInMergeQueue` are written together, as one coherent snapshot, onto **both** the
   emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
   URL. The served PR fields therefore never disagree with `displayStatus` on a PR's
   lifecycle: a merged root copy lifts a stale `open` linked copy beside `pr_merged` (never
@@ -1690,12 +1713,12 @@ attention is never fabricated.
       the PRs persisted on the workspace's registered secondary git roots
       (`workspace_git_root.pull_requests`, the sweep's per-root discovery — §5.6), a
       **same-rung input** folded in by URL (see the git-root fold below) — yields `pr_queued`
-      (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
-      not draft; caveat: GitHub's REST `mergeable_state` never reports `"queued"` — a
-      queued PR reads `"clean"` — so the pool path yields `pr_queued` only when a host
-      reports that value, and carrying the merge-queue signal onto pooled entries is
-      tracked as [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654);
-      the monitor path below already keys on `isInMergeQueue`); else `pr_ready` only
+      when the PR sits in the forge's merge queue and is not draft: the entry's
+      `isInMergeQueue` is `true` (the signal the `github.pulls.get` fold persists on the
+      pooled copies, with the preservation rule of "PR-field ownership" above —
+      [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654); GitHub's
+      REST `mergeable_state` never reports `"queued"`, a queued PR reads `"clean"` there),
+      or a host that does report `mergeable_state == "queued"`; else `pr_ready` only
       when the PR is **truly mergeable** — not draft,
       `mergeable == true` AND `mergeable_state == "clean"`
       ([intent-hq/intentd#1402](https://github.com/intent-hq/intentd/pull/1402);
@@ -1752,18 +1775,19 @@ lexicographically in this order:
 1. lifecycle rank — `Open`/`Draft` < `Closed` < `Merged`;
 2. `updatedAt` — the latest among equal ranks;
 3. readiness rank, the step-4 precedence, where *draft* means `status: draft` or
-   `isDraft: true` — non-draft `mergeableState: queued` 5 > non-draft `mergeable: true` and
+   `isDraft: true` — non-draft merge-queued (`isInMergeQueue: true`, or a host-reported
+   `mergeableState: queued`) 5 > non-draft `mergeable: true` and
    `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
    `mergeable: false` 1;
 4. non-draft over draft;
-5. `mergeableState`, 6. `mergeable`, 7. `isDraft`, 8. `status` — raw field values compared
-   as unknown < set, `false` < `true`, strings lexicographic, and `open` over `draft` (the
-   only statuses sharing a lifecycle rank), so the order is total over every lifecycle field
-   and equal keys are identical snapshots.
+5. `isInMergeQueue`, 6. `mergeableState`, 7. `mergeable`, 8. `isDraft`, 9. `status` — raw
+   field values compared as unknown < set, `false` < `true`, strings lexicographic, and
+   `open` over `draft` (the only statuses sharing a lifecycle rank), so the order is total
+   over every lifecycle field and equal keys are identical snapshots.
 
 Two same-instant reads of one open PR therefore converge on the readier copy rather than the
-first root visited; `isDraft`, `mergeable` and `mergeableState` move with `status`, so the
-selected copy is one coherent snapshot. Consequently a stale open
+first root visited; `isDraft`, `mergeable`, `mergeableState` and `isInMergeQueue` move with
+`status`, so the selected copy is one coherent snapshot. Consequently a stale open
 duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
 stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
 on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL (`prUrl`) was
@@ -1781,7 +1805,8 @@ on **every** surface that derives `displayStatus`: `workspace.list` and the lite
 fields carry the same canonical lifecycle**: on each of those read surfaces the emitted
 `activePullRequest` and the workspace-owned `pullRequests` entries are canonicalized in
 place with the very same same-url rule (the copy maximizing the same-url tie key above — one
-coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` snapshot,
+coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` /
+`isInMergeQueue` snapshot,
 identity fields untouched, nothing persisted), so no response pairs
 `activePullRequest: open` with `displayStatus: pr_merged`, or a `draft` pooled copy with
 `pr_ready`; the list emit merge above applies the identical rule when it appends the
@@ -1842,9 +1867,11 @@ done) without waiting for the next `workspace.list`; registering a root that alr
 carries PR data and unregistering a PR-bearing root (`ws.git.registerRoot` /
 `ws.git.unregisterRoot`, and the sweep's auto-prune of a missing path) recompute the
 same way, so removing the root lapses its rung back to the base rollup. An unchanged
-sweep emits nothing. The **`github.pulls.get` fold** (§5.27,
+sweep emits nothing. The **on-demand fold** (§5.27,
 [intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923)) is a recompute
-site too: a successful on-demand fetch is upserted into every non-archived, non-remote
+site too: a PR snapshot served to `github.pulls.get` or `ws.pr.snapshot` — a fetch; a cache
+hit only projects `isInMergeQueue` onto same-head copies whose signal differs (§5.27) — is upserted into
+every non-archived, non-remote
 workspace — and every secondary git root of such a workspace — referencing the PR by URL
 (a root only updates an existing pool entry and its linked `prStatus` / `prUrl`, §5.27),
 and each persisted delta (the write that emits `pr:updated` / `gitRoot:updated`)
