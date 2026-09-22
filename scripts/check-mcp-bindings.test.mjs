@@ -1,17 +1,25 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
+import { CheckError } from './check-makefile-targets.mjs';
 import {
   INDEX_PATH,
+  INTENTD_DIR,
   PROTOCOL_DIR,
   RENAMED_BINDINGS,
+  TOOLS_RS_IN_INTENTD,
   TOOLS_RS_PATH,
   collectDocMentions,
+  describeCheckout,
   extractHelpText,
+  formatBanner,
   formatError,
+  formatOffPinWarning,
   identifiersIn,
   maskLiterals,
   mergeBindings,
@@ -20,6 +28,9 @@ import {
   runChecks,
   splitArgs,
 } from './check-mcp-bindings.mjs';
+import { cleanNodeEnv } from './test-env.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./check-mcp-bindings.mjs', import.meta.url));
 
 const BASE_HELP = `Execute JavaScript against the workspace API.
 
@@ -358,4 +369,195 @@ test('a tools.rs without the constants fails naming each missing constant', asyn
     `${TOOLS_RS_PATH}:1: error: could not extract the WORKSPACE_API_DESCRIPTION constant`,
     `${TOOLS_RS_PATH}:1: error: could not extract the WORKSPACE_API_DESCRIPTION_CHIEF constant`,
   ]);
+});
+
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+};
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+// A passing fixture whose packages/intentd is a nested git repo with RUST committed, recorded as the
+// monorepo gitlink. `advance()` commits an extra binding in intentd so the checkout moves off the pin.
+async function makeGitRoot(t) {
+  const root = await makeRoot({ docs: { 'methods/agents.md': VALID_DOC }, index: renderIndex(allBindings()) });
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const intentd = path.join(root, INTENTD_DIR);
+  git(intentd, 'init', '-q', '-b', 'main');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'pin');
+  const pin = git(intentd, 'rev-parse', 'HEAD');
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${pin},${INTENTD_DIR}`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  const advance = async () => {
+    const ahead = RUST.replace('  ws.agent.watch(agentId)', '  ws.agent.unwatch(id) → { ok, removed }  // Stop watching.\n  ws.agent.watch(agentId)');
+    await fs.writeFile(path.join(intentd, TOOLS_RS_IN_INTENTD), ahead);
+    git(intentd, 'commit', '-q', '-am', 'ahead of the pin');
+    return git(intentd, 'rev-parse', 'HEAD');
+  };
+  return { root, intentd, pin, advance };
+}
+
+const runCli = (cwd, ...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: cleanNodeEnv() });
+const names = (result) => result.bindings.map((b) => b.name);
+
+test('formatBanner and formatOffPinWarning render the ref shapes; unknown refs print nothing', () => {
+  const checkout = 'a'.repeat(40);
+  const pin = 'b'.repeat(40);
+  const dir = INTENTD_DIR;
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout, pin }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin bbbbbbb)`);
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout, pin: null }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin unreadable)`);
+  assert.equal(formatBanner({ source: 'pin', dir, pin }), 'check-mcp-bindings: intentd help text from recorded pin bbbbbbb');
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout: null, pin }), null);
+  assert.equal(formatBanner(null), null);
+  assert.equal(
+    formatOffPinWarning({ source: 'checkout', dir, checkout, pin }),
+    `warning: ${INTENTD_DIR} checkout aaaaaaa is off the recorded pin bbbbbbb; results reflect the checkout, not the pin. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.`,
+  );
+  assert.equal(formatOffPinWarning({ source: 'checkout', dir, checkout: pin, pin }), null);
+  assert.equal(formatOffPinWarning({ source: 'checkout', dir, checkout, pin: null }), null);
+  assert.equal(formatOffPinWarning({ source: 'pin', dir, pin }), null);
+  assert.equal(formatOffPinWarning(null), null);
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout: pin, pin, dirty: true }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout bbbbbbb (dirty) (recorded pin bbbbbbb)`);
+  assert.equal(
+    formatOffPinWarning({ source: 'checkout', dir, checkout: pin, pin, dirty: true }),
+    `warning: ${INTENTD_DIR} checkout bbbbbbb has uncommitted changes; results reflect the working tree, not the recorded pin bbbbbbb. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.`,
+  );
+});
+
+test('a root outside any git repository yields an unknown ref: no banner, no warning, checks unchanged', async () => {
+  const root = await makeRoot({ docs: { 'methods/agents.md': VALID_DOC }, index: renderIndex(allBindings()) });
+  assert.deepEqual(describeCheckout(root), { source: 'checkout', dir: INTENTD_DIR, checkout: null, pin: null });
+  const result = await runChecks(root);
+  assert.deepEqual(messages(result), []);
+  assert.equal(formatBanner(result.ref), null);
+  assert.equal(formatOffPinWarning(result.ref), null);
+  const skipped = await runChecks(await makeRoot({ rust: null }));
+  assert.equal(skipped.ref, null);
+});
+
+test('at the pin: the banner names checkout == pin, no warning, exit code and output otherwise unchanged', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const result = await runChecks(root);
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: false });
+  assert.equal(formatOffPinWarning(result.ref), null);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nMCP ws.* bindings are consistent (11 bindings).\n`);
+  assert.equal(cli.stderr, '');
+});
+
+test('dirty at the pin: an edited tools.rs is read from the working tree, the banner says (dirty) and stderr warns without changing the exit code', async (t) => {
+  const { root, intentd, pin } = await makeGitRoot(t);
+  const edited = RUST.replace('  ws.agent.watch(agentId)', '  ws.agent.unwatch(id) → { ok, removed }  // Stop watching.\n  ws.agent.watch(agentId)');
+  await fs.writeFile(path.join(intentd, TOOLS_RS_IN_INTENTD), edited);
+  const result = await runChecks(root);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: true });
+  assert.ok(names(result).includes('ws.agent.unwatch'), 'the working-tree help text is what was parsed');
+  assert.equal(messages(result).length, 1);
+  const cli = runCli(root);
+  assert.equal(cli.status, 1);
+  assert.equal(cli.stdout, `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout ${pin.slice(0, 7)} (dirty) (recorded pin ${pin.slice(0, 7)})\n`);
+  assert.ok(cli.stderr.startsWith(`warning: ${INTENTD_DIR} checkout ${pin.slice(0, 7)} has uncommitted changes; results reflect the working tree, not the recorded pin ${pin.slice(0, 7)}. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.\n`), cli.stderr);
+  assert.match(cli.stderr, /ws\.agent\.unwatch is in the help text but missing from the index/);
+  const pinned = runCli(root, '--pinned');
+  assert.equal(pinned.status, 0, pinned.stderr);
+  assert.equal(pinned.stderr, '', 'the pinned run reads git objects and is not dirty');
+});
+
+test('off the pin: results reflect the checkout and the stderr warning names both SHAs without changing the exit code', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  assert.notEqual(head, pin);
+  const result = await runChecks(root);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
+  assert.ok(names(result).includes('ws.agent.unwatch'), 'the checkout help text is what was parsed');
+  assert.equal(messages(result).length, 1);
+  assert.match(messages(result)[0], /ws\.agent\.unwatch is in the help text but missing from the index/);
+  const warning = `warning: ${INTENTD_DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)}; results reflect the checkout, not the pin. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.\n`;
+  const failing = runCli(root);
+  assert.equal(failing.status, 1);
+  assert.equal(failing.stdout, `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\n`);
+  assert.ok(failing.stderr.startsWith(warning), failing.stderr);
+  const written = runCli(root, '--write');
+  assert.equal(written.status, 0, written.stderr);
+  assert.equal(written.stderr, warning, 'the warning is the only stderr output of a passing off-pin run');
+  assert.match(written.stdout, /^check-mcp-bindings: intentd help text from packages\/intentd checkout [0-9a-f]{7} \(recorded pin [0-9a-f]{7}\)\nWrote docs\/protocol\/methods\/mcp-bindings\.md \(12 bindings\)\.\nMCP ws\.\* bindings are consistent \(12 bindings\)\.\n$/);
+});
+
+test('runChecks with a relative root reports the same off-pin ref as the absolute root', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  const previous = process.cwd();
+  process.chdir(root);
+  t.after(() => process.chdir(previous));
+  const relative = await runChecks('.');
+  assert.deepEqual(relative.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
+  assert.deepEqual(relative.ref, (await runChecks(root)).ref);
+  assert.ok(formatBanner(relative.ref));
+  assert.ok(formatOffPinWarning(relative.ref));
+});
+
+test('without git on PATH the default run stays exit 0 with no provenance and --pinned exits 2 naming the missing git', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const emptyBin = await fs.mkdtemp(path.join(os.tmpdir(), 'check-mcp-bindings-nogit-'));
+  t.after(() => fs.rm(emptyBin, { recursive: true, force: true }));
+  const noGit = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: root, encoding: 'utf8', env: cleanNodeEnv({ PATH: emptyBin }) });
+  const plain = noGit();
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(plain.stdout, 'MCP ws.* bindings are consistent (11 bindings).\n');
+  assert.equal(plain.stderr, '');
+  const pinned = noGit('--pinned');
+  assert.equal(pinned.status, 2);
+  assert.equal(pinned.stdout, '');
+  assert.equal(pinned.stderr, 'error: git not found on PATH; install git or add it to PATH and retry\n');
+  assert.ok(!pinned.stderr.includes('monorepo root'));
+  assert.ok(!pinned.stderr.includes(pin.slice(0, 7)), 'no pin is fabricated without git');
+});
+
+test('--pinned reads tools.rs at the recorded gitlink through git objects, never the worktree, and composes with --write', async (t) => {
+  const { root, intentd, pin, advance } = await makeGitRoot(t);
+  await advance();
+  await fs.writeFile(path.join(intentd, TOOLS_RS_IN_INTENTD), 'fn main() {}');
+  assert.equal(messages(await runChecks(root)).length, 2, 'the checkout run sees the dirty worktree file');
+  const pinned = await runChecks(root, { pinned: true });
+  assert.deepEqual(pinned.ref, { source: 'pin', dir: INTENTD_DIR, pin });
+  assert.deepEqual(messages(pinned), []);
+  assert.ok(!names(pinned).includes('ws.agent.unwatch'), 'the pin does not have the checkout-only binding');
+  assert.equal(pinned.bindings.length, 11);
+  assert.equal(formatOffPinWarning(pinned.ref), null);
+  const cli = runCli(root, '--pinned');
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, `check-mcp-bindings: intentd help text from recorded pin ${pin.slice(0, 7)}\nMCP ws.* bindings are consistent (11 bindings).\n`);
+  assert.equal(cli.stderr, '');
+  await fs.writeFile(path.join(root, INDEX_PATH), 'stale\n');
+  const written = runCli(root, '--pinned', '--write');
+  assert.equal(written.status, 0, written.stderr);
+  assert.equal(written.stderr, '');
+  assert.equal(await fs.readFile(path.join(root, INDEX_PATH), 'utf8'), renderIndex(allBindings()));
+});
+
+test('--pinned exits 2 with the submodule hint when the pin is absent from the intentd object store', async (t) => {
+  const { root } = await makeGitRoot(t);
+  const missing = '1'.repeat(40);
+  git(root, 'update-index', '--cacheinfo', `160000,${missing},${INTENTD_DIR}`);
+  git(root, 'commit', '-q', '-m', 'pin not fetched');
+  await assert.rejects(
+    runChecks(root, { pinned: true }),
+    (error) => error instanceof CheckError && error.exitCode === 2 && error.message.includes(`git submodule update --init ${INTENTD_DIR}`) && error.message.includes(missing),
+  );
+  const cli = runCli(root, '--pinned');
+  assert.equal(cli.status, 2);
+  assert.equal(cli.stdout, '');
+  assert.match(cli.stderr, /is not present in packages\/intentd; run 'git submodule update --init packages\/intentd' \(or 'git -C packages\/intentd fetch origin 1{40}'\) and retry/);
+  const checkout = await runChecks(root);
+  assert.deepEqual(messages(checkout), []);
+  assert.equal(checkout.ref.pin, missing, 'the default run still names the recorded pin');
+  assert.ok(formatOffPinWarning(checkout.ref).includes(`checkout ${checkout.ref.checkout.slice(0, 7)} is off the recorded pin 1111111`));
 });

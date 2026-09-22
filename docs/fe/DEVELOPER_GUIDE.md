@@ -145,7 +145,12 @@ is uninitialized or the ref is missing — no fetch is performed), and optional 
 summaries when GitHub authentication is available. The report is read-only, including
 stale sandbox state.
 The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
-(default 10, fractional allowed) and reports `{}` when that budget is exceeded.
+(default 10, fractional allowed) and reports `{}` when that budget is exceeded. Every
+other probe (doctor, sandbox status and health, git, gh) runs under
+`DEV_STATUS_PROBE_TIMEOUT` seconds (default 10, fractional allowed); an exceeded budget
+degrades that field (for example `sandboxes` becomes `[]`) without failing the report.
+A knob value that is not a positive number of at most 86400 seconds is ignored with a
+stderr warning and the default applies.
 
 The shell suites are linted by `make lint-shell-sleeps` (part of `make check`): a fixed
 `sleep <n>`, `time.sleep(<n>)`, or fixed-count poll loop in `scripts/*.test.sh` must wait

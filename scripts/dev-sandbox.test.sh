@@ -70,8 +70,8 @@ pid_gone() {
   local process_state
   kill -0 "$1" 2>/dev/null || return 0
   if ! process_state=$(ps -o stat= -p "$1" 2>/dev/null) || [[ -z "$process_state" ]]; then
-    ! kill -0 "$1" 2>/dev/null
-    return
+    if kill -0 "$1" 2>/dev/null; then return 1; fi
+    return 0
   fi
   [[ "$process_state" == Z* ]]
 }

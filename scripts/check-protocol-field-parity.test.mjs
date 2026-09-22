@@ -2,7 +2,7 @@
 // Run: node --test scripts/check-protocol-field-parity.test.mjs
 
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,7 +11,18 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
-import { PAIRS, comparePair, extractRustFields, extractTsKeys, formatDiagnostic, runChecks, toCamelCase } from './check-protocol-field-parity.mjs';
+import {
+  PAIRS,
+  comparePair,
+  extractRustFields,
+  extractTsKeys,
+  formatDiagnostic,
+  formatRefBanner,
+  formatRefOffPinWarning,
+  runChecks,
+  toCamelCase,
+} from './check-protocol-field-parity.mjs';
+import { cleanNodeEnv } from './test-env.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./check-protocol-field-parity.mjs', import.meta.url));
 
@@ -355,7 +366,7 @@ test('runChecks separates stale-ignore warnings from errors', async (t) => {
 const run = promisify(execFile);
 async function runCli(root) {
   try {
-    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root]);
+    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root], { env: cleanNodeEnv() });
     return { code: 0, stdout, stderr };
   } catch (err) {
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
@@ -437,6 +448,98 @@ test('runChecks only skips a pair when the submodule directory itself is absent'
   assert.deepEqual(result.errors, []);
   assert.deepEqual(result.checked, []);
   assert.match(result.skipped[0], /packages\/cloudlands-fe\/types\.ts missing — submodule not initialized/);
+});
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+};
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const SUBMODULES = ['packages/intentd', 'packages/cloudlands-fe'];
+
+// The CLI fixture with both packages as nested git repos recorded as the monorepo gitlinks.
+// `advance()` commits an extra emitted field in intentd so that checkout moves off its pin.
+async function makeGitRoot(t) {
+  const { files, staleCount } = cliFixtureFiles();
+  for (const dir of SUBMODULES) delete files[`${dir}/.git`];
+  const root = await fixture(t, files);
+  const pins = {};
+  for (const dir of SUBMODULES) {
+    git(path.join(root, dir), 'init', '-q', '-b', 'main');
+    git(path.join(root, dir), 'add', '.');
+    git(path.join(root, dir), 'commit', '-q', '-m', 'pin');
+    pins[dir] = git(path.join(root, dir), 'rev-parse', 'HEAD');
+  }
+  git(root, 'init', '-q', '-b', 'main');
+  for (const dir of SUBMODULES) git(root, 'update-index', '--add', '--cacheinfo', `160000,${pins[dir]},${dir}`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  const advance = async () => {
+    const [{ rust }] = PAIRS;
+    const file = path.join(root, rust.file);
+    const text = await fs.readFile(file, 'utf8');
+    await fs.writeFile(file, text.replace(`pub struct ${rust.struct} {\n`, `pub struct ${rust.struct} {\n    pub parent_agent_id: String,\n`));
+    git(path.join(root, 'packages/intentd'), 'commit', '-q', '-am', 'ahead of the pin');
+    return git(path.join(root, 'packages/intentd'), 'rev-parse', 'HEAD');
+  };
+  return { root, pins, staleCount, advance };
+}
+
+const bannerOf = (dir, checkout, pin) => `check-protocol-field-parity: ${path.basename(dir)} sources from ${dir} checkout ${checkout.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`;
+
+test('fixtures outside any git repository yield unknown refs: no banner, no warning', async (t) => {
+  const root = await fixture(t, {
+    'packages/intentd/.git': 'gitdir: x\n',
+    'packages/intentd/model.rs': RUST,
+    'packages/cloudlands-fe/.git': 'gitdir: x\n',
+    'packages/cloudlands-fe/types.ts': TS_FULL,
+  });
+  const result = await runChecks(root, [FIXTURE_PAIR]);
+  assert.deepEqual(result.refs, SUBMODULES.map((dir) => ({ source: 'checkout', dir, checkout: null, pin: null })));
+  for (const ref of result.refs) {
+    assert.equal(formatRefBanner(ref), null);
+    assert.equal(formatRefOffPinWarning(ref), null);
+  }
+  const skipped = await runChecks(root, [{ ...FIXTURE_PAIR, ts: { file: 'packages/ios/Types.ts', type: 'Row' } }]);
+  assert.deepEqual(skipped.refs, [], 'a skipped pair reads nothing, so no ref is reported');
+});
+
+test('at the pins: one banner per submodule names checkout == pin on stdout, no off-pin warning, exit code unchanged', async (t) => {
+  const { root, pins, staleCount } = await makeGitRoot(t);
+  const result = await runChecks(root);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.refs, SUBMODULES.map((dir) => ({ source: 'checkout', dir, checkout: pins[dir], pin: pins[dir], dirty: false })));
+  for (const ref of result.refs) assert.equal(formatRefOffPinWarning(ref), null);
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.ok(stdout.startsWith(SUBMODULES.map((dir) => bannerOf(dir, pins[dir], pins[dir]) + '\n').join('')), stdout);
+  assert.doesNotMatch(stderr, /is off the recorded pin/);
+  assert.equal(stderr.match(/stale ignore entry/g)?.length, staleCount, 'the stale-ignore warnings are unchanged');
+});
+
+test('off the intentd pin: the intentd banner names both SHAs, its stderr warning leads, results reflect the checkout, exit code unchanged', async (t) => {
+  const { root, pins, advance } = await makeGitRoot(t);
+  const head = await advance();
+  assert.notEqual(head, pins['packages/intentd']);
+  const result = await runChecks(root);
+  assert.deepEqual(result.refs, [
+    { source: 'checkout', dir: 'packages/intentd', checkout: head, pin: pins['packages/intentd'], dirty: false },
+    { source: 'checkout', dir: 'packages/cloudlands-fe', checkout: pins['packages/cloudlands-fe'], pin: pins['packages/cloudlands-fe'], dirty: false },
+  ]);
+  assert.equal(result.errors.length, 1, 'the checkout source (with the extra field) is what was compared');
+  assert.match(result.errors[0].message, /parentAgentId/);
+  assert.equal(formatRefOffPinWarning(result.refs[1]), null, 'the cloudlands-fe checkout is still at its pin');
+  const warning = `warning: packages/intentd checkout ${head.slice(0, 7)} is off the recorded pin ${pins['packages/intentd'].slice(0, 7)}; results reflect the checkout, not the pin. Run git submodule update --checkout packages/intentd to compare against the pin.\n`;
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.equal(stdout, `${bannerOf('packages/intentd', head, pins['packages/intentd'])}\n${bannerOf('packages/cloudlands-fe', pins['packages/cloudlands-fe'], pins['packages/cloudlands-fe'])}\n`);
+  assert.ok(stderr.startsWith(warning), stderr);
+  assert.equal(stderr.match(/is off the recorded pin/g).length, 1, 'only the moved submodule warns');
+  assert.match(stderr, /parentAgentId/);
 });
 
 // ---- Regressions from the PR #5488 review ----

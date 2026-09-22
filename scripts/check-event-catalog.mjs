@@ -20,6 +20,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
+
 export const SIDECAR = 'docs/protocol/event-types.json';
 export const EVENTS_DOC = 'docs/protocol/06-events.md';
 export const VENDORED_COPIES = [
@@ -108,6 +110,17 @@ export function undocumentedTypes(catalog, doc) {
 
 export const BYTE_MISMATCH = `not byte-identical to ${SIDECAR} (ordering, formatting, duplicate, or extra field)`;
 
+/** The stdout line naming the submodule ref a vendored copy was read from, or null when no ref is known. */
+export function formatRefBanner(ref) {
+  return formatBanner(ref, { check: 'check-event-catalog', what: 'vendored copy' });
+}
+
+/** The stderr warning for a submodule checkout that is off the recorded pin, or null. */
+export function formatRefOffPinWarning(ref) {
+  return formatOffPinWarning(ref);
+}
+
+/** Returns `{ failures, warnings, skipped, refs }`; `refs` holds one submodule ref per vendored copy that was read. */
 export async function inspectRepository(root) {
   root = path.resolve(root);
   const sidecarBytes = await fs.readFile(path.join(root, SIDECAR));
@@ -115,6 +128,7 @@ export async function inspectRepository(root) {
   const failures = [];
   const warnings = [];
   const skipped = [];
+  const refs = [];
 
   for (const copy of VENDORED_COPIES) {
     const copyPath = path.join(root, copy);
@@ -122,6 +136,7 @@ export async function inspectRepository(root) {
       skipped.push(copy);
       continue;
     }
+    refs.push(describeCheckout(root, submoduleOf(copy)));
     const copyBytes = await fs.readFile(copyPath);
     if (copyBytes.equals(sidecarBytes)) continue;
     const diff = diffCatalogs(sidecar, JSON.parse(copyBytes.toString('utf8')));
@@ -134,12 +149,18 @@ export async function inspectRepository(root) {
   for (const type of undocumentedTypes(sidecar, doc)) {
     failures.push({ source: EVENTS_DOC, message: `type ${type} from ${SIDECAR} is not mentioned` });
   }
-  return { failures, warnings, skipped };
+  return { failures, warnings, skipped, refs };
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { failures, warnings, skipped } = await inspectRepository(root);
+  const { failures, warnings, skipped, refs } = await inspectRepository(root);
+  for (const ref of refs) {
+    const banner = formatRefBanner(ref);
+    const offPin = formatRefOffPinWarning(ref);
+    if (banner) console.log(banner);
+    if (offPin) console.error(offPin);
+  }
   for (const copy of skipped) console.log(`skipped: ${copy} (submodule not initialized)`);
   for (const warning of warnings) console.error(`${warning.source}: warning: ${warning.message}`);
   const warningSuffix = warnings.length ? `; ${warnings.length} warning(s): ${LEAD_HINT}` : '';

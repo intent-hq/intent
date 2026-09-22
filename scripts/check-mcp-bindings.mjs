@@ -5,7 +5,16 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-export const TOOLS_RS_PATH = 'packages/intentd/crates/intent-acp/src/mcp_server/tools.rs';
+import { CheckError, DEFAULT_INTENTD_DIR, createGitlinkReader, resolveGitlink } from './check-makefile-targets.mjs';
+import {
+  describeCheckout as describeSubmoduleCheckout,
+  formatBanner as formatRefBanner,
+  formatOffPinWarning as formatRefOffPinWarning,
+} from './submodule-ref.mjs';
+
+export const INTENTD_DIR = DEFAULT_INTENTD_DIR;
+export const TOOLS_RS_IN_INTENTD = 'crates/intent-acp/src/mcp_server/tools.rs';
+export const TOOLS_RS_PATH = `${INTENTD_DIR}/${TOOLS_RS_IN_INTENTD}`;
 export const PROTOCOL_DIR = 'docs/protocol';
 export const INDEX_PATH = 'docs/protocol/methods/mcp-bindings.md';
 export const HELP_CONSTANTS = ['WORKSPACE_API_DESCRIPTION', 'WORKSPACE_API_DESCRIPTION_CHIEF'];
@@ -345,13 +354,48 @@ async function walkMarkdown(dir, rel = '') {
   return out;
 }
 
-/** Run all three checks against `root`; returns `{ errors, skipped, wrote, bindings }`. */
-export async function runChecks(root, { write = false } = {}) {
-  const rustText = await readIfExists(path.join(root, TOOLS_RS_PATH));
-  if (rustText === null) return { errors: [], skipped: `skipped: ${TOOLS_RS_PATH} (submodule not initialized)`, wrote: false, bindings: [] };
+const short = (sha) => sha.slice(0, 7);
+
+/** The intentd commit the checkout is at and the gitlink HEAD records; either is null when git cannot tell. */
+export function describeCheckout(root) {
+  return describeSubmoduleCheckout(root, INTENTD_DIR);
+}
+
+/** The stdout line naming the intentd ref the help text was read from, or null when no ref is known. */
+export function formatBanner(ref) {
+  return formatRefBanner(ref, { check: 'check-mcp-bindings', what: 'help text' });
+}
+
+/** The stderr warning for a checkout that is off the recorded pin, or null when it is at the pin (or unknown). */
+export function formatOffPinWarning(ref) {
+  return formatRefOffPinWarning(ref, {
+    remedy: 'Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.',
+  });
+}
+
+/**
+ * The tools.rs text plus the ref it came from. Default: the worktree file (null text when the submodule is not
+ * initialized). `pinned`: the blob at the gitlink HEAD records, read through git objects only, so the worktree
+ * never leaks in; a pin absent from the submodule object store throws the `CheckError` of `resolveGitlink`.
+ */
+async function readToolsRs(root, { pinned }) {
+  if (!pinned) return { rustText: await readIfExists(path.join(root, TOOLS_RS_PATH)), ref: describeCheckout(root) };
+  const pin = resolveGitlink({ cwd: root, intentdDir: INTENTD_DIR });
+  const reader = createGitlinkReader(pin, { cwd: root, intentdDir: INTENTD_DIR });
+  const rustText = reader.exists(TOOLS_RS_IN_INTENTD) ? reader.read(TOOLS_RS_IN_INTENTD) : null;
+  return { rustText, ref: { source: 'pin', dir: INTENTD_DIR, pin } };
+}
+
+/** Run all three checks against `root`; returns `{ errors, skipped, wrote, bindings, ref }`. */
+export async function runChecks(root, { write = false, pinned = false } = {}) {
+  const { rustText, ref } = await readToolsRs(root, { pinned });
+  if (rustText === null) {
+    if (pinned) return { errors: [{ file: TOOLS_RS_PATH, line: 1, message: `not found at recorded pin ${short(ref.pin)}` }], skipped: null, wrote: false, bindings: [], ref };
+    return { errors: [], skipped: `skipped: ${TOOLS_RS_PATH} (submodule not initialized)`, wrote: false, bindings: [], ref: null };
+  }
   const help = extractHelpText(rustText);
   const errors = help.missing.map((name) => ({ file: TOOLS_RS_PATH, line: 1, message: `could not extract the ${name} constant` }));
-  if (help.missing.length) return { errors, skipped: null, wrote: false, bindings: [] };
+  if (help.missing.length) return { errors, skipped: null, wrote: false, bindings: [], ref };
   const bindings = mergeBindings(parseBindings(help.base), parseBindings(help.chief));
 
   const indexFile = path.join(root, INDEX_PATH);
@@ -368,15 +412,20 @@ export async function runChecks(root, { write = false } = {}) {
     const text = await fs.readFile(path.join(protocolDir, rel), 'utf8');
     errors.push(...checkDoc(`${PROTOCOL_DIR}/${rel}`, collectDocMentions(text), bindings));
   }
-  return { errors, skipped: null, wrote, bindings };
+  return { errors, skipped: null, wrote, bindings, ref };
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const write = args.includes('--write');
+  const pinned = args.includes('--pinned');
   const rootArg = args.find((a) => !a.startsWith('--'));
   const root = rootArg ? path.resolve(rootArg) : process.cwd();
-  const { errors, skipped, wrote, bindings } = await runChecks(root, { write });
+  const { errors, skipped, wrote, bindings, ref } = await runChecks(root, { write, pinned });
+  const banner = formatBanner(ref);
+  const warning = formatOffPinWarning(ref);
+  if (banner) console.log(banner);
+  if (warning) console.error(warning);
   if (skipped) console.log(skipped);
   if (wrote) console.log(`Wrote ${INDEX_PATH} (${bindings.length} bindings).`);
   if (errors.length === 0) {
@@ -388,4 +437,12 @@ async function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await main();
+  } catch (error) {
+    if (!(error instanceof CheckError)) throw error;
+    console.error(error.message);
+    process.exitCode = error.exitCode;
+  }
+}

@@ -54,12 +54,69 @@ for command in bash cksum date dirname git grep head python3 sed awk; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 
+# Every probe budget in dev-status.sh must come from a knob so the suite can
+# raise it under load; a numeric literal reintroduces a fixed wall-clock budget.
+# The embedded Python is parsed with `ast`, so any spelling of a numeric
+# `timeout` keyword argument, parameter default, or assignment (`timeout = 3`,
+# `timeout=.4`, `timeout=(3)`, `timeout=-1`) fails while comments and strings
+# never count.
+python3 - "$script" <<'PY' || fail "dev-status.sh has a numeric timeout literal; use DEV_STATUS_PORT_TIMEOUT or DEV_STATUS_PROBE_TIMEOUT"
+import ast
+import re
+import sys
+
+source = open(sys.argv[1], encoding="utf-8").read()
+match = re.search(r"<<'PY'\n(.*?)\nPY(?:\n|\Z)", source, re.DOTALL)
+assert match, "embedded Python heredoc not found"
+tree = ast.parse(match.group(1), filename=sys.argv[1])
+
+
+def numeric_literal(node):
+    while isinstance(node, ast.UnaryOp):
+        node = node.operand
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, (int, float, complex))
+        and not isinstance(node.value, bool)
+    )
+
+
+def parameter_defaults(arguments):
+    positional = arguments.posonlyargs + arguments.args
+    yield from zip(positional[len(positional) - len(arguments.defaults):], arguments.defaults)
+    yield from zip(arguments.kwonlyargs, arguments.kw_defaults)
+
+
+literals = []
+for node in ast.walk(tree):
+    if isinstance(node, ast.Call):
+        candidates = [(keyword.arg, keyword.value) for keyword in node.keywords]
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        candidates = [(argument.arg, default) for argument, default in parameter_defaults(node.args)]
+    elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        candidates = [(target.id, node.value) for target in targets if isinstance(target, ast.Name)]
+    else:
+        continue
+    for name, value in candidates:
+        if name == "timeout" and numeric_literal(value):
+            literals.append(f"line {value.lineno}: {ast.unparse(value)}")
+for literal in literals:
+    print(f"numeric timeout literal at heredoc {literal}", file=sys.stderr)
+sys.exit(1 if literals else 0)
+PY
+
 # The port probe budget is generous here so a loaded host never empties
-# `ports`; the no-gh wall-clock bound scales with it (3 s of slack on top,
-# i.e. the historical 5000 ms at the former 2 s default) so it still catches a
+# `ports`, and the probe budget (doctor, sandbox, git, gh) likewise never
+# empties `sandboxes`. The knobs bound each call, not the report: with `gh`
+# absent the no-gh run still executes the doctor probe, the port probe and the
+# sandbox probe serially (git calls share the probe budget but are fast on the
+# real repo), so the wall-clock bound is port + 2 × probe plus 3 s of slack
+# (the historical 5000 ms at the former 2 s port default) and still catches a
 # missing `gh` hanging the report.
 export DEV_STATUS_PORT_TIMEOUT="${DEV_STATUS_PORT_TIMEOUT:-30}"
-no_gh_budget_ms=$(python3 -c 'import os; print(int(float(os.environ["DEV_STATUS_PORT_TIMEOUT"]) * 1000) + 3000)')
+export DEV_STATUS_PROBE_TIMEOUT="${DEV_STATUS_PROBE_TIMEOUT:-30}"
+no_gh_budget_ms=$(python3 -c 'import os; print(int((float(os.environ["DEV_STATUS_PORT_TIMEOUT"]) + 2 * float(os.environ["DEV_STATUS_PROBE_TIMEOUT"])) * 1000) + 3000)')
 
 started_ms=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
 PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
@@ -163,6 +220,39 @@ fi
 grep -q "$coverage_line" <(PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$script") \
   || fail "human status did not print the Coverage line"
 [[ -f "$state_dir/ui.json" ]] || fail "status removed a live fixture state file"
+
+# Degraded probe budget: a budget too small for dev-sandbox.sh status empties
+# `sandboxes` (the live fixture is still on disk) but the report exits 0.
+DEV_STATUS_PROBE_TIMEOUT=0.001 PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+  bash "$script" >"$temp_dir/degraded.json" || fail "status exited non-zero under a tiny DEV_STATUS_PROBE_TIMEOUT"
+python3 - "$temp_dir/degraded.json" <<'PY' || fail "degraded probe budget did not empty sandboxes"
+import json
+import sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["sandboxes"] == [], report["sandboxes"]
+PY
+
+# Rejected knob values (not a number; finite but too large for the subprocess
+# and socket timeout APIs) are ignored with exactly one warning naming the
+# fallback, and the report is still a complete, exit-0 JSON document. The
+# probes then run under the fixed production default, so nothing here asserts
+# that a live probe finished within it.
+for rejected in abc 1e20; do
+  DEV_STATUS_PROBE_TIMEOUT="$rejected" PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+    bash "$script" >"$temp_dir/invalid-probe.json" 2>"$temp_dir/invalid-probe.err" \
+    || fail "status exited non-zero under DEV_STATUS_PROBE_TIMEOUT=$rejected"
+  grep -q "ignoring DEV_STATUS_PROBE_TIMEOUT='$rejected' .*; using 10\$" "$temp_dir/invalid-probe.err" \
+    || fail "DEV_STATUS_PROBE_TIMEOUT=$rejected was not reported on stderr with the default: $(cat "$temp_dir/invalid-probe.err")"
+  [[ "$(grep -c 'ignoring DEV_STATUS_PROBE_TIMEOUT' "$temp_dir/invalid-probe.err")" == 1 ]] \
+    || fail "DEV_STATUS_PROBE_TIMEOUT=$rejected warning was not printed exactly once"
+  python3 - "$temp_dir/invalid-probe.json" <<'PY' || fail "report under DEV_STATUS_PROBE_TIMEOUT=$rejected was not a complete JSON document"
+import json
+import sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert set(report) == {"host", "ports", "sandboxes", "repos", "docs"}, set(report)
+assert isinstance(report["sandboxes"], list), report["sandboxes"]
+PY
+done
 
 cat >"$state_dir/stale.json" <<'JSON'
 {"mode":"ui","pid":99999999}

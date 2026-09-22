@@ -125,7 +125,7 @@ ports: ## Print this worktree's resolved development ports
 	fi
 	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
 
-status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe, default 10)
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe and DEV_STATUS_PROBE_TIMEOUT=<seconds> every other probe, default 10 each)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 
@@ -147,11 +147,15 @@ check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.
 # The MCP `ws.*` binding surface is documented only by the help-text constants
 # in intentd's tools.rs; docs/protocol/methods/mcp-bindings.md is the generated
 # signature index, and prose mentions under docs/protocol/ must match it.
-check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text
-	@node scripts/check-mcp-bindings.mjs
+# The help text is read from the packages/intentd checkout (the run names the
+# checkout and the recorded pin, and warns when they differ); PINNED=1 reads it
+# from the recorded gitlink through git objects instead.
+PINNED ?=
+check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs $(if $(PINNED),--pinned)
 
-mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text
-	@node scripts/check-mcp-bindings.mjs --write
+mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs --write $(if $(PINNED),--pinned)
 
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
@@ -172,8 +176,10 @@ check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Che
 # CI Gate check, thread resolution, merge queue) are snapshotted under
 # .github/rulesets/; a silent edit on GitHub shows up as drift. UPDATE=1
 # accepts the live rules into the snapshots; a token avoids the unauthenticated
-# rate limit.
-check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them)
+# rate limit. With RULESET_ADMIN_TOKEN set (administration read on the three
+# repositories) the rulesets' bypass actors are compared with
+# .github/rulesets/*.bypass.json too; without it they are skipped with a warning.
+check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them; RULESET_ADMIN_TOKEN adds bypass actors)
 	@node scripts/check-rulesets.mjs $(if $(UPDATE),--update)
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
@@ -261,7 +267,7 @@ FE_BUILD_HEAP_MB ?= 16384
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-changed coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps check clean clean-dev \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -451,6 +457,16 @@ lint-raw-child: lint-sources ## Deprecated alias of lint-sources
 # ratchets down. Pure shell + awk; needs no submodule.
 lint-shell-sleeps: ## Check scripts/*.test.sh fixed sleeps are marked or baselined
 	@scripts/lint-fixed-sleeps.sh
+
+# shellcheck over scripts/*.sh (the *.test.sh suites match the same glob); -x
+# follows `source` lines into the sibling scripts. Rule policy lives in the
+# repo-root .shellcheckrc. Not part of `make check` yet: dev hosts that have not
+# re-run `make bootstrap-dev-host` lack the binary, so this fails fast with
+# doctor's [missing] wording instead of falling back to npx.
+lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstrap-dev-host installs it)
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
+	@shellcheck -x scripts/*.sh
 
 check: check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
 
