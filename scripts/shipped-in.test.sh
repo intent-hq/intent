@@ -27,6 +27,8 @@ done
 # $GH_STUB_DIR/compare/<owner>__<repo>/<base>...<head>, manifests from
 # $GH_STUB_DIR/manifest/<tag>.json, the cloudlands-fe Release Alpha run list
 # from $GH_STUB_DIR/runs.json and its jobs from $GH_STUB_DIR/jobs/<run id>.json.
+# The rate-limit probe (`api repos/intent-hq/cloudlands-releases`) succeeds
+# unless $GH_STUB_DIR/probe.fail exists, in which case it is rate limited.
 # Every invocation is appended to GH_TEST_LOG.
 # GH_STUB_FAIL selects a failure mode (1 = generic, or one of the gh error
 # texts below); GH_STUB_FAIL_ON narrows it to one subcommand ("release list",
@@ -43,6 +45,7 @@ if [[ -n "${GH_STUB_FAIL:-}" && ( -z "$fail_on" || "$fail_on" == "$1" || "$fail_
     5xx) echo "gh: Server Error (HTTP 502)" >&2 ;;
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
+    notfound) echo "release not found" >&2 ;;
     *) echo "stub: unknown GH_STUB_FAIL $GH_STUB_FAIL" >&2 ;;
   esac
   exit 1
@@ -55,6 +58,11 @@ case "$1 $2" in
     exit 0 ;;
   "api repos/"*)
     path=${2#repos/}
+    if [[ "$path" == intent-hq/cloudlands-releases && $# -eq 2 ]]; then
+      [[ -f "$GH_STUB_DIR/probe.fail" ]] && { echo "gh: API rate limit exceeded for user ID 526899. If you reach out to GitHub Support for help, please include the request ID 1234:ABCD. (HTTP 403)" >&2; exit 1; }
+      echo '{"full_name":"intent-hq/cloudlands-releases"}'
+      exit 0
+    fi
     if [[ "$path" == */actions/runs/*/jobs ]]; then
       [[ "$*" == *" --paginate"* ]] || { echo "stub: jobs fetched without --paginate" >&2; exit 1; }
       run_id=${path%/jobs}; run_id=${run_id##*/}
@@ -159,10 +167,18 @@ run_script cloudlands-fe "$sha"
 [[ -z "$stdout" ]] || fail "compare API failure printed '$stdout'"
 [[ "$stderr" == *"stub: 404 repos/intent-hq/cloudlands-fe/compare/$sha...v2.2.0"* ]] || fail "compare API failure hid gh stderr: $stderr"
 
+# A failure that does not look transient is followed by exactly one REST
+# probe on the releases repo before it counts as a hard failure.
+probe_call='api repos/intent-hq/cloudlands-releases'
+probe_count() {
+  grep -c "^$probe_call\$" "$temp_dir/gh.log" || true
+}
+
 reset_stub
 GH_STUB_FAIL=1 run_script cloudlands-fe "$sha"
 [[ "$status" -eq 1 ]] || fail "gh failure exited $status (expected 1, not 3)"
 [[ "$stderr" == *"stub: gh unavailable"* ]] || fail "gh failure hid gh stderr: $stderr"
+[[ "$(probe_count)" -eq 1 ]] || fail "generic gh failure ran the rate-limit probe $(probe_count) times (expected 1)"
 
 # Transient GitHub failures exit 4 and surface gh's text so a polling hook can
 # retry instead of evicting itself (intent-hq/intent rate-limit incident).
@@ -172,8 +188,35 @@ for mode in ratelimit ratelimit-rest 5xx network; do
   [[ "$status" -eq 4 ]] || fail "$mode on release list exited $status (expected 4): $stderr"
   [[ -z "$stdout" ]] || fail "$mode on release list printed '$stdout'"
   [[ "$stderr" == "shipped-in: gh release list on intent-hq/cloudlands-releases failed: "* ]] || fail "$mode on release list message: $stderr"
+  [[ "$(probe_count)" -eq 0 ]] || fail "$mode on release list ran the rate-limit probe despite the transient fast path"
 done
 [[ "$stderr" == *"error connecting to api.github.com check your internet connection"* ]] || fail "multi-line gh stderr was not surfaced on one line: $stderr"
+
+# Under REST throttling gh masks the 403 as `release not found` (2026-09-22,
+# workspace frosty-beaver: the "Wait for shipped alpha" hook was evicted with
+# exit 1); a rate-limited follow-up probe reclassifies it as transient.
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+: >"$stub_dir/probe.fail"
+GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-fe "$sha"
+[[ "$status" -eq 4 ]] || fail "masked rate limit on release download exited $status (expected 4): $stderr"
+[[ -z "$stdout" ]] || fail "masked rate limit on release download printed '$stdout'"
+[[ "$stderr" == "shipped-in: gh release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: release not found (GitHub REST API is rate limited: gh: API rate limit exceeded for user ID 526899."*"(HTTP 403))" ]] || fail "masked rate limit message: $stderr"
+[[ "$(probe_count)" -eq 1 ]] || fail "masked rate limit ran the probe $(probe_count) times (expected 1)"
+
+# The same gh text with a healthy probe is a genuinely missing release.
+reset_stub
+echo ahead >"$fe_compare/$sha...v2.3.0"
+echo behind >"$fe_compare/$sha...v2.2.0"
+echo behind >"$fe_compare/$sha...v2.1.0"
+GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-fe "$sha"
+[[ "$status" -eq 1 ]] || fail "genuinely missing release exited $status (expected 1): $stderr"
+[[ -z "$stdout" ]] || fail "genuinely missing release printed '$stdout'"
+[[ "$stderr" == "shipped-in: gh release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: release not found" ]] || fail "genuinely missing release message: $stderr"
+! grep -qi 'rate limit' <<<"$stderr" || fail "genuinely missing release was reported as rate limited: $stderr"
+[[ "$(probe_count)" -eq 1 ]] || fail "genuinely missing release ran the probe $(probe_count) times (expected 1)"
 
 reset_stub
 echo ahead >"$fe_compare/$sha...v2.3.0"
