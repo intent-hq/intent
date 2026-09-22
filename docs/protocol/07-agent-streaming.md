@@ -297,7 +297,8 @@ live deltas" below):
 **Text-block `media` on live deltas (v10.7, additive — the image dimension sidecar, §5.5
 `agent.getConversation`).** A `text` block whose Markdown embeds a probeable image reference
 carries the presence-detected `media` map — `{ "<src>": { width, height } }`, keyed by the image
-`src` exactly as written in the Markdown (`![alt](<src>)`, before any client rewriting), valued by
+`src` exactly as written in the Markdown image reference's `(...)` target, before any client
+rewriting, valued by
 the image's intrinsic pixel dimensions read from the file header. The daemon probes on the
 **stream path**: when a text chunk completes an image reference it reads the header **before
 emitting that chunk's delta**, so the dimensions ride the same frame as the Markdown that needs
