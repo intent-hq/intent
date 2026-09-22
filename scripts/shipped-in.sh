@@ -27,10 +27,11 @@
 # misses); 5 = same, but the active Release Alpha run on intent-hq/cloudlands-fe
 # looks stalled (a job queued longer than SHIPPED_IN_STALL_MINUTES, default 30;
 # 0 disables the probe) -- stderr names the run, job and queue age; 4 =
-# transient GitHub failure (rate limit, 5xx, network) -- retry later; 2 = usage
-# error; 1 = any other gh/API or manifest failure. gh's own error text is
-# appended to the message on 1 and 4. The stall probe is best-effort: when it
-# fails the script still exits 3 and notes why on stderr.
+# transient GitHub failure (rate limit -- including one gh masks as another
+# error, detected by a follow-up REST probe --, 5xx, network) -- retry later;
+# 2 = usage error; 1 = any other gh/API or manifest failure. gh's own error
+# text is appended to the message on 1 and 4. The stall probe is best-effort:
+# when it fails the script still exits 3 and notes why on stderr.
 
 set -euo pipefail
 
@@ -92,21 +93,46 @@ fail() {
   exit 1
 }
 
-# gh stderr is captured here so failures can be classified and surfaced.
+# gh stderr is captured here so failures can be classified and surfaced; the
+# rate-limit probe below keeps its own file so the original text survives.
 gh_err=$(mktemp)
-trap 'rm -f "$gh_err"' EXIT
+probe_err=$(mktemp)
+trap 'rm -f "$gh_err" "$probe_err"' EXIT
 
 transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connection (reset|refused)|timeout|no such host|network is unreachable|temporary failure|unexpected EOF'
 
 # Report a failed gh call: exit 4 when its stderr looks transient, else 1.
+# gh masks some REST 403s: under REST throttling `gh release download` and
+# `gh release view` print `release not found` while `gh release list`
+# (GraphQL) still lists the tag -- 2026-09-22, workspace frosty-beaver, the
+# "Wait for shipped alpha" hook was evicted with exit 1. So a failure that
+# does not look transient gets one REST probe on the releases repo (the same
+# core quota; `gh api rate_limit` is not gated by it and kept reporting 5000
+# remaining during the incident): a probe that itself fails transiently (rate
+# limit, 5xx, network) turns it into exit 4 and the message names which; a
+# healthy probe, or one failing for any other reason, keeps the original
+# message and exit 1.
 gh_fail() {
-  local detail
+  local detail probe_detail probe_state
   detail=$(<"$gh_err")
   detail=${detail//$'\n'/ }
-  echo "shipped-in: $*${detail:+: $detail}" >&2
   if grep -qiE "$transient_pattern" "$gh_err"; then
+    echo "shipped-in: $*${detail:+: $detail}" >&2
     exit 4
   fi
+  if ! gh api "repos/$releases_repo" >/dev/null 2>"$probe_err" &&
+    grep -qiE "$transient_pattern" "$probe_err"; then
+    probe_detail=$(<"$probe_err")
+    probe_detail=${probe_detail//$'\n'/ }
+    if grep -qiE 'rate limit|HTTP 429' "$probe_err"; then
+      probe_state="is rate limited"
+    else
+      probe_state="is unavailable"
+    fi
+    echo "shipped-in: $*${detail:+: $detail} (GitHub REST API $probe_state: $probe_detail)" >&2
+    exit 4
+  fi
+  echo "shipped-in: $*${detail:+: $detail}" >&2
   exit 1
 }
 
