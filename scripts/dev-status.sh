@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # JSON schema:
-# {"host":{"doctorOk":bool,"gaps":[string],
+# {"setup":{"running":bool,"markers":[string]},
+#  "host":{"doctorOk":bool,"gaps":[string],
 #  "coverageTooling":{"ready":bool,"detail":string}},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
@@ -30,6 +31,7 @@ import functools
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -104,6 +106,24 @@ def run(command, *, cwd=root, env=None, timeout=None):
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+# The daemon writes the workspace setup script to <worktree>/.intent/setup-<uuid>.sh
+# while it runs and removes it on exit, so a matching file means the worktree is
+# still being provisioned and everything below is provisional.
+SETUP_MARKER = re.compile(r"^setup-[0-9a-f]{32}\.sh$")
+
+
+def setup_status():
+    intent_dir = os.path.join(root, ".intent")
+    try:
+        names = os.listdir(intent_dir)
+    except OSError:
+        names = []
+    markers = sorted(
+        os.path.join(".intent", name) for name in names if SETUP_MARKER.match(name)
+    )
+    return {"running": bool(markers), "markers": markers}
 
 
 COVERAGE_UNKNOWN = {"ready": False, "detail": "unknown"}
@@ -311,6 +331,7 @@ def github_ready():
 
 gh_ready = github_ready()
 report = {
+    "setup": setup_status(),
     "host": doctor_status(),
     "ports": port_status(),
     "sandboxes": sandbox_status(),
@@ -326,6 +347,11 @@ if json_output:
     print()
     raise SystemExit(0)
 
+if report["setup"]["running"]:
+    print(
+        "SETUP SCRIPT STILL RUNNING — status below is provisional "
+        f"({', '.join(report['setup']['markers'])})"
+    )
 print("Intent worktree status")
 print(f"Host       doctor {'ok' if report['host']['doctorOk'] else 'has gaps'}")
 for gap in report["host"]["gaps"]:

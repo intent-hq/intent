@@ -128,7 +128,11 @@ python3 - "$temp_dir/empty.json" <<'PY' || fail "empty JSON report shape was inc
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-assert set(report) == {"host", "ports", "sandboxes", "repos", "docs"}
+assert set(report) == {"setup", "host", "ports", "sandboxes", "repos", "docs"}
+assert set(report["setup"]) == {"running", "markers"}
+assert isinstance(report["setup"]["running"], bool)
+assert isinstance(report["setup"]["markers"], list)
+assert report["setup"]["running"] is bool(report["setup"]["markers"])
 assert set(report["host"]) == {"doctorOk", "gaps", "coverageTooling"}
 assert isinstance(report["host"]["doctorOk"], bool)
 assert isinstance(report["host"]["gaps"], list)
@@ -245,7 +249,7 @@ for rejected in abc 1e20; do
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-assert set(report) == {"host", "ports", "sandboxes", "repos", "docs"}, set(report)
+assert set(report) == {"setup", "host", "ports", "sandboxes", "repos", "docs"}, set(report)
 assert isinstance(report["sandboxes"], list), report["sandboxes"]
 PY
 done
@@ -370,5 +374,37 @@ assert repos["cloudlands-fe"][0] is False and repos["cloudlands-fe"][2] is False
 assert isinstance(repos["cloudlands-fe"][1], str), repos
 assert repos["cloudlands-fe"][3] is None, repos
 PY
+
+# Setup marker: the daemon keeps <worktree>/.intent/setup-<uuid>.sh in place
+# only while the workspace setup script runs, so its presence flags the whole
+# report as provisional; unrelated .intent files never trigger it.
+fixture_setup() {
+  PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+    bash "$fixture/scripts/dev-status.sh" | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["setup"], sort_keys=True))'
+}
+banner='^SETUP SCRIPT STILL RUNNING — status below is provisional'
+mkdir -p "$fixture/.intent"
+printf '{}\n' >"$fixture/.intent/config.json"
+printf '#!/bin/sh\n' >"$fixture/.intent/setup-wrapper-0123456789abcdef0123456789abcdef.cmd"
+idle=$(fixture_setup)
+[[ "$idle" == '{"markers": [], "running": false}' ]] || fail "idle setup fixture reported $idle"
+fixture_human_status >"$temp_dir/idle.txt"
+! grep -q "$banner" "$temp_dir/idle.txt" || fail "human status printed the provisional banner without a setup marker"
+[[ "$(head -n1 "$temp_dir/idle.txt")" == "Intent worktree status" ]] \
+  || fail "human status did not start with the header when idle: $(head -n1 "$temp_dir/idle.txt")"
+
+marker=".intent/setup-0123456789abcdef0123456789abcdef.sh"
+printf '#!/bin/sh\nsleep 60\n' >"$fixture/$marker"
+running=$(fixture_setup)
+[[ "$running" == "{\"markers\": [\"$marker\"], \"running\": true}" ]] || fail "running setup fixture reported $running"
+fixture_human_status >"$temp_dir/running.txt"
+[[ "$(head -n1 "$temp_dir/running.txt")" == "SETUP SCRIPT STILL RUNNING — status below is provisional ($marker)" ]] \
+  || fail "human status did not lead with the provisional banner: $(head -n1 "$temp_dir/running.txt")"
+grep -q '^Intent worktree status$' "$temp_dir/running.txt" || fail "provisional status dropped the regular report"
+
+rm "$fixture/$marker"
+after=$(fixture_setup)
+[[ "$after" == '{"markers": [], "running": false}' ]] || fail "setup fixture after marker removal reported $after"
+! grep -q "$banner" <(fixture_human_status) || fail "human status kept the provisional banner after the marker was removed"
 
 echo "dev-status tests passed (no-gh ${elapsed_ms}ms)"
