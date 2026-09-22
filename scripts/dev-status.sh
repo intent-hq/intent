@@ -11,7 +11,8 @@
 # Knobs: STATUS_JSON=1 (or --json) emits JSON; DEV_STATUS_PORT_TIMEOUT=<seconds>
 # bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok);
 # DEV_STATUS_PROBE_TIMEOUT=<seconds> bounds every other probe (doctor, sandbox
-# status and health, git, gh; default 10, fractional ok).
+# status and health, git, gh; default 10, fractional ok). Either knob is ignored
+# with a warning unless it is a positive number of at most 86400 seconds.
 
 set -euo pipefail
 
@@ -38,6 +39,11 @@ import urllib.request
 
 root, json_output = sys.argv[1], sys.argv[2] == "1"
 
+# subprocess/socket timeouts overflow their C representation for huge finite
+# values (1e20 raised OverflowError instead of degrading), so one day is the
+# ceiling either knob accepts.
+TIMEOUT_MAX = 86400.0
+
 
 def timeout_from_env(name, default):
     raw = os.environ.get(name)
@@ -47,10 +53,11 @@ def timeout_from_env(name, default):
         value = float(raw)
     except ValueError:
         value = None
-    if value is None or not math.isfinite(value) or value <= 0:
+    if value is None or not math.isfinite(value) or value <= 0 or value > TIMEOUT_MAX:
         print(
             f"dev-status: ignoring {name}={raw!r} "
-            f"(expected a positive number of seconds); using {default:g}",
+            f"(expected a positive number of seconds, at most {TIMEOUT_MAX:g}); "
+            f"using {default:g}",
             file=sys.stderr,
         )
         return default
