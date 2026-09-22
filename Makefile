@@ -125,7 +125,7 @@ ports: ## Print this worktree's resolved development ports
 	fi
 	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
 
-status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe, default 10)
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe and DEV_STATUS_PROBE_TIMEOUT=<seconds> every other probe, default 10 each)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 

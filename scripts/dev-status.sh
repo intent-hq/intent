@@ -9,7 +9,10 @@
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
 # Knobs: STATUS_JSON=1 (or --json) emits JSON; DEV_STATUS_PORT_TIMEOUT=<seconds>
-# bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok).
+# bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok);
+# DEV_STATUS_PROBE_TIMEOUT=<seconds> bounds every other probe (doctor, sandbox
+# status and health, git, gh; default 10, fractional ok). Either knob is ignored
+# with a warning unless it is a positive number of at most 86400 seconds.
 
 set -euo pipefail
 
@@ -23,6 +26,7 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 exec python3 - "$repo_root" "$json_output" <<'PY'
+import functools
 import json
 import math
 import os
@@ -35,8 +39,59 @@ import urllib.request
 
 root, json_output = sys.argv[1], sys.argv[2] == "1"
 
+# subprocess/socket timeouts overflow their C representation for huge finite
+# values (1e20 raised OverflowError instead of degrading), so one day is the
+# ceiling either knob accepts.
+TIMEOUT_MAX = 86400.0
 
-def run(command, *, cwd=root, env=None, timeout=3):
+
+def timeout_from_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0 or value > TIMEOUT_MAX:
+        print(
+            f"dev-status: ignoring {name}={raw!r} "
+            f"(expected a positive number of seconds, at most {TIMEOUT_MAX:g}); "
+            f"using {default:g}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
+# port block (~0.8 s each on a loaded host, more when explicit ports are set or
+# the preferred block is busy); the former 2 s budget emptied "ports" under
+# load, and 10 s keeps generous headroom for loaded hosts while still bounding
+# the report.
+PORT_TIMEOUT_DEFAULT = 10.0
+
+# The doctor (bootstrap-dev-host.sh --check) and dev-sandbox.sh status each
+# cost ~0.9 s on a 32-core host at load average 16 and exceeded the former 3 s
+# budget at load ~50, emptying "sandboxes"; 10 s matches the port knob's
+# headroom. Every non-port probe (doctor, sandbox status and health, git, gh)
+# shares this budget.
+PROBE_TIMEOUT_DEFAULT = 10.0
+
+
+@functools.lru_cache(maxsize=None)
+def port_timeout():
+    return timeout_from_env("DEV_STATUS_PORT_TIMEOUT", PORT_TIMEOUT_DEFAULT)
+
+
+@functools.lru_cache(maxsize=None)
+def probe_timeout():
+    return timeout_from_env("DEV_STATUS_PROBE_TIMEOUT", PROBE_TIMEOUT_DEFAULT)
+
+
+def run(command, *, cwd=root, env=None, timeout=None):
+    if timeout is None:
+        timeout = probe_timeout()
     try:
         return subprocess.run(
             command,
@@ -84,32 +139,6 @@ def doctor_status():
     }
 
 
-# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
-# port block (~0.8 s each on a loaded host, more when explicit ports are set or
-# the preferred block is busy); the former 2 s budget emptied "ports" under
-# load, and 10 s keeps generous headroom for loaded hosts while still bounding
-# the report.
-PORT_TIMEOUT_DEFAULT = 10.0
-
-
-def port_timeout():
-    raw = os.environ.get("DEV_STATUS_PORT_TIMEOUT")
-    if raw is None or not raw.strip():
-        return PORT_TIMEOUT_DEFAULT
-    try:
-        value = float(raw)
-    except ValueError:
-        value = None
-    if value is None or not math.isfinite(value) or value <= 0:
-        print(
-            f"dev-status: ignoring DEV_STATUS_PORT_TIMEOUT={raw!r} "
-            f"(expected a positive number of seconds); using {PORT_TIMEOUT_DEFAULT:g}",
-            file=sys.stderr,
-        )
-        return PORT_TIMEOUT_DEFAULT
-    return value
-
-
 def port_status():
     result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=port_timeout())
     ports = {}
@@ -146,7 +175,7 @@ def sandbox_health(url):
         return None
     health_url = urllib.parse.urljoin(url.rstrip("/") + "/", "__sandbox/health")
     try:
-        with urllib.request.urlopen(health_url, timeout=0.4) as response:
+        with urllib.request.urlopen(health_url, timeout=probe_timeout()) as response:
             payload = json.load(response)
         return payload if isinstance(payload, dict) else None
     except (OSError, ValueError, urllib.error.URLError):
@@ -154,7 +183,7 @@ def sandbox_health(url):
 
 
 def git_output(path, *arguments):
-    result = run(["git", "-C", path, *arguments], timeout=1)
+    result = run(["git", "-C", path, *arguments])
     if result is None or result.returncode != 0:
         return None
     return result.stdout.strip()
@@ -186,7 +215,6 @@ def branch_pr(path, branch):
         ["gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
          "--json", "number,url,state,statusCheckRollup"],
         cwd=path,
-        timeout=3,
     )
     if result is None or result.returncode != 0:
         return None
@@ -277,7 +305,7 @@ def repo_status(relative_path, gh_ready):
 def github_ready():
     if shutil.which("gh") is None:
         return False
-    result = run(["gh", "auth", "status"], timeout=1)
+    result = run(["gh", "auth", "status"])
     return result is not None and result.returncode == 0
 
 
