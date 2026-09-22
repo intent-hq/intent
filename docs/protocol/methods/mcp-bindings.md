@@ -261,7 +261,7 @@ ws.terminal.readOutput(terminalId, maxLines?) → string
 ```text
 ws.workspace.applyProposal(proposalIdOrIdempotencyKey, { userRequested: true, title?, initialPrompt? }) → { ok, proposalId, outcome, workspace, initialAgent?, overrides?, alreadyResolved?, resolveWarning? }
 ws.workspace.archive() → { ok, status, archivedAt }
-ws.workspace.details() → { id, title, hasTitle, status, statusMessage, statusImageAssetId, branch, repositoryName, tags }
+ws.workspace.details() → { id, title, hasTitle, status, statusMessage, statusImageAssetId, branch, repositoryName, tags, setupStatus }
 ws.workspace.info() → { id, path }
 ws.workspace.proposeSibling({ title, initialPrompt, specialist?, baseRef? }) → { ok, proposalId, proposal, ... }
 ws.workspace.setAgentName(name) → { ok, name }
