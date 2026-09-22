@@ -585,6 +585,22 @@ test('without RULESET_ADMIN_TOKEN the bypass actors are not checked: one warning
   assert.match(one.stdout, /the bypass actors of the intent-hq\/intentd rulesets are not checked/);
 });
 
+test('on a pull_request or merge_group run the token-absent message is a notice, not a warning', async (t) => {
+  const cwd = makeRepo(t);
+  for (const event of ['pull_request', 'merge_group']) {
+    const io = capture();
+    const exitCode = await run([], { cwd, env: { GITHUB_EVENT_NAME: event }, fetchImpl: fetchFromFixture(fixtureWithRulesets()), ...io });
+    assert.equal(exitCode, 0, io.err.join('\n'));
+    assert.equal(io.out.filter((line) => line.startsWith('::warning::')).length, 0, event);
+    const notices = io.out.filter((line) => line.startsWith('::notice::'));
+    assert.equal(notices.length, 1, event);
+    assert.match(notices[0], /RULESET_ADMIN_TOKEN is not set; the bypass actors of the .* rulesets are not checked/);
+  }
+  const scheduled = capture();
+  await run([], { cwd, env: { GITHUB_EVENT_NAME: 'schedule' }, fetchImpl: fetchFromFixture(fixtureWithRulesets()), ...scheduled });
+  assert.equal(scheduled.out.filter((line) => /^::warning::check-rulesets: RULESET_ADMIN_TOKEN is not set/.test(line)).length, 1);
+});
+
 test('a ruleset detail without bypass_actors warns and is skipped, and --update leaves the allow-list alone', async (t) => {
   const partial = liveRulesets('intent');
   delete partial[orgRuleset.id].bypass_actors;

@@ -242,7 +242,10 @@ with no rollback.
   half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
   read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to
   such a caller) and is fail-soft: without it the bypass actors are skipped with a
-  warning, so set it locally too when running `UPDATE=1` for a bypass change. A PR whose
+  warning, so set it locally too when running `UPDATE=1` for a bypass change. The
+  bypass-actor comparison is deliberately confined to `ruleset-drift.yml`, which runs
+  main's code; the `ruleset-check` CI job runs the script from the PR head or the
+  merged tree, so it never receives the token and skips the bypass actors. A PR whose
   gate is red cannot enter the queue, and the queue reruns CI on the actual merged
   tree (`merge_group` runs of the same check) before landing. A monorepo PR also
   cannot enter the queue while any review thread is unresolved: auto-merge arms but

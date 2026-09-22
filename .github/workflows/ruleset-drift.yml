@@ -11,6 +11,10 @@
 # intent, intentd and cloudlands-fe: GitHub returns a ruleset's bypass_actors
 # only to such a caller. It is fail-soft — when the secret is absent the
 # bypass actors are skipped with a warning and the rules are still checked.
+# This workflow is the only one that receives the token: it runs main's code,
+# whereas ci.yml's ruleset-check runs the script from the PR head or the merged
+# tree, where unreviewed code could read the secret, so the bypass-actor
+# comparison is deliberately confined to this workflow.
 name: Ruleset drift
 
 on:

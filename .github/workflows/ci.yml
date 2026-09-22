@@ -224,11 +224,14 @@ jobs:
   # #5455). Public endpoint, so GITHUB_TOKEN only lifts the rate limit;
   # transient API failures warn and pass. The effective rules omit each
   # ruleset's bypass_actors, which GitHub returns only to a caller with
-  # administration read; RULESET_ADMIN_TOKEN (a fine-grained PAT with that
-  # permission on the three repositories) lets the check compare them with
-  # .github/rulesets/*.bypass.json (#5510), and is fail-soft: absent (as on a
-  # fork PR), the bypass actors are skipped with a warning. ruleset-drift.yml
-  # runs the same check daily, since a ruleset edit on GitHub triggers no PR.
+  # administration read; their comparison with .github/rulesets/*.bypass.json
+  # (#5510) is deliberately confined to ruleset-drift.yml, which runs main's
+  # code on a schedule: this job runs scripts/check-rulesets.mjs from the PR
+  # head or the merged tree, so RULESET_ADMIN_TOKEN (administration read on all
+  # three repositories) is never passed to it. Without the token the script
+  # skips the bypass actors with a notice and still checks the rules.
+  # ruleset-drift.yml also covers the rules daily, since a ruleset edit on
+  # GitHub triggers no PR.
   ruleset-check:
     runs-on: ubuntu-latest
     steps:
@@ -242,7 +245,6 @@ jobs:
       - run: node scripts/check-rulesets.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RULESET_ADMIN_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}
 
   # Guard release footer tokens in PR prose and branch commit messages unless
   # the release impact is explicitly acknowledged with a label.

@@ -632,8 +632,9 @@ export async function run(argv, { cwd = process.cwd(), env = process.env, fetchI
     exitCode = Math.max(exitCode, code);
   };
   if (!adminToken) {
+    const level = env.GITHUB_EVENT_NAME === 'pull_request' || env.GITHUB_EVENT_NAME === 'merge_group' ? 'notice' : 'warning';
     stdout.log(
-      `::warning::check-rulesets: ${ADMIN_TOKEN_VARIABLE} is not set; the bypass actors of the ${options.repos.map((repo) => `${OWNER}/${repo}`).join(', ')} rulesets are not checked (GitHub returns them only to a token with administration read on the repository).`,
+      `::${level}::check-rulesets: ${ADMIN_TOKEN_VARIABLE} is not set; the bypass actors of the ${options.repos.map((repo) => `${OWNER}/${repo}`).join(', ')} rulesets are not checked (GitHub returns them only to a token with administration read on the repository).`,
     );
   }
 
