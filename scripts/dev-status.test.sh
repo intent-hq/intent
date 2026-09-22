@@ -249,7 +249,7 @@ for rejected in abc 1e20; do
 import json
 import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
-assert set(report) == {"host", "ports", "sandboxes", "repos", "docs"}, set(report)
+assert set(report) == {"setup", "host", "ports", "sandboxes", "repos", "docs"}, set(report)
 assert isinstance(report["sandboxes"], list), report["sandboxes"]
 PY
 done
