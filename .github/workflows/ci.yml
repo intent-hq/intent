@@ -166,6 +166,7 @@ jobs:
       - run: git submodule update --init --depth=1 packages/intentd
       - run: |
           echo "shell tests: host-specific daemon and pnpm behavior is stubbed"
+          bash scripts/auto-bump-submodules.test.sh
           bash scripts/bootstrap-dev-host.test.sh
           bash scripts/ci-gate.test.sh
           bash scripts/consumer-checks.test.sh
