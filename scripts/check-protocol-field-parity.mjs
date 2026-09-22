@@ -20,6 +20,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
+
 const MODEL_RS = 'packages/intentd/crates/intent-core/src/model.rs';
 
 export const PAIRS = [
@@ -529,9 +531,14 @@ async function exists(p) {
   }
 }
 
-function submoduleOf(file) {
-  const m = file.match(/^(packages\/[^/]+)\//);
-  return m ? m[1] : null;
+/** The stdout line naming the submodule ref a pair's files were read from, or null when no ref is known. */
+export function formatRefBanner(ref) {
+  return formatBanner(ref, { check: 'check-protocol-field-parity', what: 'sources' });
+}
+
+/** The stderr warning for a submodule checkout that is off the recorded pin, or null. */
+export function formatRefOffPinWarning(ref) {
+  return formatOffPinWarning(ref);
 }
 
 // `{ source }` when readable, `{ skipped: true }` when the file's submodule is
@@ -548,14 +555,16 @@ async function readManifestFile(root, file) {
 }
 
 /**
- * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped }`.
- * `warnings` are the stale ignore entries; only `errors` fail the check.
+ * Run every manifest pair against `root`; returns `{ errors, warnings, checked, skipped, refs }`.
+ * `warnings` are the stale ignore entries; only `errors` fail the check. `refs` holds one submodule
+ * ref per distinct `packages/<name>` a compared file was read from, in first-read order.
  */
 export async function runChecks(root, pairs = PAIRS) {
   const errors = [];
   const warnings = [];
   const checked = [];
   const skipped = [];
+  const refs = new Map();
   for (const pair of pairs) {
     const [rust, ts] = await Promise.all([readManifestFile(root, pair.rust.file), readManifestFile(root, pair.ts.file)]);
     for (const r of [rust, ts]) if (r.error) errors.push(r.error);
@@ -565,15 +574,24 @@ export async function runChecks(root, pairs = PAIRS) {
       continue;
     }
     if (rust.error || ts.error) continue;
+    for (const dir of [submoduleOf(pair.rust.file), submoduleOf(pair.ts.file)]) {
+      if (dir && !refs.has(dir)) refs.set(dir, describeCheckout(root, dir));
+    }
     for (const d of comparePair(pair, rust.source, ts.source)) (d.severity === 'warning' ? warnings : errors).push(d);
     checked.push(pairLabel(pair));
   }
-  return { errors, warnings, checked, skipped };
+  return { errors, warnings, checked, skipped, refs: [...refs.values()] };
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { errors, warnings, checked, skipped } = await runChecks(root);
+  const { errors, warnings, checked, skipped, refs } = await runChecks(root);
+  for (const ref of refs) {
+    const banner = formatRefBanner(ref);
+    const offPin = formatRefOffPinWarning(ref);
+    if (banner) console.log(banner);
+    if (offPin) console.error(offPin);
+  }
   for (const s of skipped) console.log(s);
   for (const w of warnings) console.error(formatDiagnostic(w));
   const warningSummary = warnings.length > 0 ? `${warnings.length} warning(s): stale ignore entries` : '';

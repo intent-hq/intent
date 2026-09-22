@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { CheckError, DEFAULT_INTENTD_DIR, createGitlinkReader, resolveGitlink } from './check-makefile-targets.mjs';
+import {
+  describeCheckout as describeSubmoduleCheckout,
+  formatBanner as formatRefBanner,
+  formatOffPinWarning as formatRefOffPinWarning,
+} from './submodule-ref.mjs';
 
 export const INTENTD_DIR = DEFAULT_INTENTD_DIR;
 export const TOOLS_RS_IN_INTENTD = 'crates/intent-acp/src/mcp_server/tools.rs';
@@ -352,37 +356,21 @@ async function walkMarkdown(dir, rel = '') {
 
 const short = (sha) => sha.slice(0, 7);
 
-/** Output of a git command, or null when it fails (not a repository, unknown ref, ...). */
-function gitOrNull(args, cwd) {
-  try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch {
-    return null;
-  }
-}
-
 /** The intentd commit the checkout is at and the gitlink HEAD records; either is null when git cannot tell. */
 export function describeCheckout(root) {
-  return {
-    source: 'checkout',
-    checkout: gitOrNull(['-C', path.join(root, INTENTD_DIR), 'rev-parse', 'HEAD'], root),
-    pin: gitOrNull(['rev-parse', `HEAD:${INTENTD_DIR}`], root),
-  };
+  return describeSubmoduleCheckout(root, INTENTD_DIR);
 }
 
 /** The stdout line naming the intentd ref the help text was read from, or null when no ref is known. */
 export function formatBanner(ref) {
-  if (!ref) return null;
-  if (ref.source === 'pin') return `check-mcp-bindings: intentd help text from recorded pin ${short(ref.pin)}`;
-  if (!ref.checkout) return null;
-  const pin = ref.pin ? short(ref.pin) : 'unreadable';
-  return `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout ${short(ref.checkout)} (recorded pin ${pin})`;
+  return formatRefBanner(ref, { check: 'check-mcp-bindings', what: 'help text' });
 }
 
 /** The stderr warning for a checkout that is off the recorded pin, or null when it is at the pin (or unknown). */
 export function formatOffPinWarning(ref) {
-  if (!ref || ref.source !== 'checkout' || !ref.checkout || !ref.pin || ref.checkout === ref.pin) return null;
-  return `warning: ${INTENTD_DIR} checkout ${short(ref.checkout)} is off the recorded pin ${short(ref.pin)}; results reflect the checkout, not the pin. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.`;
+  return formatRefOffPinWarning(ref, {
+    remedy: 'Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.',
+  });
 }
 
 /**
@@ -395,7 +383,7 @@ async function readToolsRs(root, { pinned }) {
   const pin = resolveGitlink({ cwd: root, intentdDir: INTENTD_DIR });
   const reader = createGitlinkReader(pin, { cwd: root, intentdDir: INTENTD_DIR });
   const rustText = reader.exists(TOOLS_RS_IN_INTENTD) ? reader.read(TOOLS_RS_IN_INTENTD) : null;
-  return { rustText, ref: { source: 'pin', pin } };
+  return { rustText, ref: { source: 'pin', dir: INTENTD_DIR, pin } };
 }
 
 /** Run all three checks against `root`; returns `{ errors, skipped, wrote, bindings, ref }`. */

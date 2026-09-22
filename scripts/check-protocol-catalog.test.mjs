@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   CATALOG_PATH,
@@ -12,12 +14,19 @@ import {
   collectDocumentedMethods,
   extractRustCatalog,
   formatError,
+  formatRefBanner,
+  formatRefOffPinWarning,
   formatWarning,
   methodNamesInFirstCell,
   parseCatalog,
   runChecks,
   tokenizeRowSuffixes,
 } from './check-protocol-catalog.mjs';
+import { submoduleOf } from './submodule-ref.mjs';
+import { cleanNodeEnv } from './test-env.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./check-protocol-catalog.mjs', import.meta.url));
+const INTENTD_DIR = submoduleOf(INTENTD_CATALOG_PATH);
 
 const CATALOG = `> Part of the protocol docs — §5 Method Catalog.
 
@@ -343,6 +352,77 @@ test('Layer 2 is skipped (exit 0 on Layer 1 alone) when catalog.rs is absent', a
   assert.deepEqual(result.warnings, []);
   assert.equal(result.layer2Ran, false);
   assert.equal(result.skipped, `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`);
+  assert.equal(result.ref, null);
+});
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+};
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+// A passing fixture whose packages/intentd is a nested git repo with catalog.rs committed and recorded as
+// the monorepo gitlink. `advance()` commits an extra router method in intentd so the checkout moves off the pin.
+async function makeGitRoot(t) {
+  const root = await makeRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const intentd = path.join(root, INTENTD_DIR);
+  git(intentd, 'init', '-q', '-b', 'main');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'pin');
+  const pin = git(intentd, 'rev-parse', 'HEAD');
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${pin},${INTENTD_DIR}`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  const advance = async () => {
+    await fs.writeFile(path.join(root, INTENTD_CATALOG_PATH), RUST.replace('    "agent.stop",\n', '    "agent.stop",\n    "agent.unwatch",\n'));
+    git(intentd, 'commit', '-q', '-am', 'ahead of the pin');
+    return git(intentd, 'rev-parse', 'HEAD');
+  };
+  return { root, pin, advance };
+}
+
+const runCli = (root) => spawnSync(process.execPath, [SCRIPT, root], { encoding: 'utf8', env: cleanNodeEnv() });
+
+test('a root outside any git repository yields an unknown ref: no banner, no warning, checks unchanged', async () => {
+  const result = await runChecks(await makeRoot());
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: null, pin: null });
+  assert.equal(formatRefBanner(result.ref), null);
+  assert.equal(formatRefOffPinWarning(result.ref), null);
+});
+
+test('at the pin: the banner names checkout == pin on stdout, no warning, exit code and output otherwise unchanged', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const result = await runChecks(root);
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin });
+  assert.equal(formatRefOffPinWarning(result.ref), null);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, `check-protocol-catalog: intentd catalog.rs from ${INTENTD_DIR} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nProtocol method catalog is consistent (Layer 1 + Layer 2).\n`);
+  assert.equal(cli.stderr, '');
+});
+
+test('off the pin: results reflect the checkout and the stderr warning names both SHAs without changing the exit code', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  assert.notEqual(head, pin);
+  const result = await runChecks(root);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
+  assert.ok(messages(result).length >= 1, 'the checkout catalog.rs (with the extra method) is what was compared');
+  assert.match(messages(result).join('\n'), /agent\.unwatch/);
+  const banner = `check-protocol-catalog: intentd catalog.rs from ${INTENTD_DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\n`;
+  const warning = `warning: ${INTENTD_DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)}; results reflect the checkout, not the pin. Run git submodule update --checkout ${INTENTD_DIR} to compare against the pin.\n`;
+  const cli = runCli(root);
+  assert.equal(cli.status, 1);
+  assert.equal(cli.stdout, banner);
+  assert.ok(cli.stderr.startsWith(warning), cli.stderr);
+  assert.match(cli.stderr, /agent\.unwatch/);
 });
 
 test('extractRustCatalog pulls the four constants from a realistic snippet', () => {

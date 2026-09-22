@@ -409,24 +409,25 @@ const names = (result) => result.bindings.map((b) => b.name);
 test('formatBanner and formatOffPinWarning render the ref shapes; unknown refs print nothing', () => {
   const checkout = 'a'.repeat(40);
   const pin = 'b'.repeat(40);
-  assert.equal(formatBanner({ source: 'checkout', checkout, pin }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin bbbbbbb)`);
-  assert.equal(formatBanner({ source: 'checkout', checkout, pin: null }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin unreadable)`);
-  assert.equal(formatBanner({ source: 'pin', pin }), 'check-mcp-bindings: intentd help text from recorded pin bbbbbbb');
-  assert.equal(formatBanner({ source: 'checkout', checkout: null, pin }), null);
+  const dir = INTENTD_DIR;
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout, pin }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin bbbbbbb)`);
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout, pin: null }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout aaaaaaa (recorded pin unreadable)`);
+  assert.equal(formatBanner({ source: 'pin', dir, pin }), 'check-mcp-bindings: intentd help text from recorded pin bbbbbbb');
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout: null, pin }), null);
   assert.equal(formatBanner(null), null);
   assert.equal(
-    formatOffPinWarning({ source: 'checkout', checkout, pin }),
+    formatOffPinWarning({ source: 'checkout', dir, checkout, pin }),
     `warning: ${INTENTD_DIR} checkout aaaaaaa is off the recorded pin bbbbbbb; results reflect the checkout, not the pin. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.`,
   );
-  assert.equal(formatOffPinWarning({ source: 'checkout', checkout: pin, pin }), null);
-  assert.equal(formatOffPinWarning({ source: 'checkout', checkout, pin: null }), null);
-  assert.equal(formatOffPinWarning({ source: 'pin', pin }), null);
+  assert.equal(formatOffPinWarning({ source: 'checkout', dir, checkout: pin, pin }), null);
+  assert.equal(formatOffPinWarning({ source: 'checkout', dir, checkout, pin: null }), null);
+  assert.equal(formatOffPinWarning({ source: 'pin', dir, pin }), null);
   assert.equal(formatOffPinWarning(null), null);
 });
 
 test('a root outside any git repository yields an unknown ref: no banner, no warning, checks unchanged', async () => {
   const root = await makeRoot({ docs: { 'methods/agents.md': VALID_DOC }, index: renderIndex(allBindings()) });
-  assert.deepEqual(describeCheckout(root), { source: 'checkout', checkout: null, pin: null });
+  assert.deepEqual(describeCheckout(root), { source: 'checkout', dir: INTENTD_DIR, checkout: null, pin: null });
   const result = await runChecks(root);
   assert.deepEqual(messages(result), []);
   assert.equal(formatBanner(result.ref), null);
@@ -439,7 +440,7 @@ test('at the pin: the banner names checkout == pin, no warning, exit code and ou
   const { root, pin } = await makeGitRoot(t);
   const result = await runChecks(root);
   assert.deepEqual(messages(result), []);
-  assert.deepEqual(result.ref, { source: 'checkout', checkout: pin, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin });
   assert.equal(formatOffPinWarning(result.ref), null);
   const cli = runCli(root);
   assert.equal(cli.status, 0, cli.stderr);
@@ -452,7 +453,7 @@ test('off the pin: results reflect the checkout and the stderr warning names bot
   const head = await advance();
   assert.notEqual(head, pin);
   const result = await runChecks(root);
-  assert.deepEqual(result.ref, { source: 'checkout', checkout: head, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
   assert.ok(names(result).includes('ws.agent.unwatch'), 'the checkout help text is what was parsed');
   assert.equal(messages(result).length, 1);
   assert.match(messages(result)[0], /ws\.agent\.unwatch is in the help text but missing from the index/);
@@ -473,7 +474,7 @@ test('--pinned reads tools.rs at the recorded gitlink through git objects, never
   await fs.writeFile(path.join(intentd, TOOLS_RS_IN_INTENTD), 'fn main() {}');
   assert.equal(messages(await runChecks(root)).length, 2, 'the checkout run sees the dirty worktree file');
   const pinned = await runChecks(root, { pinned: true });
-  assert.deepEqual(pinned.ref, { source: 'pin', pin });
+  assert.deepEqual(pinned.ref, { source: 'pin', dir: INTENTD_DIR, pin });
   assert.deepEqual(messages(pinned), []);
   assert.ok(!names(pinned).includes('ws.agent.unwatch'), 'the pin does not have the checkout-only binding');
   assert.equal(pinned.bindings.length, 11);

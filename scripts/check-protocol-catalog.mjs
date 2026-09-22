@@ -5,6 +5,8 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
+import { describeCheckout, formatBanner, formatOffPinWarning, submoduleOf } from './submodule-ref.mjs';
+
 export const CATALOG_PATH = 'docs/protocol/05-method-catalog.md';
 export const METHODS_DIR = 'docs/protocol/methods';
 export const INTENTD_CATALOG_PATH = 'packages/intentd/crates/intent-transport/src/catalog.rs';
@@ -356,7 +358,17 @@ async function readIfExists(file) {
   }
 }
 
-/** Run both layers against `root`; returns `{ errors, warnings, skipped, layer2Ran }`. */
+/** The stdout line naming the intentd ref catalog.rs was read from, or null when no ref is known. */
+export function formatRefBanner(ref) {
+  return formatBanner(ref, { check: 'check-protocol-catalog', what: 'catalog.rs' });
+}
+
+/** The stderr warning for an intentd checkout that is off the recorded pin, or null. */
+export function formatRefOffPinWarning(ref) {
+  return formatOffPinWarning(ref);
+}
+
+/** Run both layers against `root`; returns `{ errors, warnings, skipped, layer2Ran, ref }` (`ref` is null when Layer 2 did not run). */
 export async function runChecks(root) {
   const catalogText = await fs.readFile(path.join(root, CATALOG_PATH), 'utf8');
   const catalog = parseCatalog(catalogText);
@@ -369,15 +381,19 @@ export async function runChecks(root) {
   );
   const errors = checkLayer1(catalog, docs);
   const rustText = await readIfExists(path.join(root, INTENTD_CATALOG_PATH));
-  if (rustText === null) return { errors, warnings: [], skipped: `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`, layer2Ran: false };
+  if (rustText === null) return { errors, warnings: [], skipped: `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`, layer2Ran: false, ref: null };
   const layer2 = checkLayer2(catalog, extractRustCatalog(rustText), docs);
   errors.push(...layer2.errors);
-  return { errors, warnings: layer2.warnings, skipped: null, layer2Ran: true };
+  return { errors, warnings: layer2.warnings, skipped: null, layer2Ran: true, ref: describeCheckout(root, submoduleOf(INTENTD_CATALOG_PATH)) };
 }
 
 async function main() {
   const root = process.argv[2] ? path.resolve(process.argv[2]) : process.cwd();
-  const { errors, warnings, skipped, layer2Ran } = await runChecks(root);
+  const { errors, warnings, skipped, layer2Ran, ref } = await runChecks(root);
+  const banner = formatRefBanner(ref);
+  const offPin = formatRefOffPinWarning(ref);
+  if (banner) console.log(banner);
+  if (offPin) console.error(offPin);
   if (skipped) console.log(skipped);
   for (const w of warnings) console.error(formatWarning(w));
   if (errors.length === 0) {

@@ -112,6 +112,7 @@ jobs:
         with:
           node-version: 22
       - run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
+      - run: node --test scripts/submodule-ref.test.mjs
       - run: node --test scripts/check-protocol-catalog.test.mjs
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
