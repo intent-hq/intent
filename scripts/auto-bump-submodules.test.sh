@@ -9,6 +9,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/auto-bump-submodules.sh"
 checker="$repo_root/scripts/check-mcp-bindings.mjs"
+# Sibling modules the checker imports; the fixture copies them alongside it.
+checker_deps=(check-makefile-targets.mjs submodule-ref.mjs)
 temp_dir=$(mktemp -d)
 bin_dir="$temp_dir/bin"
 stub_dir="$temp_dir/stub"
@@ -121,6 +123,7 @@ publish_intentd() {
 git_fx init -q -b main "$mono"
 mkdir -p "$mono/scripts" "$mono/docs/protocol/methods" "$mono/packages/intentd"
 cp "$checker" "$mono/scripts/check-mcp-bindings.mjs"
+for dep in "${checker_deps[@]}"; do cp "$repo_root/scripts/$dep" "$mono/scripts/$dep"; done
 printf '# Protocol docs\n' >"$mono/docs/protocol/README.md"
 printf '[submodule "intentd"]\n\tpath = packages/intentd\n\turl = %s\n' "$intentd_url" >"$mono/.gitmodules"
 gen="$temp_dir/gen"
