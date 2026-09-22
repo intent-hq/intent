@@ -7,6 +7,13 @@
 # auto/submodule-bump branch is force-updated with the new gitlink(s), pushed,
 # and a PR is created or updated with auto-merge (squash) enabled.
 #
+# When packages/intentd moves, the bump also regenerates the generated
+# docs/protocol/methods/mcp-bindings.md index from the ws.* help text in
+# tools.rs at the new tip (a single-blob partial fetch, no clone), so the bump
+# tree already passes check-mcp-bindings. The index is only touched when it
+# differs from HEAD's, and any failure along the way is a warning: the
+# gitlink-only bump still lands.
+#
 # packages/ios is best-effort: if its remote tip cannot be read (private repo,
 # no token access), it is skipped with a warning and never fails the run.
 #
@@ -16,6 +23,9 @@
 set -euo pipefail
 
 BRANCH="auto/submodule-bump"
+INTENTD_PATH="packages/intentd"
+TOOLS_RS="crates/intent-acp/src/mcp_server/tools.rs"
+INDEX_PATH="docs/protocol/methods/mcp-bindings.md"
 DRY_RUN=0
 for arg in "$@"; do
   case "$arg" in
@@ -37,6 +47,7 @@ names=()
 olds=()
 news=()
 repos=()
+urls=()
 while read -r key path; do
   name=${key#submodule.}
   name=${name%.path}
@@ -72,6 +83,7 @@ while read -r key path; do
   olds+=("$old")
   news+=("$new")
   repos+=("$repo")
+  urls+=("$url")
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
 
 if [ ${#paths[@]} -eq 0 ]; then
@@ -109,14 +121,76 @@ export GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-$GIT_AUTHOR_EMAIL}
 
 tmp_index=$(mktemp)
 pr_body_file=$(mktemp)
-trap 'rm -f "$tmp_index" "$pr_body_file"' EXIT
+tmp_work=$(mktemp -d)
+trap 'rm -f "$tmp_index" "$pr_body_file"; rm -rf "$tmp_work"' EXIT
+
+# Run git in another repository with the http credentials actions/checkout
+# persisted in this checkout's local config (the SUBMODULE_BUMP_TOKEN
+# extraheader), passed through the environment rather than argv.
+git_with_http_config() (
+  n=0
+  while read -r key value; do
+    export "GIT_CONFIG_KEY_$n=$key" "GIT_CONFIG_VALUE_$n=$value"
+    n=$((n + 1))
+  done < <(git config --local --get-regexp '^http\..*\.extraheader$' || true)
+  GIT_CONFIG_COUNT=$n exec git "$@"
+)
+
+# Regenerate the mcp-bindings index against tools.rs at the new intentd tip.
+# Sets index_blob to the regenerated index's blob id when it differs from
+# HEAD's; every failure only warns and leaves index_blob empty.
+index_blob=""
+regenerate_bindings_index() {
+  local url=$1 sha=$2 repo=$tmp_work/intentd.git root=$tmp_work/root new_blob head_blob
+  if ! command -v node >/dev/null 2>&1; then
+    warn "node not found; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  mkdir -p "$root/${INTENTD_PATH}/${TOOLS_RS%/*}"
+  # Partial fetch of one commit (trees only), then a lazy fetch of the single blob.
+  if ! { git init --quiet --bare "$repo" &&
+         git -C "$repo" remote add origin "$url" &&
+         git_with_http_config -C "$repo" fetch --quiet --depth=1 --filter=blob:none origin "$sha" &&
+         git_with_http_config -C "$repo" cat-file blob "$sha:$TOOLS_RS" > "$root/$INTENTD_PATH/$TOOLS_RS"; }; then
+    warn "$INTENTD_PATH: could not fetch $TOOLS_RS at ${sha:0:7}; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  if ! git archive "$head" docs/protocol | tar -x -C "$root"; then
+    warn "could not extract docs/protocol from HEAD; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  # A non-zero exit here is normally prose drift in docs/protocol, reported
+  # after the index was already written; the written index is still used.
+  if ! node scripts/check-mcp-bindings.mjs --write "$root"; then
+    warn "check-mcp-bindings exited non-zero against intentd ${sha:0:7}; using whatever index it wrote"
+  fi
+  if [ ! -f "$root/$INDEX_PATH" ]; then
+    warn "check-mcp-bindings did not write $INDEX_PATH; not regenerated"
+    return 0
+  fi
+  new_blob=$(git hash-object -w "$root/$INDEX_PATH")
+  head_blob=$(git rev-parse --verify --quiet "$head:$INDEX_PATH" || true)
+  if [ "$new_blob" = "$head_blob" ]; then
+    echo "$INDEX_PATH: unchanged by intentd ${sha:0:7}"
+  else
+    index_blob=$new_blob
+    echo "$INDEX_PATH: regenerated for intentd ${sha:0:7}"
+  fi
+}
 
 # Build the bumped tree in a temporary index; the worktree is never touched.
 head=$(git rev-parse HEAD)
 GIT_INDEX_FILE=$tmp_index git read-tree "$head"
 for i in "${!paths[@]}"; do
   GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "160000,${news[i]},${paths[i]}"
+  if [ "${paths[i]}" = "$INTENTD_PATH" ]; then
+    regenerate_bindings_index "${urls[i]}" "${news[i]}" || warn "$INDEX_PATH regeneration failed; continuing with the gitlink-only bump"
+  fi
 done
+if [ -n "$index_blob" ]; then
+  GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "100644,$index_blob,$INDEX_PATH"
+  commit_body+=$'\n'"$INDEX_PATH: regenerated from the new intentd ws.* help text"$'\n'
+fi
 tree=$(GIT_INDEX_FILE=$tmp_index git write-tree)
 
 # Skip the push when the remote branch already carries this exact tree, so
@@ -143,6 +217,10 @@ fi
     compare="https://github.com/${repos[i]}/compare/${olds[i]}...${news[i]}"
     echo "| ${paths[i]} | ${olds[i]:0:7} | ${news[i]:0:7} | [${olds[i]:0:7}...${news[i]:0:7}]($compare) |"
   done
+  if [ -n "$index_blob" ]; then
+    echo
+    echo "Also regenerates \`$INDEX_PATH\` from the new intentd \`ws.*\` help text (\`node scripts/check-mcp-bindings.mjs --write\`), so \`check-mcp-bindings\` passes on this tree."
+  fi
 } > "$pr_body_file"
 
 pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
