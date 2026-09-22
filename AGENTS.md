@@ -28,7 +28,9 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
 and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
-off its pin), and branch PR checks when `gh` is authenticated.
+off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
+lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
+when `gh` is authenticated.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
 system packages may require privilege. Do not discover prerequisites during a build: the
