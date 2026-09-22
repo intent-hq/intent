@@ -47,6 +47,7 @@ def make_args(root, **overrides):
         cache_dir=root / "cache",
         resume="0",
         force="0",
+        no_fail_fast="0",
         build_jobs="2",
         test_threads="1",
         label="test-changed",
@@ -512,6 +513,83 @@ class ResumableNextestTests(unittest.TestCase):
                 gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
             )
 
+    def test_no_fail_fast_flag_is_forwarded_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            default = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(default.execute(make_args(root)), 0)
+            self.assertNotIn("--no-fail-fast", default.run_commands[0])
+
+            enabled = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(enabled.execute(make_args(root, no_fail_fast="1")), 0)
+            self.assertIn("--no-fail-fast", enabled.run_commands[0])
+            self.assertTrue(
+                (root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"])) / "complete").is_file()
+            )
+
+            workspace = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            args = make_args(root, no_fail_fast="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(workspace.execute(args), 0)
+            self.assertEqual(workspace.run_commands[0][3], "--workspace")
+            self.assertIn("--no-fail-fast", workspace.run_commands[0])
+
+    def test_no_fail_fast_runs_every_plan_and_returns_first_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plans = ["-p alpha --test one", "-p beta"]
+            harness = PlannedRunHarness(
+                root,
+                [
+                    ([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 100),
+                    ([event("ok", "alpha::one$skipped")], 0),
+                ],
+            )
+            self.assertEqual(harness.execute(make_args(root, plan=plans, no_fail_fast="1")), 100)
+            self.assertEqual(len(harness.run_commands), 2)
+            for command in harness.run_commands:
+                self.assertIn("--no-fail-fast", command)
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertFalse((run_dir / "complete").exists())
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 100)
+            self.assertEqual(
+                run_record["results"],
+                [
+                    {"plan": plans[0], "passed": 1, "failed": 1, "ignored": 0, "exit_code": 100},
+                    {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
+                ],
+            )
+            self.assertEqual(
+                harness.output_lines[-2:],
+                [
+                    "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
+                    "(tests already passed for this tree)",
+                    f"[test-changed] record: {record_dir}",
+                ],
+            )
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("alpha::one", "skipped")},
+            )
+
+            trailing = PlannedRunHarness(
+                root,
+                [
+                    ([event("ok", "alpha::one$passes")], 0),
+                    ([event("failed", "alpha::one$fails")], 100),
+                    ([event("failed", "alpha::one$skipped")], 101),
+                ],
+            )
+            three = plans + ["-p gamma"]
+            self.assertEqual(trailing.execute(make_args(root, plan=three, no_fail_fast="1")), 100)
+            self.assertEqual(len(trailing.run_commands), 3)
+            record_three = run_dir / "changed" / gate.plan_key(gate.split_plans(three))
+            results = json.loads((record_three / "run.json").read_text())["results"]
+            self.assertEqual([result["exit_code"] for result in results], [0, 100, 101])
+            self.assertFalse((record_three / "complete").exists())
+
     def test_interrupted_run_terminates_cargo_and_still_prints_record(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -609,7 +687,7 @@ class Proc:
         return -15
 
 args = SimpleNamespace(repo_root=Path({str(root)!r}), intentd_dir="intentd", cache_dir=Path({str(root / "cache")!r}),
-    resume="0", force="0", build_jobs="2", test_threads="1", label="test-changed",
+    resume="0", force="0", no_fail_fast="0", build_jobs="2", test_threads="1", label="test-changed",
     plan=["-p alpha --test one"], base=None)
 with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.object(
     gate, "run", return_value={LISTING!r}

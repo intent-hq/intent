@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run nextest with an opt-in, complete-tree-keyed passed-test record."""
+"""Run nextest with an opt-in, complete-tree-keyed passed-test record.
+
+`--no-fail-fast 1` forwards `--no-fail-fast` to every `cargo nextest run` and
+keeps running the remaining `--plan` selections after one fails; the exit
+status is then the first non-zero plan status.
+"""
 
 from __future__ import annotations
 
@@ -368,6 +373,7 @@ def failure_exit_code(error: BaseException) -> int:
 
 def run_nextest(args: argparse.Namespace) -> int:
     label = args.label
+    no_fail_fast = args.no_fail_fast == "1"
     repo_root = Path(args.repo_root).resolve()
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     cache_dir = Path(args.cache_dir).expanduser().resolve()
@@ -502,6 +508,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 )
 
             status: int | None = None
+            first_failure: int | None = None
             descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             try:
                 for selection, config in zip(selections, configs):
@@ -514,6 +521,8 @@ def run_nextest(args: argparse.Namespace) -> int:
                         "--message-format", "libtest-json-plus",
                         "--message-format-version", "0.1",
                     ]
+                    if no_fail_fast:
+                        command.append("--no-fail-fast")
                     if resumed:
                         command.extend(["--no-tests", "pass"])
                     outcomes: dict[str, str] = {}
@@ -527,9 +536,14 @@ def run_nextest(args: argparse.Namespace) -> int:
                     finally:
                         result.update(tally(outcomes), exit_code=status)
                     if status != 0:
-                        break
+                        if not no_fail_fast:
+                            break
+                        if first_failure is None:
+                            first_failure = status
             finally:
                 os.close(descriptor)
+            if first_failure is not None:
+                status = first_failure
     except subprocess.CalledProcessError as error:
         print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
         exit_code = failure_exit_code(error)
@@ -555,6 +569,13 @@ def main() -> int:
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--resume", choices=("0", "1"), default="0")
     parser.add_argument("--force", choices=("0", "1"), default="0")
+    parser.add_argument(
+        "--no-fail-fast",
+        choices=("0", "1"),
+        default="0",
+        help="1 forwards --no-fail-fast to cargo nextest run and keeps running the "
+        "remaining --plan selections after one fails (default: %(default)s)",
+    )
     parser.add_argument("--build-jobs", required=True)
     parser.add_argument("--test-threads", required=True)
     parser.add_argument(
