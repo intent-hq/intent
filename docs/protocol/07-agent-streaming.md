@@ -292,6 +292,23 @@ fragment-only `textDelta` instead of accumulated `text`:
   a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
   snapshot.
 
+**Text-block `media` on live deltas (v10.7, additive — the image dimension sidecar, §5.5
+`agent.getConversation`).** A `text` block whose Markdown embeds a probeable image reference
+carries the presence-detected `media` map — `{ "<src>": { width, height } }`, keyed by the image
+`src` exactly as written in the Markdown (`![alt](<src>)`, before any client rewriting), valued by
+the image's intrinsic pixel dimensions read from the file header on the daemon's write path. The
+live-delta encoding is the **one exception to full-current-block for this field**: a live `text`
+chunk entity (`added` or `updated`, in both `deltaEncoding` modes) carries `media` with **only the
+entries resolved by that delta** — never the accumulated map — and the client **unions** them into
+the in-flight block's `media`; a chunk that resolved nothing omits the key (never `{}` or `null`).
+The persisted block's `media` equals the union of every entry sent live for that block, and the
+terminal reconcile frame carries that full union as part of the full current block, so the §7.1
+invariant holds: seq-0 snapshot reduced with every delta equals a fresh `agent.getConversation`
+read. Only `workspace-asset://…`, `intent://local/[<wsId>/]file/…`, and bare workspace-relative
+sources are probed; `http(s)://` and `data:` sources never appear in `media` (§5.5). `image`
+blocks carry their own `width` / `height` fields (§5.5) and are not part of `media`. Rows persisted
+before the sidecar shipped carry neither and render as before.
+
 **Non-assistant row deltas (`agent:message`, [intent-hq/intentd#747](https://github.com/intent-hq/intentd/pull/747)).**
 In addition to the `agent:stream:*` family and `agent:tool:call`, the channel tails the per-persist
 `agent:message` event (§6.5) — the forwarder's existing `sessionId == agentId` filter scopes it to
