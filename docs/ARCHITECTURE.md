@@ -1212,6 +1212,10 @@ Rules:
    It defines the domain vocabulary (ids, timestamps, errors, event types) and
    *traits* (`ContextEngine`, `WorkspaceApi`) that higher layers
    implement/consume.
+   (`intent-core` additionally carries a **dev-only**, version-less
+   dev-dependency on `intentd-test-support` — itself free of workspace
+   dependencies — for the shared source-lint scaffolding; the normal-build
+   leaf property is unchanged.)
 2. **`intent-transport` never touches `intent-store` directly.** It only
    depends on `intent-services`. This guarantees the RPC router and the agent
    MCP server share one code path.
