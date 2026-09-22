@@ -280,7 +280,7 @@ test('at the pin: the banner names checkout == pin on stdout, no warning, exit c
   const { root, dir, pin } = await makeGitRoot(t);
   const result = await inspectRepository(root);
   assert.deepEqual(result.failures, []);
-  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: pin, pin }]);
+  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: pin, pin, dirty: false }]);
   assert.equal(formatRefOffPinWarning(result.refs[0]), null);
   const cli = runCli(root);
   assert.equal(cli.status, 0, cli.stderr);
@@ -296,7 +296,7 @@ test('off the pin: results reflect the checkout and the stderr warning names bot
   const head = await advance();
   assert.notEqual(head, pin);
   const result = await inspectRepository(root);
-  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: head, pin }]);
+  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: head, pin, dirty: false }]);
   assert.deepEqual(result.failures, []);
   assert.equal(result.warnings.length, 1, 'the checkout golden (lagging) is what was compared');
   assert.equal(formatRefBanner(result.refs[0]), `check-event-catalog: intentd vendored copy from ${dir} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`);
@@ -335,7 +335,7 @@ test('an ios fixture fetched without packages/ios/.git yields no fabricated chec
   assert.deepEqual(result.failures, []);
   assert.deepEqual(result.skipped, []);
   assert.deepEqual(result.refs, [
-    { source: 'checkout', dir, checkout: pin, pin },
+    { source: 'checkout', dir, checkout: pin, pin, dirty: false },
     { source: 'checkout', dir: iosDir, checkout: null, pin: iosPin },
   ]);
   for (const ref of result.refs) assert.notEqual(ref.checkout, monorepoHead);

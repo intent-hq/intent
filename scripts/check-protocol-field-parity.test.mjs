@@ -512,7 +512,7 @@ test('at the pins: one banner per submodule names checkout == pin on stdout, no 
   const { root, pins, staleCount } = await makeGitRoot(t);
   const result = await runChecks(root);
   assert.deepEqual(result.errors, []);
-  assert.deepEqual(result.refs, SUBMODULES.map((dir) => ({ source: 'checkout', dir, checkout: pins[dir], pin: pins[dir] })));
+  assert.deepEqual(result.refs, SUBMODULES.map((dir) => ({ source: 'checkout', dir, checkout: pins[dir], pin: pins[dir], dirty: false })));
   for (const ref of result.refs) assert.equal(formatRefOffPinWarning(ref), null);
   const { code, stdout, stderr } = await runCli(root);
   assert.equal(code, 0, stderr);
@@ -527,8 +527,8 @@ test('off the intentd pin: the intentd banner names both SHAs, its stderr warnin
   assert.notEqual(head, pins['packages/intentd']);
   const result = await runChecks(root);
   assert.deepEqual(result.refs, [
-    { source: 'checkout', dir: 'packages/intentd', checkout: head, pin: pins['packages/intentd'] },
-    { source: 'checkout', dir: 'packages/cloudlands-fe', checkout: pins['packages/cloudlands-fe'], pin: pins['packages/cloudlands-fe'] },
+    { source: 'checkout', dir: 'packages/intentd', checkout: head, pin: pins['packages/intentd'], dirty: false },
+    { source: 'checkout', dir: 'packages/cloudlands-fe', checkout: pins['packages/cloudlands-fe'], pin: pins['packages/cloudlands-fe'], dirty: false },
   ]);
   assert.equal(result.errors.length, 1, 'the checkout source (with the extra field) is what was compared');
   assert.match(result.errors[0].message, /parentAgentId/);

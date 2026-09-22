@@ -45,17 +45,18 @@ function checkoutHead(dir) {
 
 /**
  * The commit the submodule checkout at `root/dir` is at and the gitlink HEAD records; either is null when git
- * cannot tell. `root` may be relative to the process cwd (`runChecks('.')`); it is resolved once here so git is
- * never handed a relative path as both cwd and target.
+ * cannot tell. A known checkout also carries `dirty`: true when its tracked files have uncommitted changes, so
+ * a result read from the working tree is not attributed to the commit HEAD names. `root` may be relative to the
+ * process cwd (`runChecks('.')`); it is resolved once here so git is never handed a relative path as both cwd
+ * and target.
  */
 export function describeCheckout(root, dir) {
   const absRoot = path.resolve(root);
-  return {
-    source: 'checkout',
-    dir,
-    checkout: checkoutHead(path.resolve(absRoot, dir)),
-    pin: gitOrNull(['rev-parse', `HEAD:${dir}`], absRoot),
-  };
+  const absDir = path.resolve(absRoot, dir);
+  const checkout = checkoutHead(absDir);
+  const ref = { source: 'checkout', dir, checkout, pin: gitOrNull(['rev-parse', `HEAD:${dir}`], absRoot) };
+  if (checkout) ref.dirty = (gitOrNull(['status', '--porcelain', '--untracked-files=no'], absDir) ?? '') !== '';
+  return ref;
 }
 
 /**
@@ -69,16 +70,23 @@ export function formatBanner(ref, { check, what }) {
   if (ref.source === 'pin') return `${check}: ${component} ${what} from recorded pin ${short(ref.pin)}`;
   if (!ref.checkout) return null;
   const pin = ref.pin ? short(ref.pin) : 'unreadable';
-  return `${check}: ${component} ${what} from ${ref.dir} checkout ${short(ref.checkout)} (recorded pin ${pin})`;
+  const dirty = ref.dirty ? ' (dirty)' : '';
+  return `${check}: ${component} ${what} from ${ref.dir} checkout ${short(ref.checkout)}${dirty} (recorded pin ${pin})`;
 }
 
 /**
- * The stderr warning for a checkout that is off the recorded pin, or null when it is at the pin (or unknown).
- * `remedy` is the trailing sentence telling the reader how to compare against the pin; the default restores
- * the checkout, a check with a pinned mode passes its own.
+ * The stderr warning for a checkout whose result does not reflect the recorded pin — off the pin, or at it
+ * with uncommitted changes — or null when it is clean at the pin (or unknown). `remedy` is the trailing
+ * sentence telling the reader how to compare against the pin; the default restores the checkout, a check with
+ * a pinned mode passes its own.
  */
 export function formatOffPinWarning(ref, { remedy } = {}) {
-  if (!ref || ref.source !== 'checkout' || !ref.checkout || !ref.pin || ref.checkout === ref.pin) return null;
+  if (!ref || ref.source !== 'checkout' || !ref.checkout || !ref.pin) return null;
+  const offPin = ref.checkout !== ref.pin;
+  if (!offPin && !ref.dirty) return null;
   const how = remedy ?? `Run git submodule update --checkout ${ref.dir} to compare against the pin.`;
+  if (!offPin) {
+    return `warning: ${ref.dir} checkout ${short(ref.checkout)} has uncommitted changes; results reflect the working tree, not the recorded pin ${short(ref.pin)}. ${how}`;
+  }
   return `warning: ${ref.dir} checkout ${short(ref.checkout)} is off the recorded pin ${short(ref.pin)}; results reflect the checkout, not the pin. ${how}`;
 }

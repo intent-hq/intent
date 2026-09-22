@@ -94,12 +94,12 @@ test('describeCheckout outside any git repository yields null refs: no banner, n
 
 test('describeCheckout reads the checkout HEAD and the recorded gitlink; at the pin they agree, off it they differ', async (t) => {
   const { root, pin, advance } = await makeGitRoot(t);
-  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin });
+  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin, dirty: false });
   assert.equal(formatOffPinWarning(describeCheckout(root, DIR)), null);
   const head = await advance();
   assert.notEqual(head, pin);
   const ref = describeCheckout(root, DIR);
-  assert.deepEqual(ref, { source: 'checkout', dir: DIR, checkout: head, pin });
+  assert.deepEqual(ref, { source: 'checkout', dir: DIR, checkout: head, pin, dirty: false });
   assert.equal(formatBanner(ref, { check: 'check-x', what: 'catalog' }), `check-x: intentd catalog from ${DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`);
   assert.match(formatOffPinWarning(ref), new RegExp(`^warning: ${DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)};`));
 });
@@ -112,14 +112,40 @@ test('describeCheckout reads the same refs for a relative root as for the absolu
   process.chdir(root);
   t.after(() => process.chdir(previous));
   assert.deepEqual(describeCheckout('.', DIR), describeCheckout(root, DIR));
-  assert.deepEqual(describeCheckout('.', DIR), { source: 'checkout', dir: DIR, checkout: pin, pin });
+  assert.deepEqual(describeCheckout('.', DIR), { source: 'checkout', dir: DIR, checkout: pin, pin, dirty: false });
   const head = await advance();
   const relative = describeCheckout('.', DIR);
   assert.deepEqual(relative, describeCheckout(root, DIR));
-  assert.deepEqual(relative, { source: 'checkout', dir: DIR, checkout: head, pin });
+  assert.deepEqual(relative, { source: 'checkout', dir: DIR, checkout: head, pin, dirty: false });
   assert.ok(formatOffPinWarning(relative), 'a relative root keeps the off-pin warning');
   process.chdir(path.dirname(root));
-  assert.deepEqual(describeCheckout(path.basename(root), DIR), { source: 'checkout', dir: DIR, checkout: head, pin });
+  assert.deepEqual(describeCheckout(path.basename(root), DIR), { source: 'checkout', dir: DIR, checkout: head, pin, dirty: false });
+});
+
+// A checkout at the pin whose tracked files carry uncommitted edits reads the working tree, not the pin: the
+// banner says so and the warning fires even though checkout == pin. Untracked files do not count.
+test('describeCheckout flags a dirty checkout at the pin; the banner and warning attribute the result to the working tree', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const intentd = path.join(root, DIR);
+  const label = { check: 'check-x', what: 'catalog' };
+  await fs.writeFile(path.join(intentd, 'untracked.txt'), 'scratch\n');
+  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin, dirty: false }, 'untracked files are not dirt');
+  await fs.writeFile(path.join(intentd, 'file.txt'), 'edited\n');
+  const ref = describeCheckout(root, DIR);
+  assert.deepEqual(ref, { source: 'checkout', dir: DIR, checkout: pin, pin, dirty: true });
+  assert.equal(formatBanner(ref, label), `check-x: intentd catalog from ${DIR} checkout ${pin.slice(0, 7)} (dirty) (recorded pin ${pin.slice(0, 7)})`);
+  assert.equal(
+    formatOffPinWarning(ref),
+    `warning: ${DIR} checkout ${pin.slice(0, 7)} has uncommitted changes; results reflect the working tree, not the recorded pin ${pin.slice(0, 7)}. Run git submodule update --checkout ${DIR} to compare against the pin.`,
+  );
+  assert.match(formatOffPinWarning(ref, { remedy: 'Use --pinned.' }), / Use --pinned\.$/);
+  git(intentd, 'add', 'file.txt');
+  assert.equal(describeCheckout(root, DIR).dirty, true, 'staged edits are dirt too');
+  git(intentd, 'checkout', '-q', '--', 'file.txt');
+  git(intentd, 'reset', '-q', '--hard');
+  assert.equal(describeCheckout(root, DIR).dirty, false);
+  assert.equal(formatOffPinWarning(describeCheckout(root, DIR)), null);
+  assert.equal(formatOffPinWarning({ source: 'checkout', dir: DIR, checkout: pin, pin: null, dirty: true }), null, 'an unreadable pin still warns nothing');
 });
 
 // The consumer-checks CI layout: a gitlink recorded for packages/ios and one fixture file fetched into it,
@@ -138,5 +164,5 @@ test('describeCheckout does not report the monorepo HEAD as the checkout of a su
   assert.notEqual(ref.checkout, monorepoHead);
   assert.equal(formatBanner(ref, { check: 'check-event-catalog', what: 'vendored copy' }), null);
   assert.equal(formatOffPinWarning(ref), null);
-  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin });
+  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin, dirty: false });
 });

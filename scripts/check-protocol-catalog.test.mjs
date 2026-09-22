@@ -400,7 +400,7 @@ test('at the pin: the banner names checkout == pin on stdout, no warning, exit c
   const { root, pin } = await makeGitRoot(t);
   const result = await runChecks(root);
   assert.deepEqual(messages(result), []);
-  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: false });
   assert.equal(formatRefOffPinWarning(result.ref), null);
   const cli = runCli(root);
   assert.equal(cli.status, 0, cli.stderr);
@@ -413,7 +413,7 @@ test('off the pin: results reflect the checkout and the stderr warning names bot
   const head = await advance();
   assert.notEqual(head, pin);
   const result = await runChecks(root);
-  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
   assert.ok(messages(result).length >= 1, 'the checkout catalog.rs (with the extra method) is what was compared');
   assert.match(messages(result).join('\n'), /agent\.unwatch/);
   const banner = `check-protocol-catalog: intentd catalog.rs from ${INTENTD_DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\n`;

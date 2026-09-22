@@ -423,6 +423,11 @@ test('formatBanner and formatOffPinWarning render the ref shapes; unknown refs p
   assert.equal(formatOffPinWarning({ source: 'checkout', dir, checkout, pin: null }), null);
   assert.equal(formatOffPinWarning({ source: 'pin', dir, pin }), null);
   assert.equal(formatOffPinWarning(null), null);
+  assert.equal(formatBanner({ source: 'checkout', dir, checkout: pin, pin, dirty: true }), `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout bbbbbbb (dirty) (recorded pin bbbbbbb)`);
+  assert.equal(
+    formatOffPinWarning({ source: 'checkout', dir, checkout: pin, pin, dirty: true }),
+    `warning: ${INTENTD_DIR} checkout bbbbbbb has uncommitted changes; results reflect the working tree, not the recorded pin bbbbbbb. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.`,
+  );
 });
 
 test('a root outside any git repository yields an unknown ref: no banner, no warning, checks unchanged', async () => {
@@ -440,7 +445,7 @@ test('at the pin: the banner names checkout == pin, no warning, exit code and ou
   const { root, pin } = await makeGitRoot(t);
   const result = await runChecks(root);
   assert.deepEqual(messages(result), []);
-  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: false });
   assert.equal(formatOffPinWarning(result.ref), null);
   const cli = runCli(root);
   assert.equal(cli.status, 0, cli.stderr);
@@ -448,12 +453,30 @@ test('at the pin: the banner names checkout == pin, no warning, exit code and ou
   assert.equal(cli.stderr, '');
 });
 
+test('dirty at the pin: an edited tools.rs is read from the working tree, the banner says (dirty) and stderr warns without changing the exit code', async (t) => {
+  const { root, intentd, pin } = await makeGitRoot(t);
+  const edited = RUST.replace('  ws.agent.watch(agentId)', '  ws.agent.unwatch(id) → { ok, removed }  // Stop watching.\n  ws.agent.watch(agentId)');
+  await fs.writeFile(path.join(intentd, TOOLS_RS_IN_INTENTD), edited);
+  const result = await runChecks(root);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: true });
+  assert.ok(names(result).includes('ws.agent.unwatch'), 'the working-tree help text is what was parsed');
+  assert.equal(messages(result).length, 1);
+  const cli = runCli(root);
+  assert.equal(cli.status, 1);
+  assert.equal(cli.stdout, `check-mcp-bindings: intentd help text from ${INTENTD_DIR} checkout ${pin.slice(0, 7)} (dirty) (recorded pin ${pin.slice(0, 7)})\n`);
+  assert.ok(cli.stderr.startsWith(`warning: ${INTENTD_DIR} checkout ${pin.slice(0, 7)} has uncommitted changes; results reflect the working tree, not the recorded pin ${pin.slice(0, 7)}. Run PINNED=1 make check-mcp-bindings (node scripts/check-mcp-bindings.mjs --pinned) to compare against the pin.\n`), cli.stderr);
+  assert.match(cli.stderr, /ws\.agent\.unwatch is in the help text but missing from the index/);
+  const pinned = runCli(root, '--pinned');
+  assert.equal(pinned.status, 0, pinned.stderr);
+  assert.equal(pinned.stderr, '', 'the pinned run reads git objects and is not dirty');
+});
+
 test('off the pin: results reflect the checkout and the stderr warning names both SHAs without changing the exit code', async (t) => {
   const { root, pin, advance } = await makeGitRoot(t);
   const head = await advance();
   assert.notEqual(head, pin);
   const result = await runChecks(root);
-  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
   assert.ok(names(result).includes('ws.agent.unwatch'), 'the checkout help text is what was parsed');
   assert.equal(messages(result).length, 1);
   assert.match(messages(result)[0], /ws\.agent\.unwatch is in the help text but missing from the index/);
@@ -475,7 +498,7 @@ test('runChecks with a relative root reports the same off-pin ref as the absolut
   process.chdir(root);
   t.after(() => process.chdir(previous));
   const relative = await runChecks('.');
-  assert.deepEqual(relative.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
+  assert.deepEqual(relative.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
   assert.deepEqual(relative.ref, (await runChecks(root)).ref);
   assert.ok(formatBanner(relative.ref));
   assert.ok(formatOffPinWarning(relative.ref));
