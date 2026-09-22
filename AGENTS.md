@@ -265,10 +265,10 @@ with no rollback.
   what lands as the squash title.
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: run the package gates before opening a PR — `make check` / `make test`
-  from the monorepo root; see `packages/intentd/AGENTS.md` → Gates. Coverage runs
-  on CI (the `coverage-e2e` / `coverage-all` jobs in intentd's ci.yml) and can be
-  reproduced locally with `make coverage-e2e` / `make coverage-all` — `make test`
-  deliberately excludes these slow instrumented runs.
+  from the monorepo root or from `packages/intentd` (its Makefile forwards the gate
+  targets to the root); see `packages/intentd/AGENTS.md` → Gates. Coverage runs on CI
+  (intentd ci.yml's `coverage-e2e` / `coverage-all` jobs); `make coverage-e2e` /
+  `make coverage-all` reproduce it locally — `make test` excludes these slow runs.
 
 ### Resuming local Rust gates
 
