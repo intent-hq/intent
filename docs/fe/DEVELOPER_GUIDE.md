@@ -136,8 +136,11 @@ socket and HTTP readiness probes.
 (`{ready, detail}` from the doctor's `[optional] cargo-llvm-cov` row; `ready` only when
 cargo-llvm-cov and llvm-tools-preview are both present), submodule dirty and
 ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
-submodule HEAD has moved off it, and optional PR/check summaries when GitHub
-authentication is available. The report is read-only, including stale sandbox state.
+submodule HEAD has moved off it, `behindOriginMain` (commits the checked-out submodule
+HEAD lags the already-fetched local `refs/remotes/origin/main`; `null` when the submodule
+is uninitialized or the ref is missing — no fetch is performed), and optional PR/check
+summaries when GitHub authentication is available. The report is read-only, including
+stale sandbox state.
 The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
 (default 10, fractional allowed) and reports `{}` when that budget is exceeded.
 

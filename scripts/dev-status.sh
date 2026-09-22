@@ -4,6 +4,7 @@
 #  "coverageTooling":{"ready":bool,"detail":string}},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
+#  "behindOriginMain":int|null,
 #  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
@@ -214,6 +215,17 @@ def recorded_pin(relative_path):
     return fields[2]
 
 
+def behind_origin_main(path):
+    # Counts against the already-fetched remote-tracking ref only; no fetch.
+    if git_output(path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main") is None:
+        return None
+    count = git_output(path, "rev-list", "--count", "HEAD..refs/remotes/origin/main")
+    try:
+        return int(count)
+    except (TypeError, ValueError):
+        return None
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
     pin = recorded_pin(relative_path)
@@ -229,6 +241,7 @@ def repo_status(relative_path, gh_ready):
             "behind": None,
             "pin": short_pin,
             "gitlinkDirty": False,
+            "behindOriginMain": None,
         }
 
     branch = git_output(path, "branch", "--show-current") or None
@@ -242,6 +255,7 @@ def repo_status(relative_path, gh_ready):
         "behind": None,
         "pin": short_pin,
         "gitlinkDirty": bool(pin and head and head != pin),
+        "behindOriginMain": behind_origin_main(path),
     }
     if branch is None:
         repo["head"] = git_output(path, "rev-parse", "--short", "HEAD")
@@ -326,6 +340,13 @@ for name, repo in report["repos"].items():
             f" PR #{pr['number']} checks={checks['passing']} pass/"
             f"{checks['pending']} pending/{checks['failing']} fail"
         )
-    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{pr_text}")
+    lag = repo["behindOriginMain"]
+    lag_text = f" behind-origin/main={'-' if lag is None else lag}"
+    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{lag_text}{pr_text}")
+    if lag:
+        print(
+            f"           pin is {lag} commit(s) behind origin/main — branch component work "
+            "from origin/main; auto-bump-submodules will advance the pin"
+        )
 print(f"Docs       {report['docs']['remoteHost']}")
 PY
