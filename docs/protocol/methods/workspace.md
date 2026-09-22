@@ -1302,8 +1302,9 @@ alongside `activePullRequest` and carries the reconciliation candidates the FE m
 [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)): the PR sits in the
 host's merge queue (GitHub GraphQL `isInMergeQueue`). The key is present as `true` exactly
 when a **signal-bearing** read — the on-demand fold (§5.27), which rides every read served
-through the shared PR cache by `github.pulls.get` or `ws.pr.snapshot`, cache hit or miss, not
-only a read that reached the forge — reported the PR queued, and **omitted** (never `null` / `false`)
+through the shared PR cache by `github.pulls.get` or `ws.pr.snapshot`, cache hit or miss (a
+hit projects only this field, onto a same-head copy, §5.27), not only a read that reached the
+forge — reported the PR queued, and **omitted** (never `null` / `false`)
 otherwise; a reported `false` and an unreported state both land as absent, matching the
 presence-only `MergeRequirements.isInMergeQueue` (§5.42). The field exists because a
 merge-queued PR reads `mergeableState: "clean"` on GitHub's REST API (REST never reports
@@ -1868,8 +1869,8 @@ carries PR data and unregistering a PR-bearing root (`ws.git.registerRoot` /
 same way, so removing the root lapses its rung back to the base rollup. An unchanged
 sweep emits nothing. The **on-demand fold** (§5.27,
 [intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923)) is a recompute
-site too: a PR snapshot served to `github.pulls.get` or `ws.pr.snapshot` — a fetch, or a
-cache hit whose served snapshot the persisted copy has not seen (§5.27) — is upserted into
+site too: a PR snapshot served to `github.pulls.get` or `ws.pr.snapshot` — a fetch; a cache
+hit only projects `isInMergeQueue` onto same-head copies whose signal differs (§5.27) — is upserted into
 every non-archived, non-remote
 workspace — and every secondary git root of such a workspace — referencing the PR by URL
 (a root only updates an existing pool entry and its linked `prStatus` / `prUrl`, §5.27),
