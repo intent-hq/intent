@@ -154,9 +154,10 @@ PR lands first (the upstream check warns about the now-extra docs entry; a docs-
 removal is rejected as a component extra) and the docs entry is removed after the bump. A
 **rename** is an addition: document the new name first, keeping the old entry, rename in
 the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
-upstream (`make mcp-bindings-doc` regenerates its index in the monorepo), and a Makefile
-change that depends on an intentd PR still waits for the auto-bump
-(`check-makefile-targets`). For an urgent bump, dispatch the workflow instead of filing a PR:
+upstream (the auto-bump regenerates its index in the bump commit, so a help-line change
+needs no manual pin PR), and a Makefile change that depends on an intentd PR still waits
+for the auto-bump (`check-makefile-targets`). For an urgent bump, dispatch the workflow
+instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml

@@ -41,6 +41,13 @@ jobs:
           token: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
           submodules: false
 
+      # node runs scripts/check-mcp-bindings.mjs to regenerate the bindings
+      # index inside the bump commit when the intentd pin moves.
+      - uses: actions/setup-node@v7
+        if: steps.token.outputs.present == 'true'
+        with:
+          node-version: 22
+
       - name: Bump submodule pins
         if: steps.token.outputs.present == 'true'
         env:
