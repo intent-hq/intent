@@ -56,10 +56,14 @@
 >
 > - `github.authStatus` validates the resolved token via `GET /user` and reports connection state,
 >   plus the in-flight device flow (if any) under `deviceFlow`.
-> - `github.connect` starts the flow (or returns the **same codes** while one is still pending —
->   idempotent); terminal transitions are pushed as `github:auth-changed` events (§6.5).
-> - `github.cancelAuth` aborts a pending flow; `github.revoke` deletes the **stored** token (env /
->   `gh` fallbacks are untouched — they re-resolve on the next probe).
+> - `github.connect` starts the flow (or returns the **same codes** — and the same `flowId` — while
+>   one is still pending — idempotent); terminal transitions are pushed as `github:auth-changed`
+>   events (§6.5).
+> - `github.cancelAuth` aborts a pending flow — **scoped to a flow** when the caller passes the
+>   `flowId` its `github.connect` returned (a stale id is a no-op, so a caller cannot cancel a
+>   *newer* flow it did not start; the omitted-`flowId` form is the legacy unscoped call, kept for
+>   compatibility); `github.revoke` deletes the **stored** token (env / `gh` fallbacks are
+>   untouched — they re-resolve on the next probe).
 > - **Identity** is GitHub-derived: `github.getUser` returns the authenticated user from `GET /user`.
 >
 > **🔒 Secret guardrail.** The PAT is a secret: it is **never logged, echoed, or returned** over the
@@ -104,8 +108,8 @@ GitHub/service failure → `-32603` with a descriptive `message`
 | Method | Params | Result |
 | --- | --- | --- |
 | github.authStatus | — | { isConfigured, oauthUrl, configuredButNeedsUpdate, updatedScopes, deviceFlow } — `isConfigured` = a token resolves **and** `GET /user` succeeds. `deviceFlow` is `null` when no flow is in flight, else `{ status: "pending"\|"expired"\|"denied"\|"error", userCode, verificationUri, expiresIn, interval }`; while a flow is live `oauthUrl` carries the `verificationUri` (FE shape parity). `configuredButNeedsUpdate` is `false` and `updatedScopes` is `""` (kept for FE shape parity) |
-| github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
-| github.cancelAuth | — | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise) |
+| github.connect | — | { ok: true, userCode, verificationUri, expiresIn, interval, flowId } — starts the OAuth **device flow** (or returns the SAME codes while one is pending — idempotent). `flowId` is an **opaque string** identifying the **flow, not the caller**: unique per started flow within the daemon process (it is not a device code and never sensitive — administrator-only surface). The daemon holds a single flow, so a concurrent connect that adopts the resident live flow **shares** it — same codes, same `flowId` — and can therefore cancel it too. Callers SHOULD hand the id back to `github.cancelAuth { flowId }`: what it prevents is a caller cancelling a *newer* flow it did not start (the late-cleanup case of cloudlands-fe#2794). The daemon polls GitHub in the background; terminal transitions arrive as `github:auth-changed` events (§6.5). A missing/empty `sourceControl.github.oauthClientId` or an unreachable login host → `-32603` |
+| github.cancelAuth | flowId? | { ok: true, cancelled } — aborts a pending device flow (`cancelled: true` iff one was pending; idempotent no-op otherwise). **Flow-scoped when `flowId` is present**: the pending flow is aborted only if its id equals the `flowId` a `github.connect` returned; a stale or unknown id ⇒ `{ ok: true, cancelled: false }` and nothing else is touched — the pending flow keeps polling and `github.authStatus` still reports it. The id identifies the flow, not the caller: every client whose connect returned that id (including one that adopted the live flow) can cancel it; what a scoped cancel cannot do is abort a *newer* flow the caller did not start. An **omitted** `flowId` is the **legacy unscoped call** (aborts whatever flow is pending), kept for compatibility; clients SHOULD pass the `flowId` they received — the no-stale-cancel guarantee holds among clients that do. A non-string `flowId` → `-32602`; "nothing pending" is never an error |
 | github.revoke | — | { ok: true } — deletes the **stored** `sourceControl.github.token` and aborts any in-flight flow; emits `github:auth-changed { status: "revoked" }`. Idempotent; env / `gh` fallbacks are untouched. Also best-effort logs a locally installed `gh` out of github.com, but **only** when gh's active token exactly matches the token being revoked — i.e. the login the authorize-side sync created; any other gh login is never touched, and a logout failure never affects the revoke (behavior-only, no wire-shape change) |
 | github.getUser | — | { user: GithubUser \| null } — authenticated identity from `GET /user`; never includes the token. A GitHub **rate limit** on the probe (primary quota exhausted or a secondary limit — any cause the daemon classifies as `RateLimited`) is `-32603 { code: "rate-limited" }` (§9): the stored token is present and valid, so clients wait for the limit to lift and retry after a backoff instead of treating it as "not connected" or prompting a reconnect |
 | github.users.search | query (req), limit? | { users: { id, login, avatarUrl, htmlUrl }[] } — **administrator-only** login-prefix user search over `GET /search/users` for the collaborator picker (v10.3). Missing `query` → `-32602`; a blank query, or one with no leading run of login characters (ASCII alphanumerics and `-`), answers `{ users: [] }` without a forge call — only that leading run reaches GitHub's search parser, so qualifiers / booleans typed after it are dropped. `limit` defaults to **8** and is clamped into `[1, 10]` |
@@ -114,7 +118,8 @@ GitHub/service failure → `-32603` with a descriptive `message`
 
 Since v10.5 each of the five auth rows above is an **alias**: `github.<name>` ≡ `sourceControl.<name>`
 with `provider: "github"` (any `provider` / `host` / `method` / `token` param on a `github.*` alias is
-ignored — the alias never reads params). The alias result is the **projection** documented in the
+ignored — the only param an alias reads is `github.cancelAuth`'s optional `flowId`, above). The alias
+result is the **projection** documented in the
 row — the additive `sourceControl.*` fields (`provider`, `host`, `method`, `user`,
 `deviceGrantSupported`) are stripped so the `github.*` shapes stay byte-identical. Since v10.6 the two
 `github.identityProof.*` rows are aliases of `sourceControl.identityProof.*` the same way (params
@@ -360,10 +365,11 @@ interface ReviewThreadComment {
 ```json
 // → start the OAuth device flow (daemon polls GitHub in the background)
 { "jsonrpc":"2.0","id":53,"method":"github.connect","params":{} }
-// ← response — the user enters userCode at verificationUri
+// ← response — the user enters userCode at verificationUri; flowId identifies THIS flow —
+//   pass it to github.cancelAuth { flowId } so a late cancel never aborts a newer flow
 { "jsonrpc":"2.0","id":53,"result":{
   "ok": true, "userCode": "ABCD-1234", "verificationUri": "https://github.com/login/device",
-  "expiresIn": 900, "interval": 5 } }
+  "expiresIn": 900, "interval": 5, "flowId": "7" } }
 // … the user authorizes on github.com; the daemon's background poll persists
 //   the token server-side and pushes the terminal transition:
 { "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"…","event":{
