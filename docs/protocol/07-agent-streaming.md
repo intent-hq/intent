@@ -279,9 +279,11 @@ as the id-bearing entities. Each entity carries the **full current block** (not 
 `{ agentId, messageId, role }` pointer — `role` is the row's real role: `assistant` for the stream
 family, the persisted role (`user`/`system`/`tool`) for the non-assistant row deltas below — and
 `messageSeq` + `timestamp` on the authoritative frames (the terminal reconcile and the
-non-assistant row deltas). The one exception to full-current-block: under the opt-in
+non-assistant row deltas). Two exceptions to full-current-block: under the opt-in
 `deltaEncoding: "incremental"` (above), a live `text`/`thinking` chunk entity's block carries the
-fragment-only `textDelta` instead of accumulated `text`:
+fragment-only `textDelta` instead of accumulated `text`; and, in both encodings, a live `text`
+chunk's `media` map carries only the entries that chunk resolved (v10.7, "Text-block `media` on
+live deltas" below):
 
 - `added` — a block's first appearance this turn (e.g. a text block's first chunk, or a `tool_use`).
 - `updated` — an existing block grown/changed, matched by `id` (e.g. each subsequent text chunk
@@ -291,6 +293,27 @@ fragment-only `textDelta` instead of accumulated `text`:
   This is non-empty only for orphan self-heal: e.g. a trailing partial the durable turn dropped, or
   a mispredicted `tool_result` index. Clients **must** honor it when reducing deltas onto the
   snapshot.
+
+**Text-block `media` on live deltas (v10.7, additive — the image dimension sidecar, §5.5
+`agent.getConversation`).** A `text` block whose Markdown embeds a probeable image reference
+carries the presence-detected `media` map — `{ "<src>": { width, height } }`, keyed by the image
+`src` exactly as written in the Markdown image reference's `(...)` target, before any client
+rewriting, valued by
+the image's intrinsic pixel dimensions read from the file header. The daemon probes on the
+**stream path**: when a text chunk completes an image reference it reads the header **before
+emitting that chunk's delta**, so the dimensions ride the same frame as the Markdown that needs
+them (no read-time probe, no backfill). This is the **second exception to full-current-block**: a
+live `text` chunk entity (`added` or `updated`, in both `deltaEncoding` modes) carries `media` with
+**only the entries resolved by that delta** — never the accumulated map — and the client **unions**
+them into the in-flight block's `media`; a chunk that resolved nothing omits the key (never `{}` or
+`null`). The daemon accumulates the same union and persists it as the block's `media`, and the
+terminal reconcile frame carries that full union as part of the full current block, so the §7.1
+invariant holds: seq-0 snapshot reduced with every delta equals a fresh `agent.getConversation`
+read. Only `workspace-asset://…`, `intent://local/[<wsId>/]file/…`, and bare workspace-relative
+sources are probed; `http(s)://` and `data:` sources never appear in `media` (§5.5). `image`
+blocks carry their own `width` / `height` fields (§5.5), stamped when the block is persisted, and
+are not part of `media`. Rows persisted before the sidecar shipped carry neither and render as
+before.
 
 **Non-assistant row deltas (`agent:message`, [intent-hq/intentd#747](https://github.com/intent-hq/intentd/pull/747)).**
 In addition to the `agent:stream:*` family and `agent:tool:call`, the channel tails the per-persist
