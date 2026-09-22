@@ -1,0 +1,11 @@
+# shellcheck policy for `make lint-shell` (scripts/*.sh, incl. the *.test.sh
+# suites). Repo-wide disables are reserved for rules that are pervasive and
+# deliberate; anything else is fixed at the source or annotated on the line.
+
+# Follow `source`/`.` lines into the sibling scripts instead of skipping them.
+external-sources=true
+
+# SC2016: the test suites write fixture scripts and `bash -c` bodies through
+# single-quoted heredocs and strings where `$var` must reach the child shell
+# unexpanded; that is the point of the quoting, not a mistake.
+disable=SC2016
