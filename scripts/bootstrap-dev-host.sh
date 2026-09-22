@@ -34,7 +34,9 @@ if [[ -n ${MAKELEVEL:-} ]]; then
     CALLER_PATH=${CALLER_PATH#"$make_prefix"}
   done
 fi
+# shellcheck disable=SC2030  # the subshell PATH is scoped on purpose: probe the caller's PATH without touching ours
 CALLER_CARGO=$( (PATH="$CALLER_PATH"; command -v cargo) 2>/dev/null ) || CALLER_CARGO=""
+# shellcheck disable=SC2031  # this is the real PATH edit; the subshell above never meant to change it
 PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_HOME PATH
 
@@ -46,6 +48,9 @@ GH_INSTALL_URL="https://github.com/cli/cli#installation"
 # jq: the release-notifier test suites parse GitHub API fixtures with it
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
+
+# make lint-shell runs shellcheck over scripts/*.sh.
+SHELLCHECK_INSTALL_URL="https://github.com/koalaman/shellcheck#installing"
 
 # Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
 # plus the llvm-tools-preview rustup component. Neither is required by make
@@ -468,6 +473,29 @@ jq_ready() {
   jq_version >/dev/null
 }
 
+# The --version output opens with a banner and carries the version on its own
+# `version: X.Y.Z` line, so report that line rather than the first one.
+shellcheck_version() {
+  command -v shellcheck >/dev/null 2>&1 || return 1
+  local output line
+  output=$(shellcheck --version 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      version:*)
+        line=${line#version:}
+        printf '%s\n' "${line# }"
+        return 0
+        ;;
+    esac
+  done <<<"$output"
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+# Like jq_ready: a shellcheck pathname on PATH that cannot run is not ready.
+shellcheck_ready() {
+  shellcheck_version >/dev/null
+}
+
 # Probed through cargo like the nextest check (not command -v), so a stale
 # cargo-llvm-cov binary that no longer runs counts as absent.
 llvm_cov_version() {
@@ -529,6 +557,7 @@ installable_gap_exists() {
   frontend_dependencies_ready || return 0
   gh_ready || return 0
   jq_ready || return 0
+  shellcheck_ready || return 0
   if [[ "$WITH_COVERAGE" == 1 ]]; then
     coverage_tooling_ready || return 0
   fi
@@ -697,6 +726,14 @@ check_all() {
     missing "jq: $(command -v jq) is on PATH but jq --version fails; reinstall it (run make bootstrap-dev-host)"
   else
     ok "jq: $(jq_version)"
+  fi
+
+  if ! command -v shellcheck >/dev/null 2>&1; then
+    missing "shellcheck: required by make lint-shell; run make bootstrap-dev-host"
+  elif ! shellcheck_ready; then
+    missing "shellcheck: $(command -v shellcheck) is on PATH but shellcheck --version fails; reinstall it (run make bootstrap-dev-host)"
+  else
+    ok "shellcheck: $(shellcheck_version)"
   fi
 
   if command -v sccache >/dev/null 2>&1; then
@@ -981,6 +1018,35 @@ install_jq() {
   hash -r
 }
 
+install_shellcheck() {
+  if shellcheck_ready; then
+    echo "[skip] shellcheck $(shellcheck_version) already installed"
+    return
+  fi
+
+  echo "[install] shellcheck"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install shellcheck on macOS; see $SHELLCHECK_INSTALL_URL" >&2; exit 1; }
+      brew install shellcheck || exit 1
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y shellcheck || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y ShellCheck || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y ShellCheck || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install shellcheck from $SHELLCHECK_INSTALL_URL and re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install shellcheck from $SHELLCHECK_INSTALL_URL" >&2; exit 1 ;;
+  esac
+  hash -r
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -1054,6 +1120,7 @@ install_node
 install_frontend
 install_gh
 install_jq
+install_shellcheck
 
 echo
 check_all

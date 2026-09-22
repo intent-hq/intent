@@ -76,7 +76,7 @@ is_listed() {
   return 1
 }
 
-# shellcheck disable=SC2086
+# shellcheck disable=SC2086  # $advisory and $checks are space-separated target lists; splitting is the point
 for target in $advisory; do
   is_listed "$target" $checks ||
     { echo "consumer-checks: unknown advisory target '$target'" >&2; usage; }
@@ -113,7 +113,7 @@ make_args() {
 
 results=""
 failed=0
-# shellcheck disable=SC2086
+# shellcheck disable=SC2086  # $checks / $advisory are target lists and $make_overrides / $args are make argv words; all must word-split
 for target in $checks; do
   args=$(make_args "$target")
   echo "==> make $make_overrides $args"

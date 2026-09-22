@@ -36,10 +36,10 @@
 #
 # check-mcp-bindings is advisory here: its generated index must match the
 # pinned help text line for line, so the docs cannot lead an intentd change to
-# a binding's help line; the regeneration is mechanical (`make mcp-bindings-doc`)
-# and stays a hard error in the monorepo. A failed monorepo checkout is
-# fail-soft (::warning::, job green) so a monorepo outage never blocks the
-# component repos.
+# a binding's help line; the auto-bump regenerates the index in its bump commit
+# (no manual pin PR) and the check stays a hard error in the monorepo. A failed
+# monorepo checkout is fail-soft (::warning::, job green) so a monorepo outage
+# never blocks the component repos.
 #
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:

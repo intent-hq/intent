@@ -222,8 +222,8 @@ if run_check; then
 fi
 grep -q '^scripts/a.test.sh: 2 unannotated fixed sleep(s), the baseline has no entry for it:$' <<<"$check_output" ||
   fail "file absent from the baseline did not report the missing entry: $check_output"
-grep -q '^scripts/a.test.sh:1: error: unannotated fixed sleep: sleep 1$' <<<"$check_output" &&
-  grep -q '^scripts/a.test.sh:3: error: unannotated fixed sleep: sleep 2$' <<<"$check_output" ||
+{ grep -q '^scripts/a.test.sh:1: error: unannotated fixed sleep: sleep 1$' <<<"$check_output" &&
+  grep -q '^scripts/a.test.sh:3: error: unannotated fixed sleep: sleep 2$' <<<"$check_output"; } ||
   fail "file absent from the baseline did not name every line: $check_output"
 
 write_baseline 'scripts/a.test.sh 3' 'scripts/b.test.sh 1'
@@ -371,10 +371,12 @@ harness_case prior-literal-03 - 1 - - 'sleep  0.2'
 harness_case prior-literal-04 - 1 - - $'sleep\t0.2'
 harness_case prior-literal-05 - 1 - - 'sleep "0.2"'
 harness_case prior-literal-06 - 1 - - "sleep '2'"
+# shellcheck disable=SC1003  # the fixture is a literal backslash-n and trailing backslash, not an escaped quote
 harness_case prior-literal-07 - 1 - - 'sleep {secs}\n\'
 harness_case prior-literal-08 - 1 - - 'while [ ! -e x ]; do sleep 0.05; done'
 harness_case prior-literal-09 - 1 - - 'sleep 0.2; sleep 60 &'
 harness_case prior-literal-10 - 0 - - 'thread::sleep(Duration::from_secs(1)); // sleep 60 &'
+# shellcheck disable=SC1003  # same literal-backslash fixture as prior-literal-07
 harness_case prior-literal-11 - 0 - - 'sleep 60 &\n\'
 harness_case prior-literal-12 - 0 - - 'while :; do sleep 60 & wait $!; done\n"'
 harness_case prior-literal-13 - 0 - - 'nosleep 10'

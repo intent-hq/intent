@@ -781,8 +781,9 @@ any of it — unlike the delete cascade below, nothing is deleted:
   only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
   refinements. **Combined flush of parked archive notices**: under the `"all"` flush
   mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
-  workspace whose queue holds parked ready-to-send entries (hook / PR-monitor
-  archive-cancellation wakes, parked automatic sends) no longer runs a DIRECT turn
+  workspace whose queue holds parked ready-to-send entries (the consolidated
+  `workspace_archive_wake` notice for cancelled hooks / PR monitors — see the two
+  teardown bullets below — parked automatic sends) no longer runs a DIRECT turn
   past them — the send converts to a user-origin enqueue + immediate drain kick
   (modeled on the former monorepo#1791 question-hold conversion, which v9.5 retired along with the hold — §5.5 "Pending questions"), returning the
   ordinary queued result `{ success: true, queued: true, queuedMessage, turnId }`,
@@ -813,21 +814,25 @@ any of it — unlike the delete cascade below, nothing is deleted:
   unarchived, so a park racing a manual unarchive is never stranded.
 - **Active background hooks are cancelled.** Every ACTIVE (`scheduled`/`running`) hook
   in the workspace (§5.40) goes through the `hook.cancel` machinery: scheduler task
-  aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5), and the
-  owner woken with an archive-specific notice — the wake itself parks behind the
-  archived gate above, so it queues at most and never starts a turn while archived.
-  Terminal hooks are untouched, and **unarchive does not resurrect cancelled hooks** —
-  the notice ("This hook was cancelled because its workspace was archived.") explains
-  why the watch stopped; the owner is expected to reschedule if the condition still
-  matters. Best-effort per hook: a store failure is logged and the sweep moves on
-  (archiving never fails because one hook row would not update).
+  aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5) — **silently
+  per hook** (no per-hook owner wake; since
+  [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074), harness
+  v2.7 — previously each hook queued its own per-item archive-cancellation wake). The
+  cancelled hooks are collected per owning agent for the
+  **consolidated post-unarchive notice** described after the next bullet. Terminal
+  hooks are untouched, and **unarchive does not resurrect cancelled hooks** — the
+  notice names each cancelled hook and how to re-arm it; the owner is expected to
+  reschedule if the condition still matters. Best-effort per hook: a store failure is
+  logged and the sweep moves on (archiving never fails because one hook row would not
+  update).
 - **Active PR monitors are cancelled** *([intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067); monorepo#1828)*.
   Every ACTIVE PR monitor in the workspace (§5.42) goes through the same core cancel
   transition as `prMonitor.cancel`, mirroring the hook sweep: state persisted to
   `cancelled` (guarded CAS — a concurrent cancel/complete winning the race is fine),
-  `prMonitor:cancelled` emitted (§6.5), and the owner woken with an archive-specific
-  notice ("This monitor was cancelled because its workspace was archived — it will not
-  report again.") that parks behind the archived gate above. Terminal
+  `prMonitor:cancelled` emitted (§6.5) — again **silently per monitor** (no per-monitor
+  owner wake since [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074);
+  previously each monitor queued its own per-item archive-cancellation wake); the
+  cancelled monitors join the same per-agent consolidated notice. Terminal
   (`completed`/`cancelled`) monitors are untouched, and **unarchive does not resurrect
   cancelled monitors** — the owner re-registers via `ws.pr.monitor` if the PR still
   matters. Each cancel transition ends with the transition-only
@@ -841,6 +846,41 @@ any of it — unlike the delete cascade below, nothing is deleted:
   step 4).
   Fail-soft per monitor: one row's cancel failure is logged and never aborts
   the sweep or the archive.
+- **One consolidated post-unarchive notice per affected agent** *(behavior only, no
+  wire-shape change; [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074),
+  harness v2.7 — see [HARNESS.md](../../HARNESS.md))*. After both sweeps, the archive
+  tail queues **exactly one** wake per agent that owned at least one cancelled hook
+  and/or PR monitor; agents with nothing cancelled receive nothing. The wake's
+  `messageMetadata` is `{ "type": "workspace_archive_wake", "hookIds": [...],
+  "prMonitorIds": [...] }` — both arrays always present, possibly empty (a
+  hook-only or monitor-only owner). It rides the ordinary automatic-wake delivery, so
+  it **parks behind the archived gate above** (queued at most, never a turn while
+  archived) and is delivered either by the `workspace.unarchive` drain kick or FIFO in
+  the combined flush turn of a post-archive user message (the "Combined flush of parked
+  archive notices" refinement above). Because the gate guarantees the notice is only
+  ever read after the workspace is Active again, its text is written for that moment —
+  it states the workspace has since been unarchived, lists every cancelled hook
+  (`name` + `hookId`) and monitor (PR label), says they were **NOT** resumed, and names
+  the re-arm calls. Sections for an empty kind are omitted, singular/plural handled;
+  one hook plus one monitor reads:
+
+  `[SYSTEM NOTICE] This workspace was archived and has since been unarchived. While it was archived, these background watches were cancelled and were NOT resumed: hook "Wait for shipped alpha" (<hookId>), PR monitor intent-hq/intentd#123. If a condition still matters, re-arm it: ws.hook.get(hookId) recovers a hook's script for ws.hook.schedule; ws.pr.monitor re-registers a PR.`
+
+  The `hook:cancelled` / `prMonitor:cancelled` events are unchanged, and hooks /
+  monitors are still NOT resumed on unarchive. **Ordering with completion watches**
+  (§Completion-watch persistence in agent-aux.md): the per-item cancels skip the
+  deferred-completion redelivery backstop; the tail runs it **once per owner, after
+  queueing that owner's notice** (on a queue failure too). When the notice was queued,
+  a parent's watch deferred on a monitoring-idle child therefore finds the parked notice
+  (ready-to-send → still deferred) and stays armed for the child's real post-unarchive
+  turn instead of being consumed at archive time by a synthesized completion against an
+  empty queue. On the (logged) queue-failure branch there is no parked notice, so that
+  backstop settles the deferred watch at archive time — the same fallback as a failed
+  external-cancel wake, so a lost notice never leaves a watch armed forever. The
+  notice carries no `hook_wake` / `pr_monitor_wake` metadata and none of the
+  `[Background hook "…"]` / `[PR monitor …]` prefixes, so the FE renders it as an
+  ordinary automated message. Best-effort per agent: a delivery failure is logged and
+  the tail moves on — the cancels themselves already persisted.
 
 One residual race is a deliberate trade-off: a drain that read the workspace row before
 the archive persisted can claim the in-flight slot after the sweep's busy-list snapshot,
