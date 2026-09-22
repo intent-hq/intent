@@ -104,8 +104,8 @@ Also within 10.3 (additive; the intentd multiplayer stack — principals and cal
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.6", server: { protocolVersion: "10.6", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.6", ... }`
+- `client.hello` response: `{ protocolVersion: "10.7", server: { protocolVersion: "10.7", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.7", ... }`
 
 ### Compatibility Policy
 
