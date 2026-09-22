@@ -127,7 +127,7 @@ run_doctor() {
   local started finished
   started=$(now_ms)
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
     BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
   finished=$(now_ms)
   elapsed_ms=$((finished - started))
@@ -318,6 +318,29 @@ expect_line "[missing]  jq: $bin_dir/jq is on PATH but jq --version fails"
 reject_line "[ok]       jq:"
 rm -f "$bin_dir/jq"
 
+# make lint-shell needs shellcheck; without it the doctor counts a required gap.
+run_doctor
+expect_line "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host"
+reject_line "[ok]       shellcheck:"
+gaps_without_shellcheck=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ -n "$gaps_without_shellcheck" ]] || fail "expected a gap summary without shellcheck"
+
+# The version row reads the `version:` line, not the banner shellcheck prints first.
+write_launcher shellcheck '[ "$1" = --version ] && { printf "ShellCheck - shell script analysis tool\nversion: 0.10.0\nlicense: GNU General Public License, version 3\n"; exit 0; }; exit 1'
+run_doctor
+expect_line "[ok]       shellcheck: 0.10.0"
+reject_line "[missing]  shellcheck:"
+gaps_with_shellcheck=$(sed -n 's/^Doctor found \([0-9][0-9]*\) required gap(s)\.$/\1/p' "$output")
+[[ "$gaps_with_shellcheck" == "$((gaps_without_shellcheck - 1))" ]] \
+  || fail "shellcheck did not count as one required gap: $gaps_without_shellcheck without vs $gaps_with_shellcheck with"
+
+# A shellcheck on PATH that cannot run is a broken install, not a pass.
+write_launcher shellcheck 'echo "cannot execute" >&2; exit 1'
+run_doctor
+expect_line "[missing]  shellcheck: $bin_dir/shellcheck is on PATH but shellcheck --version fails"
+reject_line "[ok]       shellcheck:"
+rm -f "$bin_dir/shellcheck"
+
 # A caller cargo that does not run the pinned toolchain draws a warning naming
 # the binary and both versions, without counting as a gap.
 printf '[toolchain]\nchannel = "1.96.0"\ncomponents = ["rustfmt", "clippy"]\n' >"$intentd_dir/rust-toolchain.toml"
@@ -346,14 +369,14 @@ write_launcher rustup "[ \"\$1\" = which ] && { echo $toolchain_bin/cargo; exit 
 write_launcher cargo 'echo "cargo 1.98.0 (0123abcd 2026-01-01) (Homebrew)"'
 make_path="$toolchain_bin/:$temp_dir/home/.cargo/bin:$bin_dir"
 PATH="$make_path" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL=1 \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL=1 \
   BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
 expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
 
 # Without MAKELEVEL the same PATH is the caller's own: the pinned toolchain
 # cargo is first, so the check is silent.
 PATH="$make_path" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' \
   BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
 reject_line "[warn]     cargo:"
 
@@ -364,7 +387,7 @@ custom_cargo_bin="$temp_dir/custom-cargo-bin"
 mkdir -p "$custom_cargo_bin"
 PATH="$toolchain_bin/:$custom_cargo_bin:$bin_dir" HOME="$temp_dir/home" \
   INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL=1 \
+  CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL=1 \
   CARGO_BIN_DIR="$custom_cargo_bin" \
   BOOTSTRAP_PROBE_TIMEOUT=2 bash "$script" --check >"$output" 2>&1 || true
 expect_line "[warn]     cargo: plain cargo is $bin_dir/cargo (1.98.0), not the pinned Rust 1.96.0"
@@ -514,7 +537,7 @@ tool_log="$temp_dir/tool.log"
 run_install_coverage() {
   : >"$tool_log"
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= TOOL_LOG="$tool_log" BOOTSTRAP_COVERAGE="$1" \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' TOOL_LOG="$tool_log" BOOTSTRAP_COVERAGE="$1" \
     bash -c 'funcs=$1; set --; source "$funcs"; load_versions; install_coverage_tooling' bash "$bootstrap_funcs" >"$output" 2>&1 \
     || fail "install_coverage_tooling exited non-zero with BOOTSTRAP_COVERAGE=$1"
 }
@@ -540,7 +563,7 @@ rm -f "$bin_dir/cargo" "$bin_dir/rustup"
 # ahead of it (intent-hq/intent#5509) does not report pnpm as not ready.
 run_pnpm_ready() {
   PATH="$bin_dir" HOME="$temp_dir/home" INTENTD_DIR="$intentd_dir" FE_DIR="$fe_dir" \
-    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT= MAKELEVEL= BOOTSTRAP_PROBE_TIMEOUT=2 \
+    CARGO_HOME="$temp_dir/home/.cargo" CARGO_INSTALL_ROOT='' MAKELEVEL='' BOOTSTRAP_PROBE_TIMEOUT=2 \
     bash -c 'funcs=$1; set --; source "$funcs"; load_versions; pnpm_ready; status=$?; printf "%s\n" "$PROBE_OUTPUT"; exit "$status"' bash "$bootstrap_funcs" >"$output" 2>&1
 }
 write_launcher corepack 'echo 0.35.0'

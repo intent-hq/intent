@@ -26,7 +26,7 @@ fail() {
   exit 1
 }
 
-always_on="bridge-test docs-check event-catalog-check shell-tests shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
+always_on="bridge-test docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
 pr_only="pr-title breaking-token submodule-pins"
 
 # needs_json <event> [<job>=<result> ...]: the `toJSON(needs)` object for a
@@ -143,6 +143,7 @@ expect_fail "unknown jobs do not stand in for known ones" pull_request \
 
 listed_jobs=$(cd "$repo_root" && "$script_bash" scripts/ci-gate.sh --list-jobs)
 printf 'list-jobs\n%s\n' "$listed_jobs" >>"$transcript"
+# shellcheck disable=SC2086  # the job lists are space-separated words; splitting is the point
 expected_listed=$(printf '%s\n' $always_on $pr_only)
 [ "$listed_jobs" = "$expected_listed" ] ||
   fail "--list-jobs does not match the job lists this suite covers:"$'\n'"$listed_jobs"
