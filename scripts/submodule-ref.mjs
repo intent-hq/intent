@@ -33,23 +33,28 @@ const realpathOrNull = (p) => {
 };
 
 /**
- * HEAD of the repository rooted exactly at `dir`, or null. A `packages/<name>` directory that holds files but
- * no repository of its own (a fixture fetched at the pin without `.git`) resolves to the enclosing monorepo,
- * whose HEAD must not be mistaken for a submodule checkout.
+ * HEAD of the repository rooted exactly at the absolute `dir`, or null. A `packages/<name>` directory that holds
+ * files but no repository of its own (a fixture fetched at the pin without `.git`) resolves to the enclosing
+ * monorepo, whose HEAD must not be mistaken for a submodule checkout.
  */
 function checkoutHead(dir) {
-  const top = gitOrNull(['-C', dir, 'rev-parse', '--show-toplevel'], dir);
+  const top = gitOrNull(['rev-parse', '--show-toplevel'], dir);
   if (!top || realpathOrNull(top) !== realpathOrNull(dir)) return null;
-  return gitOrNull(['-C', dir, 'rev-parse', 'HEAD'], dir);
+  return gitOrNull(['rev-parse', 'HEAD'], dir);
 }
 
-/** The commit the submodule checkout at `root/dir` is at and the gitlink HEAD records; either is null when git cannot tell. */
+/**
+ * The commit the submodule checkout at `root/dir` is at and the gitlink HEAD records; either is null when git
+ * cannot tell. `root` may be relative to the process cwd (`runChecks('.')`); it is resolved once here so git is
+ * never handed a relative path as both cwd and target.
+ */
 export function describeCheckout(root, dir) {
+  const absRoot = path.resolve(root);
   return {
     source: 'checkout',
     dir,
-    checkout: checkoutHead(path.join(root, dir)),
-    pin: gitOrNull(['rev-parse', `HEAD:${dir}`], root),
+    checkout: checkoutHead(path.resolve(absRoot, dir)),
+    pin: gitOrNull(['rev-parse', `HEAD:${dir}`], absRoot),
   };
 }
 

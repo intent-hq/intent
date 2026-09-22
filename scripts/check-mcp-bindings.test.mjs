@@ -468,6 +468,36 @@ test('off the pin: results reflect the checkout and the stderr warning names bot
   assert.match(written.stdout, /^check-mcp-bindings: intentd help text from packages\/intentd checkout [0-9a-f]{7} \(recorded pin [0-9a-f]{7}\)\nWrote docs\/protocol\/methods\/mcp-bindings\.md \(12 bindings\)\.\nMCP ws\.\* bindings are consistent \(12 bindings\)\.\n$/);
 });
 
+test('runChecks with a relative root reports the same off-pin ref as the absolute root', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  const previous = process.cwd();
+  process.chdir(root);
+  t.after(() => process.chdir(previous));
+  const relative = await runChecks('.');
+  assert.deepEqual(relative.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin });
+  assert.deepEqual(relative.ref, (await runChecks(root)).ref);
+  assert.ok(formatBanner(relative.ref));
+  assert.ok(formatOffPinWarning(relative.ref));
+});
+
+test('without git on PATH the default run stays exit 0 with no provenance and --pinned exits 2 naming the missing git', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const emptyBin = await fs.mkdtemp(path.join(os.tmpdir(), 'check-mcp-bindings-nogit-'));
+  t.after(() => fs.rm(emptyBin, { recursive: true, force: true }));
+  const noGit = (...args) => spawnSync(process.execPath, [SCRIPT, ...args], { cwd: root, encoding: 'utf8', env: cleanNodeEnv({ PATH: emptyBin }) });
+  const plain = noGit();
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(plain.stdout, 'MCP ws.* bindings are consistent (11 bindings).\n');
+  assert.equal(plain.stderr, '');
+  const pinned = noGit('--pinned');
+  assert.equal(pinned.status, 2);
+  assert.equal(pinned.stdout, '');
+  assert.equal(pinned.stderr, 'error: git not found on PATH; install git or add it to PATH and retry\n');
+  assert.ok(!pinned.stderr.includes('monorepo root'));
+  assert.ok(!pinned.stderr.includes(pin.slice(0, 7)), 'no pin is fabricated without git');
+});
+
 test('--pinned reads tools.rs at the recorded gitlink through git objects, never the worktree, and composes with --write', async (t) => {
   const { root, intentd, pin, advance } = await makeGitRoot(t);
   await advance();

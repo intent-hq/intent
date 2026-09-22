@@ -104,6 +104,24 @@ test('describeCheckout reads the checkout HEAD and the recorded gitlink; at the 
   assert.match(formatOffPinWarning(ref), new RegExp(`^warning: ${DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)};`));
 });
 
+// runChecks(root) callers may pass a relative root such as "." — the refs must match the absolute-root read,
+// at the pin and off it, rather than degrading to null because git was handed the submodule path twice.
+test('describeCheckout reads the same refs for a relative root as for the absolute one', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const previous = process.cwd();
+  process.chdir(root);
+  t.after(() => process.chdir(previous));
+  assert.deepEqual(describeCheckout('.', DIR), describeCheckout(root, DIR));
+  assert.deepEqual(describeCheckout('.', DIR), { source: 'checkout', dir: DIR, checkout: pin, pin });
+  const head = await advance();
+  const relative = describeCheckout('.', DIR);
+  assert.deepEqual(relative, describeCheckout(root, DIR));
+  assert.deepEqual(relative, { source: 'checkout', dir: DIR, checkout: head, pin });
+  assert.ok(formatOffPinWarning(relative), 'a relative root keeps the off-pin warning');
+  process.chdir(path.dirname(root));
+  assert.deepEqual(describeCheckout(path.basename(root), DIR), { source: 'checkout', dir: DIR, checkout: head, pin });
+});
+
 // The consumer-checks CI layout: a gitlink recorded for packages/ios and one fixture file fetched into it,
 // but no packages/ios/.git. git resolves that directory to the enclosing monorepo, whose HEAD is not a
 // submodule checkout.
