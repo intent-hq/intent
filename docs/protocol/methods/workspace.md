@@ -1298,7 +1298,7 @@ persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) s
 alongside `activePullRequest` and carries the reconciliation candidates the FE matches
 `activePullRequest` against.
 
-**`PullRequestInfo.isInMergeQueue?: boolean`** (additive, presence-detected — within 10.6;
+**`PullRequestInfo.isInMergeQueue?: boolean`** (additive, presence-detected — within 10.7;
 [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)): the PR sits in the
 host's merge queue (GitHub GraphQL `isInMergeQueue`). The key is present as `true` exactly
 when a **signal-bearing** read — the on-demand fold (§5.27), which rides every read served
