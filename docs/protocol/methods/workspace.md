@@ -870,10 +870,13 @@ any of it — unlike the delete cascade below, nothing is deleted:
   monitors are still NOT resumed on unarchive. **Ordering with completion watches**
   (§Completion-watch persistence in agent-aux.md): the per-item cancels skip the
   deferred-completion redelivery backstop; the tail runs it **once per owner, after
-  queueing that owner's notice** (on a queue failure too). A parent's watch deferred on
-  a monitoring-idle child therefore finds the parked notice (ready-to-send → still
-  deferred) and stays armed for the child's real post-unarchive turn instead of being
-  consumed at archive time by a synthesized completion against an empty queue. The
+  queueing that owner's notice** (on a queue failure too). When the notice was queued,
+  a parent's watch deferred on a monitoring-idle child therefore finds the parked notice
+  (ready-to-send → still deferred) and stays armed for the child's real post-unarchive
+  turn instead of being consumed at archive time by a synthesized completion against an
+  empty queue. On the (logged) queue-failure branch there is no parked notice, so that
+  backstop settles the deferred watch at archive time — the same fallback as a failed
+  external-cancel wake, so a lost notice never leaves a watch armed forever. The
   notice carries no `hook_wake` / `pr_monitor_wake` metadata and none of the
   `[Background hook "…"]` / `[PR monitor …]` prefixes, so the FE renders it as an
   ordinary automated message. Best-effort per agent: a delivery failure is logged and
