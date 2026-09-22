@@ -30,8 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Pinned to main: workflow_dispatch can be run on any branch, and the
+      # token must only ever meet main's scripts/check-rulesets.mjs.
       - uses: actions/checkout@v7
         with:
+          ref: main
           submodules: false
       - uses: actions/setup-node@v7
         with:

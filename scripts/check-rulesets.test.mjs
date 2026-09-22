@@ -901,3 +901,12 @@ test('the CLI checks bypass actors from a --fixture file when RULESET_ADMIN_TOKE
   assert.match(result.stderr, /Repository intent-hq\/cloudlands-fe ruleset Default bypass actor Team 7 unexpected/);
   assert.doesNotMatch(result.stdout, /RULESET_ADMIN_TOKEN is not set/);
 });
+
+test('RULESET_ADMIN_TOKEN only meets main: ruleset-drift.yml checks out ref main and ci.yml never passes the token', () => {
+  const workflows = fileURLToPath(new URL('../.github/workflows/', import.meta.url));
+  const drift = fs.readFileSync(path.join(workflows, 'ruleset-drift.yml'), 'utf8');
+  assert.match(drift, /uses: actions\/checkout@\S+\n\s+with:\n(?:\s+\S.*\n)*?\s+ref: main\n/);
+  assert.match(drift, /RULESET_ADMIN_TOKEN: \$\{\{ secrets\.RULESET_ADMIN_TOKEN \}\}/);
+  const ci = fs.readFileSync(path.join(workflows, 'ci.yml'), 'utf8');
+  assert.doesNotMatch(ci, /secrets\.RULESET_ADMIN_TOKEN/);
+});
