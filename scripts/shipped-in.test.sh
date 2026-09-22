@@ -28,7 +28,8 @@ done
 # $GH_STUB_DIR/manifest/<tag>.json, the cloudlands-fe Release Alpha run list
 # from $GH_STUB_DIR/runs.json and its jobs from $GH_STUB_DIR/jobs/<run id>.json.
 # The rate-limit probe (`api repos/intent-hq/cloudlands-releases`) succeeds
-# unless $GH_STUB_DIR/probe.fail exists, in which case it is rate limited.
+# unless $GH_STUB_DIR/probe.fail exists; its content names the failure mode
+# (one of the modes below, empty = ratelimit).
 # Every invocation is appended to GH_TEST_LOG.
 # GH_STUB_FAIL selects a failure mode (1 = generic, or one of the gh error
 # texts below); GH_STUB_FAIL_ON narrows it to one subcommand ("release list",
@@ -36,9 +37,8 @@ done
 cat >"$bin_dir/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
-fail_on=${GH_STUB_FAIL_ON:-}
-if [[ -n "${GH_STUB_FAIL:-}" && ( -z "$fail_on" || "$fail_on" == "$1" || "$fail_on" == "$1 $2" ) ]]; then
-  case "$GH_STUB_FAIL" in
+stub_fail() {
+  case "$1" in
     1) echo "stub: gh unavailable" >&2 ;;
     ratelimit) echo "gh: API rate limit exceeded for user ID 526899. If you reach out to GitHub Support for help, please include the request ID 1234:ABCD. (HTTP 403)" >&2 ;;
     ratelimit-rest) echo "HTTP 403: API rate limit exceeded for user ID 526899. (https://api.github.com/repos/intent-hq/cloudlands-releases/releases/tags/v2.3.0)" >&2 ;;
@@ -46,9 +46,13 @@ if [[ -n "${GH_STUB_FAIL:-}" && ( -z "$fail_on" || "$fail_on" == "$1" || "$fail_
     network) echo "error connecting to api.github.com" >&2; echo "check your internet connection or https://githubstatus.com" >&2 ;;
     forbidden) echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2 ;;
     notfound) echo "release not found" >&2 ;;
-    *) echo "stub: unknown GH_STUB_FAIL $GH_STUB_FAIL" >&2 ;;
+    *) echo "stub: unknown failure mode $1" >&2 ;;
   esac
   exit 1
+}
+fail_on=${GH_STUB_FAIL_ON:-}
+if [[ -n "${GH_STUB_FAIL:-}" && ( -z "$fail_on" || "$fail_on" == "$1" || "$fail_on" == "$1 $2" ) ]]; then
+  stub_fail "$GH_STUB_FAIL"
 fi
 case "$1 $2" in
   "release list")
@@ -59,7 +63,10 @@ case "$1 $2" in
   "api repos/"*)
     path=${2#repos/}
     if [[ "$path" == intent-hq/cloudlands-releases && $# -eq 2 ]]; then
-      [[ -f "$GH_STUB_DIR/probe.fail" ]] && { echo "gh: API rate limit exceeded for user ID 526899. If you reach out to GitHub Support for help, please include the request ID 1234:ABCD. (HTTP 403)" >&2; exit 1; }
+      if [[ -f "$GH_STUB_DIR/probe.fail" ]]; then
+        probe_mode=$(<"$GH_STUB_DIR/probe.fail")
+        stub_fail "${probe_mode:-ratelimit}"
+      fi
       echo '{"full_name":"intent-hq/cloudlands-releases"}'
       exit 0
     fi
@@ -205,6 +212,23 @@ GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-f
 [[ -z "$stdout" ]] || fail "masked rate limit on release download printed '$stdout'"
 [[ "$stderr" == "shipped-in: gh release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: release not found (GitHub REST API is rate limited: gh: API rate limit exceeded for user ID 526899."*"(HTTP 403))" ]] || fail "masked rate limit message: $stderr"
 [[ "$(probe_count)" -eq 1 ]] || fail "masked rate limit ran the probe $(probe_count) times (expected 1)"
+
+# A probe failing transiently for another reason (5xx, network) also exits 4,
+# but is reported as unavailable rather than rate limited (PR #5681 review).
+for mode in 5xx network; do
+  reset_stub
+  echo ahead >"$fe_compare/$sha...v2.3.0"
+  echo behind >"$fe_compare/$sha...v2.2.0"
+  echo behind >"$fe_compare/$sha...v2.1.0"
+  echo "$mode" >"$stub_dir/probe.fail"
+  GH_STUB_FAIL=notfound GH_STUB_FAIL_ON="release download" run_script cloudlands-fe "$sha"
+  [[ "$status" -eq 4 ]] || fail "release not found with $mode probe exited $status (expected 4): $stderr"
+  [[ -z "$stdout" ]] || fail "release not found with $mode probe printed '$stdout'"
+  [[ "$stderr" == "shipped-in: gh release download release-manifest.json for v2.3.0 on intent-hq/cloudlands-releases failed: release not found (GitHub REST API is unavailable: "*")" ]] || fail "release not found with $mode probe message: $stderr"
+  ! grep -qi 'rate limit' <<<"$stderr" || fail "$mode probe was reported as rate limited: $stderr"
+  [[ "$(probe_count)" -eq 1 ]] || fail "release not found with $mode probe ran the probe $(probe_count) times (expected 1)"
+done
+[[ "$stderr" == *"(GitHub REST API is unavailable: error connecting to api.github.com check your internet connection or https://githubstatus.com)" ]] || fail "multi-line probe stderr was not surfaced on one line: $stderr"
 
 # The same gh text with a healthy probe is a genuinely missing release.
 reset_stub

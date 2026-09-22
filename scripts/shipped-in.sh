@@ -108,10 +108,12 @@ transient_pattern='rate limit|HTTP 429|HTTP 5[0-9]{2}|error connecting|connectio
 # "Wait for shipped alpha" hook was evicted with exit 1. So a failure that
 # does not look transient gets one REST probe on the releases repo (the same
 # core quota; `gh api rate_limit` is not gated by it and kept reporting 5000
-# remaining during the incident): a rate-limited probe turns it into exit 4,
-# anything else keeps the original message and exit 1.
+# remaining during the incident): a probe that itself fails transiently (rate
+# limit, 5xx, network) turns it into exit 4 and the message names which; a
+# healthy probe, or one failing for any other reason, keeps the original
+# message and exit 1.
 gh_fail() {
-  local detail probe_detail
+  local detail probe_detail probe_state
   detail=$(<"$gh_err")
   detail=${detail//$'\n'/ }
   if grep -qiE "$transient_pattern" "$gh_err"; then
@@ -122,7 +124,12 @@ gh_fail() {
     grep -qiE "$transient_pattern" "$probe_err"; then
     probe_detail=$(<"$probe_err")
     probe_detail=${probe_detail//$'\n'/ }
-    echo "shipped-in: $*${detail:+: $detail} (GitHub REST API is rate limited: $probe_detail)" >&2
+    if grep -qiE 'rate limit|HTTP 429' "$probe_err"; then
+      probe_state="is rate limited"
+    else
+      probe_state="is unavailable"
+    fi
+    echo "shipped-in: $*${detail:+: $detail} (GitHub REST API $probe_state: $probe_detail)" >&2
     exit 4
   fi
   echo "shipped-in: $*${detail:+: $detail}" >&2
