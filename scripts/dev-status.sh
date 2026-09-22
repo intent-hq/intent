@@ -216,9 +216,8 @@ def recorded_pin(relative_path):
 
 
 def behind_origin_main(path):
-    # Counts against the already-fetched remote-tracking ref only; no fetch.
-    if git_output(path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main") is None:
-        return None
+    # Counts the checked-out HEAD against the already-fetched remote-tracking
+    # ref only; no fetch. A missing ref fails the call and maps to None.
     count = git_output(path, "rev-list", "--count", "HEAD..refs/remotes/origin/main")
     try:
         return int(count)
@@ -345,8 +344,8 @@ for name, repo in report["repos"].items():
     print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{lag_text}{pr_text}")
     if lag:
         print(
-            f"           pin is {lag} commit(s) behind origin/main — branch component work "
-            "from origin/main; auto-bump-submodules will advance the pin"
+            f"           checked-out HEAD is {lag} commit(s) behind origin/main — branch component "
+            "work from origin/main; auto-bump-submodules will advance the pin"
         )
 print(f"Docs       {report['docs']['remoteHost']}")
 PY

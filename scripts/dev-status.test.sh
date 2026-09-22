@@ -171,7 +171,8 @@ grep -q '^auth status$' "$GH_TEST_LOG" || fail "gh authentication was not checke
 
 # Gitlink fixture: a throwaway monorepo with real submodule checkouts, so the
 # pin / gitlinkDirty / behindOriginMain fields are asserted for in-sync, moved,
-# lagging behind origin/main, missing origin/main, and uninitialized.
+# lagging behind origin/main, moved HEAD with a different lag than the pin,
+# missing origin/main, and uninitialized.
 fixture="$temp_dir/fixture"
 git_fixture() { git -c protocol.file.allow=always -C "$fixture" "$@"; }
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
@@ -234,10 +235,28 @@ grep -q '^Repo *cloudlands-fe: .* behind-origin/main=3' "$temp_dir/lagging.txt" 
 grep -q '^Repo *intentd: .* behind-origin/main=0' "$temp_dir/lagging.txt" \
   || fail "human status did not print behind-origin/main=0 for the in-sync intentd"
 grep -A1 '^Repo *cloudlands-fe: ' "$temp_dir/lagging.txt" \
-  | grep -q '^ *pin is 3 commit(s) behind origin/main — branch component work from origin/main' \
+  | grep -q '^ *checked-out HEAD is 3 commit(s) behind origin/main — branch component work from origin/main' \
   || fail "human status did not print the lag hint under cloudlands-fe"
 [[ "$(grep -c 'commit(s) behind origin/main' "$temp_dir/lagging.txt")" == 1 ]] \
   || fail "lag hint count was not exactly one in: $(cat "$temp_dir/lagging.txt")"
+
+# Moved HEAD: the submodule checks out one of the fetched commits, so the count
+# follows the checked-out HEAD (2 behind) rather than the recorded pin (3 behind).
+cloudlands_pin=$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)
+git -C "$fixture/packages/cloudlands-fe" checkout -q --detach refs/remotes/origin/main~2
+moved_head=$(fixture_status)
+python3 - "$moved_head" "$cloudlands_pin" <<'PY' || fail "moved HEAD fixture reported $moved_head"
+import json, sys
+repos, pin = json.loads(sys.argv[1]), sys.argv[2]
+assert repos["cloudlands-fe"] == [True, pin, True, 2], repos
+PY
+fixture_human_status >"$temp_dir/moved-head.txt"
+grep -q "^Repo *cloudlands-fe: .* gitlink=moved(pin $cloudlands_pin) behind-origin/main=2" "$temp_dir/moved-head.txt" \
+  || fail "human status did not print the moved gitlink with the HEAD-relative lag"
+grep -A1 '^Repo *cloudlands-fe: ' "$temp_dir/moved-head.txt" \
+  | grep -q '^ *checked-out HEAD is 2 commit(s) behind origin/main — branch component work from origin/main' \
+  || fail "human status did not print the HEAD-relative lag hint under cloudlands-fe"
+git_fixture submodule update -q --checkout packages/cloudlands-fe
 
 # Missing ref: without refs/remotes/origin/main the count is unknown (null),
 # rendered as "-", and the script still exits 0.
