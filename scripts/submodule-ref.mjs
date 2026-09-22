@@ -4,6 +4,7 @@
 // workspace is attributed to the right cause. Neither output changes an exit code.
 
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 
 const short = (sha) => sha.slice(0, 7);
@@ -23,12 +24,31 @@ export function submoduleOf(file) {
   return m ? m[1] : null;
 }
 
+const realpathOrNull = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * HEAD of the repository rooted exactly at `dir`, or null. A `packages/<name>` directory that holds files but
+ * no repository of its own (a fixture fetched at the pin without `.git`) resolves to the enclosing monorepo,
+ * whose HEAD must not be mistaken for a submodule checkout.
+ */
+function checkoutHead(dir) {
+  const top = gitOrNull(['-C', dir, 'rev-parse', '--show-toplevel'], dir);
+  if (!top || realpathOrNull(top) !== realpathOrNull(dir)) return null;
+  return gitOrNull(['-C', dir, 'rev-parse', 'HEAD'], dir);
+}
+
 /** The commit the submodule checkout at `root/dir` is at and the gitlink HEAD records; either is null when git cannot tell. */
 export function describeCheckout(root, dir) {
   return {
     source: 'checkout',
     dir,
-    checkout: gitOrNull(['-C', path.join(root, dir), 'rev-parse', 'HEAD'], root),
+    checkout: checkoutHead(path.join(root, dir)),
     pin: gitOrNull(['rev-parse', `HEAD:${dir}`], root),
   };
 }

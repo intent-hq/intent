@@ -320,6 +320,34 @@ test('a fixture outside any git repository yields unknown refs: no banner, no wa
   assert.equal(cli.stderr, '');
 });
 
+// The CI layout: packages/ios has a recorded gitlink and the fixture file fetched into it, but no .git of
+// its own. The monorepo HEAD must not be reported as the ios checkout, and no off-pin warning may appear.
+test('an ios fixture fetched without packages/ios/.git yields no fabricated checkout, banner or warning', async (t) => {
+  const { root, dir, pin } = await makeGitRoot(t);
+  const iosDir = submoduleOf(IOS_FIXTURE);
+  await fs.mkdir(path.dirname(path.join(root, IOS_FIXTURE)), { recursive: true });
+  await fs.writeFile(path.join(root, IOS_FIXTURE), JSON.stringify(catalog));
+  const iosPin = 'c'.repeat(40);
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${iosPin},${iosDir}`);
+  git(root, 'commit', '-q', '-m', 'add ios gitlink');
+  const monorepoHead = git(root, 'rev-parse', 'HEAD');
+  const result = await inspectRepository(root);
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.refs, [
+    { source: 'checkout', dir, checkout: pin, pin },
+    { source: 'checkout', dir: iosDir, checkout: null, pin: iosPin },
+  ]);
+  for (const ref of result.refs) assert.notEqual(ref.checkout, monorepoHead);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(
+    cli.stdout,
+    `check-event-catalog: intentd vendored copy from ${dir} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nEvent catalog is in sync; checked 2 vendored copies and ${EVENTS_DOC}.\n`,
+  );
+  assert.equal(cli.stderr, '');
+});
+
 test('the checked-in sidecar is valid and fully documented', async () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const { failures } = await inspectRepository(root);

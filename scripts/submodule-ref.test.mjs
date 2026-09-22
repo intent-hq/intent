@@ -103,3 +103,22 @@ test('describeCheckout reads the checkout HEAD and the recorded gitlink; at the 
   assert.equal(formatBanner(ref, { check: 'check-x', what: 'catalog' }), `check-x: intentd catalog from ${DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`);
   assert.match(formatOffPinWarning(ref), new RegExp(`^warning: ${DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)};`));
 });
+
+// The consumer-checks CI layout: a gitlink recorded for packages/ios and one fixture file fetched into it,
+// but no packages/ios/.git. git resolves that directory to the enclosing monorepo, whose HEAD is not a
+// submodule checkout.
+test('describeCheckout does not report the monorepo HEAD as the checkout of a submodule directory without .git', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const ios = 'packages/ios';
+  await fs.mkdir(path.join(root, ios, 'IntentTests', 'Fixtures'), { recursive: true });
+  await fs.writeFile(path.join(root, ios, 'IntentTests', 'Fixtures', 'event_types.json'), '[]\n');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${pin},${ios}`);
+  git(root, 'commit', '-q', '-m', 'add ios gitlink');
+  const monorepoHead = git(root, 'rev-parse', 'HEAD');
+  const ref = describeCheckout(root, ios);
+  assert.deepEqual(ref, { source: 'checkout', dir: ios, checkout: null, pin });
+  assert.notEqual(ref.checkout, monorepoHead);
+  assert.equal(formatBanner(ref, { check: 'check-event-catalog', what: 'vendored copy' }), null);
+  assert.equal(formatOffPinWarning(ref), null);
+  assert.deepEqual(describeCheckout(root, DIR), { source: 'checkout', dir: DIR, checkout: pin, pin });
+});
