@@ -11,7 +11,7 @@ set -euo pipefail
 # The caller's environment must not steer the recipes under test (a shell with
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
-unset NEXTEST_RUNNER RESUME GATE_FORCE GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
+unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
@@ -142,14 +142,28 @@ else
   [[ "$cargo_log" == *": nextest --version" ]] \
     || fail "$case_name: stub cargo did not serve the preflight; cargo log: '$cargo_log'"
   expect_planner "" "" "" -2 -2 none never
-  expected="runner:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"
+  expected="runner:"$'\n'"python3"$'\n'"scripts/resumable_nextest.py"$'\n'"--repo-root"$'\n'"$mk"$'\n'"--intentd-dir"$'\n'"packages/intentd"$'\n'"--cache-dir"$'\n'"$mk/gate runs"$'\n'"--resume"$'\n'"1"$'\n'"--force"$'\n'"0"$'\n'"--no-fail-fast"$'\n'"0"
   [[ "$planner_log" == *$'\n'"$expected" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"$'\n'"expected to end with"$'\n'"$expected"
 
   case_name="test-changed recipe passes BASE, DRY_RUN, BUILD_JOBS, TEST_THREADS and GATE_FORCE through"
   run_make test-changed BASE=other DRY_RUN=1 BUILD_JOBS=2 TEST_THREADS=1 GATE_FORCE=1
   expect_make_ok
   expect_planner "" other 1 2 1 none never
-  [[ "$planner_log" == *$'\n'"--resume"$'\n'"0"$'\n'"--force"$'\n'"1" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+  [[ "$planner_log" == *$'\n'"--resume"$'\n'"0"$'\n'"--force"$'\n'"1"$'\n'"--no-fail-fast"$'\n'"0" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+  [[ "$stdout" != *"NO_FAIL_FAST=1"* ]] || fail "$case_name: knob line printed with NO_FAIL_FAST unset: $stdout"
+
+  no_fail_fast_line="[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"
+  case_name="test-changed recipe passes NO_FAIL_FAST=1 through without announcing it outside DRY_RUN"
+  run_make test-changed NO_FAIL_FAST=1
+  expect_make_ok
+  [[ "$planner_log" == *$'\n'"--force"$'\n'"0"$'\n'"--no-fail-fast"$'\n'"1" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
+  [[ "$stdout" != *"$no_fail_fast_line"* ]] || fail "$case_name: knob line printed outside DRY_RUN: $stdout"
+
+  case_name="test-changed recipe announces NO_FAIL_FAST=1 under DRY_RUN=1"
+  run_make test-changed DRY_RUN=1 NO_FAIL_FAST=1
+  expect_make_ok
+  [[ "$stdout" == *"$no_fail_fast_line"* ]] || fail "$case_name: knob line missing: $stdout"
+  [[ "$planner_log" == *$'\n'"--no-fail-fast"$'\n'"1" ]] || fail "$case_name: runner argv was"$'\n'"$planner_log"
 
   # Exit 3 (build-wide change) defers to the full `make test`: announced only
   # under DRY_RUN=1, re-entered through $(MAKE) otherwise. Any other failure
