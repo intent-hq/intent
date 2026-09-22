@@ -147,11 +147,15 @@ check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.
 # The MCP `ws.*` binding surface is documented only by the help-text constants
 # in intentd's tools.rs; docs/protocol/methods/mcp-bindings.md is the generated
 # signature index, and prose mentions under docs/protocol/ must match it.
-check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text
-	@node scripts/check-mcp-bindings.mjs
+# The help text is read from the packages/intentd checkout (the run names the
+# checkout and the recorded pin, and warns when they differ); PINNED=1 reads it
+# from the recorded gitlink through git objects instead.
+PINNED ?=
+check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs $(if $(PINNED),--pinned)
 
-mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text
-	@node scripts/check-mcp-bindings.mjs --write
+mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs --write $(if $(PINNED),--pinned)
 
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
