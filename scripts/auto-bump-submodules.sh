@@ -17,6 +17,11 @@
 # packages/ios is best-effort: if its remote tip cannot be read (private repo,
 # no token access), it is skipped with a warning and never fails the run.
 #
+# When no pin is behind but an auto/submodule-bump PR is still open (main
+# already carries its pins, e.g. a labeled pin PR landed the same SHA), the
+# stale PR is closed with a comment and its branch deleted, so it never sits
+# open and red. A missing gh or a failed close only warns.
+#
 # Usage: auto-bump-submodules.sh [--dry-run]
 #   --dry-run  Report which pins are behind; never writes, pushes, or
 #              touches PRs. Requires only ambient git auth (no gh).
@@ -86,8 +91,35 @@ while read -r key path; do
   urls+=("$url")
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
 
+# Close a rolling PR left open once main already carries its pins; every
+# failure only warns so a missing or failing gh never fails the run.
+close_stale_pr() {
+  local pr
+  if ! command -v gh >/dev/null 2>&1; then
+    warn "gh not found; cannot check for a stale $BRANCH PR"
+    return 0
+  fi
+  if ! pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty'); then
+    warn "could not list open $BRANCH PRs; leaving any stale PR open"
+    return 0
+  fi
+  if [ -z "$pr" ]; then
+    return 0
+  fi
+  if gh pr close "$pr" --delete-branch --comment "Closing: \`main\` already carries these submodule pins, so this rolling bump PR is stale. The next pin drift opens a fresh one."; then
+    echo "Closed stale PR #$pr (main already carries its pins) and deleted $BRANCH."
+  else
+    warn "could not close stale PR #$pr; leaving it open"
+  fi
+}
+
 if [ ${#paths[@]} -eq 0 ]; then
   echo "All submodule pins match their remote tips; nothing to do."
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "dry-run: skipping the stale $BRANCH PR check (requires gh)."
+    exit 0
+  fi
+  close_stale_pr
   exit 0
 fi
 
