@@ -28,7 +28,9 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
 and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
-off its pin), and branch PR checks when `gh` is authenticated.
+off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
+lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
+when `gh` is authenticated.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
 system packages may require privilege. Do not discover prerequisites during a build: the
@@ -154,9 +156,10 @@ PR lands first (the upstream check warns about the now-extra docs entry; a docs-
 removal is rejected as a component extra) and the docs entry is removed after the bump. A
 **rename** is an addition: document the new name first, keeping the old entry, rename in
 the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
-upstream (`make mcp-bindings-doc` regenerates its index in the monorepo), and a Makefile
-change that depends on an intentd PR still waits for the auto-bump
-(`check-makefile-targets`). For an urgent bump, dispatch the workflow instead of filing a PR:
+upstream (the auto-bump regenerates its index in the bump commit, so a help-line change
+needs no manual pin PR), and a Makefile change that depends on an intentd PR still waits
+for the auto-bump (`check-makefile-targets`). For an urgent bump, dispatch the workflow
+instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml

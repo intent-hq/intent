@@ -83,9 +83,10 @@ assert {"DEV_PORT", "DEV_TCP_PORT", "BRIDGE_PORT", "CDP_PORT"} <= set(report["po
 assert report["sandboxes"] == []
 assert set(report["repos"]) == {"intentd", "cloudlands-fe"}
 for repo in report["repos"].values():
-    assert {"branch", "dirty", "ahead", "behind", "pin", "gitlinkDirty"} <= set(repo)
+    assert {"branch", "dirty", "ahead", "behind", "pin", "gitlinkDirty", "behindOriginMain"} <= set(repo)
     assert repo["pin"] is None or isinstance(repo["pin"], str)
     assert isinstance(repo["gitlinkDirty"], bool)
+    assert repo["behindOriginMain"] is None or isinstance(repo["behindOriginMain"], int)
     assert "pr" not in repo
 assert report["docs"]["remoteHost"] == "AGENTS.md#developing-on-a-remote-host"
 PY
@@ -169,7 +170,9 @@ grep -q '^auth status$' "$GH_TEST_LOG" || fail "gh authentication was not checke
 ! grep -q '^pr ' "$GH_TEST_LOG" || fail "PR lookup ran without authenticated gh"
 
 # Gitlink fixture: a throwaway monorepo with real submodule checkouts, so the
-# pin / gitlinkDirty fields are asserted for in-sync, moved, and uninitialized.
+# pin / gitlinkDirty / behindOriginMain fields are asserted for in-sync, moved,
+# lagging behind origin/main, moved HEAD with a different lag than the pin,
+# missing origin/main, and uninitialized.
 fixture="$temp_dir/fixture"
 git_fixture() { git -c protocol.file.allow=always -C "$fixture" "$@"; }
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
@@ -190,11 +193,14 @@ fixture_status() {
     bash "$fixture/scripts/dev-status.sh" | python3 -c '
 import json, sys
 repos = json.load(sys.stdin)["repos"]
-print(json.dumps({k: [v["initialized"], v["pin"], v["gitlinkDirty"]] for k, v in repos.items()}, sort_keys=True))'
+print(json.dumps({k: [v["initialized"], v["pin"], v["gitlinkDirty"], v["behindOriginMain"]] for k, v in repos.items()}, sort_keys=True))'
+}
+fixture_human_status() {
+  PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$fixture/scripts/dev-status.sh"
 }
 
 in_sync=$(fixture_status)
-[[ "$in_sync" == "{\"cloudlands-fe\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)\", false], \"intentd\": [true, \"$intentd_pin\", false]}" ]] \
+[[ "$in_sync" == "{\"cloudlands-fe\": [true, \"$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)\", false, 0], \"intentd\": [true, \"$intentd_pin\", false, 0]}" ]] \
   || fail "in-sync fixture reported $in_sync"
 
 git -C "$fixture/packages/intentd" commit -q --allow-empty -m "moved off the pin"
@@ -202,11 +208,68 @@ moved=$(fixture_status)
 python3 - "$moved" "$intentd_pin" <<'PY' || fail "moved gitlink fixture reported $moved"
 import json, sys
 repos, pin = json.loads(sys.argv[1]), sys.argv[2]
-assert repos["intentd"] == [True, pin, True], repos
+assert repos["intentd"] == [True, pin, True, 0], repos
 assert repos["cloudlands-fe"][2] is False, repos
 PY
-grep -q "^Repo *intentd: .* gitlink=moved(pin $intentd_pin)" <(PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$fixture/scripts/dev-status.sh") \
+grep -q "^Repo *intentd: .* gitlink=moved(pin $intentd_pin)" <(fixture_human_status) \
   || fail "human status did not flag the moved gitlink"
+
+# Lagging: the file remote gains commits and the submodule clone fetches them,
+# so its pin sits behind the (already fetched) origin/main without any fetch
+# by the status script itself.
+for n in 1 2 3; do
+  git -C "$temp_dir/src-cloudlands-fe" commit -q --allow-empty -m "upstream $n"
+done
+git -c protocol.file.allow=always -C "$fixture/packages/cloudlands-fe" fetch -q origin
+lagging=$(fixture_status)
+python3 - "$lagging" <<'PY' || fail "lagging fixture reported $lagging"
+import json, sys
+repos = json.loads(sys.argv[1])
+assert repos["cloudlands-fe"][3] == 3, repos
+assert repos["cloudlands-fe"][2] is False, repos
+assert repos["intentd"][3] == 0, repos
+PY
+fixture_human_status >"$temp_dir/lagging.txt"
+grep -q '^Repo *cloudlands-fe: .* behind-origin/main=3' "$temp_dir/lagging.txt" \
+  || fail "human status did not print the cloudlands-fe lag token"
+grep -q '^Repo *intentd: .* behind-origin/main=0' "$temp_dir/lagging.txt" \
+  || fail "human status did not print behind-origin/main=0 for the in-sync intentd"
+grep -A1 '^Repo *cloudlands-fe: ' "$temp_dir/lagging.txt" \
+  | grep -q '^ *checked-out HEAD is 3 commit(s) behind origin/main — branch component work from origin/main' \
+  || fail "human status did not print the lag hint under cloudlands-fe"
+[[ "$(grep -c 'commit(s) behind origin/main' "$temp_dir/lagging.txt")" == 1 ]] \
+  || fail "lag hint count was not exactly one in: $(cat "$temp_dir/lagging.txt")"
+
+# Moved HEAD: the submodule checks out one of the fetched commits, so the count
+# follows the checked-out HEAD (2 behind) rather than the recorded pin (3 behind).
+cloudlands_pin=$(git_fixture rev-parse --short=7 HEAD:packages/cloudlands-fe)
+git -C "$fixture/packages/cloudlands-fe" checkout -q --detach refs/remotes/origin/main~2
+moved_head=$(fixture_status)
+python3 - "$moved_head" "$cloudlands_pin" <<'PY' || fail "moved HEAD fixture reported $moved_head"
+import json, sys
+repos, pin = json.loads(sys.argv[1]), sys.argv[2]
+assert repos["cloudlands-fe"] == [True, pin, True, 2], repos
+PY
+fixture_human_status >"$temp_dir/moved-head.txt"
+grep -q "^Repo *cloudlands-fe: .* gitlink=moved(pin $cloudlands_pin) behind-origin/main=2" "$temp_dir/moved-head.txt" \
+  || fail "human status did not print the moved gitlink with the HEAD-relative lag"
+grep -A1 '^Repo *cloudlands-fe: ' "$temp_dir/moved-head.txt" \
+  | grep -q '^ *checked-out HEAD is 2 commit(s) behind origin/main — branch component work from origin/main' \
+  || fail "human status did not print the HEAD-relative lag hint under cloudlands-fe"
+git_fixture submodule update -q --checkout packages/cloudlands-fe
+
+# Missing ref: without refs/remotes/origin/main the count is unknown (null),
+# rendered as "-", and the script still exits 0.
+git -C "$fixture/packages/intentd" update-ref -d refs/remotes/origin/main
+missing_ref=$(fixture_status)
+python3 - "$missing_ref" <<'PY' || fail "missing origin/main fixture reported $missing_ref"
+import json, sys
+repos = json.loads(sys.argv[1])
+assert repos["intentd"][3] is None, repos
+assert repos["cloudlands-fe"][3] == 3, repos
+PY
+grep -q '^Repo *intentd: .* behind-origin/main=-' <(fixture_human_status) \
+  || fail "human status did not print behind-origin/main=- for the missing ref"
 
 git_fixture submodule deinit -q -f packages/cloudlands-fe
 deinit=$(fixture_status)
@@ -215,6 +278,7 @@ import json, sys
 repos = json.loads(sys.argv[1])
 assert repos["cloudlands-fe"][0] is False and repos["cloudlands-fe"][2] is False, repos
 assert isinstance(repos["cloudlands-fe"][1], str), repos
+assert repos["cloudlands-fe"][3] is None, repos
 PY
 
 echo "dev-status tests passed (no-gh ${elapsed_ms}ms)"

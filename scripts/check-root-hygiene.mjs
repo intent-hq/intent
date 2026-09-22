@@ -12,6 +12,7 @@ export const ALLOWED_TOP_LEVEL_ENTRIES = new Set([
   '.gitignore',
   '.gitmodules',
   '.intent',
+  '.shellcheckrc',
   'AGENTS.md',
   'CONTRIBUTING.md',
   'LICENSE',
