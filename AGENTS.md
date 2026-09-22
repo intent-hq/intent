@@ -31,6 +31,10 @@ and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodu
 off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
 lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
 when `gh` is authenticated.
+While `setup.running` is true (or your first message carried the setup-in-progress
+notice) the workspace setup script is still provisioning the worktree, so treat the whole
+report as provisional and wait with a hook on `ws.workspace.details().setupStatus` before
+acting on it.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
 system packages may require privilege. Do not discover prerequisites during a build: the
