@@ -146,7 +146,7 @@ forwarded with `provider: "github"`; the result projected to the documented `git
 → `-32602`. `host` is optional and **gitlab-only** (a non-empty `host` with `provider: "github"` →
 `-32602`); it is a bare host name or `host[:port]` (no scheme, no path). `sourceControl.gitlab.apiBaseUrl`
 (§5.12) overrides the API origin for that host (test seam); it never changes the reported `host`.
-Beyond the two typed errors below, error conventions match `github.*` (§9): missing/invalid params →
+Beyond the typed errors below, error conventions match `github.*` (§9): missing/invalid params →
 `-32602`; an unreachable host, a missing client id, or any other forge/service failure → `-32603`
 with a descriptive `message`.
 
