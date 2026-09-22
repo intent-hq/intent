@@ -630,6 +630,31 @@ test('exits 2 with a submodule hint when the gitlink object is absent', (t) => {
   assert.match(result.stderr, /git submodule update --init packages\/intentd/);
 });
 
+test('exits 2 naming the missing git executable, not the monorepo root, when git is not on PATH', (t) => {
+  const { root, sha } = makeFixture(t);
+  fs.writeFileSync(path.join(root, 'Makefile'), 'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n');
+  const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), 'check-makefile-targets-nogit-'));
+  t.after(() => fs.rmSync(emptyBin, { recursive: true, force: true }));
+  const previousPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  t.after(() => {
+    process.env.PATH = previousPath;
+  });
+  const missingGit = (error) => error instanceof CheckError && error.exitCode === 2 && error.message === 'error: git not found on PATH; install git or add it to PATH and retry';
+  assert.throws(() => resolveGitlink({ cwd: root }), missingGit);
+  assert.throws(() => resolveGitlink({ cwd: root, gitlink: sha }), missingGit);
+  const result = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env: cleanNodeEnv({ PATH: emptyBin }) });
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'error: git not found on PATH; install git or add it to PATH and retry\n');
+  process.env.PATH = previousPath;
+  assert.throws(
+    () => resolveGitlink({ cwd: path.join(root, 'does-not-exist') }),
+    (error) => error instanceof CheckError && error.message.includes('run from the monorepo root'),
+    'a missing cwd is still reported as a wrong root, not as missing git',
+  );
+});
+
 test('CLI prints the success summary on a Makefile whose references exist at the pin', (t) => {
   const { root, sha } = makeFixture(t);
   fs.writeFileSync(

@@ -2,7 +2,7 @@
 // Run: node --test scripts/check-event-catalog.test.mjs
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,8 +17,12 @@ import {
   SIDECAR,
   VENDORED_COPIES,
   diffCatalogs,
+  formatRefBanner,
+  formatRefOffPinWarning,
   inspectRepository,
 } from './check-event-catalog.mjs';
+import { submoduleOf } from './submodule-ref.mjs';
+import { cleanNodeEnv } from './test-env.mjs';
 
 const [INTENTD_GOLDEN, IOS_FIXTURE] = VENDORED_COPIES;
 
@@ -50,6 +54,12 @@ function lag(message) {
   return `${message} (${LEAD_HINT})`;
 }
 
+// The ref of a vendored copy read from a fixture outside any git repository.
+function unknownRef(copy) {
+  return { source: 'checkout', dir: submoduleOf(copy), checkout: null, pin: null };
+}
+const BOTH_REFS = [unknownRef(INTENTD_GOLDEN), unknownRef(IOS_FIXTURE)];
+
 async function fixture(t, files) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'check-event-catalog-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
@@ -68,7 +78,7 @@ test('identical vendored copies pass', async (t) => {
     [INTENTD_GOLDEN]: catalog,
     [IOS_FIXTURE]: catalog,
   });
-  assert.deepEqual(await inspectRepository(root), { failures: [], warnings: [], skipped: [] });
+  assert.deepEqual(await inspectRepository(root), { failures: [], warnings: [], skipped: [], refs: BOTH_REFS });
 });
 
 test('a missing vendored copy is skipped, not failed', async (t) => {
@@ -77,7 +87,7 @@ test('a missing vendored copy is skipped, not failed', async (t) => {
     [EVENTS_DOC]: doc,
     [INTENTD_GOLDEN]: catalog,
   });
-  assert.deepEqual(await inspectRepository(root), { failures: [], warnings: [], skipped: [IOS_FIXTURE] });
+  assert.deepEqual(await inspectRepository(root), { failures: [], warnings: [], skipped: [IOS_FIXTURE], refs: [unknownRef(INTENTD_GOLDEN)] });
 });
 
 test('a copy lagging the sidecar warns without failing (docs lead the pin)', async (t) => {
@@ -103,6 +113,7 @@ test('a copy lagging the sidecar warns without failing (docs lead the pin)', asy
       ...expectedWarnings.map((message) => ({ source: IOS_FIXTURE, message })),
     ],
     skipped: [],
+    refs: BOTH_REFS,
   });
 });
 
@@ -126,6 +137,7 @@ test('a copy carrying what the sidecar lacks fails naming the monorepo files to 
     ],
     warnings: [{ source: IOS_FIXTURE, message: lag('missing type task:ready-tasks-changed') }],
     skipped: [],
+    refs: BOTH_REFS,
   });
   for (const failure of result.failures) {
     assert.ok(failure.message.includes(SIDECAR) && failure.message.includes(EVENTS_DOC));
@@ -147,6 +159,7 @@ test('a semantically equal copy that is not byte-identical fails', async (t) => 
     ],
     warnings: [],
     skipped: [],
+    refs: BOTH_REFS,
   });
 
   const duplicated = withTypes(catalog, [...catalog.types, 'note:created']);
@@ -164,6 +177,7 @@ test('a semantically equal copy that is not byte-identical fails', async (t) => 
     ],
     warnings: [],
     skipped: [],
+    refs: BOTH_REFS,
   });
 });
 
@@ -206,6 +220,7 @@ test('a sidecar type absent from the events doc fails', async (t) => {
     failures: [{ source: EVENTS_DOC, message: `type task:ready-tasks-changed from ${SIDECAR} is not mentioned` }],
     warnings: [],
     skipped: [INTENTD_GOLDEN, IOS_FIXTURE],
+    refs: [],
   });
 });
 
@@ -224,6 +239,113 @@ test('the CLI exits 0 on warnings and reports the count, 1 on errors', async (t)
   assert.equal(failed.status, 1);
   assert.match(failed.stderr, /unexpected type note:renamed/);
   assert.match(failed.stderr, /check-event-catalog: 1 error\(s\)$/m);
+});
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+};
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+// A passing fixture whose packages/intentd is a nested git repo with the golden committed and recorded
+// as the monorepo gitlink; `advance()` commits a lagging golden in intentd so the checkout moves off the pin.
+async function makeGitRoot(t) {
+  const root = await fixture(t, { [SIDECAR]: catalog, [EVENTS_DOC]: doc, [INTENTD_GOLDEN]: catalog });
+  const dir = submoduleOf(INTENTD_GOLDEN);
+  const intentd = path.join(root, dir);
+  git(intentd, 'init', '-q', '-b', 'main');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'pin');
+  const pin = git(intentd, 'rev-parse', 'HEAD');
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${pin},${dir}`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  const advance = async () => {
+    await fs.writeFile(path.join(root, INTENTD_GOLDEN), JSON.stringify(withTypes(catalog, ['note:created', 'workspace:updated'])));
+    git(intentd, 'commit', '-q', '-am', 'ahead of the pin');
+    return git(intentd, 'rev-parse', 'HEAD');
+  };
+  return { root, dir, pin, advance };
+}
+
+const SCRIPT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'check-event-catalog.mjs');
+const runCli = (root) => spawnSync(process.execPath, [SCRIPT, root], { encoding: 'utf8', env: cleanNodeEnv() });
+
+test('at the pin: the banner names checkout == pin on stdout, no warning, exit code unchanged', async (t) => {
+  const { root, dir, pin } = await makeGitRoot(t);
+  const result = await inspectRepository(root);
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: pin, pin, dirty: false }]);
+  assert.equal(formatRefOffPinWarning(result.refs[0]), null);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(
+    cli.stdout,
+    `check-event-catalog: intentd vendored copy from ${dir} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nskipped: ${IOS_FIXTURE} (submodule not initialized)\nEvent catalog is in sync; checked 1 vendored copy and ${EVENTS_DOC}.\n`,
+  );
+  assert.equal(cli.stderr, '');
+});
+
+test('off the pin: results reflect the checkout and the stderr warning names both SHAs without changing the exit code', async (t) => {
+  const { root, dir, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  assert.notEqual(head, pin);
+  const result = await inspectRepository(root);
+  assert.deepEqual(result.refs, [{ source: 'checkout', dir, checkout: head, pin, dirty: false }]);
+  assert.deepEqual(result.failures, []);
+  assert.equal(result.warnings.length, 1, 'the checkout golden (lagging) is what was compared');
+  assert.equal(formatRefBanner(result.refs[0]), `check-event-catalog: intentd vendored copy from ${dir} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`);
+  const warning = `warning: ${dir} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)}; results reflect the checkout, not the pin. Run git submodule update --checkout ${dir} to compare against the pin.\n`;
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.ok(cli.stdout.startsWith(formatRefBanner(result.refs[0]) + '\n'), cli.stdout);
+  assert.ok(cli.stderr.startsWith(warning), cli.stderr);
+  assert.match(cli.stderr, /warning: missing type task:ready-tasks-changed/);
+});
+
+test('a fixture outside any git repository yields unknown refs: no banner, no warning', async (t) => {
+  const root = await fixture(t, { [SIDECAR]: catalog, [EVENTS_DOC]: doc, [INTENTD_GOLDEN]: catalog });
+  const { refs } = await inspectRepository(root);
+  assert.deepEqual(refs, [unknownRef(INTENTD_GOLDEN)]);
+  assert.equal(formatRefBanner(refs[0]), null);
+  assert.equal(formatRefOffPinWarning(refs[0]), null);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.doesNotMatch(cli.stdout, /^check-event-catalog:/m);
+  assert.equal(cli.stderr, '');
+});
+
+// The CI layout: packages/ios has a recorded gitlink and the fixture file fetched into it, but no .git of
+// its own. The monorepo HEAD must not be reported as the ios checkout, and no off-pin warning may appear.
+test('an ios fixture fetched without packages/ios/.git yields no fabricated checkout, banner or warning', async (t) => {
+  const { root, dir, pin } = await makeGitRoot(t);
+  const iosDir = submoduleOf(IOS_FIXTURE);
+  await fs.mkdir(path.dirname(path.join(root, IOS_FIXTURE)), { recursive: true });
+  await fs.writeFile(path.join(root, IOS_FIXTURE), JSON.stringify(catalog));
+  const iosPin = 'c'.repeat(40);
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${iosPin},${iosDir}`);
+  git(root, 'commit', '-q', '-m', 'add ios gitlink');
+  const monorepoHead = git(root, 'rev-parse', 'HEAD');
+  const result = await inspectRepository(root);
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.skipped, []);
+  assert.deepEqual(result.refs, [
+    { source: 'checkout', dir, checkout: pin, pin, dirty: false },
+    { source: 'checkout', dir: iosDir, checkout: null, pin: iosPin },
+  ]);
+  for (const ref of result.refs) assert.notEqual(ref.checkout, monorepoHead);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(
+    cli.stdout,
+    `check-event-catalog: intentd vendored copy from ${dir} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nEvent catalog is in sync; checked 2 vendored copies and ${EVENTS_DOC}.\n`,
+  );
+  assert.equal(cli.stderr, '');
 });
 
 test('the checked-in sidecar is valid and fully documented', async () => {
