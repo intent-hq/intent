@@ -157,14 +157,15 @@ tmp_work=$(mktemp -d)
 trap 'rm -f "$tmp_index" "$pr_body_file"; rm -rf "$tmp_work"' EXIT
 
 # Run git in another repository with the http credentials actions/checkout
-# persisted in this checkout's local config (the SUBMODULE_BUMP_TOKEN
-# extraheader), passed through the environment rather than argv.
+# persisted for this checkout (the SUBMODULE_BUMP_TOKEN extraheader; newer
+# checkout versions reach it through an includeIf, hence --includes), passed
+# through the environment rather than argv.
 git_with_http_config() (
   n=0
   while read -r key value; do
     export "GIT_CONFIG_KEY_$n=$key" "GIT_CONFIG_VALUE_$n=$value"
     n=$((n + 1))
-  done < <(git config --local --get-regexp '^http\..*\.extraheader$' || true)
+  done < <(git config --includes --get-regexp '^http\..*\.extraheader$' || true)
   GIT_CONFIG_COUNT=$n exec git "$@"
 )
 
@@ -200,7 +201,10 @@ regenerate_bindings_index() {
     warn "check-mcp-bindings did not write $INDEX_PATH; not regenerated"
     return 0
   fi
-  new_blob=$(git hash-object -w "$root/$INDEX_PATH")
+  if ! new_blob=$(git hash-object -w "$root/$INDEX_PATH") || [ -z "$new_blob" ]; then
+    warn "could not store the regenerated $INDEX_PATH as a blob; not regenerated"
+    return 0
+  fi
   head_blob=$(git rev-parse --verify --quiet "$head:$INDEX_PATH" || true)
   if [ "$new_blob" = "$head_blob" ]; then
     echo "$INDEX_PATH: unchanged by intentd ${sha:0:7}"
@@ -220,8 +224,12 @@ for i in "${!paths[@]}"; do
   fi
 done
 if [ -n "$index_blob" ]; then
-  GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "100644,$index_blob,$INDEX_PATH"
-  commit_body+=$'\n'"$INDEX_PATH: regenerated from the new intentd ws.* help text"$'\n'
+  if GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "100644,$index_blob,$INDEX_PATH"; then
+    commit_body+=$'\n'"$INDEX_PATH: regenerated from the new intentd ws.* help text"$'\n'
+  else
+    warn "could not add the regenerated $INDEX_PATH to the bump tree; continuing with the gitlink-only bump"
+    index_blob=""
+  fi
 fi
 tree=$(GIT_INDEX_FILE=$tmp_index git write-tree)
 

@@ -36,21 +36,34 @@ git_fx() {
 }
 
 # Stub gh: `pr list` prints the open PR number kept in $GH_STUB_DIR/pr (the
-# post-`--jq` output the script reads), `pr create` opens PR 42, `pr close`
-# removes it; everything else succeeds. Every invocation is appended to
-# GH_TEST_LOG.
+# post-`--jq` output the script reads), `pr create` opens PR 42 and keeps its
+# `--body-file` as $GH_STUB_DIR/body, `pr close` removes it; everything else
+# succeeds. Every invocation is appended to GH_TEST_LOG.
 cat >"$bin_dir/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$GH_TEST_LOG"
 case "$1 $2" in
   "pr list") [[ -f "$GH_STUB_DIR/pr" ]] && cat "$GH_STUB_DIR/pr"; exit 0 ;;
-  "pr create") echo 42 >"$GH_STUB_DIR/pr" ;;
+  "pr create") echo 42 >"$GH_STUB_DIR/pr"; cp "${@: -1}" "$GH_STUB_DIR/body" ;;
   "pr close") rm -f "$GH_STUB_DIR/pr" ;;
   "pr edit" | "pr merge") ;;
   *) echo "stub: unexpected gh $*" >&2; exit 1 ;;
 esac
 SH
 chmod +x "$bin_dir/gh"
+
+# Stub git for fault injection: fails the invocation whose argv contains
+# GIT_STUB_FAIL (when set) and defers every other call to the real git.
+real_git=$(command -v git)
+cat >"$bin_dir/git" <<SH
+#!/usr/bin/env bash
+if [[ -n "\${GIT_STUB_FAIL:-}" && " \$* " == *"\$GIT_STUB_FAIL"* ]]; then
+  echo "stub: failing git \$*" >&2
+  exit 1
+fi
+exec "$real_git" "\$@"
+SH
+chmod +x "$bin_dir/git"
 
 # tools.rs with the two help-text constants the checker extracts; $1 lists
 # extra API lines for the base constant.
@@ -133,7 +146,7 @@ run_script() {
   stderr=$(<"$temp_dir/stderr")
 }
 reset_stub() {
-  rm -f "$stub_dir/pr"
+  rm -f "$stub_dir/pr" "$stub_dir/body"
   : >"$temp_dir/gh.log"
 }
 bump_commit() {
@@ -147,10 +160,28 @@ gitlink_at() {
   git -C "$origin" ls-tree "$1" packages/intentd | awk '$1 == "160000" { print $3 }'
 }
 
+# Fail-soft: when the regenerated index cannot be stored as a blob or added to
+# the bump tree, the bump still lands gitlink-only with a warning, and neither
+# the commit body nor the PR body claims a regeneration.
+publish_intentd "$intentd_c1"
+for fault in "hash-object -w" "update-index --cacheinfo 100644,"; do
+  reset_stub
+  GIT_STUB_FAIL="$fault" run_script
+  [[ "$status" -eq 0 ]] || fail "bump with failing 'git $fault' exited $status: $stderr"
+  [[ "$stderr" == *"warning: could not "*"$index_path"* ]] || fail "failing 'git $fault' did not warn: $stderr"
+  bump=$(bump_commit) || fail "failing 'git $fault' pushed no $branch"
+  [[ "$stdout" == *"Pushed $bump to $branch."* ]] || fail "failing 'git $fault' did not report the push: $stdout"
+  [[ "$(gitlink_at "$bump")" == "$intentd_c1" ]] || fail "failing 'git $fault' did not move the gitlink"
+  [[ "$(touched_paths "$bump")" == "packages/intentd" ]] || fail "failing 'git $fault' bump touched: $(touched_paths "$bump")"
+  [[ "$(git -C "$origin" log -1 --format=%b "$bump")" != *"regenerated"* ]] || fail "failing 'git $fault' bump body mentions the index"
+  [[ -f "$stub_dir/body" ]] || fail "failing 'git $fault' created no PR"
+  ! grep -q "regenerates" "$stub_dir/body" || fail "failing 'git $fault' PR body claims a regeneration: $(<"$stub_dir/body")"
+  git -C "$origin" update-ref -d "refs/heads/$branch"
+done
+
 # Case 1: the intentd tip adds a ws.* help line. The pushed bump commit moves
 # the gitlink and regenerates the index, and the checker passes on that tree.
 reset_stub
-publish_intentd "$intentd_c1"
 run_script
 [[ "$status" -eq 0 ]] || fail "changed help text bump exited $status: $stderr"
 [[ "$stdout" == *"packages/intentd: behind (${intentd_c0:0:7} -> ${intentd_c1:0:7})"* ]] || fail "drift not reported: $stdout"
