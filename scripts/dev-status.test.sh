@@ -54,12 +54,19 @@ for command in bash cksum date dirname git grep head python3 sed awk; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 
+# Every probe budget in dev-status.sh must come from a knob so the suite can
+# raise it under load; a numeric literal reintroduces a fixed wall-clock budget.
+! grep -nE 'timeout=[0-9]' "$script" \
+  || fail "dev-status.sh has a numeric timeout= literal; use DEV_STATUS_PORT_TIMEOUT or DEV_STATUS_PROBE_TIMEOUT"
+
 # The port probe budget is generous here so a loaded host never empties
-# `ports`; the no-gh wall-clock bound scales with it (3 s of slack on top,
-# i.e. the historical 5000 ms at the former 2 s default) so it still catches a
-# missing `gh` hanging the report.
+# `ports`, and the probe budget (doctor, sandbox, git, gh) likewise never
+# empties `sandboxes`; the no-gh wall-clock bound scales with both (3 s of
+# slack on top, i.e. the historical 5000 ms at the former 2 s port default) so
+# it still catches a missing `gh` hanging the report.
 export DEV_STATUS_PORT_TIMEOUT="${DEV_STATUS_PORT_TIMEOUT:-30}"
-no_gh_budget_ms=$(python3 -c 'import os; print(int(float(os.environ["DEV_STATUS_PORT_TIMEOUT"]) * 1000) + 3000)')
+export DEV_STATUS_PROBE_TIMEOUT="${DEV_STATUS_PROBE_TIMEOUT:-30}"
+no_gh_budget_ms=$(python3 -c 'import os; print(int((float(os.environ["DEV_STATUS_PORT_TIMEOUT"]) + float(os.environ["DEV_STATUS_PROBE_TIMEOUT"])) * 1000) + 3000)')
 
 started_ms=$(python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
 PATH="$bin_dir" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
@@ -159,6 +166,31 @@ fi
 grep -q "$coverage_line" <(PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" bash "$script") \
   || fail "human status did not print the Coverage line"
 [[ -f "$state_dir/ui.json" ]] || fail "status removed a live fixture state file"
+
+# Degraded probe budget: a budget too small for dev-sandbox.sh status empties
+# `sandboxes` (the live fixture is still on disk) but the report exits 0; an
+# invalid value is ignored with a warning and the default still finds it.
+DEV_STATUS_PROBE_TIMEOUT=0.001 PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+  bash "$script" >"$temp_dir/degraded.json" || fail "status exited non-zero under a tiny DEV_STATUS_PROBE_TIMEOUT"
+python3 - "$temp_dir/degraded.json" <<'PY' || fail "degraded probe budget did not empty sandboxes"
+import json
+import sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert report["sandboxes"] == [], report["sandboxes"]
+PY
+DEV_STATUS_PROBE_TIMEOUT=abc PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
+  bash "$script" >"$temp_dir/invalid-probe.json" 2>"$temp_dir/invalid-probe.err" \
+  || fail "status exited non-zero under an invalid DEV_STATUS_PROBE_TIMEOUT"
+grep -q "ignoring DEV_STATUS_PROBE_TIMEOUT='abc'" "$temp_dir/invalid-probe.err" \
+  || fail "invalid DEV_STATUS_PROBE_TIMEOUT was not reported on stderr: $(cat "$temp_dir/invalid-probe.err")"
+[[ "$(grep -c 'ignoring DEV_STATUS_PROBE_TIMEOUT' "$temp_dir/invalid-probe.err")" == 1 ]] \
+  || fail "invalid DEV_STATUS_PROBE_TIMEOUT warning was not printed exactly once"
+python3 - "$temp_dir/invalid-probe.json" <<'PY' || fail "invalid probe budget did not fall back to the default"
+import json
+import sys
+report = json.load(open(sys.argv[1], encoding="utf-8"))
+assert len(report["sandboxes"]) == 1, report["sandboxes"]
+PY
 
 cat >"$state_dir/stale.json" <<'JSON'
 {"mode":"ui","pid":99999999}
