@@ -269,7 +269,7 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-changed coverage-e2e coverage-all \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
@@ -477,6 +477,9 @@ gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest
 	@$(MAKE) --no-print-directory test
 
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
+
+test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
+	python3 -m unittest -v scripts.test_resumable_nextest scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
