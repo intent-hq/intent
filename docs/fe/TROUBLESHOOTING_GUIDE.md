@@ -13,8 +13,52 @@
 5. [Test Issues](#test-issues)
 6. [TypeScript Issues](#typescript-issues)
 7. [Migration Issues](#migration-issues)
+8. [Codex Runtime and Models](#codex-runtime-and-models)
 
 ## Common Issues and Solutions
+
+### Codex Runtime and Models
+
+When Codex model choices differ between Intent and a terminal, run diagnostics on the
+daemon host with the same Intent configuration:
+
+```bash
+intentd doctor
+intentd doctor --codex-models
+```
+
+The first command reports the selected ACP adapter (settings override, local discovery,
+or managed npm), its configured managed pin, and separately measured adapter/runtime
+versions. A configured pin or a named binary on PATH is not a measured bundled runtime.
+The check follows production selection, including managed removal of `CODEX_PATH` and
+`CODEX_CONFIG`; it never substitutes an unrelated PATH `codex`. Unverified local packages,
+opaque wrappers, missing runtimes, and timeouts are shown as unknown. Ordinary doctor
+adds no npm resolution or live catalog calls.
+
+`--codex-models` explicitly permits managed package resolution/download and compares
+fresh ACP advertisements with `model/list` from the verified runtime. Read each catalog's
+status separately: one can fail while the other succeeds. An advertised empty catalog
+differs from no advertisement. Original model IDs, raw aliases, hidden flags, and source
+messages are preserved; exact comparison does not normalize effort suffixes. Withheld
+IDs or incomplete catalogs make comparison inconclusive. ACP choices may be synthesized;
+presence is not proof of entitlement, and absence is not proof of an account restriction
+or a remedy for model access.
+
+Live checks use existing file authentication from `CODEX_HOME/auth.json` or the default
+home's `.codex/auth.json`, plus the selected `OPENAI_API_KEY`, `CODEX_API_KEY`, and
+`CODEX_ACCESS_TOKEN` environment values. Keyring-only credentials may be unavailable in
+the isolated probe. User/project configuration, MCP servers, and model caches are not
+copied. No prompt, login, or token-refresh request is sent, and account metadata,
+credentials, and raw child errors are not printed.
+
+Allow more than 30 seconds for the entire command: local inspection/version operations
+each allow three seconds and 16 KiB of stdout; ACP and raw startup/conversation phases
+each allow 30 seconds and 1 MiB per output stream. Raw pagination stops at ten pages or
+a repeated cursor, catalogs at 2,000 rows, and authentication/entrypoint files at 64 KiB.
+Process startup and cleanup have additional budgets; cleanup confirmation allows five
+seconds. Unknown or failed provider checks are advisory. Existing daemon-health checks
+still control the exit status. A cleanup warning means temporary state was retained
+because termination could not be confirmed.
 
 ### Agent Creation Issues
 
