@@ -390,7 +390,7 @@ The active provider is tracked in the `providerSettings` Redux slice; it starts 
 
 ## Testing and Validation
 
-Use `pnpm` for all documented test commands.
+Use `pnpm` for frontend test commands.
 
 ```bash
 pnpm run test:unit
@@ -406,6 +406,17 @@ Tests and test helpers are spread across several areas of the repo:
 - Electron main-process tests under `src/main/__tests__/`
 - shared tests under `src/shared/__tests__/`
 - reusable mocks/factories under `src/test/`
+
+The [transfer-selection fixture contract](../protocol/README.md#transfer-selection-fixture-contract)
+defines the shared 32-case import-to-ModelPicker matrix. Its input schema tests run
+from the monorepo root with `node --test scripts/check-transfer-selection-contract.test.mjs`;
+`node scripts/check-transfer-selection-contract.mjs --inputs-only` validates the
+matrix without a Rust build. Component harnesses must use `TRANSFER_SELECTION_FIXTURE_ROOT`
+to locate the same inputs and daemon-generated public sessions, including from a
+standalone checkout. Renderer tests must consume those full responses with real
+identity/catalog selectors and assert the model label or Auto plus the absence of
+warnings, fallback actions, model mutations and toasts. A hash check alone does not
+establish daemon provenance; the connected gate must regenerate and compare outputs.
 
 ## Debugging Notes
 
