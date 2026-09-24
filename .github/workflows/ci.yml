@@ -117,6 +117,7 @@ jobs:
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs
+      - run: node --test scripts/check-transfer-selection-contract.test.mjs
       - run: make consumer-checks
 
   # The event-type catalog is vendored on three surfaces (intentd golden,

@@ -224,6 +224,29 @@ Renderer assertions use the complete emitted session, real identity/catalog
 selectors and isolated state/transport: explicit Auggie label or Auto (`Default
 model` tooltip), with no warning, fallback action, model mutation or toast.
 
+### Gate rollout
+
+`make check-transfer-selection-contract` validates the complete matrix, golden and
+provenance envelope without compiling Rust or installing the frontend. It is a
+required row of `make consumer-checks`. Integrity alone does not prove freshness;
+the connected Cargo-to-ModelPicker runner supplies that proof.
+
+Publish this contract, its real generated golden and the lightweight checks first.
+Standalone component CI then checks out monorepo `main` once per job, recording its
+resolved full SHA; the validator and fixtures must come from that same checkout.
+A missing validator or golden fails the job. Land the daemon harness, then the
+renderer harness, with human merge permission, and let the automated submodule
+bump advance both pins. Only after both recorded pins contain the harnesses may
+the separate connected-runner/Makefile/reusable-workflow activation land. Never
+advance gitlinks manually or treat a missing harness as a passing connected check.
+
+The reusable workflow keeps its own monorepo workflow revision, replaces only the
+calling component with its actual PR head (queue commit for `merge_group`), and
+initializes the other component at the recorded monorepo pin. Once activated, it
+runs the connected proof for both caller directions on every successful checkout,
+without a changed-path filter. Local runs at two feature heads are useful evidence,
+but do not establish that a not-yet-landed counterpart pin passes.
+
 ## Compatibility policy (summary)
 
 The protocol version is a `major.minor` pair: **additive** changes (new methods, new optional params, new presence-detected response fields) bump the minor version; **breaking** changes (removed methods, changed shapes) bump the major version. Additive response fields on an existing method do not change the golden-test-enforced catalog and ship within the current version — clients must detect them by **presence**, not by protocol version. The full policy and the complete version-by-version history live in [versioning.md](./versioning.md).
