@@ -239,6 +239,42 @@ test('missing required inputs and outputs fail; only explicit inputs-only mode o
   await assert.rejects(inspectFixtures({ fixtureRoot: dir, inputsOnly: true }), /required.*contract.json/);
 });
 
+test('API rejects empty output paths without downgrading a requested freshness check', async (t) => {
+  const dir = await fixture(t);
+  assert.match(await inspectFixtures({ fixtureRoot: dir }), /freshness not checked/);
+  for (const name of ['fresh', 'generated']) {
+    await assert.rejects(inspectFixtures({ fixtureRoot: dir, [name]: '' }), new RegExp(`--${name} must be a non-empty string`));
+  }
+});
+
+test('API inputs-only rejects every supplied output or provenance option, including falsy values', async (t) => {
+  const dir = await fixture(t);
+  for (const name of ['fresh', 'generated', 'intentdRevision', 'generatorSha256']) {
+    for (const value of ['', null, false, 0]) {
+      await assert.rejects(inspectFixtures({ fixtureRoot: dir, inputsOnly: true, [name]: value }), /--inputs-only cannot be combined/);
+    }
+  }
+  assert.match(await inspectFixtures({ fixtureRoot: dir, inputsOnly: true, fresh: undefined }), /outputs not checked/);
+});
+
+test('CLI rejects empty output paths and inputs-only options supplied with empty values', async (t) => {
+  const dir = await fixture(t);
+  const env = { ...cleanNodeEnv(), TRANSFER_SELECTION_FIXTURE_ROOT: dir };
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: os.tmpdir(), env, encoding: 'utf8' });
+  for (const name of ['fresh', 'generated']) {
+    for (const args of [[`--${name}`, ''], [`--${name}=`]]) {
+      const result = run(...args);
+      assert.equal(result.status, 1, `${args}: ${result.stdout}`);
+      assert.match(result.stderr, new RegExp(`--${name} must be a non-empty string`));
+    }
+  }
+  for (const name of ['fresh', 'generated', 'intentd-revision', 'generator-sha256']) {
+    const result = run('--inputs-only', `--${name}=`);
+    assert.equal(result.status, 1, `${name}: ${result.stdout}`);
+    assert.match(result.stderr, /--inputs-only cannot be combined/);
+  }
+});
+
 test('CLI works outside the monorepo and never silently accepts a missing or malformed file', async (t) => {
   const dir = await fixture(t);
   const env = { ...cleanNodeEnv(), TRANSFER_SELECTION_FIXTURE_ROOT: dir };

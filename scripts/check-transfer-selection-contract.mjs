@@ -211,7 +211,10 @@ async function readRequiredJson(file) {
 }
 
 export async function inspectFixtures({ fixtureRoot, inputsOnly = false, generated, fresh, intentdRevision, generatorSha256 } = {}) {
-  requireValue(!inputsOnly || (!generated && !fresh && !intentdRevision && !generatorSha256), '--inputs-only cannot be combined with output or provenance options');
+  requireValue(!inputsOnly || [generated, fresh, intentdRevision, generatorSha256].every((value) => value === undefined), '--inputs-only cannot be combined with output or provenance options');
+  for (const [name, value] of [['--generated', generated], ['--fresh', fresh]]) {
+    if (value !== undefined) string(value, name);
+  }
   const root = resolveFixtureRoot({ fixtureRoot });
   const contract = await readRequiredJson(path.join(root, 'contract.json'));
   assertContract(contract);
@@ -219,7 +222,7 @@ export async function inspectFixtures({ fixtureRoot, inputsOnly = false, generat
   const goldenPath = path.resolve(generated ?? path.join(root, 'public-sessions.json'));
   const golden = await readRequiredJson(goldenPath);
   const expectedSource = { intentdRevision, generatorSha256 };
-  if (fresh) {
+  if (fresh !== undefined) {
     const freshPath = path.resolve(fresh);
     const freshArtifact = await readRequiredJson(freshPath);
     const [goldenStat, freshStat] = await Promise.all([fs.stat(goldenPath), fs.stat(freshPath)]);
