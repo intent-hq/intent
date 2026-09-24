@@ -14,7 +14,6 @@ SPEC.loader.exec_module(MODULE)
 
 class SeedDevProvidersTests(unittest.TestCase):
     def test_seeds_preferences_and_only_absolute_paths(self):
-        self.fail("Intentional CI failure demonstration for #5793")
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
             source = root_path / "prod.toml"
