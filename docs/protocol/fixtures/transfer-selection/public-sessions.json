@@ -1,0 +1,1471 @@
+{
+  "formatVersion": 1,
+  "normalizationVersion": 1,
+  "provenance": {
+    "kind": "intentd-public-import",
+    "generator": "intent-services/transfer-selection-contract",
+    "intentdRevision": "8ca55d20d9929eaabbeac0bbeb9a1a03c6d8cde7",
+    "intentdDirty": false,
+    "generatorSha256": "4739418f289f0102a986bd1a94409b672a1769c36c0c1174fe63be51f3970796",
+    "contractSha256": "0a7cfb0b4e44e46902137a60428d802970c360a0e46555ed5ce9c25e7953de14",
+    "payloadSha256": "bebef6ccbe0b81ec95c453027955919bc1961f20547f805e6a173a354763e79a"
+  },
+  "cases": [
+    {
+      "id": "auggie:direct:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:direct:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:history:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:history:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:prefix:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:prefix:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "auggie:gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "auggie",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "auggie:auto:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "auggie:auto:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "auggie",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "acp:direct:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:direct:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:history:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:history:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:prefix:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:prefix:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "acp",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "acp:auto:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "acp:auto:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "acp",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "augment:direct:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:direct:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:history:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:history:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:prefix:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:prefix:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "augment",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "augment:auto:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "augment:auto:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "augment",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "default:direct:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:direct:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:history:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:history:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:prefix:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:prefix:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "model": "gpt6-astra",
+        "reasoningEffort": "low",
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoning_effort": "low",
+        "last_turn_provider": "default",
+        "last_turn_model": "gpt6-astra"
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": "gpt6-astra",
+        "reasoningEffort": "low"
+      }
+    },
+    {
+      "id": "default:auto:codex=true",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    },
+    {
+      "id": "default:auto:codex=false",
+      "session": {
+        "id": "agent-transfer-contract",
+        "workspaceId": "ws-transfer-contract",
+        "name": "Transfer contract",
+        "nameExplicitlySet": false,
+        "provider": "auggie",
+        "status": "idle",
+        "isActive": false,
+        "messages": [],
+        "notificationsMuted": false,
+        "harnessVersion": "1.0",
+        "harnessFeatures": {
+          "backgroundHooks": true,
+          "hostExec": true,
+          "scripts": true,
+          "terminalAccess": true,
+          "browserAutomation": true,
+          "richChatBlocks": true,
+          "structuredQuestions": true,
+          "attentionRequests": true,
+          "stateSnapshot": true,
+          "prMonitor": true,
+          "taskGraph": true,
+          "peerAgents": false,
+          "mcpTools": true
+        },
+        "createdAt": "2000-01-01T00:00:00Z",
+        "updatedAt": "2000-01-01T00:00:00Z"
+      },
+      "persisted": {
+        "provider": "auggie",
+        "model": null,
+        "reasoning_effort": null,
+        "last_turn_provider": "default",
+        "last_turn_model": null
+      },
+      "firstTurn": {
+        "provider": "auggie",
+        "model": null,
+        "reasoningEffort": null
+      }
+    }
+  ]
+}
