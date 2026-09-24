@@ -40,6 +40,44 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.subscribe (deprecated) | eventTypes (req, array), agentId?, excludeSelf?, batchWindow? | service result `{ subscriptionId, eventTypes }` — not the WS streaming surface (use events.subscribe). Registers a real internal subscription: when `agentId` names a subscriber agent, matching workspace events (category wildcards or exact types) are coalesced over `batchWindow` ms (default 500) and delivered as one `[WORKSPACE EVENTS]` wake message per batch, with `event_notification` message metadata; `excludeSelf` (default true) drops the subscriber's own events. **Agent events are off-limits to agent subscribers ([monorepo#1229](https://github.com/intent-hq/monorepo/issues/1229)):** when the call carries a subscriber agent, every explicit `agent:`-prefixed entry — exact types, the `agent:*` wildcard itself, and the observability events — plus `chat:stream:delta` is rejected with `-32602` at subscribe time, atomically (a mixed list like `["note:*", "agent:*"]` registers NOTHING; the error text redirects to `ws.agent.watch(agentId)` and lists the non-agent categories that remain available). A bare `*` is NOT rejected: it silently narrows to the non-agent category wildcards at resolution time (front-door `*` expansion is unchanged and still includes `agent:*`). A **match-time guard** backs the subscribe-time one: agent-owned delivery filters set `exclude_agent_events`, so legacy `agent:*` rows persisted before the guard existed never deliver agent events after a daemon restart. Subscriber-less (FE front-door) subscriptions are exempt from all of this and keep the full stream. Agent-owned subscriptions persist across daemon restarts (rows whose subscriber is gone — or whose workspace no longer exists, `__chief__` exempt — are pruned at startup, monorepo#947). Live subscriptions are listed via `agent.getSubscriptions` (`eventSubscriptions`) and reported by `agent.diagnostics`. `workspace.delete` drops the workspace's event subscriptions (delivery tasks aborted, rows deleted). Without `agentId` (FE front door) the subscription is match-only in memory — no wake target. Over the MCP seam (`ws.agent.subscribe` / `ws.event.subscribe`) the subscriber is the calling agent automatically (so the restriction applies; the MCP binding's `*` expansion moved into the daemon for the per-subscriber resolution). |
 | agent.unsubscribe (deprecated) | subscriptionId (req) | service result `{ success: true, subscriptionId }` — stops delivery; unknown id errors |
 
+**Assistant prompt-version marker (additive, presence-detected; [intent#5830](https://github.com/intent-hq/intent/issues/5830)).**
+The `agent.list` / `agent.get` metadata shape above additionally includes
+`chiefPromptVersion?: number`. This is a caller-supplied version of the built-in
+Assistant's creation-time instructions, not the daemon protocol or harness version.
+The internal specialist id stays `chief-of-staff`.
+
+- **Create:** `agent.create` accepts `metadata.chiefPromptVersion` alongside the
+  caller's `metadata.behaviorPrompt`. A non-null marker must be a positive integer
+  in `1..=4294967295` (`u32`); a string, boolean, fractional number, zero, negative
+  number, or out-of-range value is rejected with `-32602` before persistence.
+  An omitted or `null` marker means no marker. The daemon never assigns a current
+  version merely because the request names the Assistant specialist.
+- **Read:** the valid numeric marker is returned on the `agent.create` and
+  `agent.update` results, `agent.get`, every `agent.list` scope, and the §6.9 agent
+  collection's snapshots and deltas. Missing, null, or invalid legacy markers are
+  omitted from `AgentLite`, never coerced from strings or inferred from creation
+  time. `agent.getSession` retains the raw persisted metadata. No history or saved
+  prompt is rewritten and no existing session is backfilled.
+- **Invalidation:** `agent.update` clears the marker when `systemPrompt` or the
+  canonical specialist actually changes. A no-op patch, name change, or model
+  change preserves it. Updating arbitrary metadata (including `behaviorPrompt`
+  or the marker) remains unsupported; a client cannot promote an old session by
+  patching the marker alone. Later stale session writes must not restore a cleared
+  marker. Create a new session to apply a new version of the instructions.
+- **Cost and durability:** the marker lives in the existing session metadata JSON
+  and survives daemon restart. The existing summary SQL already reads that metadata;
+  no additional query or schema change is needed. The wire projection adds only a
+  bounded scalar to `AGENT_LIST_ROW_METADATA_KEYS`; the list-row and frame budgets
+  still apply. This is a persisted-on-write field (RPC cost ladder rung 1), with no
+  transcript or system-prompt hydration on list reads.
+- **Client compatibility:** compare the returned numeric marker with the client's
+  current prompt version, together with `metadata.specialist === "chief-of-staff"`.
+  Reuse additionally requires an empty conversation. An old or absent marker must
+  not qualify, even when `createdAt` is recent or in the future. Older daemons omit
+  the projected marker, so updated clients decline reuse rather than guess. Older
+  clients ignore the new field. Explicit selection and deep links to old threads
+  remain valid; this contract does not delete, rename, or migrate those threads.
+
 **Progress wakes and durable final wakes.** This is the current delivery contract and
 supersedes the older report-delivery wording in the method-table row above.
 `agent.reportToParent` persists the report and, for an ungrouped child, sends one immediate
