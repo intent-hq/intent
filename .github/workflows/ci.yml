@@ -85,6 +85,19 @@ jobs:
       - run: node --test scripts/uds-ws-bridge.test.mjs
       - run: node --test scripts/uds-rpc.test.mjs
 
+  # Standard-library-only Python suites run without submodules. Use the same
+  # entry point locally and in CI; tomllib requires Python 3.11 or newer.
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: make test-scripts
+
   # Documentation invariants include the public frontend agent guide, the
   # browser-tab contract surfaces in cloudlands-fe and intentd, and the
   # protocol method catalog (docs/protocol/05-method-catalog.md ↔ methods/*.md
@@ -338,7 +351,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test]
+    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test]
     steps:
       - uses: actions/checkout@v7
         with:
