@@ -165,6 +165,7 @@ jobs:
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs
       - run: node --test scripts/check-transfer-selection-contract.test.mjs scripts/test-transfer-selection-contract.test.mjs scripts/transfer-selection-ci.test.mjs
+      - run: node --test scripts/backend-keychain-contract.test.mjs
       - run: node --test scripts/consumer-checks-ci.test.mjs
       - run: make consumer-checks
 

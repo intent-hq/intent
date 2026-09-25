@@ -38,7 +38,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 cd "$repo_root"
 
-checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract"
+checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract"
 advisory=${CONSUMER_CHECKS_ADVISORY:-}
 context=${CONSUMER_CHECKS_CONTEXT:-monorepo}
 make_bin=${MAKE:-make}
@@ -91,6 +91,7 @@ fix_path() {
     check-makefile-targets) echo "Makefile intentd crate / --test references (must exist at the pinned intentd gitlink in the monorepo / at the caller head upstream)" ;;
     check-protocol-field-parity) echo "scripts/check-protocol-field-parity.mjs PAIRS (ignore manifest) or the cloudlands-fe type that consumes the row struct" ;;
     check-transfer-selection-contract) echo "docs/protocol/fixtures/transfer-selection/ (shape, coverage and provenance; no compilation)" ;;
+    check-backend-keychain-contract) echo "docs/protocol/fixtures/backend-keychain/v1/ + adopted component mirrors/locks (see docs/protocol/backend-keychain.md)" ;;
     *) echo "unknown check" ;;
   esac
 }

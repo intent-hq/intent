@@ -21,6 +21,10 @@ the § → file map, and the version history + compatibility policy live in
 golden tests in the `intent-transport` crate. [PROTOCOL.md](./PROTOCOL.md) remains as
 a redirect stub so legacy "PROTOCOL.md §N.M" citations stay meaningful.
 
+[protocol/backend-keychain.md](./protocol/backend-keychain.md) documents the
+separate owner-backend Keychain v1 contract shared by desktop and iOS, its
+canonical fixture corpus, and immutable component-copy verification.
+
 To debug live daemon state against this contract, `scripts/uds-rpc.mjs` (wrapped as
 `make rpc METHOD=... [PARAMS='{...}'] [SUBSCRIBE=1]`) sends a one-shot JSON-RPC
 request — or holds a subscription open — on the running daemon's UDS socket and
