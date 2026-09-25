@@ -28,7 +28,13 @@ Always use `http://daemon.localhost:<port>` in the embedded browser.
 
 Run `STATUS_JSON=1 make status` first. It reports host gaps, resolved ports, live sandboxes
 and health, both component branches (`repos.<name>.gitlinkDirty` flags a submodule moved
-off its pin), and branch PR checks when `gh` is authenticated.
+off its pin; `repos.<name>.behindOriginMain` counts commits the checked-out submodule HEAD
+lags the local `origin/main` — branch component work from `origin/main` when > 0), and branch PR checks
+when `gh` is authenticated.
+While `setup.running` is true (or your first message carried the setup-in-progress
+notice) the workspace setup script is still provisioning the worktree, so treat the whole
+report as provisional and wait with a hook on `ws.workspace.details().setupStatus` before
+acting on it.
 Use `make status` for the human-readable form. If `host.doctorOk` is false, run
 `make bootstrap-dev-host`, then `make doctor`; automation can set `BOOTSTRAP_YES=1`, but
 system packages may require privilege. Do not discover prerequisites during a build: the
@@ -103,7 +109,9 @@ and [sandbox internals](docs/fe/DEVELOPER_GUIDE.md#remote-sandbox-internals) for
 ## Commit & PR Workflow
 
 When changes span a submodule and the monorepo, land the submodule PR (Phase 1); the
-monorepo pin advance (Phase 2) then happens automatically.
+monorepo pin advance (Phase 2) then happens automatically. Exception: monorepo protocol
+docs that the consumer checks read (`docs/protocol/`) land first when the change is an
+addition — see Phase 2 → Docs lead the pin.
 
 ### Phase 1 — Submodule PRs
 
@@ -115,9 +123,14 @@ monorepo pin advance (Phase 2) then happens automatically.
    human** (see Conventions → Merging). Approved + green checks is not enough.
 
 When the change fixes a monorepo issue, reference it with the full cross-repo form —
-`Fixes intent-hq/intent#N` — in the squash-commit message or PR body. GitHub
-auto-closes the issue on merge, and the release notifier (see Release Process) comments
-on it once a release actually contains the complete fix.
+`Fixes intent-hq/intent#N` — in the PR body or squash-commit message, on **every** PR of
+a cross-component fix (intentd and cloudlands-fe alike); never downgrade to `Refs` /
+`Part of` to avoid an early close. GitHub closing the issue when the first PR merges is
+expected: the cloudlands-fe release notifier (see Release Process) holds its shipped-version
+comment until every *linked* fix PR is merged and contained, and mention-only references
+are invisible to it — an all-`Refs` fix gets no auto-close and no comment (as happened to
+[intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383): intentd#2001 +
+cloudlands-fe#2687), and a mixed one can be announced before it has fully shipped.
 
 ### Phase 2 — Monorepo pin advance (automated)
 
@@ -125,10 +138,10 @@ Submodule pins are advanced automatically by the `auto-bump-submodules` workflow
 (`.github/workflows/auto-bump-submodules.yml`): it detects submodule tips ahead of the
 recorded pins and lands the bump via a single rolling PR on the `auto/submodule-bump`
 branch with auto-merge armed; repeat runs update that PR instead of opening new ones.
-The workflow is triggered three ways: each submodule repo notifies the monorepo on push
-to `main` via a `repository_dispatch` event (`submodule-update` type), so bumps normally
-land within about a minute of a submodule merge; a cron run every 30 minutes acts as a
-backstop; and manual `workflow_dispatch` is available for urgent bumps. The
+Each submodule repo triggers the workflow via `repository_dispatch` (`submodule-update`)
+on push to its `main`. Monorepo `main` pushes that change submodule gitlinks trigger a
+continuation to pick up deferred tips after a queued bump merges. A cron run every
+30 minutes is the backstop; manual `workflow_dispatch` handles urgent bumps. The
 `repository_dispatch` notifications are sent by the submodule repos using the
 `MONOREPO_DISPATCH_TOKEN` secret (stored in each submodule repo; a fine-grained PAT with
 contents:write on `intent-hq/intent`), and are fail-soft: when the secret is absent
@@ -136,8 +149,21 @@ the notify step logs a warning and skips, and the cron backstop still advances t
 
 The workflow owns pin advancement: the `submodule-pins` CI job fails any monorepo PR
 whose diff moves a `packages/*` gitlink unless its head branch is `auto/submodule-bump`
-or it carries the `submodule-pin-intended` label. For an urgent bump, dispatch the
-workflow instead of filing a PR:
+or it carries the `submodule-pin-intended` label. The consumer checks — `make consumer-checks`
+(method and event catalogs, protocol→FE field parity, docs-check, check-makefile-targets) —
+run against the pins in the monorepo `docs-check` job and, through the reusable
+`.github/workflows/consumer-checks.yml`, as `monorepo-consumer-checks` on every intentd and
+cloudlands-fe PR against that PR's head. Docs lead the pin, by direction: for an
+**addition** the monorepo docs PR its table names lands first (the checks only warn until
+the component catches up), then re-run the upstream job; for a **removal** the component
+PR lands first (the upstream check warns about the now-extra docs entry; a docs-first
+removal is rejected as a component extra) and the docs entry is removed after the bump. A
+**rename** is an addition: document the new name first, keeping the old entry, rename in
+the component, then drop the old entry after the bump. `check-mcp-bindings` is advisory
+upstream (the auto-bump regenerates its index in the bump commit, so a help-line change
+needs no manual pin PR), and a Makefile change that depends on an intentd PR still waits
+for the auto-bump (`check-makefile-targets`). For an urgent bump, dispatch the workflow
+instead of filing a PR:
 
 ```bash
 gh workflow run auto-bump-submodules.yml
@@ -211,28 +237,39 @@ with no rollback.
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
   (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
   workflows merge their own rolling PRs). All three repos (monorepo, intentd,
-  cloudlands-fe) route `main` merges through a **merge queue** (squash method): once
-  a human has given permission, `gh pr merge --squash` adds the PR to the queue, and
-  the PR lands when the queue's gate passes — so merging no longer requires the
-  branch to be up to date first, and there is no update-branch/re-check treadmill.
-  In intentd and cloudlands-fe the queue runs CI on the actual merged tree
-  (`merge_group` runs of the same required check) before landing; the monorepo
-  ruleset has no required status checks, so its queue serializes merges but gates on
-  nothing and lands entries without a CI run.
-  `--auto` remains useful to enqueue once still-pending PR checks pass — with a
-  queue enabled, `gh pr merge --squash --auto` prints "The merge strategy for main is
-  set by the merge queue"; that is informational (the queue's own squash method
-  applies), not an error. All three queues are configured identically: squash
-  method, all-green grouping, at most 5 entries built/merged per group, and a
-  60-minute check-response timeout. A queue failure ejects the PR from the queue (it
-  does not land): the PR timeline records a `RemovedFromMergeQueueEvent` with a
-  `reason` (`failed_checks` when the `merge_group` run fails; a check that does not
-  report within the timeout is treated as failed), which `ws.pr.snapshot` /
-  `ws.pr.monitor` surface as `mergeQueueEjection`. An ejected PR is not re-queued on its own: fix the cause and
-  re-enqueue by re-running `gh pr merge --squash --auto`. The queue's squash uses the
-  same title rules as a direct squash merge: on a single-commit PR the commit title
-  defaults to that commit's message headline; on a multi-commit PR it defaults to the
-  PR title. The commit message includes all commit messages from the PR either way.
+  cloudlands-fe) route `main` merges through a **merge queue**: once a human has
+  given permission, `gh pr merge --squash` adds the PR to the queue, and the PR lands
+  when the queue's gate passes — no update-branch/re-check treadmill. The expected
+  `main` rules of all three repos (required `CI Gate` check, thread resolution,
+  merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
+  and their allowed bypass actors (none by default) in `.github/rulesets/*.bypass.json`,
+  compared with the live rules by the `ruleset-check` CI job and daily by
+  `ruleset-drift.yml`; after an intended ruleset change, run
+  `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
+  half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
+  read on intent, intentd and cloudlands-fe — GitHub returns `bypass_actors` only to
+  such a caller) and is fail-soft: without it the bypass actors are skipped with a
+  warning, so set it locally too when running `UPDATE=1` for a bypass change. The
+  bypass-actor comparison is deliberately confined to `ruleset-drift.yml`, which runs
+  main's code; the `ruleset-check` CI job runs the script from the PR head or the
+  merged tree, so it never receives the token and skips the bypass actors. A PR whose
+  gate is red cannot enter the queue, and the queue reruns CI on the actual merged
+  tree (`merge_group` runs of the same check) before landing. A monorepo PR also
+  cannot enter the queue while any review thread is unresolved: auto-merge arms but
+  the PR stays BLOCKED outside the queue
+  ([intent-hq/intent#4959](https://github.com/intent-hq/intent/issues/4959)), so
+  confirm `ws.pr.snapshot(N).requirements.threads.unresolved` is 0 before enqueueing.
+  `--auto` enqueues once still-pending PR checks pass; its "The merge strategy for
+  main is set by the merge queue" output is informational, not an error. A
+  `merge_group` failure ejects the PR (it does not land): the timeline records a
+  `RemovedFromMergeQueueEvent` with `reason: failed_checks` (a check that does not
+  report within the queue's timeout counts as failed), surfaced by `ws.pr.snapshot` /
+  `ws.pr.monitor` as `mergeQueueEjection`. An ejected PR is not re-queued on its
+  own: fix the cause and re-enqueue with `gh pr merge --squash --auto`. The queue's
+  squash uses the same title rules as a direct squash merge: on a single-commit PR
+  the commit title defaults to that commit's message headline; on a multi-commit PR
+  it defaults to the PR title. The commit message includes all commit messages from
+  the PR either way.
   On single-commit PRs, ensure the branch commit message is itself a valid
   conventional commit (amend auto-commits like "Coordinator" before pushing) to
   prevent non-conventional commits from landing on main (e.g., PR #102 incident); on
@@ -240,37 +277,38 @@ with no rollback.
   what lands as the squash title.
 - **Changelogs** are generated with `git-cliff` (see `cliff.toml`).
 - **Rust**: run the package gates before opening a PR — `make check` / `make test`
-  from the monorepo root; see `packages/intentd/AGENTS.md` → Gates. Coverage runs
-  on CI (the `coverage-e2e` / `coverage-all` jobs in intentd's ci.yml) and can be
-  reproduced locally with `make coverage-e2e` / `make coverage-all` — `make test`
-  deliberately excludes these slow instrumented runs.
+  also run from `packages/intentd` (its Makefile forwards them to the root); see
+  `packages/intentd/AGENTS.md` → Gates. Coverage runs on CI (intentd ci.yml's
+  `coverage-e2e` / `coverage-all` jobs); `make coverage-e2e` / `make coverage-all` from
+  the monorepo root reproduce it locally — `make test` excludes these slow runs.
 
 ### Resuming local Rust gates
 
-- `make gate` runs `make check` and then the full nextest suite. `make test` remains
-  the test-only entry point. Resume records apply only to nextest; `make gate` always
-  reruns fmt, clippy, and the repo-slug fold lint.
-- After a harness or terminal interruption, rerun `make test RESUME=1`. It skips
-  only tests recorded as passed for the identical tracked and untracked worktree,
-  submodule pointers, Rust toolchain, lockfile, and nextest configuration. Records
-  live under `$HOME/.cache/intent/gate-runs`, expire after seven days, and include
-  `junit.xml` plus an incremental passed-test stream. Set `GATE_FORCE=1` to ignore
-  a matching record and run the complete suite.
-- When the full suite is impractical, run `make test-changed` before entering the
-  merge queue: it diffs the intentd checkout against `origin/main` (override with
-  `BASE=<ref>`), runs only the touched crates' nextest targets, and falls back to the
-  full suite on manifest, lockfile, or nextest-config changes; `DRY_RUN=1` prints the plan.
+- `make gate` runs `make check` then the full nextest suite; `make test` is
+  test-only (resume records apply only to nextest — `gate` always reruns the lints).
+- When the full suite is impractical, run `make test-changed` before enqueueing:
+  intentd's `scripts/changed-tests.sh` picks the nextest targets changed vs
+  `origin/main` (`BASE=<ref>`; `DRY_RUN=1` prints the plan) and falls back to the
+  full suite on manifest/lockfile/nextest-config changes. `make coverage-changed`
+  runs it under llvm-cov — the local equivalent of the PR `coverage-changed` job.
+- `make test` / `make test-changed` write a resume record (junit + passed-test stream
+  in `$HOME/.cache/intent/gate-runs`, 7-day expiry) and print its `record:` path when
+  tests ran (a fully resumed run prints only a skip count). `RESUME=1` skips tests
+  recorded as passed for the same worktree (tracked and untracked), submodule pointers,
+  toolchain, lockfile and nextest config (`GATE_FORCE=1` ignores it). To continue past a
+  known flake, `RESUME=1 NO_FAIL_FAST=1 make test-changed` (or `make test`) runs the rest
+  to completion, records them, and exits non-zero if anything failed ([intent-hq/intent#5645](https://github.com/intent-hq/intent/issues/5645)).
 - Run long gates as saved command-mode `ws.script` entries (`ws.script.start`, a
   self-checking `ws.hook.schedule` on `ws.script.status`, then `ws.script.output`).
   The hook must dispatch on `s.status === "exited" && s.exitCode !== undefined` — never
-  on "not running": `starting` is a live state, and treating anything but a recorded
-  exit as finished fired a false wake on the hook's validation run
-  ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
+  on "not running": `starting` is live, and anything else fired a false wake on the
+  validation run ([intent-hq/intent#4858](https://github.com/intent-hq/intent/issues/4858)).
+  `exitCode === -1` means the supervisor could not observe the exit (process lost, or a
+  command script running when the daemon stopped) — read `s.error` and treat as failure.
   `ws.script.run` rejects `timeoutSeconds` above budget − 5s (25s default). Saved scripts
-  are PTY-backed with no keyboard, so use the `make` targets — they disable progress bars
-  and pagers (`make list-tests` for nextest discovery, which ignores `PAGER`); a raw
-  `cargo nextest` / `cargo build` / `git` / `gh` must pass `--no-pager` / the same env or
-  it floods the buffer or stalls on `less`.
+  are PTY-backed, so use the `make` targets (no progress bars or pagers; `make list-tests`
+  for nextest discovery) — bare `cargo`/`git`/`gh` without `--no-pager` or that env
+  flood the buffer or stall on `less`.
 
 ## Release Process
 
@@ -370,10 +408,8 @@ for all components.
   (`gh issue list --repo intent-hq/intent --search "<keywords>" --state all`) and
   comment on / link the existing issue instead of filing a duplicate.
 - **Cross-reference**: reference the issue number in related commits/PRs (e.g.
-  `fix: correct panel focus (#123)`). In submodule PRs, use the full cross-repo form
-  `Fixes intent-hq/intent#N` so the issue auto-closes on merge and the release
-  notifier comments on it once a release contains the complete fix (see Release
-  Process).
+  `fix: correct panel focus (#123)`); in submodule PRs use the closing keyword on
+  every PR of the fix, per Phase 1 — Submodule PRs.
 
 ## Working on Issues
 

@@ -550,24 +550,72 @@ via the MCP `ws.pr.monitor` binding (registration is MCP-only, like
 `prMonitor.pollSeconds` cadence and polls the due monitors — each distinct PR
 becomes due after an effective interval (the minimum time between two polls of
 one PR; the actual revisit lands on the first tick at or after it, i.e. rounds
-up to the next `pollSeconds` tick) stretched so the loop is modelled to spend at most
-the live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
-minimum 60, maximum 5000; each PR poll costed at 3 REST calls — a cadence
-**cost model**, not a hard ceiling: no request is counted or blocked against
-it, and actual spend can differ — the 3-call unit is a single-page estimate,
-so paginated review lists and degraded-path REST fallbacks cost more, while
-GraphQL reads ride their own quota), fetching a capped oldest-first subset per tick so
-a large monitor set is spread across ticks instead of burst-fetched, and
-honouring the global forge rate-limit gate (`services::rate_limit`,
-monorepo#2961) shared with the PR-refresh and git-root sweeps: a
-quota-exhausted forge read — the PR read itself or any secondary checklist /
-comment read — pauses all PR-monitor polling until the window resets,
-recording the pause as `lastError` on the affected monitors, and the gate
-is re-consulted before every fetch within a sweep so a pause opened by a
-sibling sweep stops the in-flight sweep too — diffs the
-merge-requirements checklist
+up to the next `pollSeconds` tick) planned as the larger of two cadences
+(`effective_pr_monitor_interval_secs` / `plan_quota_cadence`): the
+hourly-budget cadence, stretched so the loop is modelled to spend at most the
+live `prMonitor.hourlyRequestBudget` forge calls per hour (default 1500,
+minimum 60, maximum 5000; each PR poll costed at `PR_MONITOR_REQUESTS_PER_POLL`
+= 3 calls — a cadence **cost model**, not a hard ceiling: no request is counted
+or blocked against it, and actual spend can differ — the 3-call unit is a
+single-page planning constant, so the folded observation spends less and
+paginated review lists / degraded-path REST fallbacks more), and the quota
+cadence (intentd#1948): each due-sweep tick spends one quota-free
+`rate_limit` probe and stretches the interval so the projected spend to the
+window's reset (capped at 2h) stays within the live
+`prMonitor.quotaSharePercent` (default 50, minimum 1, maximum 100) of the
+forge's REMAINING quota — `allowed = floor(remaining × share / 100)` in
+integer arithmetic, interval `ceil(distinctPRs × 3 × secondsToReset /
+allowed)`, rounded up to whole ticks — and defers polling entirely, however
+stale or catch-up-marked the monitors, once `allowed < 3` (a failed probe or
+a host without the signal falls back to the hourly budget alone). Each tick
+fetches a capped oldest-first subset of the due PRs
+(`pr_monitor_fetches_per_tick`) so a large monitor set is spread across ticks
+instead of burst-fetched; while a stretched interval spaces fetches further
+apart than one tick, the cap is zero until that spacing has elapsed since the
+newest `lastPolledAt`, so a stale backlog (restart, outage, quota stretch)
+drains within the planned budget — a hold measured from the persisted stamps,
+needing no spend counter, and keyed on the final interval alone, so a
+budget-derived stretch holds even with unknown or plentiful quota. On GitHub
+one poll is a single GraphQL `pr_observation` (PR record,
+merge-requirement signals, reviews and review
+threads within bounded windows, conversation-comment count; `rateLimit.cost`
+1) plus a REST `branch_rules` read — 2 reads where the per-signal sequence
+cost 6 (intentd#1949); an outgrown window takes the paged per-signal read
+for that piece only, a failed folded read (other than quota exhaustion) falls
+back to the per-signal reads, and a fingerprint-unchanged cheap poll reuses
+the previous full fetch for up to 5 polls / 15 minutes. The loop honours the
+global forge rate-limit gate (`services::rate_limit`, monorepo#2961) shared
+with the PR-refresh and git-root sweeps: a quota-exhausted forge read — the
+observation or PR read itself or any secondary checklist / branch-rules /
+comment read, except the branch-rules read nested inside GitHub's per-signal
+`merge_requirements` probe, which degrades every failure to `rulesKnown:
+false` without pausing (monorepo#5281) — pauses all forge-touching sweep
+work until the forge-reported reset plus a 30s margin (clamped into [60s, 2h]; a fixed 5min without a
+reported reset), stamping the pause deadline as `lastError` on every active
+monitor across workspaces (`Store::annotate_active_pr_monitors_pause`), and
+the gate is re-consulted before every fetch within a sweep so a pause opened
+by a sibling sweep stops the in-flight sweep too. While paused, each
+PR-monitor and PR-refresh tick re-probes `rate_limit` for free and lifts the
+pause early once `remaining ≥ max(500, 10% of limit)`
+(`maybe_lift_rate_limit_pause`, intentd#1945), clearing the annotations
+(`Store::clear_active_pr_monitors_pause`) at once — `pausedUntil` is derived
+from the in-memory gate and vanishes as soon as it opens, by lift or expiry,
+while an expired annotation waits for the row's next write-back and
+`lastSnapshot` for the next successful poll; a fetch that hits quota
+exhaustion after a lift spends its own free reset probe when re-pausing
+(`pause_sweeps_for_rate_limit`); the gate transition and its bulk
+stamp / clear run under the gate's reconcile lock, and the `pr_monitor` row
+is authoritative for the pause — a poll's guarded write-back lands only its
+genuine error part, composed in SQL with the row's current unexpired
+annotation (`PrMonitorPollUpdate::last_error`), never introducing, moving,
+or resurrecting one; boot rehydration strips annotations left by the
+previous process. Every `PrMonitor` wire projection carries the deadline as
+`pausedUntil` on ACTIVE rows while the gate is closed, monitor wakes carry it
+in their metadata, and `ws.pr.snapshot` samples it after its awaited forge
+reads (intentd#1954). Each poll diffs the merge-requirements checklist
 (checks, reviews, threads, mergeability, branch rules — composed in
-`pr_ops::merge_requirements` with per-signal, never-fatal degradation) against
+`pr_ops::merge_requirements` / `merge_requirements_from_observation` with
+per-signal, never-fatal degradation) against
 the monitor's persisted **emit baseline** (the PR state as of the last
 delivered wake, or registration), and wakes the owning agent with a single
 consolidated notification once the PR has been quiet for
@@ -887,12 +935,39 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
 | Knob | Default | Bounds |
 | --- | --- | --- |
 | `idleReapMinutes` | `10` (new installs; an existing `config.toml` keeps its own value — see above) | How long an idle agent subtree is retained (`0` disables the idle-reap **sweep** — it does not guarantee idle trees survive, since a non-zero `memoryBudgetMb` can still evict them at admission). **The lever for a memory-constrained seat.** |
-| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
+| `memoryBudgetMb` | auto: `(RAM − 8 GB) / 2`, min 4 GB (absent key) | Aggregate RSS of the whole child tree, as a soft admission gate on new spawns — binding only while the tree is over budget **and** host available memory is below `HOST_MEMORY_RESERVE_BYTES` (8 GiB + one provisional agent); see the headroom rule below. Absent key (the default) = auto (RAM-derived); explicit `0` = off (preserved for existing config files); positive value = budget in MB. Catalog max is the machine's own physical RAM, capped at 1,024,000 MB. |
 | `maxConcurrentAdapters` | `6` (on) | Concurrently live ephemeral adapter chains (quick actions, model probes). |
 | `maxConcurrent` | `0` (auto from RAM) | Agent **slots**. Not a memory bound — see the 22× range above. |
 
+- **The budget binds only when the host is short — a two-condition rule**
+  ([intent-hq/intentd#1947](https://github.com/intent-hq/intentd/pull/1947)).
+  `budget_admits` in `intent-services/src/agent_manager.rs` refuses a spawn
+  (and `evict_while_over_budget` drains idle trees) only while **both** hold:
+  the charged tree total is over budget **and** the host's available memory
+  (`sysinfo` available memory, read in the same published `system.status`
+  sweep as the tree) is below `HOST_MEMORY_RESERVE_BYTES` = 8 GiB +
+  `PROVISIONAL_AGENT_BYTES`.
+  The tree total double-counts shared pages and includes every daemon
+  descendant (dev servers, test runs, headless browsers started through
+  `ws.script` / `host.exec`), so on a large host it crosses the budget —
+  auto or an explicit small value alike — while tens of gigabytes are still
+  free; an over-budget tree with that headroom is admitted without queueing
+  or eviction. **Strict fallback:** when a published tree sample carries no
+  headroom reading (`available_memory: None` — the host's available-memory
+  sampling is unsupported or failed, so `sysinfo` reported zero) the budget
+  denies on the tree alone, exactly the pre-#1947 behaviour. This is
+  distinct from having no tree sample yet: before the first published sweep
+  lands, `budget_denies` returns no denial at all, so the gate stays inert
+  rather than strict. One `TreeMemoryProbe::sample()` returns bytes, sample
+  id and headroom from the same sweep, so a decision never pairs one sweep's
+  total with the next sweep's headroom. The idle-reap sweep
+  (`idleReapMinutes`) is independent of this rule and still drains idle
+  trees on its own TTL.
 - **`memoryBudgetMb` is a soft admission gate, not a ceiling**
-  (monorepo#2063, validated end-to-end against real agents). Set to 1500 MB,
+  (monorepo#2063, validated end-to-end against real agents **under the strict
+  policy** — the tree-only criterion that is now the fallback above; on a
+  host with headroom the gate does not engage, so these figures describe the
+  host-short regime, not the common case on a large seat). Set to 1500 MB,
   a 20-agent simultaneous burst peaked at **3.06 GB** against **12.37 GB**
   unbounded, and settled at 1.73 GB against 11.56 GB; the same-budget 8-agent
   burst peaked at 2.47 GB and 3.09 GB across two runs — i.e. **the bound does
@@ -903,10 +978,11 @@ self-described at the point of use in `DEFAULT_CONFIG_TEMPLATE`,
   `PROVISIONAL_AGENT_BYTES` = 660 MB, and `budget_pending_bytes` resets when a
   new sample seq lands while a just-spawned agent's RSS is still ramping —
   `ProcessRegistry` in `intent-services/src/agent_manager.rs`), so it is a
-  **fixed offset, not proportional to demand**: budget for roughly 2× the
-  configured value as the transient. That sizing rule covers the **admission**
-  transient the measurement exercised — a burst of comparable agents — and is
-  not a runtime ceiling. The gate runs at spawn only: an already-admitted
+  **fixed offset, not proportional to demand**: when the gate is engaged,
+  budget for roughly 2× the configured value as the transient. That sizing
+  rule covers the **admission** transient the measurement exercised — a burst
+  of comparable agents with the host short — and is not a runtime ceiling.
+  The gate runs at spawn only: an already-admitted
   agent whose own workload grows (the 9.6 GB `vitest` case above) is never
   re-checked and can carry the tree past the budget by itself, and the gate's
   only lever against that is refusing later spawns and evicting idle trees.
@@ -1205,6 +1281,10 @@ Rules:
    It defines the domain vocabulary (ids, timestamps, errors, event types) and
    *traits* (`ContextEngine`, `WorkspaceApi`) that higher layers
    implement/consume.
+   (`intent-core` additionally carries a **dev-only**, version-less
+   dev-dependency on `intentd-test-support` — itself free of workspace
+   dependencies — for the shared source-lint scaffolding; the normal-build
+   leaf property is unchanged.)
 2. **`intent-transport` never touches `intent-store` directly.** It only
    depends on `intent-services`. This guarantees the RPC router and the agent
    MCP server share one code path.

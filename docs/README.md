@@ -26,6 +26,20 @@ To debug live daemon state against this contract, `scripts/uds-rpc.mjs` (wrapped
 request — or holds a subscription open — on the running daemon's UDS socket and
 prints each received frame as a JSON line.
 
+The rows the daemon emits and the frontend types that read them are kept in step by
+`scripts/check-protocol-field-parity.mjs` (`make check-protocol-field-parity`, part of
+`make check` and the `docs-check` CI job). It compares the serde fields of an intentd
+row struct in `packages/intentd/crates/intent-core/src/model.rs` with the top-level
+members of the cloudlands-fe type that consumes it — today `AgentLite` ↔ `AgentSession`
+(`src/shared/types/agent-session.ts`) and `Workspace` ↔ `Workspace`
+(`src/shared/types.ts`) — and fails when an emitted field is missing on the FE side. To
+cover another row, add a pair to the manifest constant at the top of the script; to
+exempt a field the FE intentionally does not consume, add it to that pair's `ignore`
+map with a one-line reason. A stale entry — one whose field is no longer emitted or is
+now present in the FE type — is reported as a warning, not a failure, so an FE PR that
+declares a previously ignored field does not have to wait for the monorepo entry to be
+removed; remove the entry in a follow-up.
+
 ## Harness Versioning — `HARNESS.md`
 
 **[HARNESS.md](./HARNESS.md)** explains the harness versioning system: the permanent
@@ -71,7 +85,7 @@ migrated from `packages/cloudlands-fe/docs/` after an accuracy audit:
 
 **Release engineering**
 
-- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails)
+- [RELEASING.md](./RELEASING.md) — cross-component release pipeline (channels, workflows, secrets, ordering, guardrails, release notifier and how to link fix PRs to issues)
 - [fe/RELEASING.md](./fe/RELEASING.md) — release process (beta/stable channels)
 - [fe/DEPLOYING.md](./fe/DEPLOYING.md) — deployment infrastructure, runners, and feeds
 

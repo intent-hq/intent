@@ -9,6 +9,13 @@ FE_DIR=${FE_DIR:-"$ROOT_DIR/packages/cloudlands-fe"}
 TOOLCHAIN_FILE="$INTENTD_DIR/rust-toolchain.toml"
 PACKAGE_FILE="$FE_DIR/package.json"
 CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
+# Recent rustup installs a named-but-absent toolchain behind implicit
+# invocations (`rustup run`, `rustup component list --toolchain`, the cargo
+# proxy, `rustup show`, even `rustup toolchain list` under an absent override
+# pin). The doctor is read-only, so disable that for every rustup call this
+# script makes; install mode is unaffected because it installs explicitly via
+# rustup toolchain install / component add / default.
+export RUSTUP_AUTO_INSTALL=0
 # Caller-visible cargo, resolved BEFORE this script's own PATH prepend below.
 # Under make (MAKELEVEL set) the Makefile has already prepended the pinned
 # rustup toolchain dir and CARGO_BIN_DIR (see the PATH export in the Makefile);
@@ -21,13 +28,15 @@ CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
 # (where `rustup which` would otherwise answer with the default toolchain).
 CALLER_PATH="$PATH"
 if [[ -n ${MAKELEVEL:-} ]]; then
-  make_rustup_cargo=$([[ -r "$TOOLCHAIN_FILE" ]] && cd "${INTENTD_DIR}" 2>/dev/null && RUSTUP_AUTO_INSTALL=0 rustup which cargo 2>/dev/null)
+  make_rustup_cargo=$([[ -r "$TOOLCHAIN_FILE" ]] && cd "${INTENTD_DIR}" 2>/dev/null && rustup which cargo 2>/dev/null)
   make_prefix="${make_rustup_cargo:+${make_rustup_cargo%cargo}:}${CARGO_BIN_DIR:-${CARGO_INSTALL_ROOT:-$CARGO_HOME}/bin}:"
   while [[ "$CALLER_PATH" == "$make_prefix"* ]]; do
     CALLER_PATH=${CALLER_PATH#"$make_prefix"}
   done
 fi
+# shellcheck disable=SC2030  # the subshell PATH is scoped on purpose: probe the caller's PATH without touching ours
 CALLER_CARGO=$( (PATH="$CALLER_PATH"; command -v cargo) 2>/dev/null ) || CALLER_CARGO=""
+# shellcheck disable=SC2031  # this is the real PATH edit; the subshell above never meant to change it
 PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_HOME PATH
 
@@ -39,6 +48,16 @@ GH_INSTALL_URL="https://github.com/cli/cli#installation"
 # jq: the release-notifier test suites parse GitHub API fixtures with it
 # (intentd scripts/test-notify-fixed-issues.sh via make test, cloudlands-fe pnpm test:unit).
 JQ_INSTALL_URL="https://jqlang.github.io/jq/download/"
+
+# make lint-shell runs shellcheck over scripts/*.sh.
+SHELLCHECK_INSTALL_URL="https://github.com/koalaman/shellcheck#installing"
+
+# Instrumented coverage (make coverage-e2e / coverage-all) needs cargo-llvm-cov
+# plus the llvm-tools-preview rustup component. Neither is required by make
+# test, so the doctor reports them as [optional] and bootstrap installs them
+# only on request (--coverage / BOOTSTRAP_COVERAGE=1): cargo install compiles
+# cargo-llvm-cov from source. The printed remediation comes from
+# llvm_cov_install_command, which qualifies the rustup step with the pin.
 
 # Supported Node: read from packages/cloudlands-fe/package.json engines.node by
 # load_versions, so the frontend owns the range (its install builds node-pty
@@ -59,6 +78,7 @@ PROBE_ERROR=""
 
 MODE=install
 ASSUME_YES=${BOOTSTRAP_YES:-0}
+WITH_COVERAGE=${BOOTSTRAP_COVERAGE:-0}
 FAILURES=0
 TOOLCHAIN=""
 PACKAGE_MANAGER=""
@@ -73,10 +93,12 @@ cleanup() {
 trap cleanup EXIT
 
 usage() {
-  echo "Usage: $0 [--check] [--check-frontend] [--yes]"
+  echo "Usage: $0 [--check] [--check-frontend] [--coverage] [--yes]"
   echo "  --check            Report missing requirements without changing the host"
   echo "  --check-frontend   Report only the frontend toolchain gaps (Corepack + pinned pnpm)"
   echo "                     that block the dev/sandbox targets; exit 0 silently when ready"
+  echo "  --coverage         Also install cargo-llvm-cov and llvm-tools-preview for"
+  echo "                     make coverage-e2e / coverage-all (env alias: BOOTSTRAP_COVERAGE=1)"
   echo "  --yes              Install without prompting"
 }
 
@@ -84,6 +106,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --check) MODE=check ;;
     --check-frontend) MODE=check-frontend ;;
+    --coverage) WITH_COVERAGE=1 ;;
     --yes) ASSUME_YES=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -156,9 +179,24 @@ required_submodules_ready() {
   [[ -e "$INTENTD_DIR/.git" && -e "$FE_DIR/.git" ]]
 }
 
-rust_toolchain_ready() {
+# The pin appears in `rustup toolchain list`, a pure listing under the
+# RUSTUP_AUTO_INSTALL=0 exported above. Every probe that names the pin
+# (`rustup run`, `rustup component list --toolchain`) is gated on it so an
+# absent pin reports [missing] without touching the network.
+toolchain_installed() {
   [[ -n "$TOOLCHAIN" ]] || return 1
   command -v rustup >/dev/null 2>&1 || return 1
+  local listing line
+  listing=$(rustup toolchain list 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    line=${line%% *}
+    [[ "$line" == "$TOOLCHAIN" || "$line" == "$TOOLCHAIN"-* ]] && return 0
+  done <<<"$listing"
+  return 1
+}
+
+rust_toolchain_ready() {
+  toolchain_installed || return 1
   rustup run "$TOOLCHAIN" rustc --version >/dev/null 2>&1 || return 1
   rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^rustfmt-' || return 1
   rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^clippy-'
@@ -182,7 +220,7 @@ report_shadowing_cargo() {
   # permanently even for a pin-honoring rustup proxy. Skip silently.
   [[ "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
   local line version
-  line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" RUSTUP_AUTO_INSTALL=0 "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
+  line=$( (cd "$INTENTD_DIR" 2>/dev/null && PATH="$CALLER_PATH" "$CALLER_CARGO" --version 2>/dev/null) | head -n 1 )
   version=${line#cargo }
   version=${version%% *}
   [[ "$version" == "$TOOLCHAIN" ]] && return 0
@@ -260,10 +298,13 @@ run_bounded() {
 }
 
 # launcher_probe <dir> <launcher> <args...>: runs a package-manager launcher under
-# PROBE_TIMEOUT. On success PROBE_OUTPUT holds its first output line; otherwise
+# PROBE_TIMEOUT. On success PROBE_OUTPUT holds the last semver-shaped output
+# line (falling back to the first line when there is none): a host that injects
+# tracing into Node (Datadog, intent-hq/intent#5509) logs its startup
+# configuration to stdout before the launcher answers `--version`. Otherwise
 # PROBE_ERROR names the launcher path and what went wrong.
 launcher_probe() {
-  local dir=$1 launcher=$2 path status
+  local dir=$1 launcher=$2 path status version
   shift 2
   PROBE_OUTPUT=""
   PROBE_ERROR=""
@@ -272,7 +313,8 @@ launcher_probe() {
   status=$?
   case "$status" in
     0)
-      PROBE_OUTPUT=$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)
+      version=$(printf '%s\n' "$PROBE_OUTPUT" | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+' | sed -n '$p')
+      PROBE_OUTPUT=${version:-$(printf '%s\n' "$PROBE_OUTPUT" | head -n 1)}
       return 0
       ;;
     124)
@@ -471,6 +513,74 @@ jq_ready() {
   jq_version >/dev/null
 }
 
+# The --version output opens with a banner and carries the version on its own
+# `version: X.Y.Z` line, so report that line rather than the first one.
+shellcheck_version() {
+  command -v shellcheck >/dev/null 2>&1 || return 1
+  local output line
+  output=$(shellcheck --version 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case "$line" in
+      version:*)
+        line=${line#version:}
+        printf '%s\n' "${line# }"
+        return 0
+        ;;
+    esac
+  done <<<"$output"
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+# Like jq_ready: a shellcheck pathname on PATH that cannot run is not ready.
+shellcheck_ready() {
+  shellcheck_version >/dev/null
+}
+
+# Probed through cargo like the nextest check (not command -v), so a stale
+# cargo-llvm-cov binary that no longer runs counts as absent.
+llvm_cov_version() {
+  command -v cargo >/dev/null 2>&1 || return 1
+  local output
+  output=$(cargo llvm-cov --version 2>/dev/null) || return 1
+  [[ -n "$output" ]] || return 1
+  printf '%s\n' "${output%%$'\n'*}"
+}
+
+llvm_cov_ready() {
+  llvm_cov_version >/dev/null
+}
+
+# The coverage scripts run inside packages/intentd, so the component must be on
+# the pinned toolchain; without a readable pin the active toolchain is checked.
+llvm_tools_ready() {
+  command -v rustup >/dev/null 2>&1 || return 1
+  if [[ -n "$TOOLCHAIN" ]]; then
+    toolchain_installed || return 1
+    rustup component list --toolchain "$TOOLCHAIN" --installed 2>/dev/null | grep -q '^llvm-tools'
+  else
+    rustup component list --installed 2>/dev/null | grep -q '^llvm-tools'
+  fi
+}
+
+coverage_tooling_ready() {
+  llvm_cov_ready && llvm_tools_ready
+}
+
+# Printed remediations target the toolchain llvm_tools_ready probed: with a
+# readable pin the component goes on that toolchain (the rustup default may
+# differ), otherwise the unqualified command installs into the active one.
+llvm_tools_install_command() {
+  if [[ -n "$TOOLCHAIN" ]]; then
+    printf 'rustup component add llvm-tools-preview --toolchain %s\n' "$TOOLCHAIN"
+  else
+    printf 'rustup component add llvm-tools-preview\n'
+  fi
+}
+
+llvm_cov_install_command() {
+  printf 'cargo install cargo-llvm-cov --locked && %s\n' "$(llvm_tools_install_command)"
+}
+
 installable_gap_exists() {
   required_submodules_ready || return 0
   load_versions
@@ -487,7 +597,25 @@ installable_gap_exists() {
   frontend_dependencies_ready || return 0
   gh_ready || return 0
   jq_ready || return 0
+  shellcheck_ready || return 0
+  if [[ "$WITH_COVERAGE" == 1 ]]; then
+    coverage_tooling_ready || return 0
+  fi
   return 1
+}
+
+# Optional row: never counts toward FAILURES, so doctorOk is unaffected.
+report_coverage_tooling() {
+  local version
+  if version=$(llvm_cov_version); then
+    if llvm_tools_ready; then
+      optional "cargo-llvm-cov: $version with llvm-tools-preview (make coverage-e2e / coverage-all)"
+    else
+      optional "cargo-llvm-cov: $version, but llvm-tools-preview is missing; run $(llvm_tools_install_command)"
+    fi
+  else
+    optional "cargo-llvm-cov: not installed (only make coverage-e2e / coverage-all need it); run BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host, or $(llvm_cov_install_command)"
+  fi
 }
 
 # Reports the Corepack and frontend-package-manager state shared by check_all
@@ -593,6 +721,7 @@ check_all() {
   else
     missing "cargo-nextest: required by make test"
   fi
+  report_coverage_tooling
 
   local node_found
   if node_ready; then
@@ -637,6 +766,14 @@ check_all() {
     missing "jq: $(command -v jq) is on PATH but jq --version fails; reinstall it (run make bootstrap-dev-host)"
   else
     ok "jq: $(jq_version)"
+  fi
+
+  if ! command -v shellcheck >/dev/null 2>&1; then
+    missing "shellcheck: required by make lint-shell; run make bootstrap-dev-host"
+  elif ! shellcheck_ready; then
+    missing "shellcheck: $(command -v shellcheck) is on PATH but shellcheck --version fails; reinstall it (run make bootstrap-dev-host)"
+  else
+    ok "shellcheck: $(shellcheck_version)"
   fi
 
   report_microvm_libkrun
@@ -772,6 +909,33 @@ install_rust() {
   fi
 }
 
+# Opt-in (--coverage / BOOTSTRAP_COVERAGE=1): a default bootstrap never
+# mentions coverage tooling, so an otherwise-complete host still reports
+# "nothing to do".
+install_coverage_tooling() {
+  [[ "$WITH_COVERAGE" == 1 ]] || return 0
+
+  if coverage_tooling_ready; then
+    echo "[skip] $(llvm_cov_version) with llvm-tools-preview already installed"
+    return
+  fi
+
+  if ! llvm_cov_ready; then
+    echo "[install] cargo-llvm-cov (cargo install compiles it from source)"
+    cargo install cargo-llvm-cov --locked || exit 1
+    hash -r
+  else
+    echo "[skip] $(llvm_cov_version) already installed"
+  fi
+
+  if ! llvm_tools_ready; then
+    echo "[install] llvm-tools-preview component for Rust $TOOLCHAIN"
+    rustup component add --toolchain "$TOOLCHAIN" llvm-tools-preview || exit 1
+  else
+    echo "[skip] llvm-tools-preview already installed"
+  fi
+}
+
 install_node() {
   if node_ready; then
     echo "[skip] Node v$(node_version) is supported ($NODE_REQUIREMENT)"
@@ -896,6 +1060,35 @@ install_jq() {
   hash -r
 }
 
+install_shellcheck() {
+  if shellcheck_ready; then
+    echo "[skip] shellcheck $(shellcheck_version) already installed"
+    return
+  fi
+
+  echo "[install] shellcheck"
+  case "$(uname -s)" in
+    Darwin)
+      command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install shellcheck on macOS; see $SHELLCHECK_INSTALL_URL" >&2; exit 1; }
+      brew install shellcheck || exit 1
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        as_root apt-get install -y shellcheck || exit 1
+      elif command -v dnf >/dev/null 2>&1; then
+        as_root dnf install -y ShellCheck || exit 1
+      elif command -v yum >/dev/null 2>&1; then
+        as_root yum install -y ShellCheck || exit 1
+      else
+        echo "ERROR: unsupported Linux package manager; install shellcheck from $SHELLCHECK_INSTALL_URL and re-run" >&2
+        exit 1
+      fi
+      ;;
+    *) echo "ERROR: only Linux and macOS are supported; install shellcheck from $SHELLCHECK_INSTALL_URL" >&2; exit 1 ;;
+  esac
+  hash -r
+}
+
 install_frontend() {
   if ! command -v corepack >/dev/null 2>&1; then
     command -v npm >/dev/null 2>&1 || { echo "ERROR: npm is required to install Corepack" >&2; exit 1; }
@@ -964,10 +1157,12 @@ load_versions
 install_python
 install_native_build_dependencies
 install_rust
+install_coverage_tooling
 install_node
 install_frontend
 install_gh
 install_jq
+install_shellcheck
 
 echo
 check_all

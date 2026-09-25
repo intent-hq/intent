@@ -14,10 +14,16 @@ else
 fi
 
 failures=0
+warnings=0
 fail() {
   local file=$1 line=$2 message=$3
   printf '%s:%s: error: %s\n' "$file" "$line" "$message" >&2
   failures=$((failures + 1))
+}
+warn() {
+  local file=$1 line=$2 message=$3
+  printf '%s:%s: warning: %s\n' "$file" "$line" "$message" >&2
+  warnings=$((warnings + 1))
 }
 
 # Emit `file:line:make <target>` for every mention that appears in code: lines
@@ -168,6 +174,10 @@ done
 # `errorCode?:` union plus its CaptureErrorCode alias, and intentd's
 # ws.browser.docs("overview") text. A token (or the `displayed` field) present
 # on one surface but not the others is drift (intent-hq/intent#4835, #4867).
+# The docs lead the pin: a canonical token a pinned component does not carry
+# yet is a warning, so the monorepo docs change can land before the component
+# PR; an FE union/alias token absent from the canonical documentation is an
+# error. The intentd overview is checked only for documented tokens it lacks.
 browser_protocol_doc=docs/protocol/methods/files-terminal-browser.md
 browser_fe_executor=packages/cloudlands-fe/src/features/browser/main/browser-action-executor.ts
 browser_fe_cdp=packages/cloudlands-fe/src/features/browser/main/embedded-browser-cdp-service.ts
@@ -233,29 +243,31 @@ browser_fe_declared=$(
 )
 browser_fe_declared=$(printf '%s\n' "$browser_fe_declared" | cut -d: -f2- | sort -u)
 
+# Canonical tokens a pinned component lacks: warnings, one per lagging
+# component, so a caught-up sibling never fails on the other's lag.
 browser_token_count=0
 while IFS=: read -r line token; do
   browser_token_count=$((browser_token_count + 1))
   if ((${#browser_fe_files[@]} > 0)) && ! grep -Fxq "$token" <<<"$browser_fe_declared"; then
-    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not declared in the errorCode union / CaptureErrorCode alias in ${browser_fe_files[*]}"
+    warn "$browser_protocol_doc" "$line" "browser errorCode '$token' is documented but not yet declared in the errorCode union / CaptureErrorCode alias in ${browser_fe_files[*]} (pinned cloudlands-fe lags the docs)"
   fi
   if ((browser_intentd_ok)) && ! grep -Fq "\`$token\`" "$browser_intentd_overview"; then
-    fail "$browser_protocol_doc" "$line" "browser errorCode '$token' is not documented in $browser_intentd_overview"
+    warn "$browser_protocol_doc" "$line" "browser errorCode '$token' is documented but not yet in $browser_intentd_overview (pinned intentd lags the docs)"
   fi
 done < <(browser_protocol_tokens)
 if ((browser_token_count == 0)); then
   fail "$browser_protocol_doc" 1 'expected a backticked errorCode bullet list after "additive structured `errorCode` when the cause is one of:"; found none'
 fi
 
+# FE union/alias tokens with no canonical bullet: errors. The intentd overview
+# is not reverse-checked — it is compared only for documented tokens it lacks
+# (warned above).
 browser_fe_reverse() {
   local file=$1 start=$2 count=0 line token
   while IFS=: read -r line token; do
     count=$((count + 1))
     if ! grep -Fq "\`$token\`" "$browser_protocol_doc"; then
-      fail "$file" "$line" "browser errorCode '$token' is not documented in $browser_protocol_doc"
-    fi
-    if ((browser_intentd_ok)) && ! grep -Fq "\`$token\`" "$browser_intentd_overview"; then
-      fail "$file" "$line" "browser errorCode '$token' is not documented in $browser_intentd_overview"
+      fail "$file" "$line" "browser errorCode '$token' is not documented in $browser_protocol_doc (add its canonical bullet first; the docs may lead the pin)"
     fi
   done < <(browser_fe_tokens "$file" "$start")
   if ((count == 0)); then
@@ -277,4 +289,7 @@ if ((failures > 0)); then
   exit 1
 fi
 
+if ((warnings > 0)); then
+  printf 'docs-check: %d warning(s) (docs lead the pin)\n' "$warnings" >&2
+fi
 printf 'docs-check: checked %d docs; all invariants passed\n' "${#docs[@]}"

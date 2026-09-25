@@ -1,0 +1,46 @@
+# Daily main-branch ruleset drift check for intent, intentd and cloudlands-fe.
+# ci.yml's `ruleset-check` job runs the same comparison on every pull_request
+# and merge_group run, but a ruleset edit on GitHub opens no PR, so this
+# schedule is what notices drift between PRs (GitHub's default failed-workflow
+# email is the alert). The check itself lives in scripts/check-rulesets.mjs;
+# the expected rules are .github/rulesets/*.main.json and the allowed bypass
+# actors .github/rulesets/*.bypass.json. The schedule stays out of ci.yml on
+# purpose: its CI Gate fails on any event other than pull_request / merge_group.
+#
+# RULESET_ADMIN_TOKEN is a fine-grained PAT with administration read on
+# intent, intentd and cloudlands-fe: GitHub returns a ruleset's bypass_actors
+# only to such a caller. It is fail-soft — when the secret is absent the
+# bypass actors are skipped with a warning and the rules are still checked.
+# This workflow is the only one that receives the token: it runs main's code,
+# whereas ci.yml's ruleset-check runs the script from the PR head or the merged
+# tree, where unreviewed code could read the secret, so the bypass-actor
+# comparison is deliberately confined to this workflow.
+name: Ruleset drift
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruleset-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Pinned to main: workflow_dispatch can be run on any branch, and the
+      # token must only ever meet main's scripts/check-rulesets.mjs.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          submodules: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test scripts/check-rulesets.test.mjs
+      - run: node scripts/check-rulesets.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RULESET_ADMIN_TOKEN: ${{ secrets.RULESET_ADMIN_TOKEN }}

@@ -151,10 +151,33 @@ line and writes state only after this gate succeeds; older frontend branches fal
 socket and HTTP readiness probes.
 
 `STATUS_JSON=1 make status` consumes these files and health responses into
-`{host, ports, sandboxes, repos, docs}`. It adds doctor gaps, submodule dirty and
+`{setup, host, ports, sandboxes, repos, docs}`. `setup` is `{running, markers}`: `running`
+is true while a `<worktree>/.intent/setup-<uuid>.sh` marker exists (the daemon keeps it
+for the duration of the workspace setup script), and the human form then leads with a
+provisional banner. It adds doctor gaps, `host.coverageTooling`
+(`{ready, detail}` from the doctor's `[optional] cargo-llvm-cov` row; `ready` only when
+cargo-llvm-cov and llvm-tools-preview are both present), submodule dirty and
 ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the checked-out
-submodule HEAD has moved off it, and optional PR/check summaries when GitHub
-authentication is available. The report is read-only, including stale sandbox state.
+submodule HEAD has moved off it, `behindOriginMain` (commits the checked-out submodule
+HEAD lags the already-fetched local `refs/remotes/origin/main`; `null` when the submodule
+is uninitialized or the ref is missing — no fetch is performed), and optional PR/check
+summaries when GitHub authentication is available. The report is read-only, including
+stale sandbox state.
+The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
+(default 10, fractional allowed) and reports `{}` when that budget is exceeded. Every
+other probe (doctor, sandbox status and health, git, gh) runs under
+`DEV_STATUS_PROBE_TIMEOUT` seconds (default 10, fractional allowed); an exceeded budget
+degrades that field (for example `sandboxes` becomes `[]`) without failing the report.
+A knob value that is not a positive number of at most 86400 seconds is ignored with a
+stderr warning and the default applies.
+
+The shell suites are linted by `make lint-shell-sleeps` (part of `make check`): a fixed
+`sleep <n>`, `time.sleep(<n>)`, or fixed-count poll loop in `scripts/*.test.sh` must wait
+on an observable event instead, or carry `# timing-guard: <reason>` on its line or the
+line above. `scripts/fixed-sleep-baseline.txt` grandfathers existing sites and only
+ratchets down. The poll-loop rule tokenises line by line; its accepted blind spots
+(multi-line arithmetic containing `<<`, a `case` pattern `done)`) are listed in the
+header of `scripts/lint-fixed-sleeps.sh` and pinned by `scripts/lint-fixed-sleeps.test.sh`.
 
 ### Chat-motion performance traces
 
@@ -386,7 +409,7 @@ The active provider is tracked in the `providerSettings` Redux slice; it starts 
 
 ## Testing and Validation
 
-Use `pnpm` for all documented test commands.
+Use `pnpm` for frontend test commands.
 
 ```bash
 pnpm run test:unit
@@ -402,6 +425,55 @@ Tests and test helpers are spread across several areas of the repo:
 - Electron main-process tests under `src/main/__tests__/`
 - shared tests under `src/shared/__tests__/`
 - reusable mocks/factories under `src/test/`
+
+The [transfer-selection fixture contract](../protocol/README.md#transfer-selection-fixture-contract)
+defines the shared 32-case import-to-ModelPicker matrix. Its input schema tests run
+from the monorepo root with `node --test scripts/check-transfer-selection-contract.test.mjs`;
+`node scripts/check-transfer-selection-contract.mjs --inputs-only` validates the
+matrix without a Rust build. Component harnesses must use `TRANSFER_SELECTION_FIXTURE_ROOT`
+to locate the same inputs and daemon-generated public sessions, including from a
+standalone checkout. Renderer tests must consume those full responses with real
+identity/catalog selectors and assert the model label or Auto plus the absence of
+warnings, fallback actions, model mutations and toasts. A hash check alone does not
+establish daemon provenance; the connected gate must regenerate and compare outputs.
+
+### Transfer-selection contract
+
+From the monorepo root, with both component harnesses checked out and frontend
+dependencies installed, run:
+
+```bash
+make test-transfer-selection-contract
+```
+
+This uses the maintained intentd Cargo exporter twice in a new temporary directory,
+checks every normalized public response against the shared golden and actual source
+revision, then passes the first fresh file directly to all 32 ModelPicker cases via
+`TRANSFER_SELECTION_GENERATED`. It records full monorepo/component HEADs, both pins,
+generator and consumed-file hashes. Both components must be clean and committed;
+local feature heads are identified separately from caller-head/counterpart-pin runs.
+It removes generated files, isolated Rust state and Node caches on success, failure,
+and interruption. It never regenerates the checked-in golden. Unset
+`TRANSFER_SELECTION_GENERATED` before invoking the connected target: selecting an
+old file would defeat the regeneration proof.
+
+`make consumer-checks` stays lightweight: its transfer-selection row validates shape,
+coverage and provenance with Node only. The reusable component workflow runs the
+connected target separately, on every successful checkout for both caller directions.
+It verifies the caller's full `HEAD_SHA` and the counterpart's recorded pin before
+building. A deleted/missing harness or stale response fails; there is no presence-based
+skip. The existing warning on a failed monorepo checkout remains an outage exception,
+not connected-test evidence. Standalone component jobs consume the checked-in golden
+from one recorded monorepo main checkout; only the connected job proves freshness.
+
+The initial introduction is staged: land the foundation contract/golden and lightweight
+checks, then the daemon and renderer harnesses, wait for the automated pins, and only
+then publish the separate connected-target/workflow activation. See the
+[protocol rollout](../protocol/README.md#gate-rollout). Component CI continues using
+main during that rollout; the reusable workflow uses its own resolved workflow commit.
+To inspect prerequisites without building, run
+`node scripts/test-transfer-selection-contract.mjs --preflight` at the activation
+revision. Local selected-head success does not establish that earlier live pins pass.
 
 ## Debugging Notes
 

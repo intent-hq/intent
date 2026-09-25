@@ -55,6 +55,12 @@ as a routing concept.
 - Adding a remote is manual **IP:port + token** entry with **trust-on-first-use**
   (TOFU) self-signed-cert confirmation: the FE dials the remote once, shows the
   presented certificate fingerprint, and only pins it once the user confirms.
+- A remote can also use a **Tailcat address + port + token**. Paste the original
+  address without changing its case. Tailcat addresses start with `tc` and
+  contain an encoded payload, not a DNS name. Fingerprint capture and reconnect
+  use the bundled Tailcat forwarder. They retain the same TLS pin and token
+  checks as direct WSS. If the forwarder is unavailable, a Tailcat-only
+  connection fails without a DNS lookup.
 - The **Fleet HUD is per-backend** (`main/hud-window.ts`): opening the HUD binds
   it to the opener window's backend, one HUD per backend, HUDs for different
   backends coexist. The HUD footer's status dot opens a backend menu with Open

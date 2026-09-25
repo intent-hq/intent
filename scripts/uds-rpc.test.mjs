@@ -11,6 +11,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { cleanNodeEnv } from './test-env.mjs';
 import { parseArgs, runProbe, USAGE } from './uds-rpc.mjs';
 
 const RPC_PATH = fileURLToPath(new URL('./uds-rpc.mjs', import.meta.url));
@@ -246,7 +247,7 @@ test('connection refused at the socket path exits nonzero', async () => {
 // --- CLI entry point ---
 
 async function runCli(args) {
-  const child = spawn(process.execPath, [RPC_PATH, ...args]);
+  const child = spawn(process.execPath, [RPC_PATH, ...args], { env: cleanNodeEnv() });
   let stdout = '';
   let stderr = '';
   child.stdout.on('data', (d) => (stdout += d));

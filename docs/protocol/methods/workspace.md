@@ -4,14 +4,14 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields) |
-| workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v10.3 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
-| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below) | { workspace: Workspace } |
+| workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
+| workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v10.9 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — fast-ack: returns immediately after deleting the database row and emitting `workspace:deleted`, while filesystem cleanup runs in a background task — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
-| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. -32602 if not found. |
-| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
+| workspace.archive | workspaceId (req) | { workspace: Workspace } — returns the refreshed record with `archived: true` / `status: "Archived"` / `archivedAt` set, so callers do not need to follow up with `workspace.get`. Emits `workspace:updated` with the full applied delta `changes: { archived: true, status: "Archived", archivedAt: <ts> }` where `<ts>` is the same ISO timestamp persisted on the row (§6.5). **Archive stops active work** ([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); PR monitors: [intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067)): in-flight agent turns are gracefully interrupted, ACTIVE background hooks and ACTIVE PR monitors (§5.42) are cancelled, and queued messages/wakes park while the workspace stays archived — see the archive active-work teardown block below. **Archive removes guests** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the archived flip, the detach of every `collaborator` membership and the revocation of every open invite commit in **one** store transaction — atomic, so a store failure fails the call with the workspace still active — and are announced before the `archived` delta: one `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }` per detached collaborator (its queued messages dropped, as for `workspace.members.remove`), then one `{ invites: true }` when at least one invite was revoked (§5.48). The returned record's `memberCount` / `openInviteCount` are the post-sweep values. -32602 if not found. |
+| workspace.unarchive | workspaceId (req) | { workspace: Workspace } — mirror of `workspace.archive`; returns the refreshed record with `archived: false` / `status: "Active"` and `archivedAt` cleared. Emits `workspace:updated` with `changes: { archived: false, status: "Active", archivedAt: null }` — an explicit JSON `null` so clients clear the field (§6.5). Re-kicks the queue drains parked by the archived gates so parked messages deliver without a manual kick; cancelled hooks and PR monitors are NOT resurrected, and neither are the collaborators and open invites the archive removed — the owner is the sole member afterwards and brings a guest back explicitly, via `workspace.members.add` or a fresh invite (see the archive active-work teardown block below). The same delta shape is also emitted by the turn-start **auto-unarchive** (see the auto-unarchive block below), which additionally stamps the additive `autoUnarchive` field into `changes` — the stamp is never present on this manual path (or `workspace.restore`). -32602 if not found. |
 | workspace.dismissAttention | workspaceId (req) | { workspace: Workspace } — clears `attention` to `"none"`; -32602 if not found |
 | workspace.markSeen | workspaceId (req) | { workspace: Workspace } — marks the workspace seen: advances **every top-level (no parent, non-background, non-deleted) session's per-conversation seen marker** to its `lastMessageId` through the `agent.markSeen` op (§5.5; same monotonic CAS, each advanced session emits its own `agent:updated` marker event; background/child sessions are untouched), which settles the **derived workspace `unread`** (see the `attention` bullet below) to `none` and emits ONE `workspace:attention-changed { none }` on the transition; also clears the stored legacy flag (guarded on `unread` — a persistent `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message landing mid-call is never retired). **Marker advances are the call's contract, so failures propagate**: a failed pending-list read or per-session marker write is the call's error — the caller never sees success while a session stays unread; the one tolerated per-session failure is a racing `agent.delete` (a deleted session no longer feeds the derivation, so it is skipped). Idempotent: a re-call with nothing unseen writes and emits nothing. `updated_at` stays untouched (looking is not "activity", monorepo#1466) |
 | workspace.getContext | workspaceId (req) | { items: ContextItem[] } — persisted chat-context attachments for the workspace; empty array before the first save. -32602 if the workspace is absent. |
@@ -167,7 +167,14 @@ must exist; an unresolved ref is warned before Apply and fails through the exist
 `workspace.create` structured error without fallback.
 
 The result is the existing `workspace-create` proposal resource with
-`preview.workspaceCreate.mode: "sibling"`. The title, prompt, specialist, and base ref
+`preview.workspaceCreate.mode: "sibling"`, plus a top-level `proposalId` (additive,
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)): the proposal's
+pending-tracking identity — its `applyToolCallId`, falling back to `preview.title` — which
+is the key of the `pendingProposals` entry and of the `proposalResolutions` map (§5.5
+"Pending proposals" in [agents.md](./agents.md)). The caller should retain it: it is the
+stable handle `ws.workspace.applyProposal` accepts before AND after the proposal is
+resolved, whereas the idempotency key addresses the proposal only while it is pending. The
+title, prompt, specialist, and base ref
 remain editable; repository metadata is locked. The proposal stores one idempotency key,
 which its Apply and Retry actions reuse, so one proposal creates at most one workspace.
 Dismiss has no create side effect. Delegated and background agents do not receive this
@@ -175,6 +182,80 @@ binding, and raw dispatch rejects it. Agents with a parent report the opportunit
 parentless background agents remain blocked and have no parent-report path. This is an MCP
 binding over the existing `workspace.create` flow, not a JSON-RPC method, and does not
 change Chief of Staff `ws.app.workspaces.create` behavior.
+
+**Agent apply ([intent-hq/intent#5413](https://github.com/intent-hq/intent/issues/5413),
+[intentd#1995](https://github.com/intent-hq/intentd/pull/1995)).** When the user tells the
+proposing agent in chat to approve one of its proposals, that agent can apply it itself
+with `ws.workspace.applyProposal(proposalIdOrIdempotencyKey, { userRequested: true,
+title?, initialPrompt? })`. The first argument is a non-empty string; the options object
+is required and `userRequested: true` (Boolean `true` only) is a mandatory attestation
+that the user explicitly asked in chat — absent or any other value is an error and nothing
+is created. `title` and `initialPrompt` are the ONLY overridable fields (each a non-empty
+trimmed string when present; `title` replaces `params.title`, `initialPrompt` replaces
+`params.initialAgent.prompt` and errors when the proposal carries no `initialAgent`);
+repository identity and path, `baseRef`, specialist and metadata are never overridable —
+any other option key is rejected naming the allowed set. **Proposing-agent-only lookup:**
+the argument is matched against the CALLER's own session — first a `pendingProposals`
+entry's `proposalId` verbatim, then the `payload.params.idempotencyKey` of a pending
+entry's proposal block (loaded by a bounded single-message seek of the carrying message,
+never a transcript hydration) — so another agent's proposal is never applicable, and the
+matched proposal must be `kind: "workspace-create"` with
+`payload.operation: "workspace.create"` (anything else is refused naming the kind). The
+proposal's stored idempotency key is reused verbatim, with or without overrides, so agent
+Apply, card Apply and card Retry converge on one workspace: the first successful create
+binds the key, and later retries reuse it and return the same workspace even if the
+resolution write previously failed and the card is still pending. Same-key **concurrent**
+first-use callers (e.g. card Apply and agent Apply racing on one key) are serialized per
+`idempotencyKey` in the daemon's global create scope — `workspace.create` carries no
+`workspaceId`, so its idempotency record lives under the empty-workspace sentinel, not
+under the workspace it creates — so exactly one create runs and every caller receives the
+identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)). The create runs through
+the same `workspace.create` deserialization as the
+router (a non-null `initialAgent.agentId` is rejected), and on success the binding calls
+the same `agent.resolveProposal` path the client-driven Apply uses, requesting
+`outcome: "applied"` with `detail` `"Created workspace <id> (<title>) via
+ws.workspace.applyProposal"` (suffixed ` with overridden title` / ` with overridden
+prompt` / ` with overridden title and prompt` when overrides were used) — so the
+`agent:updated` emit carrying `pendingProposals` + `proposalResolutions` and the
+`proposal_resolved` system notice fire identically to a card Apply (§5.5 "Pending
+proposals" in [agents.md](./agents.md); the caller is mid-turn, so the notice is
+promoted to the front of its queue), and on an ordinary successful resolution the card
+renders applied. Result:
+`{ ok: true, proposalId, outcome, workspace: { id, title, branch?, path? },
+initialAgent?, overrides?, resolveWarning? }` — `initialAgent` is the `workspace.create`
+result's initial agent when present (agent-hidden fields stripped), `overrides` is
+`{ title?: true, initialPrompt?: true }` naming the overridden fields (omitted when none).
+**`outcome` is NOT unconditionally `"applied"`.** `agent.resolveProposal` never
+overwrites a persisted resolution — it echoes the existing one — so when the card was
+resolved from the UI while the create was in flight, that persisted outcome is kept and
+the result reports it as `outcome`. The warning is added only when the persisted outcome
+is not `applied`: a concurrent non-applied resolution (`dismissed`) yields
+`outcome: "dismissed"` with the created `workspace` retained in the result and a
+`resolveWarning` stating plainly that the workspace exists even though the card does not
+show applied (the agent should tell the user); a concurrent UI Apply yields
+`outcome: "applied"` with no warning, exactly like the ordinary case. `resolveWarning`
+also covers a failed resolution write: `outcome` is then `"applied"` (the requested
+value), the workspace exists, and the card may still show pending until the user
+dismisses it; nothing is retried. In the ordinary case (`outcome: "applied"`, write
+succeeded) `resolveWarning` is absent.
+**Idempotent / refused paths:** an id that is no longer pending but recorded `applied` in
+`proposalResolutions` returns `{ ok: true, proposalId, outcome: "applied",
+alreadyResolved: true }` without creating again; one recorded `dismissed` is an error
+(propose again with `proposeSibling` if still wanted); an id that is neither pending nor
+resolved is an error. **The idempotency key matches a proposal ONLY while it is pending**
+(`proposalResolutions` is keyed by `proposalId` alone, and a resolved proposal's carrying
+message is no longer tracked), so the caller should retain the `proposalId` returned by
+`proposeSibling` as the stable handle to address the proposal after it has been applied
+or dismissed — the miss error says so and points at it. A `workspace.create` failure
+surfaces the structured error and records NO resolution, so the card stays pending for
+Retry. **Turn-end caveat:** a proposal emitted in the CURRENT turn is recorded as pending
+only when the turn persists, so the agent can apply proposals from an earlier turn only —
+matching the intended flow (the user replies "approve" in a later message); the not-found
+error says so. Same availability as `proposeSibling`: foreground top-level agents only —
+delegated and background agents do not receive the binding and raw dispatch rejects it.
+Like `proposeSibling` this is an MCP binding over existing daemon paths, not a JSON-RPC
+method: `agent.resolveProposal` and the client-driven Apply flow are unchanged.
 
 **Attach semantics.** Proposals emitted by a `workspace_api` call attach to that call's
 `tool_result` regardless of the script's return value. When the binding runs, the MCP
@@ -717,7 +798,11 @@ server-minted id is `initialAgent.id`); when content is present the agent's turn
 asynchronously (fire-and-forget) but the create call is not idempotent unless a
 `idempotencyKey` is supplied — a replay with the same key returns the stored result
 (carrying the originally minted `initialAgent.id`) without re-creating the
-session or re-delivering the prompt.
+session or re-delivering the prompt. Same-key **concurrent** first-use callers are
+serialized per `idempotencyKey` in the daemon's global create scope (the call has no
+`workspaceId`; the record lives under the empty-workspace sentinel), so exactly one create
+runs and every caller receives the identical stored result
+([intent-hq/intentd#2000](https://github.com/intent-hq/intentd/pull/2000)).
 The daemon stamps the reference-parity `isInitialAgent`/`isFirstWorkspaceAgent` flags on
 the created session's raw metadata JSON, and the strict `AgentLite.metadata` projection
 surfaces `isInitialAgent?: true` (presence-detected, `true`-only — §5.5) on the
@@ -727,8 +812,39 @@ agents created any other way omit the key.
 **Archive active-work teardown (`workspace.archive` / `workspace.unarchive`)**
 *([intent-hq/intentd#896](https://github.com/intent-hq/intentd/pull/896); behavior only,
 no wire-shape change).* Archiving stops the workspace's active work without destroying
-any of it — unlike the delete cascade below, nothing is deleted:
+any of it — unlike the delete cascade below, nothing is deleted, with one exception: the
+workspace's guests and open invites, which archive removes:
 
+- **Guests are detached and open invites revoked — atomically with the flip**
+  ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)). The
+  `status: "Archived"` / `archived` / `archivedAt` write, the delete of every non-owner
+  (`collaborator`) membership and the revocation of every open invite run in **one**
+  `BEGIN IMMEDIATE` store transaction: they commit together or not at all, and a store
+  failure fails the RPC with the workspace still active (access revocation is never
+  best-effort). A join (`invite.prove` / `invite.accept`) or `workspace.members.add`
+  racing the archive serializes entirely before it (and is swept) or entirely after it
+  — never seated afterwards. Which code the loser sees depends on where it was when
+  the archive committed: a `workspace.members.add`, or a join whose service-side
+  validation already passed, reaches its own write transaction, observes the archived
+  flag and is refused `-32602 { code: "workspace-archived" }`; a join that re-reads the
+  invite after the sweep fails earlier, in service validation, with the invite's closed
+  state `invite-revoked` (the sweep revoked it) before the archived check is reached
+  (§5.48). After the commit,
+  before anything else in the archive tail, the daemon drops each detached
+  collaborator's queued messages on the workspace's agents and publishes one
+  `workspace:updated { changes: { members: true, removedPrincipalId, memberCount } }`
+  per detached collaborator (in membership order, `memberCount` counting down to the
+  surviving owner), then one `{ invites: true }` when at least one invite was revoked —
+  the same deltas `workspace.members.remove` and `workspace.invite.revoke` emit (§5.48).
+  While archived, `workspace.members.add`, `workspace.invite.create` and the join
+  commit are refused with `workspace-archived`. **Unarchive does not restore
+  membership or invites**: the owner is the sole member of an unarchived workspace and
+  must explicitly bring a guest back — `workspace.members.add` for an existing
+  credentialed principal, or a fresh `workspace.invite.create`. The archive holds a per-workspace
+  fence until the removal deltas are out, and every unarchive path (manual, turn-start
+  auto-unarchive, `workspace.update` lifecycle delegation) flips under the same fence,
+  so an unarchive + re-add of a detached principal can never interleave with the tail's
+  drop.
 - **In-flight agents are gracefully interrupted.** After the archived row is persisted
   (so a concurrent queue-drain kick observes the flag and parks instead of respawning a
   turn), the daemon sweeps every agent with an in-flight turn in the workspace through
@@ -761,8 +877,9 @@ any of it — unlike the delete cascade below, nothing is deleted:
   only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
   refinements. **Combined flush of parked archive notices**: under the `"all"` flush
   mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
-  workspace whose queue holds parked ready-to-send entries (hook / PR-monitor
-  archive-cancellation wakes, parked automatic sends) no longer runs a DIRECT turn
+  workspace whose queue holds parked ready-to-send entries (the consolidated
+  `workspace_archive_wake` notice for cancelled hooks / PR monitors — see the two
+  teardown bullets below — parked automatic sends) no longer runs a DIRECT turn
   past them — the send converts to a user-origin enqueue + immediate drain kick
   (modeled on the former monorepo#1791 question-hold conversion, which v9.5 retired along with the hold — §5.5 "Pending questions"), returning the
   ordinary queued result `{ success: true, queued: true, queuedMessage, turnId }`,
@@ -793,21 +910,25 @@ any of it — unlike the delete cascade below, nothing is deleted:
   unarchived, so a park racing a manual unarchive is never stranded.
 - **Active background hooks are cancelled.** Every ACTIVE (`scheduled`/`running`) hook
   in the workspace (§5.40) goes through the `hook.cancel` machinery: scheduler task
-  aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5), and the
-  owner woken with an archive-specific notice — the wake itself parks behind the
-  archived gate above, so it queues at most and never starts a turn while archived.
-  Terminal hooks are untouched, and **unarchive does not resurrect cancelled hooks** —
-  the notice ("This hook was cancelled because its workspace was archived.") explains
-  why the watch stopped; the owner is expected to reschedule if the condition still
-  matters. Best-effort per hook: a store failure is logged and the sweep moves on
-  (archiving never fails because one hook row would not update).
+  aborted, state persisted to `cancelled`, `hook:cancelled` emitted (§6.5) — **silently
+  per hook** (no per-hook owner wake; since
+  [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074), harness
+  v2.7 — previously each hook queued its own per-item archive-cancellation wake). The
+  cancelled hooks are collected per owning agent for the
+  **consolidated post-unarchive notice** described after the next bullet. Terminal
+  hooks are untouched, and **unarchive does not resurrect cancelled hooks** — the
+  notice names each cancelled hook and how to re-arm it; the owner is expected to
+  reschedule if the condition still matters. Best-effort per hook: a store failure is
+  logged and the sweep moves on (archiving never fails because one hook row would not
+  update).
 - **Active PR monitors are cancelled** *([intent-hq/intentd#1067](https://github.com/intent-hq/intentd/pull/1067); monorepo#1828)*.
   Every ACTIVE PR monitor in the workspace (§5.42) goes through the same core cancel
   transition as `prMonitor.cancel`, mirroring the hook sweep: state persisted to
   `cancelled` (guarded CAS — a concurrent cancel/complete winning the race is fine),
-  `prMonitor:cancelled` emitted (§6.5), and the owner woken with an archive-specific
-  notice ("This monitor was cancelled because its workspace was archived — it will not
-  report again.") that parks behind the archived gate above. Terminal
+  `prMonitor:cancelled` emitted (§6.5) — again **silently per monitor** (no per-monitor
+  owner wake since [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074);
+  previously each monitor queued its own per-item archive-cancellation wake); the
+  cancelled monitors join the same per-agent consolidated notice. Terminal
   (`completed`/`cancelled`) monitors are untouched, and **unarchive does not resurrect
   cancelled monitors** — the owner re-registers via `ws.pr.monitor` if the PR still
   matters. Each cancel transition ends with the transition-only
@@ -821,6 +942,41 @@ any of it — unlike the delete cascade below, nothing is deleted:
   step 4).
   Fail-soft per monitor: one row's cancel failure is logged and never aborts
   the sweep or the archive.
+- **One consolidated post-unarchive notice per affected agent** *(behavior only, no
+  wire-shape change; [intent-hq/intentd#2074](https://github.com/intent-hq/intentd/pull/2074),
+  harness v2.7 — see [HARNESS.md](../../HARNESS.md))*. After both sweeps, the archive
+  tail queues **exactly one** wake per agent that owned at least one cancelled hook
+  and/or PR monitor; agents with nothing cancelled receive nothing. The wake's
+  `messageMetadata` is `{ "type": "workspace_archive_wake", "hookIds": [...],
+  "prMonitorIds": [...] }` — both arrays always present, possibly empty (a
+  hook-only or monitor-only owner). It rides the ordinary automatic-wake delivery, so
+  it **parks behind the archived gate above** (queued at most, never a turn while
+  archived) and is delivered either by the `workspace.unarchive` drain kick or FIFO in
+  the combined flush turn of a post-archive user message (the "Combined flush of parked
+  archive notices" refinement above). Because the gate guarantees the notice is only
+  ever read after the workspace is Active again, its text is written for that moment —
+  it states the workspace has since been unarchived, lists every cancelled hook
+  (`name` + `hookId`) and monitor (PR label), says they were **NOT** resumed, and names
+  the re-arm calls. Sections for an empty kind are omitted, singular/plural handled;
+  one hook plus one monitor reads:
+
+  `[SYSTEM NOTICE] This workspace was archived and has since been unarchived. While it was archived, these background watches were cancelled and were NOT resumed: hook "Wait for shipped alpha" (<hookId>), PR monitor intent-hq/intentd#123. If a condition still matters, re-arm it: ws.hook.get(hookId) recovers a hook's script for ws.hook.schedule; ws.pr.monitor re-registers a PR.`
+
+  The `hook:cancelled` / `prMonitor:cancelled` events are unchanged, and hooks /
+  monitors are still NOT resumed on unarchive. **Ordering with completion watches**
+  (§Completion-watch persistence in agent-aux.md): the per-item cancels skip the
+  deferred-completion redelivery backstop; the tail runs it **once per owner, after
+  queueing that owner's notice** (on a queue failure too). When the notice was queued,
+  a parent's watch deferred on a monitoring-idle child therefore finds the parked notice
+  (ready-to-send → still deferred) and stays armed for the child's real post-unarchive
+  turn instead of being consumed at archive time by a synthesized completion against an
+  empty queue. On the (logged) queue-failure branch there is no parked notice, so that
+  backstop settles the deferred watch at archive time — the same fallback as a failed
+  external-cancel wake, so a lost notice never leaves a watch armed forever. The
+  notice carries no `hook_wake` / `pr_monitor_wake` metadata and none of the
+  `[Background hook "…"]` / `[PR monitor …]` prefixes, so the FE renders it as an
+  ordinary automated message. Best-effort per agent: a delivery failure is logged and
+  the tail moves on — the cancels themselves already persisted.
 
 One residual race is a deliberate trade-off: a drain that read the workspace row before
 the archive persisted can claim the in-flight slot after the sweep's busy-list snapshot,
@@ -966,11 +1122,21 @@ each with a dedicated change event (§6.5) that carries the new value:
   `"none" | "unread" | "review_required"`. Server-owned, so dismissing it from any client
   clears it for all clients. **The served `unread` value is DERIVED from per-agent seen
   markers** on the `workspace.list` / `workspace.get` / subscription emit path:
-  `unread` = any **top-level (no parent, non-background, non-deleted)** session whose
-  newest user/assistant message is an assistant message the v4.5 seen marker has not
-  caught up with (`lastMessageId` set, `lastMessageRole == "assistant"`,
-  `metadata.lastSeenMessageId` absent or ≠ `lastMessageId` — the same equality-only
-  comparison as the client-side per-agent derivation, §5.5 `agent.markSeen`). A stored
+  `unread` = any **top-level (no parent, non-background, non-deleted, non-retired, not
+  muted)** session whose newest user/assistant message is an assistant message the v4.5
+  seen marker has not caught up with (`lastMessageId` set, `lastMessageRole ==
+  "assistant"`, `metadata.lastSeenMessageId` absent or ≠ `lastMessageId` — the same
+  equality-only comparison as the client-side per-agent derivation, §5.5
+  `agent.markSeen`). A soft-retired session (`retiredAt` set, §5.5 `agent.restore`) never
+  participates: the FE cannot land on a hidden agent to read it, so retiring the LAST
+  unread session settles the stored flag exactly like the last seen-marker advance (one
+  `workspace:attention-changed { none }`, `review_required` untouched) and
+  `agent.restore` is silent (no stored-flag write, no event) — a restored session with
+  an unseen assistant last message simply re-derives `unread` on the next read. A muted
+  session (`notificationsMuted`, §5.5 `agent.update`) follows the same shape: muting the
+  LAST unread session settles the stored flag with one `workspace:attention-changed
+  { none }`, and unmuting is silent — the unseen tail re-derives `unread` on the next
+  read. A stored
   `review_required` always wins over the derivation; the stored `unread` flag is no
   longer the read-path source of truth — the turn-end raise still writes it (back-compat
   + the transition emit), but a stale stored value can neither show nor hide the blue
@@ -1018,15 +1184,18 @@ each with a dedicated change event (§6.5) that carries the new value:
 string enum — `"Active" | "Inactive" | "Archived" | "Deleted"` (src/shared/types.ts) — both on
 the wire and as the stored DB word (matching the `PullRequestStatus` precedent). Optional
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
-`prStatus`, `activePullRequest`, `pullRequests`, `contextLinks`, `archivedAt`, `cowSupported`,
+`prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
+**List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
 `checkoutMode`, `executionEnvironment`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
 **`contextLinks` (new in intentd, migration `0110`).** Issue/PR context links supplied
 at `workspace.create` — the initializer's context mentions — persisted on the workspace
-row and returned on every `Workspace` payload so any client opening the workspace can
-seed its layout from the linked pages. The param is `contextLinks?: ContextLink[]` where
+row and returned on the **detail** `Workspace` payloads (the `workspace.create` result and
+`workspace.get`) so a client opening the workspace can seed its layout from the linked
+pages; `workspace.list` / lite `workspace.subscribe` seq-0 rows omit it (see **List-row
+slimming** below). The param is `contextLinks?: ContextLink[]` where
 `ContextLink = { kind: "issue" | "pr", url: string, owner: string, repo: string,
 number: number }` (`kind` lowercase on the wire; an unknown `kind` — or a negative or
 fractional `number`, which fails the unsigned-integer field type — rejects `-32602` at
@@ -1203,6 +1372,27 @@ persisted `pullRequests: PullRequestInfo[]` (new in intentd, migration `0035`) s
 alongside `activePullRequest` and carries the reconciliation candidates the FE matches
 `activePullRequest` against.
 
+**`PullRequestInfo.isInMergeQueue?: boolean`** (additive, presence-detected — within 10.7;
+[intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654)): the PR sits in the
+host's merge queue (GitHub GraphQL `isInMergeQueue`). The key is present as `true` exactly
+when a **signal-bearing** read — the on-demand fold (§5.27), which rides every read served
+through the shared PR cache by `github.pulls.get` or `ws.pr.snapshot`, cache hit or miss (a
+hit projects only this field, onto a same-head copy, §5.27), not only a read that reached the
+forge — reported the PR queued, and **omitted** (never `null` / `false`)
+otherwise; a reported `false` and an unreported state both land as absent, matching the
+presence-only `MergeRequirements.isInMergeQueue` (§5.42). The field exists because a
+merge-queued PR reads `mergeableState: "clean"` on GitHub's REST API (REST never reports
+`"queued"`), so the REST-only refresh paths — the branch sweep, the git-root sweep,
+`pr.refresh`, the stale-pool heal — cannot observe the queue. **Preservation rule:** such a
+REST-only refresh inherits a persisted `isInMergeQueue: true` onto its snapshot while the PR
+stays **open, non-draft and on the same known `headSha`**; it lapses when the PR leaves open
+(merged / closed / draft), when `headSha` changes (a new push after a queue ejection) or is
+unknown on either side, and whenever a signal-bearing read lands (the fold writes what it
+observed — a fold that sees the PR no longer queued clears the key). The persisted
+`activePullRequest` and the same-numbered `pullRequests` entry always carry one coherent copy,
+and the field stays on list rows (like `mergeable` / `mergeableState`) since the step-4
+`pr_queued` derivation below keys on it. Rows persisted before the field existed read absent.
+
 **Merged `pullRequests` on the list emit paths (new in intentd;
 [intent-hq/intentd#1330](https://github.com/intent-hq/intentd/pull/1330)).** On
 `workspace.list` and the lite `workspace.subscribe` seq-0 snapshot (§6.9) — the two list
@@ -1214,32 +1404,70 @@ known to the workspace's PR monitors (entries synthesized as `PullRequestInfo` f
 excluded — the same visibility rule as `prMonitor.list`; a snapshotless monitor synthesizes
 URL/title from its repo identity, and a completed monitor without a snapshot verdict maps
 to `closed`, never `merged`). **Dedup is by PR `url`, first-wins by source precedence**
-(workspace stored list > git-root > monitor-derived) — one entry per URL, **no recency
-comparison**: a URL already carried by the workspace's stored list wins outright even when
-a git-root or monitor entry for the same PR is fresher. One exception: a lower-priority
-duplicate whose `status` sits higher on the lifecycle ladder (`Open`/`Draft` < `Closed` <
-`Merged`) upgrades the winning entry's `status` + `updatedAt` + `isDraft` in place, so a
-stale stored/git-root entry never shadows a monitor that already saw the PR merge
-(monorepo#3127). Status only ever moves up the ladder: `Merged` is irreversible and wins
-over everything (including a stale `Closed`), while `Closed` — the snapshotless
-completed-monitor fallback among others — never downgrades a `Merged` verdict, and
-reopened-after-close is left to the sweep re-fetch. `isDraft` moves with `status` so an
-upgraded entry never reads merged/closed while still claiming draft.
-Identity and all other fields still come from the higher-priority source. Entries can therefore be
+(workspace stored list > git-root > monitor-derived) — one entry per URL: identity and all
+other fields come from the higher-priority source (a URL already carried by the workspace's
+stored list keeps that entry's identity even when a git-root or monitor entry for the same
+PR is fresher). The **lifecycle** of a duplicate follows its source:
+
+- A **git-root** duplicate takes the same **same-url canonicalization** the `displayStatus`
+  derivation folds git-root PRs with (§5.1 "Git-root PR fold"; behavior only, within 10.1):
+  among every copy of the URL — the linked `activePullRequest`, the stored `pullRequests`
+  entry and each git-root record — the copy with the highest (lifecycle rank, `updatedAt`)
+  is selected — the maximum of the **same-url tie key** (lifecycle rank: `Open`/`Draft` <
+  `Closed` < `Merged`; `updatedAt`; readiness rank, with *draft* meaning `status: draft` or
+  `isDraft: true`: non-draft merge-queued (`isInMergeQueue: true`, or a host-reported
+  `mergeableState: queued`) 5 > non-draft `mergeable: true` and
+  `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
+  `mergeable: false` 1, mirroring step 4; non-draft over draft; `isInMergeQueue`;
+  `mergeableState`; `mergeable`;
+  `isDraft`; `status` — the trailing raw fields ordered unknown < set, `false` < `true`,
+  strings lexicographic, and `open` over `draft`, the only equal-rank statuses), compared
+  lexicographically in that order, which is total over every lifecycle field; `Merged` is
+  irreversible — and its `status`, `updatedAt`,
+  `isDraft`, `mergeable`, `mergeableState`
+  and `isInMergeQueue` are written together, as one coherent snapshot, onto **both** the
+  emitted `pullRequests` entry **and** the emitted `activePullRequest` when it carries the
+  URL. The served PR fields therefore never disagree with `displayStatus` on a PR's
+  lifecycle: a merged root copy lifts a stale `open` linked copy beside `pr_merged` (never
+  `activePullRequest: open` next to `displayStatus: pr_merged`), a newer clean `open` root
+  copy lifts an older `draft` pooled copy beside `pr_ready` (never `draft` next to
+  `pr_ready`), and the result is independent of git-root order.
+- A **monitor-derived** duplicate upgrades only when its `status` sits **strictly higher**
+  on the lifecycle ladder, moving `status` + `updatedAt` + `isDraft` in place, so a stale
+  stored/git-root entry never shadows a monitor that already saw the PR merge
+  (monorepo#3127). Status only ever moves up the ladder: `Merged` wins over everything
+  (including a stale `Closed`), while `Closed` — the snapshotless completed-monitor fallback
+  among others — never downgrades a `Merged` verdict, and reopened-after-close is left to the
+  sweep re-fetch. `isDraft` moves with `status` so an upgraded entry never reads
+  merged/closed while still claiming draft; a monitor entry's `updatedAt` is the monitor
+  row's, not the PR's, and it carries no `mergeableState`, so it never takes the equal-rank
+  tie-break.
+
+Entries can therefore be
 **cross-repo** (a submodule root's or a monitored PR's repository rather than the workspace
 repository): the entry's `url` is authoritative for which repo it belongs to. The merge is
 computed on emit from already-persisted rows — plain column reads plus an in-memory merge,
 **no forge calls on the read path** — and exists so list/sidebar clients see submodule and
 monitored PRs without opening the workspace. A row with nothing to merge keeps its stored
 serialization untouched (an absent stored `pullRequests` stays omitted); a row that merges
-always serializes a plain array. The merge also runs **after** the `displayStatus`
-enrichment, so the PR/task rollup (the derivation below) reads only the stored
-workspace-level list — merged entries affect the emitted `pullRequests` array, never
-`displayStatus`. Everything else is unchanged: the stored `workspace.pull_requests` column
-keeps its workspace-repo semantics (PR discovery/refresh writes it as before, and the
-explicit-null clear below still targets only the stored value), `workspace.get` and the
-write-path responses carry the unmerged workspace-level list, and the `pr:*` event
-payloads (§6.5) are untouched.
+always serializes a plain array. The merge runs **after** the `displayStatus`
+enrichment, but the derivation below sees the same external inputs on its own terms: the
+git-root PRs feed its PR rungs directly (as a same-rung input to the stored list — §5.1
+step 4, the git-root fold, which also canonicalizes the row's own `activePullRequest` /
+`pullRequests` copies in place on every surface that derives `displayStatus`, `workspace.get`
+included) and the monitored PRs feed them through the monitor signals
+(intentd#1329), so the emitted `pullRequests` array and `displayStatus` agree on what the
+workspace's PRs are. `workspace.get` serves the **same merged pool** (workspace + git-root +
+monitor entries, same source priority / URL dedup / lifecycle rules) **uncapped** and with no
+`pullRequestsTotal`, while the list emit paths (`workspace.list`, the workspace channel's
+seq-0 rows and deltas) carry that pool capped at the **5** most recent
+(`WORKSPACE_LIST_PR_CAP`) with `pullRequestsTotal` when truncated — so `workspace.get` is
+the recovery surface for the full pool (see the detail-only table below). Everything else is
+unchanged: the stored `workspace.pull_requests` column keeps its workspace-repo semantics
+(PR discovery/refresh writes it as before, and the explicit-null clear below still targets
+only the stored value), the write-path responses carry the unmerged workspace-level list
+(no git-root or monitor entries are appended there — only the same-url canonicalization of
+the workspace's own copies applies), and the `pr:*` event payloads (§6.5) are untouched.
 
 **Explicit-null clear on `workspace.update` PR fields.** On `workspace.update`, the same
 five clearable PR fields (`prUrl`, `prNumber`, `prStatus`, `activePullRequest`,
@@ -1270,6 +1498,11 @@ omitted** (see its bullet below):
   `inProgress`. The renderer-only per-task `tasks` array is omitted.
 - `agentSummary: { count, agents: WorkspaceAgentInfo[], agentIds: string[] }` where
   `WorkspaceAgentInfo = { id, name, status, specialist?, lastActivity?, isStreaming, isResponding, parentAgentId?, isBackground? }`.
+  Soft-deleted sessions (`status: "deleted"`) and soft-retired sessions (`retiredAt` set,
+  §5.5 `agent.restore`) are **excluded** from `count` / `agents` / `agentIds`. The retired
+  exclusion matches the default `agent.list` read (its SQL filter is `retired_at IS NULL`
+  only), which itself still serves `deleted` rows — so the summary is a strict subset of
+  that read, not the same row set; `agent.restore` brings a retired row back.
   This matches the **live iOS `WorkspaceStore.parseWorkspace` consumer** (the richer
   `{ count, agents }` form); `agentIds` is additionally emitted alongside it for forward-compat with
   the slim TS `WorkspaceAgentIdSummary { agentIds }` (a future desktop-on-intentd reads
@@ -1293,7 +1526,8 @@ omitted** (see its bullet below):
   filters archived before reading it; iOS decodes it optionally). Active list rows and
   `workspace.get` — archived included — keep serving it. The slimming runs as a final pass
   over the merged list after enrichment, so a row degraded by an enrichment failure is
-  slimmed the same way.
+  slimmed the same way (see **List-row slimming** below for the full set of list-only
+  omissions).
 - `diffSummary: { schemaVersion, updatedAt, totalFiles, totalAdditions, totalDeletions, files }` —
   **never emitted since intentd#743**: the per-workspace head-diff rollup is omitted on the
   `workspace.list` / `workspace.get` / workspace-subscription emit paths (recomputing it for every
@@ -1301,6 +1535,53 @@ omitted** (see its bullet below):
   stays on the wire shape as optional for decoder compatibility; clients that need diff data fetch
   it on demand (path-scoped `git.diffs` / `git.numstat`, §5.6) instead of reading it off a hydrated
   workspace payload.
+
+**List-row slimming (`workspace.list` / lite `workspace.subscribe` seq-0; extends
+[monorepo#3041](https://github.com/intent-hq/monorepo/issues/3041)).** Both list surfaces
+serve each `Workspace` through one final `Workspace::slim_for_list` pass — after the
+aggregate enrichment and the merged-`pullRequests` fold above, so degraded rows and
+externally merged PR entries are slimmed alike — that drops the **detail-only** fields.
+Every stripped optional field is simply **absent** on list rows (never `null`; the v4.2
+`diskUsage` precedent), so this is not a wire-shape change; the one non-optional case is
+`diffSummary.files`, which is always serialized and is emptied to `[]` whenever a list row
+carries a `diffSummary` at all (the aggregate enrichment leaves `diffSummary` absent on the
+normal list paths, so today the whole object is absent). `workspace.get` never slims and
+keeps serving every field. The list-only omissions are:
+
+| Omitted on list rows | Detail read | Rationale |
+| --- | --- | --- |
+| `tokenUsage` | `workspace.get`, `workspace.getTokenUsage` + `workspace:tokenUsage-changed` (§5.23) | Persisted tally dominated large frames; no list consumer reads it |
+| `agentSummary` on **archived** rows only | `workspace.get` | No HUD/coverflow agent card renders for an archived workspace; active rows keep the full summary |
+| `setupScript` | `workspace.get`, `workspace.getSetupScript` (§5.25) | Unbounded script body read only by the open workspace's chat/setup surfaces |
+| `contextLinks` | `workspace.get` | Consumed once, when a client opens the workspace and seeds its layout from the linked pages |
+| `diskUsage` (absent), `diffSummary.files` (`[]` when a `diffSummary` is present) | `workspace.diskUsage`, path-scoped `git.diffs` / `git.numstat` (§5.6) | Never populated on the list path anyway; cleared so the guarantee holds by construction (`diffSummary` totals stay) |
+| `activePullRequest` / `pullRequests[]` entry fields `headSha`, `author` | `workspace.get` | Hover-tooltip data; list contexts (sidebar PR dropdown, card status, delete warning) need `number` / `url` / `title` / `status` / `isDraft` and the timestamps used for ordering, which stay. `mergeable` / `mergeableState` also stay on list entries: the client derives the PR lifecycle display status from them off list rows |
+| `pullRequests[]` entries beyond the **5** most recent (`WORKSPACE_LIST_PR_CAP`) | `workspace.get` (the full **merged** pool — the workspace's own entries plus the git-root and PR-monitor entries the emit-path merge folds in, same source priority / URL dedup / lifecycle rules as the list rows — uncapped, in merge order: stored entries, then git-root, then monitor-derived) | The pool's length is unbounded in production (unlike the active row's `agentSummary`, which is deliberately left uncapped, it is cheap to bound), and the row budget was sized from a five-entry pool. Survivors are ordered by `updatedAt` descending (`number` descending on ties); the entry matching `activePullRequest` (by exact repository-qualified `url` — `id` / `number` collide across the repositories the merged pool spans; an entry without a URL never stands in for an active PR that has one, and `number` decides only between an active PR and an entry that both lack a URL) is always retained, counts toward the 5 and leads the survivors. A pool of 5 or fewer is left as stored (no reorder). `activePullRequest` itself is never removed (its entry is slimmed like the pool's) |
+
+**`pullRequestsTotal?: number`** is the one **list-only** key: present on a `workspace.list` /
+lite `workspace.subscribe` seq-0 row only when the cap above truncated `pullRequests`, carrying
+the pre-cap (post-merge) pool length (so a client can render "+N more" and fetch the full pool
+via `workspace.get`, which serves the same merged pool uncapped — every entry the cap dropped is
+recoverable there, whichever source it came from); absent (never `null`) when the pool fit, and
+**never** on `workspace.get`. Derived-field ladder: computed on the list emit path from the row
+already in hand (the length of the pool being truncated — no extra read), never persisted; the
+`workspace.get` merge is two scoped store reads (git roots, non-cancelled monitors — the same
+narrow projection as the list's bulk read), no forge calls.
+
+Fixed-size scalars stay on list rows even when only detail surfaces read them
+(`baseCommitSha`, `path` / `repositoryPath` / `worktreePath`): a 40-hex SHA buys nothing per
+row, and FE stores hydrate the open workspace from list rows. Clients that hydrate a
+workspace from `workspace.get` and later receive a `workspace.list` refresh must preserve the
+detail-only fields across the merge rather than overwrite them with the (absent) list values.
+
+The contract is enforced in intentd by two goldens on a worst-case-realistic active row
+(ten-agent `agentSummary`, an eight-entry stored PR pool capped to five on the row, every
+small optional scalar present):
+a per-row byte budget (`WORKSPACE_LIST_ROW_BUDGET_BYTES` in `intent-core`, with the
+fleet arithmetic in its doc comment) whose failure message attributes bytes per field, and
+a top-level / per-PR key allowlist (`WORKSPACE_LIST_ROW_KEYS` / `WORKSPACE_LIST_PR_KEYS`).
+Adding a field to list rows means adding it to the allowlist, stating which rung of the
+derived-field ladder it sits on, and updating this table.
 
 **Workspace disk usage (`workspace.diskUsage`, on-demand since v4.2).** The **cached**
 whole-workspace disk footprint —
@@ -1433,10 +1714,19 @@ and live agent activity around the "current cycle" rollup:
 
 The attention axes (steps 0–2) are probed per workspace
 over its **top-level foreground** sessions — no `parentAgentId`, not background
-(`isBackground`), and not deleted — plus the dismissible workspace `attention` flag
+(`isBackground`), not deleted, not soft-retired (`retiredAt` unset), and not muted
+(`notificationsMuted`, §5.5 `agent.update`) — plus the dismissible workspace `attention`
+flag
 (`review_required` only — the `unread` flag never feeds the derivation). Child
 and background sessions never count: their attention surface is the parent/subscriber (the
-§5.5 attention-retire taxonomy). A pending attention request raised MID-TURN whose
+§5.5 attention-retire taxonomy). A soft-retired session (§5.5 `agent.restore`) is inert
+and never counts either — a retired session parked in `error`, or holding a pending
+blocker / discussion request or pending questions, moves none of these axes (the
+retire op recomputes-and-compares `displayStatus`, so the rung lapses on the retire), and
+`agent.restore` brings its signal back. A muted session is silenced the same way: none of
+its signals count while `notificationsMuted` is set (the mute toggle
+recomputes-and-compares `displayStatus`, so the rung lapses on the mute), and unmuting
+brings them back. A pending attention request raised MID-TURN whose
 user-facing surfacing is still parked on the deferred-attention registry does not count
 either ([intent-hq/intentd#1639](https://github.com/intent-hq/intentd/pull/1639), §5.5
 idle-deferred surfacing): the request feeds these axes only from the turn-end flush
@@ -1493,9 +1783,17 @@ attention is never fabricated.
    here, but it can read as `pr_open`/`pr_ready` there.
 4. **Not running** — the "current cycle" precedence:
    1. **Open/draft PR** — the linked `activePullRequest` when open/draft, else the most
-      recently updated open/draft entry in `pullRequests` — yields `pr_queued`
-      (`mergeable_state == "queued"` — the PR sits in the forge's merge queue — and
-      not draft); else `pr_ready` only when the PR is **truly mergeable** — not draft,
+      recently updated open/draft entry in the PR pool — the stored `pullRequests` plus
+      the PRs persisted on the workspace's registered secondary git roots
+      (`workspace_git_root.pull_requests`, the sweep's per-root discovery — §5.6), a
+      **same-rung input** folded in by URL (see the git-root fold below) — yields `pr_queued`
+      when the PR sits in the forge's merge queue and is not draft: the entry's
+      `isInMergeQueue` is `true` (the signal the `github.pulls.get` fold persists on the
+      pooled copies, with the preservation rule of "PR-field ownership" above —
+      [intent-hq/intent#5654](https://github.com/intent-hq/intent/issues/5654); GitHub's
+      REST `mergeable_state` never reports `"queued"`, a queued PR reads `"clean"` there),
+      or a host that does report `mergeable_state == "queued"`; else `pr_ready` only
+      when the PR is **truly mergeable** — not draft,
       `mergeable == true` AND `mergeable_state == "clean"`
       ([intent-hq/intentd#1402](https://github.com/intent-hq/intentd/pull/1402);
       GitHub's `mergeable` flag alone only rules out conflicts, so a `blocked` /
@@ -1522,8 +1820,9 @@ attention is never fabricated.
       nothing, and a store read failure fails open to no signal.
    2. **Open tasks remain** (`completed < total`) → `in_progress` when any task has started
       (`inProgress > 0` or `completed > 0`), else `not_started`.
-   3. **Latest PR merged** (the linked PR, else the most recently updated `pullRequests`
-      entry) → `pr_merged`. A **COMPLETED monitor** whose final snapshot shows the PR
+   3. **Latest PR merged** (the linked PR, else the most recently updated entry of the
+      same pool — `pullRequests` plus the folded git-root PRs) → `pr_merged`. A
+      **COMPLETED monitor** whose final snapshot shows the PR
       merged feeds this rung too (intentd#1329) — only the **latest** completed
       monitor (by `updatedAt`) counts, mirroring the linked-PR "most recently
       updated" semantics, so an older merged watch never masks a newer
@@ -1532,6 +1831,61 @@ attention is never fabricated.
       `not_started`.
 5. **Idle demotion** — when not running and step 4 yields `in_progress` or `not_started`,
    the result is demoted to `idle`; the PR stages and `complete` pass through.
+
+**Git-root PR fold (steps 4.1 and 4.3; behavior only, no version bump).** The PRs
+persisted on the workspace's registered secondary git roots
+(`workspace_git_root.pull_requests` — submodule and sibling-clone roots, §5.6 `gitRoot.*`)
+are a **same-rung input** to the PR stages, not a separate rung: they join the workspace's
+own `pullRequests` in one pool before steps 4.1 and 4.3 run, so a merged git-root PR reads
+`pr_merged` only once step 4.2 is clear (open tasks still precede the merged check), an
+open one holds `pr_open` / `pr_ready` / `pr_queued` even with every task complete, and a
+closed-unmerged one never promotes on its own. The fold **dedupes by PR `url`** with the
+same lifecycle-ladder upgrade the emitted-`pullRequests` merge above applies: a URL the
+workspace already carries (linked `activePullRequest` or a `pullRequests` entry) keeps its
+identity fields, and every copy of that URL — linked, pooled, git-root — is canonicalized to
+the **highest** lifecycle among them — the copy maximizing the **same-url tie key**, compared
+lexicographically in this order:
+
+1. lifecycle rank — `Open`/`Draft` < `Closed` < `Merged`;
+2. `updatedAt` — the latest among equal ranks;
+3. readiness rank, the step-4 precedence, where *draft* means `status: draft` or
+   `isDraft: true` — non-draft merge-queued (`isInMergeQueue: true`, or a host-reported
+   `mergeableState: queued`) 5 > non-draft `mergeable: true` and
+   `mergeableState: clean` 4 > any remaining `mergeable: true` 3 > `mergeable` unknown 2 >
+   `mergeable: false` 1;
+4. non-draft over draft;
+5. `isInMergeQueue`, 6. `mergeableState`, 7. `mergeable`, 8. `isDraft`, 9. `status` — raw
+   field values compared as unknown < set, `false` < `true`, strings lexicographic, and
+   `open` over `draft` (the only statuses sharing a lifecycle rank), so the order is total
+   over every lifecycle field and equal keys are identical snapshots.
+
+Two same-instant reads of one open PR therefore converge on the readier copy rather than the
+first root visited; `isDraft`, `mergeable`, `mergeableState` and `isInMergeQueue` move with
+`status`, so the selected copy is one coherent snapshot. Consequently a stale open
+duplicate on a root never resurrects a merged PR as `pr_open`, a merged pooled copy lifts a
+stale open linked copy, `Closed` never downgrades `Merged`, and the result does not depend
+on git-root order; a `prStatus` scalar ranking below the lifecycle its own URL (`prUrl`) was
+canonicalized to is read as that lifecycle — whether that URL's copy is linked, pooled, or
+root-only — while every other URL says nothing about the scalar (neither a root-only PR
+nor a pooled `pullRequests` entry whose root copy merged while `prUrl` names another PR;
+without a `prUrl` the scalar is never normalized). A URL the workspace does not carry is appended as a distinct
+pool entry and follows the ordinary "most recently updated" selection. The fold is derived
+purely from already-persisted rows — **no forge calls** — and a git-root read failure
+degrades to the previous derivation (no signal, never an error). It is applied identically
+on **every** surface that derives `displayStatus`: `workspace.list` and the lite
+`workspace.subscribe` seq-0 snapshot (which reuse the list's single bulk git-root read),
+`workspace.get` (one scoped read), and the `workspace:displayStatus-changed` recompute
+(§6.5), so the three read surfaces and the transition event always agree. **The served PR
+fields carry the same canonical lifecycle**: on each of those read surfaces the emitted
+`activePullRequest` and the workspace-owned `pullRequests` entries are canonicalized in
+place with the very same same-url rule (the copy maximizing the same-url tie key above — one
+coherent `status` / `updatedAt` / `isDraft` / `mergeable` / `mergeableState` /
+`isInMergeQueue` snapshot,
+identity fields untouched, nothing persisted), so no response pairs
+`activePullRequest: open` with `displayStatus: pr_merged`, or a `draft` pooled copy with
+`pr_ready`; the list emit merge above applies the identical rule when it appends the
+git-root entries themselves. The `workspace:displayStatus-changed` payload carries no PR
+fields.
 
 The dismissible `unread` workspace attention flag (the server-owned turn-end blue dot,
 §5.1 `attention`) **never feeds the derivation** — the intentd#945 step-6 unread
@@ -1548,15 +1902,18 @@ value takes the neutral unknown treatment instead).
 only when a **top-level foreground** agent's queue drains (intentd#1021): child agents
 (`parent_agent_id` set) and background agents never raise it — their completions surface
 to their parent/coordinator, not the user. A `NotFound` session load (deleted agent)
-skips the raise too, while a genuine store error fails open (raise + warn). The raise is
+skips the raise too, as does a session soft-retired mid-turn (`ws.agent.retire` from
+inside the turn — `retired_at` set by the time its drain ends) or muted
+(`notificationsMuted`, §5.5 `agent.update`) by the time its drain ends, while a genuine
+store error fails open (raise + warn). The raise is
 further guarded on the stored flag being `none`: it never downgrades a persistent
 `review_required` (no `workspace:attention-changed`), and `workspace.markSeen` — guarded
 on `unread` — leaves `review_required` in place; only `workspace.dismissAttention`
 retires that flag (its documented contract).
 
-A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — and the
-monitor signals — for open/draft entries) or open tasks (step 4.2 precedes the merged
-check). Transitions are pushed as
+A merged PR in history never masks an open PR (step 4.1 scans `pullRequests` — plus the
+folded git-root PRs and the monitor signals — for open/draft entries) or open tasks
+(step 4.2 precedes the merged check). Transitions are pushed as
 `workspace:displayStatus-changed` (§6.5), which since intentd#793 also fires on agent
 start/stop: the 0→1 running transition recomputes-and-emits immediately, and the
 running→not-running recompute runs after the same debounce grace window as
@@ -1575,7 +1932,26 @@ monitor's signal back to the base rollup (the idempotent re-arm still recomputes
 stays a silent no-op). A mid-watch snapshot change (e.g. checks turning the PR
 mergeable, `pr_open` → `pr_ready`) does not push its own transition — the poll loop's
 non-terminal refreshes are not recompute sites; the flip surfaces on the next read-path
-enrichment or any later choke-point recompute. Hook lifecycle transitions
+enrichment or any later choke-point recompute. The **git-root PR sweep** is a recompute
+site too (the git-root fold above): the background PR-refresh loop's per-root refresh
+(§5.6 — the same sweep that emits `gitRoot:updated`) recomputes-and-compares after it
+persists a changed linkage or pool, so a secondary-root PR opening emits
+`pr_open`/`pr_ready`/`pr_queued` and one merging emits `pr_merged` (once the tasks are
+done) without waiting for the next `workspace.list`; registering a root that already
+carries PR data and unregistering a PR-bearing root (`ws.git.registerRoot` /
+`ws.git.unregisterRoot`, and the sweep's auto-prune of a missing path) recompute the
+same way, so removing the root lapses its rung back to the base rollup. An unchanged
+sweep emits nothing. The **on-demand fold** (§5.27,
+[intent-hq/intentd#1923](https://github.com/intent-hq/intentd/pull/1923)) is a recompute
+site too: a PR snapshot served to `github.pulls.get` or `ws.pr.snapshot` — a fetch; a cache
+hit only projects `isInMergeQueue` onto same-head copies whose signal differs (§5.27) — is upserted into
+every non-archived, non-remote
+workspace — and every secondary git root of such a workspace — referencing the PR by URL
+(a root only updates an existing pool entry and its linked `prStatus` / `prUrl`, §5.27),
+and each persisted delta (the write that emits `pr:updated` / `gitRoot:updated`)
+recomputes-and-compares, so a hover-card read of a just-merged PR emits
+`pr_merged` without waiting for the next sweep; an unchanged or unreferenced PR emits
+nothing. Hook lifecycle transitions
 (intentd#856 established the sites): a hook **schedule** (a newly persisted active
 hook can raise `waiting`) and every hook **settlement** — dispatch, eviction, cancel, expiry, on
 both the synchronous ops and the spawned-task run paths — so `waiting` drops when the
@@ -1708,7 +2084,8 @@ seq-0 snapshot rows (§6.9) **never serve** `tokenUsage` — the field is option
 (`skip_serializing_if`), so it is simply absent (never `null`), following the v4.2
 `diskUsage` precedent. `workspace.get` keeps serving it, and clients that need usage read
 `workspace.getTokenUsage` + `workspace:tokenUsage-changed` as before (the FE already did
-exactly this — no list consumer read the field off list rows).
+exactly this — no list consumer read the field off list rows). The full set of list-only
+omissions is tabulated under **List-row slimming** in the `Workspace` payload notes above.
 
 | Method | Params | Result |
 | --- | --- | --- |

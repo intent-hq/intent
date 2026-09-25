@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # JSON schema:
-# {"host":{"doctorOk":bool,"gaps":[string]},"ports":{},"sandboxes":[],
+# {"setup":{"running":bool,"markers":[string]},
+#  "host":{"doctorOk":bool,"gaps":[string],
+#  "coverageTooling":{"ready":bool,"detail":string}},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
+#  "behindOriginMain":int|null,
 #  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
+# Knobs: STATUS_JSON=1 (or --json) emits JSON; DEV_STATUS_PORT_TIMEOUT=<seconds>
+# bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok);
+# DEV_STATUS_PROBE_TIMEOUT=<seconds> bounds every other probe (doctor, sandbox
+# status and health, git, gh; default 10, fractional ok). Either knob is ignored
+# with a warning unless it is a positive number of at most 86400 seconds.
 
 set -euo pipefail
 
@@ -19,8 +27,11 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 exec python3 - "$repo_root" "$json_output" <<'PY'
+import functools
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,8 +41,59 @@ import urllib.request
 
 root, json_output = sys.argv[1], sys.argv[2] == "1"
 
+# subprocess/socket timeouts overflow their C representation for huge finite
+# values (1e20 raised OverflowError instead of degrading), so one day is the
+# ceiling either knob accepts.
+TIMEOUT_MAX = 86400.0
 
-def run(command, *, cwd=root, env=None, timeout=3):
+
+def timeout_from_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0 or value > TIMEOUT_MAX:
+        print(
+            f"dev-status: ignoring {name}={raw!r} "
+            f"(expected a positive number of seconds, at most {TIMEOUT_MAX:g}); "
+            f"using {default:g}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
+# port block (~0.8 s each on a loaded host, more when explicit ports are set or
+# the preferred block is busy); the former 2 s budget emptied "ports" under
+# load, and 10 s keeps generous headroom for loaded hosts while still bounding
+# the report.
+PORT_TIMEOUT_DEFAULT = 10.0
+
+# The doctor (bootstrap-dev-host.sh --check) and dev-sandbox.sh status each
+# cost ~0.9 s on a 32-core host at load average 16 and exceeded the former 3 s
+# budget at load ~50, emptying "sandboxes"; 10 s matches the port knob's
+# headroom. Every non-port probe (doctor, sandbox status and health, git, gh)
+# shares this budget.
+PROBE_TIMEOUT_DEFAULT = 10.0
+
+
+@functools.lru_cache(maxsize=None)
+def port_timeout():
+    return timeout_from_env("DEV_STATUS_PORT_TIMEOUT", PORT_TIMEOUT_DEFAULT)
+
+
+@functools.lru_cache(maxsize=None)
+def probe_timeout():
+    return timeout_from_env("DEV_STATUS_PROBE_TIMEOUT", PROBE_TIMEOUT_DEFAULT)
+
+
+def run(command, *, cwd=root, env=None, timeout=None):
+    if timeout is None:
+        timeout = probe_timeout()
     try:
         return subprocess.run(
             command,
@@ -46,19 +108,59 @@ def run(command, *, cwd=root, env=None, timeout=3):
         return None
 
 
+# The daemon writes the workspace setup script to <worktree>/.intent/setup-<uuid>.sh
+# while it runs and removes it on exit, so a matching file means the worktree is
+# still being provisioned and everything below is provisional.
+SETUP_MARKER = re.compile(r"^setup-[0-9a-f]{32}\.sh$")
+
+
+def setup_status():
+    intent_dir = os.path.join(root, ".intent")
+    try:
+        names = os.listdir(intent_dir)
+    except OSError:
+        names = []
+    markers = sorted(
+        os.path.join(".intent", name) for name in names if SETUP_MARKER.match(name)
+    )
+    return {"running": bool(markers), "markers": markers}
+
+
+COVERAGE_UNKNOWN = {"ready": False, "detail": "unknown"}
+
+
+def coverage_tooling(lines):
+    # Derived from the doctor's "[optional] cargo-llvm-cov: ..." row; ready only
+    # when both cargo-llvm-cov and llvm-tools-preview are present.
+    for line in lines:
+        detail = line.removeprefix("[optional] ").strip()
+        if line.startswith("[optional] ") and detail.startswith("cargo-llvm-cov:"):
+            return {"ready": "with llvm-tools-preview" in detail, "detail": detail}
+    return dict(COVERAGE_UNKNOWN)
+
+
 def doctor_status():
     result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"])
     if result is None:
-        return {"doctorOk": False, "gaps": ["doctor check could not complete"]}
+        return {
+            "doctorOk": False,
+            "gaps": ["doctor check could not complete"],
+            "coverageTooling": dict(COVERAGE_UNKNOWN),
+        }
+    lines = result.stdout.splitlines()
     gaps = []
-    for line in result.stdout.splitlines():
+    for line in lines:
         if line.startswith("[missing]  "):
             gaps.append(line.removeprefix("[missing]  ").strip())
-    return {"doctorOk": result.returncode == 0, "gaps": gaps}
+    return {
+        "doctorOk": result.returncode == 0,
+        "gaps": gaps,
+        "coverageTooling": coverage_tooling(lines),
+    }
 
 
 def port_status():
-    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=2)
+    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=port_timeout())
     ports = {}
     if result is None or result.returncode != 0:
         return ports
@@ -93,7 +195,7 @@ def sandbox_health(url):
         return None
     health_url = urllib.parse.urljoin(url.rstrip("/") + "/", "__sandbox/health")
     try:
-        with urllib.request.urlopen(health_url, timeout=0.4) as response:
+        with urllib.request.urlopen(health_url, timeout=probe_timeout()) as response:
             payload = json.load(response)
         return payload if isinstance(payload, dict) else None
     except (OSError, ValueError, urllib.error.URLError):
@@ -101,7 +203,7 @@ def sandbox_health(url):
 
 
 def git_output(path, *arguments):
-    result = run(["git", "-C", path, *arguments], timeout=1)
+    result = run(["git", "-C", path, *arguments])
     if result is None or result.returncode != 0:
         return None
     return result.stdout.strip()
@@ -133,7 +235,6 @@ def branch_pr(path, branch):
         ["gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
          "--json", "number,url,state,statusCheckRollup"],
         cwd=path,
-        timeout=3,
     )
     if result is None or result.returncode != 0:
         return None
@@ -162,6 +263,16 @@ def recorded_pin(relative_path):
     return fields[2]
 
 
+def behind_origin_main(path):
+    # Counts the checked-out HEAD against the already-fetched remote-tracking
+    # ref only; no fetch. A missing ref fails the call and maps to None.
+    count = git_output(path, "rev-list", "--count", "HEAD..refs/remotes/origin/main")
+    try:
+        return int(count)
+    except (TypeError, ValueError):
+        return None
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
     pin = recorded_pin(relative_path)
@@ -177,6 +288,7 @@ def repo_status(relative_path, gh_ready):
             "behind": None,
             "pin": short_pin,
             "gitlinkDirty": False,
+            "behindOriginMain": None,
         }
 
     branch = git_output(path, "branch", "--show-current") or None
@@ -190,6 +302,7 @@ def repo_status(relative_path, gh_ready):
         "behind": None,
         "pin": short_pin,
         "gitlinkDirty": bool(pin and head and head != pin),
+        "behindOriginMain": behind_origin_main(path),
     }
     if branch is None:
         repo["head"] = git_output(path, "rev-parse", "--short", "HEAD")
@@ -212,12 +325,13 @@ def repo_status(relative_path, gh_ready):
 def github_ready():
     if shutil.which("gh") is None:
         return False
-    result = run(["gh", "auth", "status"], timeout=1)
+    result = run(["gh", "auth", "status"])
     return result is not None and result.returncode == 0
 
 
 gh_ready = github_ready()
 report = {
+    "setup": setup_status(),
     "host": doctor_status(),
     "ports": port_status(),
     "sandboxes": sandbox_status(),
@@ -233,10 +347,25 @@ if json_output:
     print()
     raise SystemExit(0)
 
+if report["setup"]["running"]:
+    print(
+        "SETUP SCRIPT STILL RUNNING — status below is provisional "
+        f"({', '.join(report['setup']['markers'])})"
+    )
 print("Intent worktree status")
 print(f"Host       doctor {'ok' if report['host']['doctorOk'] else 'has gaps'}")
 for gap in report["host"]["gaps"]:
     print(f"           gap: {gap}")
+coverage = report["host"]["coverageTooling"]
+if coverage["ready"]:
+    coverage_text = "cargo-llvm-cov ready"
+elif coverage["detail"] == "unknown":
+    coverage_text = "cargo-llvm-cov unknown"
+elif coverage["detail"].startswith("cargo-llvm-cov: not installed"):
+    coverage_text = "cargo-llvm-cov not installed"
+else:
+    coverage_text = "cargo-llvm-cov installed, llvm-tools-preview missing"
+print(f"Coverage   {coverage_text}")
 ports = report["ports"]
 print("Ports      " + "  ".join(f"{name}={value}" for name, value in ports.items()))
 if report["sandboxes"]:
@@ -264,6 +393,13 @@ for name, repo in report["repos"].items():
             f" PR #{pr['number']} checks={checks['passing']} pass/"
             f"{checks['pending']} pending/{checks['failing']} fail"
         )
-    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{pr_text}")
+    lag = repo["behindOriginMain"]
+    lag_text = f" behind-origin/main={'-' if lag is None else lag}"
+    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{lag_text}{pr_text}")
+    if lag:
+        print(
+            f"           checked-out HEAD is {lag} commit(s) behind origin/main — branch component "
+            "work from origin/main; auto-bump-submodules will advance the pin"
+        )
 print(f"Docs       {report['docs']['remoteHost']}")
 PY

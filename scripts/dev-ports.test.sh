@@ -23,6 +23,12 @@ fail() {
 
 make_bin=$(command -v make)
 
+# Readiness budget for the held test listener (intent-hq/intent#5411): a fixed
+# 100x0.01s poll expired on a loaded host before python3 had even started.
+ready_timeout=${DEV_PORTS_TEST_READY_TIMEOUT:-30}
+[[ "$ready_timeout" =~ ^[1-9][0-9]*$ ]] \
+  || fail "DEV_PORTS_TEST_READY_TIMEOUT must be a positive integer (got '$ready_timeout')"
+
 value_of() {
   local output=$1 key=$2 line
   while IFS= read -r line; do
@@ -49,6 +55,8 @@ override=$(cd "$temp_dir" && DEV_PORT=61000 DEV_TCP_PORT=61001 BRIDGE_PORT=61002
 preferred=$(cd "$temp_dir" && bash "$script")
 busy_port=$(value_of "$preferred" DEV_PORT)
 ready_file="$temp_dir/listener-ready"
+# The listener holds the port until cleanup() kills it, so no case below can
+# outlive it on a slow host.
 python3 - "$busy_port" "$ready_file" <<'PY' &
 import pathlib
 import socket
@@ -59,14 +67,17 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.bind(("127.0.0.1", int(sys.argv[1])))
 sock.listen()
 pathlib.Path(sys.argv[2]).touch()
-time.sleep(30)
+while True:
+    time.sleep(60)  # timing-guard: placeholder lifetime
 PY
 listener_pid=$!
-for _ in {1..100}; do
-  [[ -e "$ready_file" ]] && break
-  sleep 0.01
+ready_deadline=$((SECONDS + ready_timeout))
+while [[ ! -e "$ready_file" ]]; do
+  kill -0 "$listener_pid" 2>/dev/null || fail "test listener exited before it was ready"
+  (( SECONDS < ready_deadline )) || break
+  sleep 0.02 # timing-guard: poll interval
 done
-[[ -e "$ready_file" ]] || fail "test listener did not start"
+[[ -e "$ready_file" ]] || fail "test listener did not start within ${ready_timeout}s"
 
 remapped=$(cd "$temp_dir" && bash "$script" 2>"$temp_dir/remap.stderr")
 [[ "$(value_of "$remapped" DEV_PORT)" != "$busy_port" ]] || fail "busy preferred port was not skipped"
@@ -77,6 +88,20 @@ if (cd "$temp_dir" && DEV_PORT="$busy_port" bash "$script" >"$temp_dir/explicit.
   fail "busy explicit port was remapped instead of rejected"
 fi
 grep -q 'explicit DEV_PORT=.* is busy' "$temp_dir/explicit.stderr" || fail "busy explicit port error was unclear"
+
+# Explicit ports are validated and probed one at a time, in DEV_PORT,
+# DEV_TCP_PORT, BRIDGE_PORT, CDP_PORT order: a busy earlier port is reported
+# before an invalid or duplicate later one.
+if (cd "$temp_dir" && DEV_PORT="$busy_port" DEV_TCP_PORT=invalid bash "$script" >/dev/null 2>"$temp_dir/busy-then-invalid.stderr"); then
+  fail "busy explicit port followed by an invalid one was accepted"
+fi
+grep -q "explicit DEV_PORT=$busy_port is busy" "$temp_dir/busy-then-invalid.stderr" \
+  || fail "busy explicit port was not reported before a later invalid port: $(cat "$temp_dir/busy-then-invalid.stderr")"
+if (cd "$temp_dir" && DEV_PORT="$busy_port" DEV_TCP_PORT="$busy_port" bash "$script" >/dev/null 2>"$temp_dir/busy-then-dup.stderr"); then
+  fail "busy explicit port followed by a duplicate was accepted"
+fi
+grep -q "explicit DEV_PORT=$busy_port is busy" "$temp_dir/busy-then-dup.stderr" \
+  || fail "busy explicit port was not reported before a later duplicate port: $(cat "$temp_dir/busy-then-dup.stderr")"
 
 # Regression for intent-hq/intent#4619: a connection accepted and closed by a
 # now-gone listener leaves TIME_WAIT state on the port, which is not a listener.

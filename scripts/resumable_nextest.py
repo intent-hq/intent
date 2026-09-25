@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
-"""Run nextest with an opt-in, complete-tree-keyed passed-test record."""
+"""Run nextest with an opt-in, complete-tree-keyed passed-test record.
+
+`--no-fail-fast 1` forwards `--no-fail-fast` to every `cargo nextest run` and
+keeps running the remaining `--plan` selections after one fails; the exit
+status is then the first non-zero plan status.
+"""
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 SCHEMA_VERSION = 1
@@ -20,6 +30,10 @@ MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
 RETRY_SUFFIX_RE = re.compile(r"#[0-9]+$")
+DEFAULT_LABEL = "test-intentd"
+TEST_OUTCOMES = ("ok", "failed", "ignored")
+# Outcomes appended to passed.jsonl; a failure supersedes an earlier pass.
+RECORDED_OUTCOMES = ("ok", "failed")
 
 
 def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -99,18 +113,30 @@ def prune(cache_dir: Path, now: float | None = None) -> None:
                 shutil.rmtree(entry)
 
 
-def load_passed(record: Path) -> set[tuple[str, str]]:
-    passed: set[tuple[str, str]] = set()
+def load_outcomes(record: Path) -> dict[tuple[str, str], str]:
+    """Latest recorded outcome per test for this tree.
+
+    The record is append-only and shared by every run on the tree, so a later
+    `failed` line supersedes an earlier pass of the same test. Lines without an
+    `outcome` field predate failure recording and are passes.
+    """
+    outcomes: dict[tuple[str, str], str] = {}
     if not record.is_file():
-        return passed
+        return outcomes
     with record.open(encoding="utf-8") as lines:
         for line in lines:
             try:
                 item = json.loads(line)
-                passed.add((item["binary_id"], item["test"]))
-            except (json.JSONDecodeError, KeyError, TypeError):
+                test = (item["binary_id"], item["test"])
+                outcome = item.get("outcome", "ok")
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
                 continue
-    return passed
+            outcomes[test] = outcome
+    return outcomes
+
+
+def load_passed(record: Path) -> set[tuple[str, str]]:
+    return {test for test, outcome in load_outcomes(record).items() if outcome == "ok"}
 
 
 def exact_regex(value: str) -> str:
@@ -142,14 +168,18 @@ def test_binary_ids(list_output: str) -> dict[tuple[str, str], str]:
     return binary_ids
 
 
-def parse_passed_event(
+def parse_recorded_event(
     line: str, binary_ids: dict[tuple[str, str], str]
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
+    """Return (binary_id, test, outcome) for a pass or failure event, else None."""
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
         return None
-    if event.get("type") != "test" or event.get("event") != "ok":
+    if not isinstance(event, dict) or event.get("type") != "test":
+        return None
+    outcome = event.get("event")
+    if outcome not in RECORDED_OUTCOMES:
         return None
     suite, separator, test = event.get("name", "").partition("$")
     if not separator or not suite or not test:
@@ -158,11 +188,70 @@ def parse_passed_event(
     binary_id = binary_ids.get((suite, test))
     if binary_id is None:
         raise RuntimeError(f"nextest test identifier was not listed: {event.get('name')!r}")
-    return binary_id, test
+    return binary_id, test, outcome
+
+
+def record_line(binary_id: str, test: str, outcome: str) -> str:
+    item: dict[str, str] = {"binary_id": binary_id, "test": test}
+    if outcome != "ok":
+        item["outcome"] = outcome
+    return json.dumps(item) + "\n"
+
+
+def test_outcome(line: str) -> tuple[str, str] | None:
+    """Return (test identifier without retry suffix, outcome) for a final test event."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "test":
+        return None
+    outcome = event.get("event")
+    if outcome not in TEST_OUTCOMES:
+        return None
+    return RETRY_SUFFIX_RE.sub("", event.get("name", "")), outcome
+
+
+def tally(outcomes: dict[str, str]) -> dict[str, int]:
+    counts = {"passed": 0, "failed": 0, "ignored": 0}
+    for outcome in outcomes.values():
+        counts["passed" if outcome == "ok" else outcome] += 1
+    return counts
+
+
+def split_plans(plans: list[str] | None) -> list[list[str]]:
+    return [shlex.split(plan) for plan in plans or []]
+
+
+def plan_key(plans: list[list[str]]) -> str:
+    encoded = json.dumps([" ".join(plan) for plan in plans]).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def summary_line(label: str, counts: dict[str, int], resumed: int) -> str:
+    return (
+        f"[{label}] summary: {counts['passed']} passed, {counts['failed']} failed, "
+        f"{counts['ignored']} skipped/ignored, {resumed} resumed "
+        "(tests already passed for this tree)"
+    )
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def write_atomic(path: Path, text: str) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
 
 
 def write_tool_config(
-    path: Path, cache_dir: Path, profile: str, passed: set[tuple[str, str]]
+    path: Path,
+    cache_dir: Path,
+    profile: str,
+    passed: set[tuple[str, str]],
+    junit: str = "junit.xml",
 ) -> None:
     lines = [
         "[store]",
@@ -172,10 +261,8 @@ def write_tool_config(
     ]
     if passed:
         lines.append(f"default-filter = {json.dumps(remaining_filter(passed))}")
-    lines.extend([f"[profile.{profile}.junit]", 'path = "junit.xml"', ""])
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text("\n".join(lines), encoding="utf-8")
-    temporary.replace(path)
+    lines.extend([f"[profile.{profile}.junit]", f"path = {json.dumps(junit)}", ""])
+    write_atomic(path, "\n".join(lines))
 
 
 def nextest_env() -> dict[str, str]:
@@ -187,88 +274,291 @@ def nextest_env() -> dict[str, str]:
     return env
 
 
+def invalidate_completion_markers(run_dir: Path) -> None:
+    """Remove the tree-level `complete` and every planned `changed/*/complete`.
+
+    A marker only proves that the tests it covered passed on this tree as far as
+    the shared passed.jsonl records them. Once a failure is observed, or once the
+    journal is about to be truncated, that evidence is gone for every run on the
+    tree, so no marker may outlive it.
+    """
+    (run_dir / "complete").unlink(missing_ok=True)
+    changed = run_dir / "changed"
+    if changed.is_dir():
+        for marker in changed.glob("*/complete"):
+            marker.unlink(missing_ok=True)
+
+
+def stream_nextest(
+    command: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    binary_ids: dict[tuple[str, str], str],
+    descriptor: int,
+    outcomes: dict[str, str],
+    run_dir: Path,
+) -> int:
+    process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
+    assert process.stdout is not None
+    try:
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            outcome = test_outcome(line)
+            if outcome is not None:
+                outcomes[outcome[0]] = outcome[1]
+            recorded = parse_recorded_event(line, binary_ids)
+            if recorded is not None:
+                if recorded[2] != "ok":
+                    # Persist the invalidation at the moment of failure, before the
+                    # journal line, so an interrupt cannot leave a marker resting on
+                    # a pass this failure has just superseded.
+                    invalidate_completion_markers(run_dir)
+                os.write(descriptor, record_line(*recorded).encode())
+        return process.wait()
+    except BaseException:
+        process.terminate()
+        process.wait()
+        raise
+
+
+def previously_passed(record_dir: Path, fallback: int) -> int:
+    try:
+        previous = json.loads((record_dir / "run.json").read_text(encoding="utf-8"))
+        return int(previous["passed"]) + int(previous["skipped_resumed"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return fallback
+
+
+class Terminated(BaseException):
+    """Raised by the SIGTERM handler so `finally` blocks run before the runner exits."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"terminated by signal {signum}")
+        self.signum = signum
+
+
+@contextlib.contextmanager
+def terminate_on_signal():
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def handler(signum, _frame):
+        raise Terminated(signum)
+
+    previous = signal.signal(signal.SIGTERM, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+HANDLED_ERROR_EXIT = 2
+
+
+def failure_exit_code(error: BaseException) -> int:
+    """The process exit code an exception escaping the nextest phase produces."""
+    if isinstance(error, subprocess.CalledProcessError):
+        return error.returncode
+    if isinstance(error, KeyboardInterrupt):
+        return 130
+    if isinstance(error, Terminated):
+        return 128 + error.signum
+    if isinstance(error, (OSError, RuntimeError)):
+        return HANDLED_ERROR_EXIT
+    # Anything else propagates unhandled, which exits the interpreter with 1.
+    return 1
+
+
 def run_nextest(args: argparse.Namespace) -> int:
+    label = args.label
+    no_fail_fast = args.no_fail_fast == "1"
     repo_root = Path(args.repo_root).resolve()
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     cache_dir = Path(args.cache_dir).expanduser().resolve()
+    plans = split_plans(args.plan)
     prune(cache_dir)
     key = tree_key(repo_root, intentd_dir)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
     record = run_dir / "passed.jsonl"
-    recorded = load_passed(record)
+    outcomes_by_test = load_outcomes(record)
+    recorded = {test for test, outcome in outcomes_by_test.items() if outcome == "ok"}
+    failed_on_tree = len(outcomes_by_test) - len(recorded)
     resumed = recorded if args.resume == "1" and args.force != "1" else set()
-    complete = run_dir / "complete"
-    if resumed and complete.is_file():
-        print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
+    if plans:
+        # The full-suite `complete` marker belongs to `--workspace` runs only; a
+        # planned run keeps its own marker, junit files and run.json under changed/.
+        store_dir = run_dir / "changed"
+        profile = plan_key(plans)
+        record_dir = store_dir / profile
+        record_dir.mkdir(parents=True, exist_ok=True)
+        selections = plans
+        scope = "every planned test"
+    else:
+        store_dir = cache_dir
+        profile = key
+        record_dir = run_dir
+        selections = [["--workspace"]]
+        scope = "the complete suite"
+    complete = record_dir / "complete"
+    resuming = args.resume == "1" and args.force != "1"
+    # A completed plan may legitimately have passed nothing (every selected test
+    # ignored), so the planned fast path keys on the marker alone. A test that
+    # later failed on this tree (in any run sharing passed.jsonl) supersedes the
+    # marker: the run proceeds and reruns whatever is no longer recorded as passed.
+    if complete.is_file() and not failed_on_tree and (resuming if plans else bool(resumed)):
+        skipped = previously_passed(record_dir, len(resumed)) if plans else len(resumed)
+        print(f"resumed: skipped {skipped} tests already passed for this tree", flush=True)
         return 0
 
-    env = nextest_env()
-    list_output = run(
-        [
-            "cargo", "nextest", "list", "--workspace",
-            "--build-jobs", args.build_jobs,
-            "--message-format", "json",
-        ],
-        intentd_dir,
-        env,
-    )
-    binary_ids = test_binary_ids(list_output)
-    known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
-    unknown = resumed - known_tests
-    if unknown:
-        raise RuntimeError(f"passed-test record contains {len(unknown)} unlisted tests")
-    config = run_dir / "nextest.toml"
-    write_tool_config(config, cache_dir, key, resumed)
-
+    # Invalidate the previous marker before nextest is invoked so a failed or
+    # interrupted list step cannot leave a stale `complete` behind.
     complete.unlink(missing_ok=True)
-    if not resumed:
-        record.write_text("", encoding="utf-8")
+    env = nextest_env()
+    started_at = utc_now()
+    results: list[dict[str, object]] = []
 
-    if args.resume == "1" and args.force == "1":
-        print("[test-intentd] GATE_FORCE=1: running the complete suite", flush=True)
-    elif args.resume == "1" and not resumed:
-        print(
-            "[test-intentd] no passed-test record for this tree; running the complete suite",
-            flush=True,
-        )
+    def finalize(status: int | None) -> None:
+        totals = {"passed": 0, "failed": 0, "ignored": 0}
+        for result in results:
+            for name in totals:
+                totals[name] += int(result[name])
+        if status == 0:
+            write_atomic(complete, "complete\n")
+            if resumed:
+                print(
+                    f"resumed: skipped {len(resumed)} tests already passed for this tree",
+                    flush=True,
+                )
+        summary = summary_line(label, totals, len(resumed))
+        write_atomic(record_dir / "summary.txt", summary + "\n")
+        if plans:
+            run_record = {
+                "label": label,
+                "base": args.base,
+                "plans": [" ".join(plan) for plan in plans],
+                "tree_key": key,
+                "plan_key": profile,
+                "started_at": started_at,
+                "finished_at": utc_now(),
+                "exit_code": status,
+                "skipped_resumed": len(resumed),
+                **totals,
+                "results": results,
+            }
+            write_atomic(record_dir / "run.json", json.dumps(run_record, indent=2) + "\n")
+        print(summary, flush=True)
+        print(f"[{label}] record: {record_dir}", flush=True)
 
-    command = [
-        "cargo", "nextest", "run", "--workspace",
-        "--build-jobs", args.build_jobs,
-        "--test-threads", args.test_threads,
-        "--tool-config-file", f"intent-gate:{config}",
-        "--profile", key,
-        "--message-format", "libtest-json-plus",
-        "--message-format-version", "0.1",
-    ]
-    if resumed:
-        command.extend(["--no-tests", "pass"])
-    process = subprocess.Popen(command, cwd=intentd_dir, env=env, text=True, stdout=subprocess.PIPE)
-    assert process.stdout is not None
-    descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    # From the first `cargo nextest list` onwards every exit — failure,
+    # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
     try:
-        for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            passed = parse_passed_event(line, binary_ids)
-            if passed is not None:
-                item = json.dumps({"binary_id": passed[0], "test": passed[1]}) + "\n"
-                os.write(descriptor, item.encode())
-        status = process.wait()
-    except BaseException:
-        process.terminate()
-        process.wait()
+        with terminate_on_signal():
+            binary_ids: dict[tuple[str, str], str] = {}
+            for selection in selections:
+                list_output = run(
+                    [
+                        "cargo", "nextest", "list", *selection,
+                        "--build-jobs", args.build_jobs,
+                        "--message-format", "json",
+                    ],
+                    intentd_dir,
+                    env,
+                )
+                binary_ids.update(test_binary_ids(list_output))
+            known_tests = {(binary_id, test) for (_, test), binary_id in binary_ids.items()}
+            if plans:
+                # passed.jsonl is shared by every run on this tree; only the tests
+                # these plans select count as resumed here.
+                resumed = resumed & known_tests
+            else:
+                unknown = resumed - known_tests
+                if unknown:
+                    raise RuntimeError(
+                        f"passed-test record contains {len(unknown)} unlisted tests"
+                    )
+            configs = []
+            for index, _ in enumerate(selections, start=1):
+                if plans:
+                    config = record_dir / f"nextest-{index}.toml"
+                    write_tool_config(
+                        config, store_dir, profile, resumed, f"junit-{index}.xml"
+                    )
+                else:
+                    config = run_dir / "nextest.toml"
+                    write_tool_config(config, store_dir, profile, resumed)
+                configs.append(config)
+
+            if not resumed and not plans:
+                # Truncating the shared journal discards the passes every marker on
+                # this tree rests on; drop them first so an interrupted full run
+                # cannot leave a marker with no evidence behind it.
+                invalidate_completion_markers(run_dir)
+                record.write_text("", encoding="utf-8")
+
+            if args.resume == "1" and args.force == "1":
+                print(f"[{label}] GATE_FORCE=1: running {scope}", flush=True)
+            elif args.resume == "1" and not resumed:
+                print(
+                    f"[{label}] no passed-test record for this tree; running {scope}",
+                    flush=True,
+                )
+
+            status: int | None = None
+            first_failure: int | None = None
+            descriptor = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                for selection, config in zip(selections, configs):
+                    command = [
+                        "cargo", "nextest", "run", *selection,
+                        "--build-jobs", args.build_jobs,
+                        "--test-threads", args.test_threads,
+                        "--tool-config-file", f"intent-gate:{config}",
+                        "--profile", profile,
+                        "--message-format", "libtest-json-plus",
+                        "--message-format-version", "0.1",
+                    ]
+                    if no_fail_fast:
+                        command.append("--no-fail-fast")
+                    if resumed:
+                        command.extend(["--no-tests", "pass"])
+                    outcomes: dict[str, str] = {}
+                    result: dict[str, object] = {"plan": " ".join(selection)}
+                    results.append(result)
+                    status = None
+                    try:
+                        status = stream_nextest(
+                            command, intentd_dir, env, binary_ids, descriptor, outcomes, run_dir
+                        )
+                    finally:
+                        result.update(tally(outcomes), exit_code=status)
+                    if status != 0:
+                        if not no_fail_fast:
+                            break
+                        if first_failure is None:
+                            first_failure = status
+            finally:
+                os.close(descriptor)
+            if first_failure is not None:
+                status = first_failure
+    except subprocess.CalledProcessError as error:
+        print(f"[{label}] ERROR: {error}", file=sys.stderr, flush=True)
+        exit_code = failure_exit_code(error)
+        finalize(exit_code)
+        return exit_code
+    except (KeyboardInterrupt, Terminated) as error:
+        print(f"[{label}] ERROR: interrupted: {error}", file=sys.stderr, flush=True)
+        exit_code = failure_exit_code(error)
+        finalize(exit_code)
+        return exit_code
+    except BaseException as error:
+        finalize(failure_exit_code(error))
         raise
-    finally:
-        os.close(descriptor)
-    if status == 0:
-        temporary = complete.with_suffix(".tmp")
-        temporary.write_text("complete\n", encoding="utf-8")
-        temporary.replace(complete)
-        if resumed:
-            print(f"resumed: skipped {len(resumed)} tests already passed for this tree", flush=True)
+    assert status is not None
+    finalize(status)
     return status
 
 
@@ -279,13 +569,32 @@ def main() -> int:
     parser.add_argument("--cache-dir", required=True)
     parser.add_argument("--resume", choices=("0", "1"), default="0")
     parser.add_argument("--force", choices=("0", "1"), default="0")
+    parser.add_argument(
+        "--no-fail-fast",
+        choices=("0", "1"),
+        default="0",
+        help="1 forwards --no-fail-fast to cargo nextest run and keeps running the "
+        "remaining --plan selections after one fails (default: %(default)s)",
+    )
     parser.add_argument("--build-jobs", required=True)
     parser.add_argument("--test-threads", required=True)
+    parser.add_argument(
+        "--label", default=DEFAULT_LABEL, help="log prefix (default: %(default)s)"
+    )
+    parser.add_argument(
+        "--plan",
+        action="append",
+        metavar="ARGS",
+        help="nextest target selection, e.g. '-p alpha --test one'; repeatable, "
+        "run in order instead of --workspace",
+    )
+    parser.add_argument("--base", metavar="REF", help="base ref recorded in run.json")
+    args = parser.parse_args()
     try:
-        return run_nextest(parser.parse_args())
+        return run_nextest(args)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
-        print(f"[test-intentd] ERROR: {error}", file=sys.stderr)
-        return 2
+        print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
+        return HANDLED_ERROR_EXIT
 
 
 if __name__ == "__main__":

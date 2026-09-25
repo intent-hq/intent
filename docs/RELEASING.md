@@ -50,6 +50,70 @@ cloudlands-fe).
   intentd-releases by `release-sitter.yml`, and the published install URLs (Homebrew
   formula, README curl commands) point at the mirror.
 
+### When a published daemon reaches running installs
+
+A sitter-supervised daemon (`intentd serve`) picks up a channel publish by one of two
+paths:
+
+- **Opportunistic, idle-triggered** — once no agent has had a turn in flight for
+  `updates.idleGraceSeconds` (default 120 s), the daemon asks its sitter to check
+  now (`SIGUSR2`), at most every `updates.idleCheckIntervalMinutes` (default 60).
+  The sitter stages any newer version and the daemon restarts into it the next
+  moment no turn is in flight, so an idle install updates within about an hour of
+  the publish without interrupting a running agent. `updates.checkOnIdle=false`
+  (live setting, no restart; see
+  [protocol/methods/settings.md](./protocol/methods/settings.md)) disables this path.
+- **Forced, periodic** — the sitter's randomized 12–24 h check, unchanged: it
+  installs a newer version (or one already staged) and restarts the daemon whether
+  or not a turn is in flight. This is the fallback for continuously busy installs and
+  the only path when `checkOnIdle` is off.
+
+`intentd update` (`system.requestUpdate`, "Update now") still checks and restarts
+immediately.
+
+### Cutting a sitter release
+
+The sitter (`crates/intentd-sitter`, installed as `intentd`) is `dist = false`: the
+daemon's cargo-dist pipeline (`release.yml`) never builds it and release-plz never tags
+it. It ships through its own hand-written pipeline,
+[`release-sitter.yml`](../packages/intentd/.github/workflows/release-sitter.yml),
+triggered by pushing a `sitter-vX.Y.Z` tag.
+
+- **Versioning** — the sitter keeps an independent `0.1.x` line. release-plz advances
+  `crates/intentd-sitter/Cargo.toml` in the ordinary intentd Release PR whenever files
+  under `crates/intentd-sitter` changed since the last daemon tag (see the
+  `intentd-sitter` entry in [`release-plz.toml`](../packages/intentd/release-plz.toml)),
+  so no manual bump is needed for crate changes. The repo-root `scripts/install.sh` /
+  `scripts/install.ps1` (republished on `sitter-latest`) are outside the crate and NOT
+  detected: an installer-script-only change needs a manual
+  `chore(sitter): bump intentd-sitter to X.Y.Z` PR before tagging. The workflow fails
+  if the tag does not match the crate version.
+- **Procedure** — after the Release PR that bumped the sitter version has merged, tag
+  that `main` commit `sitter-v<Cargo.toml version>` and push the tag:
+
+  ```bash
+  cd packages/intentd && git fetch origin
+  git tag sitter-v<version> <main-commit> && git push origin sitter-v<version>
+  ```
+
+- **What the run does** — builds the sitter for the same 5 targets as the daemon,
+  packages archives named like daemon archives, publishes a GitHub Release on the tag
+  (never marked "latest"), refreshes the fixed `sitter-latest` release (archives,
+  `install.sh` / `install.ps1`), builds `.deb`s, mirrors everything to
+  [intent-hq/intentd-releases](https://github.com/intent-hq/intentd-releases) (skipped
+  with a warning without `INTENTD_RELEASES_TOKEN`), and pushes the Homebrew formula
+  to `intent-hq/homebrew-tap` (skipped on prereleases).
+- **No self-update** — running installs pick a new sitter up only by reinstalling
+  (`install.sh` one-liner, `brew upgrade`, `.deb`; see the intentd README install
+  section). Daemon work that needs a newer sitter — e.g. the idle-triggered handshake
+  above, which requires the sitter to advertise the capability — is inert on installs
+  still running an older sitter. Incident: the sitter changes merged in intentd #1920
+  were assumed covered by the last sitter release (`sitter-v0.1.8`, cut before them),
+  and `sitter-v0.1.14` had to be cut afterwards.
+- **Is a sitter release pending?** — a non-empty
+  `git log sitter-v<last>..origin/main -- crates/intentd-sitter scripts/install.sh scripts/install.ps1`
+  (ignoring `chore: release` commits) means unreleased sitter work.
+
 ## cloudlands-fe
 
 - The intentd sidecar version is pinned in `intentd.version` at the cloudlands-fe repo
@@ -150,6 +214,17 @@ cloudlands-fe).
   the issue picks it up. When completeness cannot be determined (API error, token
   cannot see a repo), the notifier skips with a warning rather than post a
   possibly-false claim.
+- How to link a multi-PR fix: put `Fixes intent-hq/intent#N` on **every** PR of the fix
+  (intentd and cloudlands-fe alike). GitHub auto-closes the issue when the first PR
+  merges; that early close is expected, because the completeness gate above holds the
+  cloudlands-fe comment — the user-facing signal — until every linked fix PR is merged
+  and contained (the component-scoped intentd notifier may comment earlier, as the gate
+  bullet describes). Do not downgrade the other PRs to `Refs` / `Part of` to avoid the
+  early close: mention-only references are invisible to the gate. All-mention-only
+  linkage → no auto-close and no comment at all
+  ([intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383)); mixed
+  linkage (one `Fixes`, one `Refs`) → the gate cannot account for the unlinked PR and
+  may post the comment before the fix has fully shipped.
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
