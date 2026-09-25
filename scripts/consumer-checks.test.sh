@@ -350,8 +350,8 @@ downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
 ' "$workflow")
 grep -q '^ungated ' <<<"$downstream_gates" &&
   fail "every step after the guard must carry \"$gate_line\":"$'\n'"$downstream_gates"
-[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 4 ] ||
-  fail "expected 4 gated steps after the guard (component checkout, sibling submodule, setup-node, runner):"$'\n'"$downstream_gates"
+[ "$(grep -c '^gated ' <<<"$downstream_gates")" -eq 9 ] ||
+  fail "expected 9 gated steps after the guard (lightweight and connected checks):"$'\n'"$downstream_gates"
 
 step_name='Run the consumer checks (upstream context)'
 step_block=$(workflow_step "$step_name")
