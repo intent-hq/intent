@@ -76,6 +76,12 @@ load. Follow the root health wait and keep waiting if the splash remains.
 
 ### microVM sandboxes on a dev host (macOS arm64)
 
+**Prerequisite:** `packages/intentd` must be checked out at a commit that carries the
+`intentd-microvm-helper` crate and `scripts/sign-microvm-helper.sh`
+([intent-hq/intentd#873](https://github.com/intent-hq/intentd/pull/873), ≥ `2866b9fd`).
+`make dev-daemon` / `make release-daemon` build and re-sign the helper only then; at a pin
+predating it the helper step is a silent no-op and `make doctor` reports the helper as not built.
+
 The `microvm` execution environment needs a loadable `libkrun.dylib` next to the
 `intentd-microvm-helper` the daemon seats build. The packaged app bundles a GPU-less
 libkrun; on a dev host the helper falls back to Homebrew's `/opt/homebrew/lib`, which

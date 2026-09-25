@@ -344,7 +344,7 @@ report_microvm_libkrun() {
     fi
   done
   if [[ -z "$helper" ]]; then
-    optional "microVM libkrun: intentd-microvm-helper not built yet (make dev-daemon builds it); run make libkrun-local for a GPU-less local libkrun"
+    optional "microVM libkrun: intentd-microvm-helper not built yet (make dev-daemon builds and re-signs it only when packages/intentd is checked out at a commit carrying the intentd-microvm-helper crate and scripts/sign-microvm-helper.sh — intentd PR #873 / >= 2866b9fd; at an older pin the recipe skips); run make libkrun-local for a GPU-less local libkrun"
     return 0
   fi
   if [[ -f "$local_dir/libkrun.dylib" ]]; then
