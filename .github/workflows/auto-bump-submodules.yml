@@ -1,6 +1,14 @@
 name: Auto-bump submodules
 
 on:
+  # Continue after a queued bump lands, carrying tips deferred while queued.
+  # Only main's gitlinks trigger this; current pins produce no further push.
+  push:
+    branches: [main]
+    paths:
+      - packages/intentd
+      - packages/cloudlands-fe
+      - packages/ios
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
@@ -38,6 +46,8 @@ jobs:
         if: steps.token.outputs.present == 'true'
         uses: actions/checkout@v7
         with:
+          # A serialized run may start after its triggering main commit.
+          ref: main
           token: ${{ secrets.SUBMODULE_BUMP_TOKEN }}
           submodules: false
 

@@ -6,6 +6,8 @@
 # cloned). If any pin differs, the remote tip wins (pins track main): the
 # auto/submodule-bump branch is force-updated with the new gitlink(s), pushed,
 # and a PR is created or updated with auto-merge (squash) enabled.
+# A queued PR is left untouched; a main gitlink push resumes pending tips
+# after it merges, with the scheduled workflow as a backstop.
 #
 # When packages/intentd moves, the bump also regenerates the generated
 # docs/protocol/methods/mcp-bindings.md index from the ws.* help text in
@@ -97,6 +99,35 @@ while read -r key path; do
   urls+=("$url")
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
 
+# Only an open, unqueued PR can be mutated. Re-read by number so a stale
+# list response cannot make us edit a merged PR or recreate its branch.
+# Deferral ends the run successfully; an unreadable state returns failure
+# (stale cleanup handles that fail-soft, while a bump must fail closed).
+guard_pr() {
+  local pr=$1 status
+  if ! status=$(gh api graphql \
+    -f query='query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) { state isInMergeQueue }
+      }
+    }' -F owner='{owner}' -F name='{repo}' -F number="$pr" \
+    --jq '.data.repository.pullRequest | [.state, .isInMergeQueue] | @tsv'); then
+    warn "could not read PR #$pr queue state; leaving it untouched"
+    return 1
+  fi
+  case "$status" in
+    $'OPEN\tfalse') return 0 ;;
+    $'OPEN\ttrue')
+      echo "Deferred: PR #$pr is in the merge queue; leaving its branch and metadata untouched."
+      ;;
+    $'MERGED\tfalse'|$'CLOSED\tfalse')
+      echo "Deferred: PR #$pr is no longer open; the next run will recompute pins from current main."
+      ;;
+    *) warn "unexpected queue state for PR #$pr: $status; leaving it untouched"; return 1 ;;
+  esac
+  exit 0
+}
+
 # Close a rolling PR left open once main already carries its pins; every
 # failure only warns so a missing or failing gh never fails the run.
 close_stale_pr() {
@@ -112,6 +143,7 @@ close_stale_pr() {
   if [ -z "$pr" ]; then
     return 0
   fi
+  guard_pr "$pr" || return 0
   if gh pr close "$pr" --delete-branch --comment "Closing: \`main\` already carries these submodule pins, so this rolling bump PR is stale. The next pin drift opens a fresh one."; then
     echo "Closed stale PR #$pr (main already carries its pins) and deleted $BRANCH."
   else
@@ -137,6 +169,10 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "dry-run: would bump ${#paths[@]} submodule pin(s) via branch $BRANCH"
   exit 0
 fi
+
+# Do this before constructing a bump, including the identical-tree path.
+pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+if [ -n "$pr" ]; then guard_pr "$pr"; fi
 
 # "intentd" / "intentd and cloudlands-fe" / "intentd, cloudlands-fe and ios"
 join_names() {
@@ -246,15 +282,48 @@ tree=$(GIT_INDEX_FILE=$tmp_index git write-tree)
 # Skip the push when the remote branch already carries this exact tree, so
 # repeated runs don't churn the PR (and its CI) with identical commits.
 push_needed=1
+remote_head=""
 if git fetch --quiet origin "refs/heads/$BRANCH" 2>/dev/null; then
+  remote_head=$(git rev-parse FETCH_HEAD)
   if [ "$(git rev-parse --verify --quiet 'FETCH_HEAD^{tree}' || true)" = "$tree" ]; then
     push_needed=0
     echo "Branch $BRANCH already has the desired pins; skipping push."
   fi
 fi
+
+# A merge can finish during tree construction or an open-PR lookup. Do not
+# publish a tree based on the old main, even if the PR disappeared from list.
+if [ -n "$pr" ]; then guard_pr "$pr"; fi
+main_tip=$(git ls-remote origin refs/heads/main)
+if [ -z "$main_tip" ]; then
+  echo "error: cannot read current main; leaving $BRANCH untouched" >&2
+  exit 1
+fi
+if [ "${main_tip%%[[:space:]]*}" != "$head" ]; then
+  echo "Deferred: main advanced during this run; the next run will recompute pins from current main."
+  exit 0
+fi
+
 if [ "$push_needed" = 1 ]; then
   commit=$(git commit-tree "$tree" -p "$head" -m "$title" -m "$commit_body")
-  git push --force origin "$commit:refs/heads/$BRANCH"
+  # The lease also prevents resurrecting a branch deleted by a merge after
+  # our last lookup. GitHub protects a PR enqueued after that lookup too.
+  if push_output=$(git push --force-with-lease="refs/heads/$BRANCH:$remote_head" origin "$commit:refs/heads/$BRANCH" 2>&1); then
+    printf '%s\n' "$push_output"
+  else
+    push_status=$?
+    printf '%s\n' "$push_output" >&2
+    # Match the complete observed server diagnostic, ignoring only wrapping
+    # and transport padding. Other GH006 reasons (even alongside this one)
+    # and authentication/transport failures must keep their nonzero status.
+    remote_error=$(sed -n 's/^remote: *//p' <<<"$push_output" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/ $//')
+    queue_error="error: GH006: Protected branch update failed for refs/heads/$BRANCH. - A pull request for this branch has been added to a merge queue. Branches that are queued for merging cannot be updated. To modify this branch, dequeue the associated pull request."
+    if [ "$remote_error" = "$queue_error" ]; then
+      echo "Deferred: GitHub enqueued the rolling PR before the push; pending tips will resume after its merge."
+      exit 0
+    fi
+    exit "$push_status"
+  fi
   echo "Pushed $commit to $BRANCH."
 fi
 
@@ -273,8 +342,13 @@ fi
   fi
 } > "$pr_body_file"
 
-pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+# Retain a previously observed PR number: if it merged in the meantime, its
+# disappearance from the open list must not cause us to create a second PR.
+if [ -z "$pr" ]; then
+  pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+fi
 if [ -n "$pr" ]; then
+  guard_pr "$pr"
   gh pr edit "$pr" --title "$title" --body-file "$pr_body_file"
   echo "Updated existing PR #$pr."
 else
@@ -283,10 +357,12 @@ else
   echo "Created PR #$pr."
 fi
 
+guard_pr "$pr"
 # Enabling auto-merge fails when the PR is already in clean status ("Pull
 # request is in clean status"); fall back to a direct squash merge so the PR
 # doesn't sit open unmerged. Only if both fail do we warn and leave it open.
 if ! gh pr merge "$pr" --auto --squash; then
+  guard_pr "$pr"
   warn "could not enable auto-merge on PR #$pr; attempting direct merge"
   if ! gh pr merge "$pr" --squash; then
     warn "could not merge PR #$pr; leaving it open"
