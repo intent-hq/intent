@@ -249,7 +249,12 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 # sweep prunes and what the existence guard tests.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
-SWEEP_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(INTENTD_DIR)/target)
+
+# Where cargo writes intentd build artifacts: CARGO_TARGET_DIR when exported
+# (relocated cache), else the in-tree packages/intentd/target. Shared by every
+# recipe that tests for or paths into a built artifact (sweep guard, microVM
+# helper re-sign).
+CARGO_TARGET_RESOLVED = $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(INTENTD_DIR)/target)
 
 # Parallelism caps shared by the Rust build/test/coverage targets
 # (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
@@ -297,6 +302,22 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # Node process (vite, tsc, electron-builder) gets the bump. Overridable, e.g.
 # make dist-mac FE_BUILD_HEAP_MB=24576.
 FE_BUILD_HEAP_MB ?= 16384
+
+# macOS: re-sign the microVM helper after any cargo build/run that may have
+# relinked it. Relinking replaces the ad-hoc signature carrying the
+# com.apple.security.hypervisor entitlement with a plain linker-signed one,
+# and the next microVM boot then fails with helper exit status 70 (libkrun
+# cannot create the VM without the entitlement). Silent no-op on non-Darwin
+# and when the helper binary does not exist yet (first-build ordering).
+# The helper is looked up under $(CARGO_TARGET_RESOLVED), so a relocated cache
+# (CARGO_TARGET_DIR) is signed too.
+# $(1) = cargo profile dir (debug|release), $(2) = log tag.
+define sign-microvm-helper
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -f "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" ]; then \
+		echo "[$(2)] re-signing microVM helper ($(1)) with hypervisor entitlement"; \
+		"$(INTENTD_DIR)/scripts/sign-microvm-helper.sh" "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" >/dev/null; \
+	fi
+endef
 
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
@@ -640,10 +661,10 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
-	@if [ -d "$(SWEEP_TARGET_DIR)" ]; then \
+	@if [ -d "$(CARGO_TARGET_RESOLVED)" ]; then \
 		cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS); \
 	else \
-		echo "[sweep] nothing to sweep — $(SWEEP_TARGET_DIR) does not exist"; \
+		echo "[sweep] nothing to sweep — $(CARGO_TARGET_RESOLVED) does not exist"; \
 	fi
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
@@ -773,9 +794,17 @@ dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, 
 	# INTENTD_LEGACY_IMPORT_ROOTS="" disables the legacy import hook: the dev
 	# seat starts with a fresh $(DEV_DATA_DIR) DB, so first boot would otherwise
 	# scan the shared ~/intent/workspaces root.
+	# `cargo run -p intentd` builds only the daemon crate and runs the DEBUG
+	# profile, so the daemon resolves the helper next to target/debug/intentd.
+	# Build the whole workspace first so the microVM helper (a separate member
+	# that a `-p intentd` build never produces) exists, then re-sign it before
+	# launch. `--workspace` rather than `-p intentd-microvm-helper`: the crate
+	# must exist at the pinned intentd gitlink for check-makefile-targets.
 	# INTENTD_LIBKRUN_DIR (set only when `make libkrun-local` has staged
 	# .dev/libkrun) reaches the helper through the daemon's inherited env and
 	# takes precedence over the helper-relative and /opt/homebrew/lib search.
+	cargo build --workspace --manifest-path $(INTENTD_DIR)/Cargo.toml
+	$(call sign-microvm-helper,debug,dev-daemon)
 	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
 		INTENTD_LEGACY_IMPORT_ROOTS="" $(libkrun_local_env) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --insecure
@@ -791,7 +820,13 @@ release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on
 	# toggle `server.wsApi.enabled` to retry. No `--insecure`: the WSS listener,
 	# when enabled, serves wss:// with TLS + bearer auth as the packaged app
 	# expects.
+	# `cargo run -p intentd` (no --release) runs the DEBUG profile despite the
+	# target's name and builds only the daemon crate, so build the debug
+	# workspace (which includes the microVM helper, a separate member) and
+	# re-sign the helper before launch.
 	@echo "[release-daemon] libkrun: $(if $(libkrun_local_env),local build — INTENTD_LIBKRUN_DIR=$(LIBKRUN_LOCAL_DIR),helper default search (Homebrew /opt/homebrew/lib fallback; run 'make libkrun-local' for a GPU-less local build))"
+	cargo build --workspace --manifest-path $(INTENTD_DIR)/Cargo.toml
+	$(call sign-microvm-helper,debug,release-daemon)
 	$(libkrun_local_env) cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve
 
 run-intentd: ## DEPRECATED alias for release-daemon
@@ -1047,6 +1082,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
+	$(call sign-microvm-helper,release,dev)
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"
