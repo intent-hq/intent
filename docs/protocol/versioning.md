@@ -28,11 +28,13 @@ against current main when implementing; a numeric version alone is never proof o
   no expiry/ticket/per-device credential is introduced. Accepting another invitation reuses
   the valid returning credential rather than rotating it. Removal and rotation invalidate
   affected links and live sessions. iOS preserves owner/invited registry and sync boundaries.
-- Desktop/iOS invited-session Keychain payload v2 uses fingerprint-plus-principal account
-  keys in the existing guest-sessions service, explicit v1 migration/legacy-alias fences
-  and retained person-specific removal floors. Old host-only writers cannot overwrite
-  migrated people or revive them after tombstone compaction. The owner service/schema
-  stays v1; the personal pairing URI also stays v1. See §5.49's mixed-version fixture.
+- Desktop/iOS invited-session Keychain payload v2 derives opaque digest account keys
+  from fingerprint-plus-principal identity in the existing guest-sessions service.
+  Explicit v1 migration handles old cross-account alias overwrites; independent,
+  create-only removal records survive stale v2 live writes and session compaction.
+  Old-reader logs contain no raw/reversible identity tuple. Import applies all observed
+  removals; iCloud delivery remains eventual. The owner service/schema stays v1; the
+  personal pairing URI also stays v1. See §5.49's mixed-version/race fixtures.
 - `host.executionContext.gitCredentialPolicy` safely exposes the effective managed GitHub
   helper switch and owner setting name. Classified member Git/AI authorization failures
   carry owner-directed `ExecutionAuthorizationFailure`; configured is not proof of valid

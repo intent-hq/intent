@@ -67,10 +67,18 @@ server role before persisting/publishing, preserving owner/invited sync separati
 and distinct principal IDs on a shared host.
 
 Desktop and iOS share §5.49's invited-session **payload v2**, person-qualified
-account encoding, legacy-alias migration and durable removal floors, within
+opaque digest account encoding, legacy-alias migration and independent immutable
+removal records, within
 `com.cloudlands.intent.guest-sessions`. The owner-backend service/schema and the
 pairing URI both remain v1. A payload version bump alone cannot fence old writers
 at legacy host-only accounts: follow the full migration/old-write precedence and
 mixed-version fixture. New clients never publish a live v1 invited mirror or
 route invited credentials through the owner publisher. Unknown/newer records
 remain frozen and preserved. Sync metadata cannot establish host authority.
+Read all removal records before considering live imports; the mutable session's
+cached floor is insufficient because a stale whole-item upsert can erase it.
+Create-only removal writes survive session compaction and an offline deleting
+device. Old readers can overwrite alias markers through cross-account tombstone
+propagation; canonical state and restoration handle that write. Digest accounts
+prevent old warning logs from printing raw/reversible identity tuples. Delivery
+remains eventual; client forgetting is separate from server credential revocation.

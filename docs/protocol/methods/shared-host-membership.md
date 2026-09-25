@@ -547,10 +547,13 @@ The baseline desktop invited payload is already v1 with optional `principalId`
 and `login`. Its reconciler indexes by normalized `host:port`, merges by
 fingerprint, and its store can replace a surviving row's principal/token. Its
 parser returns `newer-version` for `v > 1` before parsing record fields, but the
-reconciler freezes **only that exact account**, not other accounts for the same
-host/fingerprint. Pinned iOS's v1 fingerprint/address parser and publisher serve
-the owner registry. Consequently neither additional v1 fields nor only a v2
-version bump establishes safe invited-person coexistence.
+ordinary reconciliation loop skips **only that exact account**. This is not a
+write barrier: a v1 tombstone at another address can match a local row by
+fingerprint and propagate a tombstone over the skipped account without checking
+its frozen status. The old reader also logs every newer-version **account name**.
+Pinned iOS's v1 fingerprint/address parser and publisher serve the owner registry.
+Consequently neither additional v1 fields nor only a v2 version bump establishes
+safe invited-person coexistence or diagnostic privacy.
 
 ##### Account and payload
 
@@ -558,21 +561,61 @@ The sole invited-person identity is **(TLS certificate SHA-256 fingerprint,
 Intent principal ID)**. Normalize the fingerprint to 64 lowercase hex digits
 (accept the existing colon-separated hex spelling; reject malformed/absent
 pins). Treat `principalId` as a nonempty opaque UTF-8 string: no trimming,
-case-folding or Unicode normalization. Both platforms use the exact account key:
+case-folding or Unicode normalization; reject invalid Unicode scalar sequences.
+All **new accounts** use opaque SHA-256 digests, with these exact byte encodings
+shared by desktop and iOS:
 
 ```text
-invited-v2:<64 lowercase fingerprint hex digits>:<base64url(UTF8(principalId)) without padding>
+LP(s) = U32BE(byteLength(UTF8(s))) || UTF8(s)
+I = HEX_DECODE(fingerprint) || LP(principalId)
+S = SHA256(ASCII("intent.invited-sync/v2/session") || 0x00 || I)
+sessionAccount = "invited-v2-s:" || LOWER_HEX(S)
+
+A = U32BE(legacyAccounts.length) || LP(legacyAccounts[0]) || ...
+R = SHA256(ASCII("intent.invited-sync/v2/removal") || 0x00 || I
+           || UUID_BYTES(removalId) || U64BE(removedThrough) || A)
+removalAccount = "invited-v2-r:" || LOWER_HEX(R)
 ```
 
-The same key is used for local matching, import, credential replacement,
-tombstones and sync. For principal IDs `B` and `C` at fingerprint `F`, the keys
-are `invited-v2:F:Qg` and `invited-v2:F:Qw` respectively (substitute the same 64
-hex digits for `F`). No host, port, login, external identity, role or timestamp
-participates in person identity. A route change cannot change this account;
-guest-to-member upgrade keeps it. A certificate change requires explicit trust
-validation and cannot merge people merely because a route is unchanged.
+`||` concatenates bytes; integer encodings are unsigned, big-endian and fixed
+width. The fingerprint decodes to exactly 32 bytes. UUIDs use the 16 bytes in
+canonical textual hex order, never platform-native GUID byte order. The digest
+uses all 32 output bytes (64 lowercase hex digits), without truncation. Array
+entries are unique and sorted by unsigned UTF-8 byte order; no JSON serialization
+or locale-dependent ordering enters the hash. A removal's immutable fields are
+defined below. Both the full and compact mutable session use `sessionAccount`.
+Each independent removal uses `removalAccount`; live/route writes never address
+that namespace. These derivations are verified against every decoded record's
+identity and, for live admission, against the authenticated `principal.me`.
 
-The JSON stored at that account is a `session` or a compact `removed` record:
+The session key is used for local person matching, import and credential
+replacement. No host, port, login, external identity, role or timestamp
+participates in that key. B and C on one fingerprint have different keys; route
+changes and guest-to-member upgrade keep the person's key. A certificate change
+requires explicit trust validation and cannot merge people merely because a
+route is unchanged.
+
+The old reader's warning receives only a digest account, with no raw fingerprint
+or reversibly encoded principal, for **session, compact-session and immutable
+removal** records. Digests are correlatable identifiers, not secrets or anonymity
+against someone who already knows the inputs. New clients still redact these
+keys from diagnostics. Legacy-alias markers reuse an **existing** v1 host:port
+account, rather than creating a new account namespace, and contain only opaque
+session-key references; no identity tuple is added to that old account name.
+
+Encoding vectors use fingerprint hex `ab` repeated 32 times. The removal vector
+uses principal `B`, `removalId: "00000000-0000-4000-8000-000000000001"`,
+`removedThrough: 200` and `legacyAccounts: ["old.example:443"]`:
+
+| Record / principal UTF-8 bytes | Exact account |
+| --- | --- |
+| Session B / `42` | `invited-v2-s:8e4ca5301c7e9fdeb66c53a80eb0c36dcd84707596e010f972342e9631b39c02` |
+| Session C / `43` | `invited-v2-s:8b7992fc9596dc890a8acb87157e82a26cbf1cea7e7f3cf1d6747198b3db5015` |
+| Session é (U+00E9) / `c3 a9` | `invited-v2-s:397d72f58023e3b4931f01f0f521bdb0cb82260caedf458af7c2a0c57e22ab78` |
+| Independent removal B / inputs above | `invited-v2-r:afb2ccf2baac828571f18cf41dc2df0f1e6938f53476efeda9aad4738b4ef56f` |
+
+The mutable JSON at `sessionAccount` is a `session` or compact `removed` record.
+The independent, token-free `removal` record is stored at its own account:
 
 ```typescript
 type InvitedSessionV2 = {
@@ -592,7 +635,7 @@ type InvitedSessionV2 = {
   token: string; // nonempty when live; exactly "" when deleted
   updatedAt: number;
   pairedAt: number;
-  removedThrough: number; // 0 until a removal has been observed
+  removedThrough: number; // cached floor only; 0 until a removal is observed
   deleted: boolean;
   deletedAt: number | null; // set iff deleted
   legacyAccounts: string[];
@@ -607,20 +650,34 @@ type RemovedInvitedSessionV2 = {
   removedThrough: number;
   legacyAccounts: string[];
 };
+type InvitedRemovalV2 = {
+  v: 2;
+  kind: "removal";
+  fingerprint: string;
+  principalId: string;
+  removalId: string; // canonical lowercase UUID v4, persisted once per removal
+  removedThrough: number; // positive safe-integer clock, fixed for this removal
+  legacyAccounts: string[]; // immutable snapshot, sorted as specified above
+};
 ```
 
-All fields above are required. Preserve existing optional `accent`,
+All fields above are required. Session records preserve existing optional `accent`,
 `detectedDeviceKind` and `deviceIcon` preferences with their existing enum values;
-they have no identity/authority effect. Ports are integers in 1–65535. Clocks
+they have no identity/authority effect. Immutable removals contain no bearer,
+profile or current-route fields. Ports are integers in 1–65535. Clocks
 are finite safe-integer epoch milliseconds, never JSON booleans or numeric
-strings; `removedThrough: 0` is the no-removal sentinel. `legacyAccounts` is a
-sorted unique set of retired v1 account strings, whose historical normalization
+strings; `removedThrough: 0` is the no-removal sentinel only in mutable records.
+`legacyAccounts` is a sorted unique set of retired v1 account strings, whose historical normalization
 remains `host.trim().toLowerCase() + ":" + port`. Validate the canonical account
-against the decoded identity before applying or writing any record. A mismatch,
+against the exact derivation before applying or writing any record. A mismatch,
 malformed payload, unsupported version/kind, or newer payload freezes that
 account: preserve its bytes, do not purge, pull as live, downgrade or overwrite.
-A frozen person-qualified account also blocks publication/import for that person
+A frozen session account also blocks publication/import for that person
 through any legacy alias; do not evade the freeze by changing the account key.
+An unreadable/unknown row in the `invited-v2-r:` removal namespace must not be
+treated as an empty removal set:
+preserve it and defer invited-session import/publication until it can be read
+or recovered, without erasing existing local sessions or touching owner sync.
 
 No synced role is authority. A synced candidate remains pending until the
 credential authenticates against the pinned host and `principal.me` matches the
@@ -635,37 +692,83 @@ or a signal to erase local records.
 
 Within one person, retain last-writer-wins `updatedAt`, monotonic local mutation
 clocks (`max(now, all observed clocks + 1)`) and deletion winning an equal-clock
-live/deleted tie. Fold `removedThrough` by **maximum** and `legacyAccounts` by
-**set union** across local and synced copies before selecting a winner; a newer
+live/deleted tie. On every successful list, discover and validate **all removal
+records before considering live records**, independently of whether any session
+or alias item is present. Fold `removedThrough` by **maximum** across immutable
+removals, local durable removal observations and mutable caches for that person;
+fold `legacyAccounts` by **set union** across them before selecting a winner. A newer
 route or label edit cannot discard either. Select the credential from the
 greatest admissible `pairedAt` before merging metadata by `updatedAt`; a later
 route edit of an older pairing cannot replace a newer bearer. Among equal-clock
-live route variants,
-the lexicographically larger normalized legacy `host:port` wins as in v1. Equal
-route/clock copies are otherwise unchanged; do not rotate credentials on a read.
+live route variants, the lexicographically larger normalized legacy `host:port`
+wins as in v1. Equal route/clock copies are otherwise unchanged; do not rotate
+credentials on a read.
 
 `pairedAt` is the saved clock of the last deliberate, authenticated pairing or
 rejoin, not a foreground/reconnect/route-edit time. Forgetting a person or
-observing authoritative revocation writes a token-free tombstone for that exact
-person, with `updatedAt = removedThrough` set to a new monotonic clock and
-`deletedAt = now`. A live copy with `pairedAt <= removedThrough` cannot restore
+observing applicable authoritative revocation first records a durable local
+removal/outbox entry for that exact person: new monotonic `removedThrough`, one
+random UUID v4 `removalId`, and the known legacy-account snapshot. Retries reuse
+these **same immutable fields and account**; they never create a fresh clock.
+Persist local forgetting before any sync attempt, including while offline or
+sync-disabled. Publication must successfully insert the independent removal
+record **before** writing the mutable session tombstone or retiring aliases.
+The tombstone is a cache with `updatedAt = removedThrough`, empty token and
+`deletedAt = now`; its presence alone is not a completed shared removal.
+
+Removal publication uses a **create-only** Keychain insertion. On a duplicate,
+read and validate the existing record: equivalent known immutable fields are an
+idempotent success with stored bytes left untouched; disagreement, unknown/newer
+format or invalid data is a preserved conflict requiring recovery. Do not use
+the existing helper's generic duplicate-to-`SecItemUpdate` path for removals;
+implement the create-only operation on both platforms. A read followed by that
+blind upsert is not compare-and-swap. Hashing all known immutable removal fields
+also gives independently created removals distinct accounts; no live/route writer
+or compactor may update or delete one. This rule applies across shared/default
+access groups, with successful destination insertion before any group cleanup.
+
+A live copy with `pairedAt <=` the merged removal floor cannot restore
 that person, **even with a later route `updatedAt`**. Keep the winning removal
-locally before attempting sync, including when credential storage or a sync
-write fails. Only an explicit authenticated re-pair/rejoin may set a new
-`pairedAt > removedThrough`; it retains the removal floor. Offline retries,
-ordinary reconnects and delayed publications cannot manufacture that intent.
+locally when credential storage or a later sync write fails. Only an explicit
+authenticated re-pair/rejoin may set a new `pairedAt >` all currently observed
+removal floors, after a successful complete invited-service read. It retains
+the removal memory; it neither deletes immutable removals nor makes routes a
+new pairing intent. A later-delivered higher removal floor is still applied.
+Offline retries, ordinary reconnects and delayed publications cannot manufacture
+that intent.
 An unclassified network/availability failure is not authoritative revocation.
 Apply a failed reconnect's revocation only if its principal, bearer and saved
 `pairedAt` still match the current record; a late failure from a superseded
 credential cannot tombstone a newer successful pairing.
 
 The existing 30-day `deletedAt` window still controls retention of full deleted
-record details. Unlike v1's whole-item purge, invited v2 then **compacts** to
-`kind: "removed"`, retaining the person key, `removedThrough`, `updatedAt`, empty
-token and legacy-account set indefinitely. Compact records and legacy-alias
-markers are not TTL-purged. This non-secret migration/removal memory in the same
-service is necessary: otherwise an old writer arriving after the tombstone TTL
-could recreate a forgotten person. Owner-backend tombstone rules are unchanged.
+session details. That mutable item may compact to `kind: "removed"`, retaining
+the person key, cached floor, `updatedAt`, empty token and legacy-account set.
+The **independent removal records are already minimal and remain immutable
+indefinitely**, including after re-pair, session compaction or loss/overwrite of
+the mutable cache. Do not TTL-purge them, consolidate them into a replaceable
+maximum-floor item, or delete earlier removals because a later one exists.
+Legacy-alias markers are also retained. Owner-backend tombstone rules are unchanged.
+
+For example, X may read B's live `pairedAt: 100, removedThrough: 0`, while Y
+inserts B's removal at 200 and goes offline. X's delayed whole-item route write
+may replace the mutable session with `updatedAt: 300, pairedAt: 100, removedThrough: 0`.
+That overwrite is allowed by the storage primitive; it **cannot address the
+separate removal account**. A fresh importer that receives both records folds
+floor 200 and rejects B's live record, even after the session cache was compacted
+and without Y reconnecting. Repair of the mutable cache is optional to this
+decision; C's independent person state is unaffected.
+
+This is durable retention and convergent import, **not globally atomic iCloud
+delivery**. Keychain insertion success means local durable publication queued
+for synchronization, not that every device has received the removal. A device
+may see stale live data before the removal arrives; once it observes the removal,
+it must retain/apply that floor on later passes even if a subsequent list omits
+it. Interrupted publication remains locally suppressed and visibly pending until
+the immutable write succeeds. Client forgetting does not revoke a still-valid
+server bearer; explicit host revocation is separate and rejects that bearer
+regardless of sync delivery. Tests must cover both cases without substituting
+server rejection for the client-forgetting assertion.
 
 Preserve candidate direct hosts, port, hostname, host detection and opaque,
 case-sensitive tunnel addresses. Unknown/missing v1 `tcAddress` becomes
@@ -675,7 +778,10 @@ In v2 an observed route update or conclusive clear has a new `tcUpdatedAt`
 (`tcAddress: null` with a non-null clock means clear); higher route clock wins,
 and a clear wins an equal route-clock tie. A route-only publication merges into
 the current surviving person record, retaining its credential, `pairedAt` and
-removal floor. It cannot recreate a removed person or overwrite a newer pairing.
+cached floor. A stale write may still replace that cache; it cannot make an old
+pairing admissible once the independent removal is observed. Import must also
+retain any newer pairing already observed instead of replacing it with a stale
+route writer's bearer.
 On every reconnect, revalidate role/credential and refresh direct/tunnel routes;
 sync clocks and cached profiles do not grant access. Server revocation still
 refuses a replayed bearer even before its tombstone reaches another device.
@@ -695,10 +801,10 @@ owner service or creates an owner entry from an invited token.
 | --- | --- |
 | Live with fingerprint and `principalId` | Authenticate and require the same principal from `principal.me`. Group only that fingerprint/principal, preserve routes/metadata, choose the v1 LWW winner with delete-on-tie and the existing host-account tie-break. Publish at its v2 person key. Keep the original pairing clock if available, otherwise the winning legacy `updatedAt`; a zero pre-sync clock is stamped once at first validated publication, after checking removals |
 | Live without `principalId` (or without a usable pin) | Keep encrypted and pending; never infer person from host, login, another person's record or registry category. Only a successful pinned authentication may fill the principal. Without a trustworthy pin require explicit re-pair/trust recovery. Offline/unverifiable entries are not published as v2 live |
-| Unexpired deleted record with fingerprint and `principalId` | Apply the legacy LWW/deletion tie rule only within that person, then migrate a winning deletion to that person's v2 tombstone/removal floor. It cannot delete another person at the same host |
+| Unexpired deleted record with fingerprint and `principalId` | Apply the legacy LWW/deletion tie rule only within that person, then durably insert an independent v2 removal before publishing its cached tombstone. Preserve the winning removal clock (use 1 for a legacy zero clock); persist the chosen removal ID before retrying. It cannot delete another person at the same host |
 | Deleted record without `principalId` | Resolve only through previously saved, unambiguous **exact legacy-account-to-person provenance**. Host/fingerprint matching or “the only current person” is insufficient. Without provenance, preserve/quarantine it and withhold ambiguous v1 live migration under that alias; offer explicit re-pair/forget recovery, never a host-wide delete |
 | Expired v1 tombstone or route-convergence tombstone older than a surviving live record | Keep the v1 TTL/LWW result; do not turn a losing cleanup marker into a new person removal. Previously observed local removal suppressions still win over stale live publication |
-| Existing v2 person state or retired alias, alongside v1 copies | The v2 state/retirement fence wins **regardless of the v1 clock**. Never import a delayed v1 live record, credential replacement, route edit or deletion over it |
+| Existing v2 person state, independent removal or retired alias, alongside v1 copies | The v2 state/retirement fence wins **regardless of the v1 clock**. Never import a delayed v1 live record, credential replacement, route edit or deletion over it |
 
 Persist the full attributable candidate set and removal observations locally
 before publishing v2. For each migrated person retain every known legacy account
@@ -716,19 +822,26 @@ type InvitedLegacyAliasV2 = {
 
 This is a migration marker, never a credential or a host-wide deletion. The
 account name stays the old normalized `host:port`; the pinned v1 parser therefore
-sees `v > 1` and freezes the **old account it would otherwise write**. An account
-shared by B and C can name both; it never merges their canonical records. Do not
-replace an unresolved/malformed/newer legacy record merely to install a marker.
+sees `v > 1` and the ordinary **same-account loop skips it**. However, the pinned
+v1 reconciler's cross-account tombstone path can still overwrite a visible
+marker: it matches a live local row by fingerprint and calls
+`pushTombstone(match.account, ...)` without checking the destination's frozen
+status. An account shared by B and C can name both; it never merges their
+canonical records. Do not replace an unresolved/malformed/newer legacy record
+merely to install a marker.
 Preserve unknown fields/versions rather than rewriting them as known v2.
 
-The marker is a compatibility aid, not a lock: an old writer may have read before
-migration, write while offline, or invent a new host account after a route change.
+The marker is a compatibility aid, not a lock: besides that cross-account write,
+an old writer may have read before migration, write while offline, or invent a
+new host account after a route change.
 New clients must ignore such v1 writes when either the legacy alias is retired
-(derive retirement from **all canonical records as well as markers**) or the
-verified person already has any v2 state, including a compact removal. Ignore
-legacy tombstones in the same way; they cannot delete C while retiring B. Restore
-known alias markers after delayed v1 writes, preserving the union of person keys;
-never overwrite an unknown/newer value. Do not synthesize a newer live clock to
+(derive retirement from **all canonical sessions, independent removals and
+markers**) or the verified person already has any v2 state, including a compact
+session cache or independent removal. Ignore legacy tombstones in the same way;
+they cannot delete C while retiring B. Restore
+known alias markers after delayed or cross-account v1 writes, preserving the
+union of opaque session keys; never overwrite an unknown/newer value. Do not
+synthesize a newer live clock to
 “win” against legacy data. Unknown or missing-person v1 records stay quarantined
 until classified; they cannot bypass a canonical freeze or retirement fence.
 
@@ -740,23 +853,29 @@ require upgrading. An old writer's deletion after migration does not become a
 new person-wide deletion. Owner-only legacy iOS clients retain their old owner
 path; personal shared-host links require a role-aware client and cannot be
 advertised as supported merely because it parses a v1 URI. Do not log bearer
-URLs, credentials or person-qualified keys in pairing/sync diagnostics.
+URLs, credentials, identity tuples or account keys in new pairing/sync diagnostics.
+Supported old readers still log account names; the digest encoding above is what
+keeps those old warnings from exposing the tuple, not new-client redaction.
 
 ##### Required mixed-version fixture
 
 Desktop and native iOS must consume matching fixture vectors for encoding,
 parsing, local-store application and reconciliation, including the pinned v1
-parser/reconciler as the old writer. Execute both platform encoders against the
-other decoder, reorder input rows and interrupt/retry writes. This is a future
+parser/reconciler as the old writer, with a recording logger. Execute both
+platform encoders against the other decoder and the exact account vectors above,
+reorder input rows and interrupt/retry writes. This is a future
 component test requirement, not a claim of runtime or physical iCloud evidence.
 
 | Fixture step | Required observation |
 | --- | --- |
 | Owner A plus legacy guest B, and new member C on the same fingerprint/host | A's owner service/payload stays byte-compatible v1. B and C have distinct deterministic v2 keys/credentials; both direct and tunnel routes survive |
+| Actual pinned old reader lists live/compact session, immutable removal and legacy-alias records | Newer-version warnings still occur. All new account names are opaque digests; the warning arguments/log entry contain neither raw fingerprint/principal nor reversible tuple encoding. Legacy markers add no identity to the existing route account name; verify both ASCII and multibyte key vectors |
 | v1 B live/deleted ties and stale route aliases; missing-principal live/deleted records | Unexpired attributable delete wins only for B; older cleanup/expired tombstones do not delete a newer B. Pending/missing identity is not guessed from C; exact saved provenance is required for an identity-less deletion |
-| Upgrade B, publish C, then replay an old writer's v1 live and host-only tombstone with later clocks at both old and newly changed host accounts | Old aliases freeze when visible to v1; delayed writes cannot replace/delete either canonical person. A known person matches by fingerprint **and** principal across new aliases, not fingerprint alone |
-| Forget B while C changes direct/tunnel routes; replay B's old token and a route edit clock newer than B's deletion | Only B is removed; removal floor beats stale pairing intent. C keeps its token, role and new routes. No v1 or route-only v2 write revives B |
-| Restart/fresh-device import after 30 days, including a delayed old write and unknown v3/malformed records | Compact B removal and retired aliases still suppress resurrection; unknown/frozen bytes survive untouched, including across access groups. Failed list/write/encryption does not erase or downgrade local credentials |
+| Upgrade B, publish C; run actual old reader with a visible alias plus local B, then a v1 tombstone at another address with the same fingerprint | Ordinary same-account write is skipped, but cross-account tombstone propagation **overwrites the visible alias with v1**. Assert that actual old write, no write to canonical B/C or independent removals, then canonical-state preservation and restoration of the marker by the new reader. Repeat with delayed live writes and newly changed route accounts |
+| Forget B while C changes direct/tunnel routes; replay B's old token and a route edit clock newer than B's deletion | Once observed, B's independent removal floor beats stale pairing intent despite v1 or route-only v2 writes. C keeps its token, role and new routes |
+| X reads B live at pairing 100/floor 0 and pauses before its route upsert; Y inserts removal 200, then stays offline; X blindly writes live route 300/pairing 100/floor 0; a fresh importer reads the resulting service | The mutable item really is overwritten. The independent removal is unchanged and visible to the fresh importer, which rejects B despite a server-valid token and without Y returning. C is unchanged. A mere pre-write reread is not the test; pause after any such read |
+| Repeat that interleaving after 30-day session compaction, with interrupted/retried removal inserts, multiple removers and reordered delivery | Immutable removals survive compaction and duplicate insertion without replacement. Fresh import folds their maximum before live candidates. Failed publication stays locally suppressed/pending. If live data arrives before a removal, assert convergence once the removal arrives, not globally atomic iCloud visibility |
+| Restart/fresh-device import, including a delayed old write and unknown v3/malformed records | Independent removals and retired aliases suppress stale import when observed; unknown/frozen bytes survive untouched, including across access groups and create-only duplicate handling. Failed list/write/encryption does not erase or downgrade local credentials |
 | Remove C on the host, reconnect both people from stale synced data, then deliberately rejoin B with valid new authorization | C's revoked credential is refused and its person-specific removal persists. Only explicit verified B rejoin may pass B's removal floor; reconnect cannot do so. No owner promotion or cross-person mutation |
 | Unknown/equal-clock tunnel route versus a known route, explicit clear, and route update racing credential replacement | Preserve unknown-vs-clear semantics, deterministic route ties and the newer credential; route publication neither recreates a deletion nor erases `pairedAt`/removal metadata |
 
@@ -828,6 +947,6 @@ the assertions; passing documentation gates is not runtime evidence.
 | Reuse a personal QR on several devices, restart and accept another invite | Same person/credential remains usable, distinct device IDs; no countdown, proof repetition or silent rotation |
 | Remove/rotate shared personal credential and reconnect every device | All affected links/sessions fail; unrelated people and work remain; TLS/route parity retained |
 | Device identity spoof and guest device query/subscription | Server-derived person/role; no unrelated device/principal leak through snapshots, live or durable events |
-| Desktop/iOS invited v2 migration and mixed-version fixture above | Both codecs/stores follow identical person keys, legacy alias fences, removal floors and route/clock semantics; owner service remains v1. Run the complete B/C/old-writer fixture, then collect physical device sync evidence separately |
+| Desktop/iOS invited v2 migration and mixed-version fixture above | Both codecs/stores follow identical opaque keys, legacy alias recovery, independent removal retention and route/clock semantics; owner service remains v1. Run the complete old-reader logging/B/C/stale-writer fixture, then collect physical device sync evidence separately |
 | Lab missing/off/on, route aliases, runtime disable, both GitLab flag states | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
 | Old daemon/client and different local/remote host setup | Legacy owner/guest behavior only; no unsupported purpose fallback; selected host supplies roles/models/repos/pairing after every reconnect |
