@@ -243,7 +243,7 @@ served on the `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.list` 
     "backgroundHooks": true, "hostExec": true, "scripts": true,
     "terminalAccess": true, "browserAutomation": true, "richChatBlocks": true,
     "structuredQuestions": true, "attentionRequests": true, "stateSnapshot": true,
-    "prMonitor": true, "taskGraph": true, "peerAgents": false, "mcpTools": true
+    "prMonitor": true, "taskGraph": true, "peerAgents": true, "mcpTools": true
   }
   ```
 
@@ -419,7 +419,7 @@ their own sessions. **MCP-only** (§6.8 principle) — no new wire methods beyon
 ([intent-hq/intentd#1520](https://github.com/intent-hq/intentd/pull/1520)) that binding was
 **removed** (no compatibility alias) and its behavior folded into `ws.agent.create` behind the
 `topLevel` option. Both surfaces are **feature-gated behind `agentFeatures.peerAgents`**
-(§5.12; boolean, default **`false`** — the surface is off unless opted in via settings),
+(§5.12; boolean, default **`true`** — an explicit `false` opts out),
 captured at session/bridge creation like the other `agentFeatures` toggles, so a flip applies
 to new sessions only; for `create` the gate is **arg-conditional** at the dispatch layer —
 only `topLevel: true` calls are denied when the toggle is off, with an error naming the
