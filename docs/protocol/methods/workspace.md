@@ -420,7 +420,7 @@ provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
 Toggling the setting later affects only subsequently created workspaces — existing
 checkouts are not converted.
 
-**Execution-environment selection (`workspace.create`, v10.3).** The optional
+**Execution-environment selection (`workspace.create`, v10.9).** The optional
 `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`) selects the
 workspace's execution environment explicitly, overriding the legacy
 `skipIsolation`/`workspace.cowIsolation` derivation. Validation runs up front (before any
@@ -473,7 +473,7 @@ log a warning and fall back to the shared workspace checkout (isolation is best-
 never spawn-blocking). Agents created before this behavior (no sandbox in a `cow`
 workspace) get their sandbox on their next spawn, cloned from the checkout's state at
 that point. Workspaces with `checkoutMode: "cow"` but **no persisted**
-`executionEnvironment` (rows created before v10.3 introduced the field) keep the
+`executionEnvironment` (rows created before v10.9 introduced the field) keep the
 delegate-only isolation model.
 The selection is persisted on the returned `Workspace` as `executionEnvironment`
 (lowercase on the wire, immutable like `checkoutMode`); when the param is **omitted**,
@@ -1300,12 +1300,12 @@ both **standalone** repositories: `workspace.delete` skips the worktree-registra
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
 
-**`executionEnvironment` (v10.3).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
+**`executionEnvironment` (v10.9).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
 on the wire) — the execution environment selected at creation (§5.1
 execution-environment selection): the explicit `workspace.create` `executionEnvironment`
 param when supplied, else derived from the legacy provisioning outcome (`worktree`/`cow`
 matching `checkoutMode` on provisioned rows). Persisted and immutable like
-`checkoutMode`; omitted for pre-existing rows created before v10.3 and for
+`checkoutMode`; omitted for pre-existing rows created before v10.9 and for
 legacy-path rows that skipped provisioning without an explicit selection. The persisted
 field is the **isolation authority** for every agent in the workspace (§5.5).
 

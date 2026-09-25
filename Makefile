@@ -307,13 +307,16 @@ FE_BUILD_HEAP_MB ?= 16384
 # relinked it. Relinking replaces the ad-hoc signature carrying the
 # com.apple.security.hypervisor entitlement with a plain linker-signed one,
 # and the next microVM boot then fails with helper exit status 70 (libkrun
-# cannot create the VM without the entitlement). Silent no-op on non-Darwin
-# and when the helper binary does not exist yet (first-build ordering).
+# cannot create the VM without the entitlement). Silent no-op on non-Darwin,
+# when the helper binary does not exist yet (first-build ordering), and when
+# the signing script is absent — a pinned intentd predating the helper can
+# share a CARGO_TARGET_DIR that still holds one built from a newer branch.
 # The helper is looked up under $(CARGO_TARGET_RESOLVED), so a relocated cache
 # (CARGO_TARGET_DIR) is signed too.
 # $(1) = cargo profile dir (debug|release), $(2) = log tag.
 define sign-microvm-helper
-	@if [ "$$(uname -s)" = "Darwin" ] && [ -f "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" ]; then \
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -x "$(INTENTD_DIR)/scripts/sign-microvm-helper.sh" ] \
+		&& [ -f "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" ]; then \
 		echo "[$(2)] re-signing microVM helper ($(1)) with hypervisor entitlement"; \
 		"$(INTENTD_DIR)/scripts/sign-microvm-helper.sh" "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" >/dev/null; \
 	fi
