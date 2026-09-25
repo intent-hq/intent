@@ -129,3 +129,5 @@ Durable conventions carried forward from that phase:
 For the agent commit/PR workflow and issue tracking, see the root
 [AGENTS.md](../AGENTS.md). Bugs and open work are tracked as
 [GitHub issues](https://github.com/intent-hq/intent/issues).
+
+<!-- Temporary docs-only CI verification for step-setup; never merge this scratch branch. -->
