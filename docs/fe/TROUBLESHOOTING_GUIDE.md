@@ -27,18 +27,20 @@ intentd doctor
 intentd doctor --codex-models
 ```
 
-The first command reports the selected ACP adapter (settings override, local discovery,
-or managed npm), its configured managed pin, and separately measured adapter/runtime
-versions. A configured pin or a named binary on PATH is not a measured bundled runtime.
-The check follows production selection, including managed removal of `CODEX_PATH` and
-`CODEX_CONFIG`; it never substitutes an unrelated PATH `codex`. Unverified local packages,
-opaque wrappers, missing runtimes, and timeouts are shown as unknown. Ordinary doctor
-adds no npm resolution or live catalog calls.
+The first command reports the pinned managed ACP adapter and whether its Node.js/npx
+prerequisites are available. Like production, it ignores `providers.paths.codex`, local
+`codex-acp` installations, and `CODEX_PATH`. The adapter receives Intent's fixed
+`CODEX_CONFIG` policy disabling built-in subagents, not inherited configuration. A
+configured pin is not a measured adapter or bundled runtime version. Ordinary doctor
+adds no npm resolution or live catalog calls, so these versions remain unknown until
+the selected package is inspected by an explicit live check. No unrelated PATH `codex`
+is substituted; unverified packages, missing runtimes, and timeouts are reported as unknown.
 
-On macOS, diagnostics report launch selection, the configured pin, and verified local
-adapter package metadata only. A declared package version is labeled **metadata, not
-measured**; it is not proof of the running adapter or bundled runtime version. Version
-and catalog process probes report an explicit unsupported result because detached-child
+On macOS, diagnostics report launch selection and the configured pin without resolving
+the managed package or inspecting ignored local adapters. Package metadata applies only
+when the selected entrypoint has been established; a declared package version is labeled
+**metadata, not measured** and does not prove the running adapter or runtime version.
+Version and catalog process probes report an explicit unsupported result because detached-child
 cleanup cannot be guaranteed. `--codex-models` does not execute diagnostic providers,
 resolve npm, capture authentication, or create temporary probe state on macOS. The
 comparison remains inconclusive; normal agent/provider execution is unchanged.
