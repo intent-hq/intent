@@ -116,7 +116,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.self-test && github.repository || job.workflow_repository || 'intent-hq/intent' }}
-          ref: ${{ inputs.self-test && github.sha || job.workflow_sha || 'main' }}
+          ref: refs/heads/step-setup-live-missing-checkout-4bd0ec9e
           submodules: false
           persist-credentials: false
 
