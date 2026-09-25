@@ -1,12 +1,13 @@
 name: CI
-# CI is tiered by event. pull_request runs every job; merge_group runs the
-# same jobs on the actual merged tree before the queue lands it, except the
+# CI is tiered by event. pull_request runs all applicable jobs; merge_group
+# runs the same jobs on the actual merged tree before the queue lands it, except the
 # three PR-metadata checks (pr-title / breaking-token / submodule-pins),
 # which read `github.event.pull_request.*` / `github.head_ref` /
 # `github.base_ref` — none of which exist on merge_group — and already
 # covered the identical diff on the PR run, so they stay pull_request-only.
 # The `gate` job (CI Gate) aggregates every job into the one context the
-# main ruleset requires and is event-aware about those skips.
+# main ruleset requires and is event-aware about those skips. The reusable
+# consumer workflow exercise is selected by changed paths on both events.
 #
 # Incident: intent-hq/intent#5433 and #5446 were each green alone but broke
 # shell-tests together on every PR (intent-hq/intent#5455) for ~14 h — the
@@ -98,6 +99,39 @@ jobs:
           python-version: '3.11'
       - run: make test-scripts
 
+  # Always prepare on both PR and queue runs. Read the pin from the same
+  # tested tree as the local reusable call; a failed diff/read must fail CI,
+  # not turn into an intentional path skip.
+  consumer-checks-prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      selected: ${{ steps.select.outputs.selected }}
+      intentd-sha: ${{ steps.select.outputs.intentd-sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Select the consumer workflow exercise and pinned intentd
+        id: select
+        run: node scripts/consumer-checks-ci.mjs
+
+  # Local uses loads the workflow from this run's revision, so broken action
+  # references and setup fail before merge. Keep the full connected exercise.
+  consumer-checks-exercise:
+    needs: consumer-checks-prepare
+    if: needs.consumer-checks-prepare.outputs.selected == 'true'
+    uses: ./.github/workflows/consumer-checks.yml
+    with:
+      component: intentd
+      head-sha: ${{ needs.consumer-checks-prepare.outputs.intentd-sha }}
+      self-test: true
+
   # Documentation invariants include the public frontend agent guide, the
   # browser-tab contract surfaces in cloudlands-fe and intentd, and the
   # protocol method catalog (docs/protocol/05-method-catalog.md ↔ methods/*.md
@@ -131,6 +165,7 @@ jobs:
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs
       - run: node --test scripts/check-transfer-selection-contract.test.mjs scripts/test-transfer-selection-contract.test.mjs scripts/transfer-selection-ci.test.mjs
+      - run: node --test scripts/consumer-checks-ci.test.mjs
       - run: make consumer-checks
 
   # The event-type catalog is vendored on three surfaces (intentd golden,
@@ -346,14 +381,16 @@ jobs:
   # outright on every event; the pull_request-only jobs must succeed outright
   # on pull_request and must be job-skipped on merge_group — a skip on
   # pull_request, a run on merge_group, or any other event is a
-  # misconfiguration and fails. The self-test diffs the script's job list
-  # against this `needs` list, so keep both in step.
+  # misconfiguration and fails. Preparation must succeed, and the consumer
+  # exercise must match its path selection (success or intentional skip).
+  # The self-test diffs the script's job list against this needs list,
+  # so keep both in step.
   gate:
     name: CI Gate
     runs-on: ubuntu-latest
     permissions: {}
     if: always()
-    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test]
+    needs: [pr-title, bridge-test, python-tests, docs-check, event-catalog-check, shell-tests, shell-lint, shell-tests-bash3, repo-hygiene, ruleset-check, breaking-token, submodule-pins, triage-parser-test, consumer-checks-prepare, consumer-checks-exercise]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -362,4 +399,5 @@ jobs:
         env:
           GATE_EVENT: ${{ github.event_name }}
           GATE_NEEDS_JSON: ${{ toJSON(needs) }}
+          GATE_CONSUMER_CHECKS_SELECTED: ${{ needs.consumer-checks-prepare.outputs.selected }}
         run: bash scripts/ci-gate.sh
