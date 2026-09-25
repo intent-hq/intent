@@ -61,7 +61,7 @@
 # connected step below is required for BOTH caller directions, without path or
 # harness-presence skips. The monorepo-outage guard stays fail-soft for component
 # callers; the local CI exercise runs this same complete job.
-name: Consumer checks
+name: [Consumer checks
 
 on:
   workflow_call:
