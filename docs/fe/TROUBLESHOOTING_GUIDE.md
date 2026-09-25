@@ -36,6 +36,10 @@ adds no npm resolution or live catalog calls, so these versions remain unknown u
 the selected package is inspected by an explicit live check. No unrelated PATH `codex`
 is substituted; unverified packages, missing runtimes, and timeouts are reported as unknown.
 
+On Linux, diagnostic process probes require `/bin/bash` for private process supervision.
+If it is unavailable, probes report a failure and their results remain unknown. Diagnostics
+do not install Bash or fall back to another shell; normal provider launches are unaffected.
+
 On macOS, diagnostics report launch selection and the configured pin without resolving
 the managed package or inspecting ignored local adapters. Package metadata applies only
 when the selected entrypoint has been established; a declared package version is labeled
