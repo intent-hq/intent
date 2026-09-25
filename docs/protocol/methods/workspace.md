@@ -724,8 +724,8 @@ rung applies only when the model itself resolved from Settings; an explicitly su
 model does not inherit that effort automatically. An explicit level is rejected with
 `-32602` when the resolved model's cached `effortLevels` prove it unsupported (no catalog
 evidence means pass-through, as for `agent.create`). Resolution and validation precede
-workspace provisioning; the resolved effort is persisted and returned in
-`initialAgent.reasoningEffort` before any prompt or attachment starts the first turn.
+workspace provisioning; the resolved effort is persisted before any prompt or attachment
+starts the first turn and echoed in the response's `initialAgent.reasoningEffort`.
 An unset effort is omitted from that `AgentLite` response. No post-create `agent.update`
 is needed to apply the initial effort.
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
