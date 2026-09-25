@@ -40,3 +40,21 @@ For mutations, optimistically apply locally, send the request, and reconcile whe
 ```
 
 *The canonical wire-protocol specification for the Intent backend daemon (`intentd`). The method surface is enforced by golden tests in `crates/intent-transport/src/catalog.rs`; changes follow the compatibility policy at the top of this document.*
+
+### Shared-host role hydration and rollout *(10.9)*
+
+[§5.49](./methods/shared-host-membership.md) is the authoritative contract for
+connected-host roles, safe execution reads, invited-session storage and personal
+pairing. Hydrate hello capabilities and `principal.me` from the selected host on
+every connection before enabling management; workspace controls use `canManage`,
+never fake ownership or a cached connection category. Host provider/model/repository
+reads and pairing requests must remain routed to that host when a different local
+daemon exists. Reconcile live membership changes with a fresh bounded snapshot.
+
+Keep the existing default-off Multiplayer selector around the Collaboration tab,
+its content, every experimental entry point and direct/legacy route. Runtime
+disable dismisses stale dialogs/actions without deleting saved access. The GitLab
+lab is an additional independent gate, not a bypass. Preserve ordinary owner
+pairing and single-user preferences. iOS classifies personal pairings from the
+server role before persisting/publishing, preserving owner/invited sync separation
+and distinct principal IDs on a shared host.

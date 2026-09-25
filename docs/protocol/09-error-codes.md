@@ -41,3 +41,26 @@ where `detail` is a human-readable cause: the tail of `git clone`'s stderr (boun
 
 Only these `data.code` values are a stable contract; clients must exact-match them and treat unknown codes as `clone-failed`. Classification is best-effort prose matching over git's stderr — the `detail` is authoritative for display, the `code` for behavior. The classified categories are shared with the streaming `git.clone` surface: a failed `git:clone:done` frame carries the same category string as `data.errorCode` when classification succeeded (§5.6, §6.5).
 
+### Shared-host typed refusals *(10.9)*
+
+The additive [§5.49 contract](./methods/shared-host-membership.md) keeps the numeric
+error envelope. Connection allowlists still default-deny with `-32003` and no data;
+service authority failures still use `{ code: "forbidden", detail }`. Host members
+have their own vetted allowlist; a non-administrator is not necessarily a guest.
+
+| Numeric code | `error.data` | Meaning/recovery |
+| --- | --- | --- |
+| -32602 | `{ code: "host-membership-required" }` | Workspace remove/leave cannot remove inherited host membership; an owner uses host membership administration |
+| -32602 | `{ code: "invite-scope-mismatch" }` | Requested/defaulted scope differs from the valid invitation's stored scope; do not grant access or return preview metadata |
+| -32602 | `{ code: "access-revoked" }` | In-flight proof's authorization generation was revoked before commit; use a fresh valid invitation flow, never replay the stale proof |
+| -32003 | `{ code: "access-revoked" }` | Current credential/access revoked during personal pairing; return no pairing material and close the affected connection |
+| -32602 | `{ code: "identity-mismatch" }` | Collaboration credential/selected stable ID differs or was superseded during verification; reselect/reverify the intended account |
+| -32602 | `{ code: "identity-in-use" }` | Explicit profile selection would merge two existing principals; leave both intact |
+
+Reuse `invalid-params` for invalid host-invite fields or owner removal, `not-found`
+for hidden workspaces/wrong invitation namespace, the existing closed/pin/proof
+invite errors for failed joins, and `identity-unverifiable` with `host` for restricted
+pin or proof reads. No-forge/no-profile owner issuance no longer raises
+`github-identity-required` when `hostMembership: 1` is supported. Existing
+listener/tunnel failures, auth/scope/rate-limit errors and HTTP 401/403 semantics
+remain as described in §5.49; wrong-secret responses reveal no pin or scope preview.

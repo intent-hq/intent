@@ -921,3 +921,27 @@ interface SentryIssueResult {     // flattened UI shape — matches the FE verba
 { "jsonrpc":"2.0","id":81,"error":{ "code":-32602,"message":"Missing required parameter: id" } }
 ```
 
+### Collaboration-only identity credentials *(10.9)*
+
+[§5.49](./shared-host-membership.md#collaboration-credential-purpose) defines the
+separate `identity.authStatus`, `identity.connect`, `identity.cancelAuth`,
+`identity.revoke`, `identity.getUser` and `identity.select` methods. They reuse the
+forge engines above with an isolated collaboration credential purpose; they never
+write repository tokens or feed Git/child-process credential resolution. The old
+`sourceControl.*` auth methods and GitHub aliases retain their repository purpose.
+
+The generic proof methods above accept optional `purpose: "repository" |
+"collaboration"` (default repository); collaboration creation also requires
+`expectedIdentity` with the exact provider/instance/stable-ID triple. Results and
+legacy aliases retain their shapes. Send the new purpose only after the local
+daemon advertises `collaborationIdentity: 1`; do not send it optimistically to an
+older daemon that might ignore it. GitHub collaboration authorization requests
+gist permission, not repo/workflow merely for a join; GitLab public-snippet proof
+still requires api. Report actual granted scopes, including unknown, accurately.
+
+Repository connect/revoke and ordinary profile refresh no longer re-key or unlink
+an established person under this contract. Explicit selection remains fenced
+against stale credential/identity work, and stored Intent membership/sessions
+survive repository account changes. Invite issuance uses Intent owner/member
+authority without a working-forge/profile prerequisite; restricted pin/proof reads
+still fail with the existing actionable `identity-unverifiable` discriminator.

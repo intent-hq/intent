@@ -63,3 +63,22 @@ The frontend responds with the chosen outcome, which the backend forwards to the
 
 Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **now wired** — see the implementation note above.
 
+### Authorization for shared-host permission prompts *(10.9)*
+
+Under [§5.49](./methods/shared-host-membership.md), prompt access uses the target
+agent's workspace `canManage`: owner and active host members can read and answer;
+workspace guests cannot. The transport allowlist is only an admission check.
+Enforce this again in the service for `agent.pendingPermissions { agentId }`,
+the unfiltered aggregate `agent.pendingPermissions {}`, and
+`agent.respondPermission { requestId, outcome }`. Resolve the request's workspace
+server-side, never from a claimed client role or workspace ID.
+
+The aggregate filters before projecting requests; it cannot leak prompt IDs or
+content from unauthorized workspaces. A known but unauthorized prompt answer is
+Forbidden; a hidden workspace/agent retains the indistinguishable `not-found`
+policy. An absent/already-settled request keeps `{ resolved: false }`. Both
+`agent:permission:request` and `agent:permission:resolved` require the same current
+management capability at delivery and durable-query time. Membership removal
+invalidates access before any later answer or event; it does not cancel another
+person's running agent. Existing outcome shapes, timeout and first-resolution
+behavior are unchanged.

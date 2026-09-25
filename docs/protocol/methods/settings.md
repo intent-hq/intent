@@ -197,3 +197,21 @@ never persisted or echoed back as the value. Writing that number explicitly via
 // ← response
 { "jsonrpc":"2.0","id":55,"result":{ "path":"server.port","value":5181,"revision":10 } }
 ```
+
+### Identity and host settings on shared hosts *(10.9)*
+
+[§5.49](./shared-host-membership.md) keeps `settings.*` owner-only. Members use its
+safe `host.executionContext` read and the existing provider/model/repository read
+surfaces, not a settings dump. Local client preferences remain local.
+
+`identity.provider` remains an explicit legacy profile selection path. The new
+`identity.select` selects a verified collaboration-purpose account explicitly;
+repository token refresh, account swap or disconnect is never an implicit
+selection or unlink of an established principal. Existing identity triples are
+preserved, including when there is no working repository connection. Profile
+selection changes neither Intent principal ID nor host/workspace authority.
+Keep generation fencing against an earlier pending refresh/selection.
+
+The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
+permission. It gates the experimental collaboration UI, including the tab and
+direct routes, and cannot grant access or revoke saved memberships when toggled.

@@ -109,3 +109,12 @@ Inbound byte permits remain held through a blocked TCP write and are released on
 
 **FE fallback usage (Electron only).** The intended consumer is the `browser.exec` loopback-rewrite **tunnel fallback** (§5.9, §5.14; monorepo#2323): when a remote-rewritten `navigate` / `openTab` reachability probe fails, the Electron FE forwards the daemon port over `/tunnel` — a local TCP listener on the client machine relays to a tunnel stream — and navigates to `http://127.0.0.1:<localPort>` instead, echoing `tunneled: true` in the action result. Web builds cannot host a local TCP listener and keep the explanatory probe error.
 
+### Shared-host tunnel admission *(10.9)*
+
+Under [§5.49](./methods/shared-host-membership.md#member-execution-and-safe-host-reads),
+`/tunnel` accepts active host-member credentials as well as the owner. Workspace
+guests still receive HTTP 403. Recheck current credentials/role at admission and
+close affected tunnels on removal/revocation; a concurrent upgrade cannot outlive
+that boundary. The existing loopback target restriction, frame protocol, credits,
+TLS fingerprint pinning and stream limits are unchanged. Invitation envelopes stay
+tunnel-only; personal `intent://pair` payloads retain direct/tunnel route support.
