@@ -209,7 +209,19 @@ Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
   toggle on the capability RPC, so the toggle works with no workspace loaded;
   workspace payload consumers (e.g. isolation-mode resolution) still read the
   per-workspace aggregate.
-- **Deletion.** `workspace.delete`'s git-metadata phase is checkout-mode aware: a
+- **Deletion.** `workspace.delete` first closes data-producer admission for the
+  target workspace, waits for already admitted operations, and stops its runtime
+  writers. Store cleanup removes one session at a time and sweeps histories and
+  other growing dependent data in bounded batches, releasing the SQLite writer
+  between steps. Each batch commits independently: failure or interruption can
+  leave a live workspace row with partially removed data, and a retry finishes the
+  remaining cleanup. Cancellation does not roll back committed batches or guarantee
+  that already-started database work stops. Only the final workspace-row deletion
+  and deleted-ID tombstone share the terminal transaction. Normal immediate-delete
+  success and `workspace:deleted` follow that commit; filesystem cleanup stays
+  asynchronous. See [the deletion contract](protocol/methods/workspace.md) for
+  retry, grace-window and event semantics.
+  The git-metadata phase is checkout-mode aware: a
   worktree checkout gets registration prune + guarded branch delete + rename to a
   trash path, while a `cow` or `direct` checkout — a standalone clone with no
   registration in the source repo — goes through
