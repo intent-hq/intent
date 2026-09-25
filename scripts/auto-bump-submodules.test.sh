@@ -57,6 +57,9 @@ if [[ -n "\${GIT_STUB_FAIL:-}" && " \$* " == *"\$GIT_STUB_FAIL"* ]]; then
   printf '%s\n' "\${GIT_STUB_ERROR:-stub: failing git \$*}" >&2
   exit 1
 fi
+if [[ \${1:-} == push && -f "$stub_dir/merge-before-push" ]]; then
+  "$bin_dir/gh" --merge-before-push
+fi
 exec "$real_git" "\$@"
 SH
 chmod +x "$bin_dir/git"
@@ -406,6 +409,14 @@ unrelated_push_rejection() {
 error: GH006: Protected branch update failed for refs/heads/auto/submodule-bump.
 error: Commits must have verified signatures.
 ERROR
+  if [[ ${1:-} == with-queue ]]; then
+    cat >>"$stub_dir/reject-push" <<'ERROR'
+
+- A pull request for this branch has been added to a merge queue. Branches that
+  are queued for merging cannot be updated. To modify this branch, dequeue the
+  associated pull request.
+ERROR
+  fi
   run_script
   [[ $status != 0 ]] || fail "unrelated GH006 was swallowed as deferral"
   [[ $stderr == *'Commits must have verified signatures.'* ]] || fail "lost push rejection diagnostic: $stderr"
@@ -426,7 +437,11 @@ authentication_failure() {
 }
 merged_during_lookup() {
   seed_pr
-  touch "$stub_dir/queued" "$stub_dir/merge-on-lookup"
+  case ${1:-list} in
+    list) touch "$stub_dir/queued" "$stub_dir/merge-on-lookup" ;;
+    queue) touch "$stub_dir/merge-on-queue-lookup" ;;
+    before-list) simulate_merge ;;
+  esac
   run_script
   [[ -f $stub_dir/merged-42 ]] || fail "lookup race was not exercised"
   [[ $(git -C "$origin" rev-parse refs/heads/main) == "$bump1" ]] || fail "simulated merge lost the queued commit"
@@ -434,6 +449,39 @@ merged_during_lookup() {
   assert_no_pr_writes
   [[ ! -f $stub_dir/pr ]] || fail "opened a duplicate PR for already merged pins"
   ! bump_commit >/dev/null || fail "recreated a stale branch after merge"
+}
+queue_lookup_failure() {
+  seed_pr
+  if [[ ${1:-} == cleanup ]]; then
+    git -C "$mono" reset -q --hard "$bump1"
+    git -C "$origin" update-ref refs/heads/main "$bump1"
+  else
+    publish_intentd "$intentd_c2"
+  fi
+  before_pr=$(pr_snapshot)
+  echo 'GraphQL: Resource not accessible by integration' >"$stub_dir/reject-query"
+  run_script
+  if [[ ${1:-} == cleanup ]]; then
+    [[ $status == 0 ]] || fail "cleanup queue lookup failure was not fail-soft"
+  else
+    [[ $status != 0 ]] || fail "unreadable queue state allowed a bump"
+  fi
+  [[ $stderr == *'Resource not accessible by integration'* ]] || fail "lost queue lookup diagnostic: $stderr"
+  [[ $(bump_commit) == "$bump1" && $(pr_snapshot) == "$before_pr" ]] || fail "unreadable queue state changed remote/PR state"
+  [[ ! -s $stub_dir/pushes ]] || fail "unreadable queue state attempted a push"
+  assert_no_pr_writes
+}
+merged_before_push() {
+  seed_pr
+  publish_intentd "$intentd_c2"
+  touch "$stub_dir/merge-before-push"
+  run_script
+  [[ -f $stub_dir/merged-42 ]] || fail "push-time merge barrier was not exercised"
+  [[ $status != 0 && $stderr == *'stale info'* ]] || fail "expected a diagnostic lease rejection: $status $stderr"
+  [[ $(git -C "$origin" rev-parse refs/heads/main) == "$bump1" ]] || fail "push-time merge lost the original bump"
+  [[ ! -f $stub_dir/pr ]] || fail "push-time merge opened a duplicate PR"
+  ! bump_commit >/dev/null || fail "push recreated a merged branch"
+  assert_no_pr_writes
 }
 
 # Inspect the real workflow, following the block extraction convention used
@@ -581,8 +629,14 @@ run_case 'queued identical-tree rerun preserves PR metadata' queued_identical_tr
 run_case 'queued PR with current pins is not closed' queued_current_pins
 run_case 'unqueued stale PR and remote branch are removed' unqueued_stale_pr
 run_case 'unrelated GH006 push rejection remains an error' unrelated_push_rejection
+run_case 'queue rejection with another protection error still fails' unrelated_push_rejection with-queue
 run_case 'authentication failure remains an error' authentication_failure
 run_case 'PR merged during lookup is not edited' merged_during_lookup
+run_case 'PR merged during queue lookup is not edited' merged_during_lookup queue
+run_case 'PR merged before open lookup is not recreated' merged_during_lookup before-list
+run_case 'queue lookup failure prevents bump mutations' queue_lookup_failure
+run_case 'queue lookup failure leaves stale cleanup fail-soft' queue_lookup_failure cleanup
+run_case 'lease prevents recreating a branch merged before push' merged_before_push
 run_case 'workflow continuation filters match only main gitlinks' workflow_filters
 run_case 'workflow checks out current main' workflow_checkout
 run_case 'workflow retains dispatches, cron, PAT, and serialization' workflow_existing_guards

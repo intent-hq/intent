@@ -99,6 +99,11 @@ merge_during_lookup() {
   printf '%s\n' "$head" >"$state/merged-$number"
   rm -f "$state/pr" "$state/queued" "$state/merge-on-lookup"
 }
+if [[ $1 == --merge-before-push ]]; then
+  touch "$state/merge-on-lookup"
+  merge_during_lookup
+  exit 0
+fi
 require_open() {
   if [[ ! -f $state/pr || $(<"$state/pr") != "$1" ]]; then
     echo "stub: attempted $2 of non-open PR #$1" >>"$state/invalid-mutations"
@@ -123,6 +128,7 @@ case "$1 ${2:-}" in
     printf '%s\n' "$result" | emit_pr
     ;;
   "api graphql")
+    if [[ -f $state/reject-query ]]; then cat "$state/reject-query" >&2; exit 1; fi
     query=$(field query)
     # Accept query/variables in either gh field syntax, but reject unrelated
     # API calls instead of silently succeeding and hiding an incomplete fake.
@@ -143,6 +149,9 @@ case "$1 ${2:-}" in
       result=$(jq '{data:{repository:{pullRequests:{nodes:.}}}}' <<<"$result")
     else
       echo "stub: GraphQL lookup must identify the PR: $query" >&2; exit 1
+    fi
+    if [[ -f $state/merge-on-queue-lookup ]]; then
+      mv "$state/merge-on-queue-lookup" "$state/merge-on-lookup"
     fi
     merge_during_lookup
     printf '%s\n' "$result" | emit
