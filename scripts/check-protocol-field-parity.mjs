@@ -38,6 +38,7 @@ export const PAIRS = [
     rust: { file: MODEL_RS, struct: 'Workspace' },
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
+      canManage: 'documented optional capability; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/2911; remove once the monorepo frontend pin includes that PR',
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
       openInviteCount: 'multiplayer w1 membership summary; not consumed by the FE today',
     },

@@ -388,6 +388,52 @@ function cliFixtureFiles(extraRust = '') {
   return { files, staleCount };
 }
 
+function workspaceCapabilityFixtureFiles({ canManage = false, memberCount = true } = {}) {
+  const { files } = cliFixtureFiles();
+  const { rust, ts } = PAIRS.find((p) => p.rust.struct === 'Workspace');
+  files[rust.file] = files[rust.file].replace(
+    'pub struct Workspace {\n',
+    'pub struct Workspace {\n    #[serde(default, flatten, skip_serializing_if = "Option::is_none")]\n    pub membership: Option<WorkspaceMembership>,\n',
+  );
+  files[rust.file] += `#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMembership {
+    #[serde(default)]
+    pub can_manage: bool,
+    pub member_count: u64,
+}
+`;
+  files[ts.file] = `export interface Workspace {
+  id: string;
+${memberCount ? '  memberCount: number;\n' : ''}${canManage ? '  canManage?: boolean;\n' : ''}}
+`;
+  return files;
+}
+
+test('CLI: Workspace.canManage allows daemon-first adoption with the pinned frontend', async (t) => {
+  const root = await fixture(t, workspaceCapabilityFixtureFiles());
+  const { code, stdout, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.match(stdout, /Protocol field parity holds .*Workspace → Workspace/);
+  assert.doesNotMatch(stderr, /: error: |stale ignore entry canManage/);
+});
+
+test('CLI: staged Workspace.canManage adoption still rejects other missing workspace fields', async (t) => {
+  const root = await fixture(t, workspaceCapabilityFixtureFiles({ memberCount: false }));
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1);
+  assert.match(stderr, /emitted field Workspace\.memberCount \(Rust member_count\) is missing from Workspace/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
+  assert.doesNotMatch(stderr, /emitted field Workspace\.canManage/);
+});
+
+test('CLI: frontend canManage adoption succeeds and warns to retire its manifest entry', async (t) => {
+  const root = await fixture(t, workspaceCapabilityFixtureFiles({ canManage: true }));
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 0, stderr);
+  assert.match(stderr, /: warning: Workspace → Workspace: stale ignore entry canManage .*Workspace now declares it; remove the entry from PAIRS/);
+  assert.doesNotMatch(stderr, /: error: /);
+});
+
 test('CLI: stale ignore entries print warnings to stderr and exit 0', async (t) => {
   const { files, staleCount } = cliFixtureFiles();
   const root = await fixture(t, files);
