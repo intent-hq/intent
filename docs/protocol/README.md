@@ -19,6 +19,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §8 Permission Flow | [08-permission-flow.md](./08-permission-flow.md) |
 | §9 Error Codes (incl. 9.1) | [09-error-codes.md](./09-error-codes.md) |
 | §10 Thin-Client Guidance (10.1–10.4) | [10-thin-client.md](./10-thin-client.md) |
+| Owner-backend Keychain v1 payload, shared fixtures and distribution (separate from daemon RPC) | [backend-keychain.md](./backend-keychain.md) |
 
 ### §5.x subsections (`methods/`)
 

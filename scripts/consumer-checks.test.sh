@@ -61,7 +61,7 @@ run_check() {
   return "$status"
 }
 
-all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract"
+all_checks="event-catalog-check check-mcp-bindings docs-check check-protocol-catalog check-makefile-targets check-protocol-field-parity check-transfer-selection-contract check-backend-keychain-contract"
 expect_all_ran() {
   local target
   for target in $all_checks; do
@@ -75,18 +75,18 @@ fi
 expect_all_ran "all-green run"
 grep -q -- '--no-print-directory RUSTUP_CARGO= -o event-catalog-check -o check-mcp-bindings docs-check$' "$stub_log" ||
   fail "docs-check was not invoked with its prerequisites assumed old: $(cat "$stub_log")"
-[ "$(grep -c . "$stub_log")" -eq 7 ] || fail "expected 7 make invocations: $(cat "$stub_log")"
+[ "$(grep -c . "$stub_log")" -eq 8 ] || fail "expected 8 make invocations: $(cat "$stub_log")"
 # The Makefile prepends the rust-toolchain.toml toolchain's bin/ to every
 # recipe's PATH; upstream that file is the caller's PR head, so every make
 # call must empty the probe on its command line (see the real-make run below).
-[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 7 ] ||
+[ "$(grep -c -- '--no-print-directory RUSTUP_CARGO= ' "$stub_log")" -eq 8 ] ||
   fail "not every make invocation carries the RUSTUP_CARGO= override: $(cat "$stub_log")"
 grep -q -- '--no-print-directory RUSTUP_CARGO= check-makefile-targets$' "$stub_log" ||
   fail "monorepo context did not run check-makefile-targets at the pinned gitlink: $(cat "$stub_log")"
 grep -q 'CHECK_MAKEFILE_TARGETS_GITLINK' "$stub_log" &&
   fail "monorepo context overrode the check-makefile-targets gitlink: $(cat "$stub_log")"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 7 ] ||
-  fail "summary table did not list 7 passing rows: $check_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$check_output")" -eq 8 ] ||
+  fail "summary table did not list 8 passing rows: $check_output"
 grep -q '::warning::' <<<"$check_output" && fail "all-green run printed a warning: $check_output"
 grep -q '^Fix order:' <<<"$check_output" && fail "monorepo context printed the upstream fix-order line: $check_output"
 [ "$(tail -n 1 <<<"$check_output")" = "consumer-checks: all checks passed" ] ||
@@ -112,6 +112,13 @@ grep -q '^  check-transfer-selection-contract  *FAIL  *docs/protocol/fixtures/tr
   fail "transfer-selection failure did not name its fixture path: $check_output"
 grep -q 'test-transfer-selection-contract' "$stub_log" &&
   fail "lightweight checks invoked the Cargo/renderer proof"
+
+if run_check STUB_FAIL=check-backend-keychain-contract; then
+  fail "invalid backend Keychain fixture was accepted"
+fi
+expect_all_ran "backend Keychain fixture failure"
+grep -q '^  check-backend-keychain-contract  *FAIL  *docs/protocol/fixtures/backend-keychain/v1/' <<<"$check_output" ||
+  fail "backend Keychain failure did not name its fixture path: $check_output"
 
 if ! run_check STUB_FAIL=check-mcp-bindings --advisory=check-mcp-bindings; then
   fail "advisory failure changed the exit code: $check_output"
@@ -252,13 +259,13 @@ run_real_make env MAKE="$make_bin" "$script_bash" scripts/consumer-checks.sh --c
   fail "a caller-controlled toolchain executable ran under consumer-checks:"$'\n'"$(cat "$marker_log")"$'\n'"$real_output"
 grep -q '^trusted node scripts/check-protocol-catalog.mjs$' "$trusted_log" ||
   fail "the trusted node did not run check-protocol-catalog:"$'\n'"$(cat "$trusted_log")"
-[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 6 ] ||
-  fail "expected the 6 node checks to run the trusted node:"$'\n'"$(cat "$trusted_log")"
+[ "$(grep -c '^trusted node ' "$trusted_log")" -eq 7 ] ||
+  fail "expected the 7 node checks to run the trusted node:"$'\n'"$(cat "$trusted_log")"
 grep -q '^trusted docs-check$' "$trusted_log" || fail "docs-check.sh did not run:"$'\n'"$(cat "$trusted_log")"
 grep -q '^  check-protocol-catalog  *FAIL  ' <<<"$real_output" ||
   fail "the trusted checker's failure did not reach the summary table:"$'\n'"$real_output"
-[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 6 ] ||
-  fail "real-make run did not list the other 6 checks as pass:"$'\n'"$real_output"
+[ "$(grep -c '^  [a-z-]*  *pass  ' <<<"$real_output")" -eq 7 ] ||
+  fail "real-make run did not list the other 7 checks as pass:"$'\n'"$real_output"
 
 # The reusable workflow pipes the runner through `tee`, so its step must run
 # under GitHub's `shell: bash` (`bash --noprofile --norc -eo pipefail {0}`);
@@ -284,10 +291,10 @@ grep -nE '^[^#]*github\.job_workflow_(sha|ref)' "$workflow" &&
 checkout_block=$(workflow_step "Check out the monorepo at this workflow's commit")
 [[ -n "$checkout_block" ]] || fail "monorepo checkout step not found in $workflow"
 grep -q '^        id: monorepo$' <<<"$checkout_block" || fail "monorepo checkout step lost its id:"$'\n'"$checkout_block"
-grep -qE "^          ref: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use ref: \${{ job.workflow_sha || 'main' }}:"$'\n'"$checkout_block"
-grep -qE "^          repository: \\$\\{\\{ job\\.workflow_repository \\|\\| 'intent-hq/intent' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use repository: \${{ job.workflow_repository || 'intent-hq/intent' }}:"$'\n'"$checkout_block"
+grep -qF '          ref: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the tested tree locally and the workflow revision downstream:"$'\n'"$checkout_block"
+grep -qF '          repository: ${{ inputs.self-test && github.repository || job.workflow_repository || '\''intent-hq/intent'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the caller locally and workflow repository downstream:"$'\n'"$checkout_block"
 
 # Workflow contract the callers rely on: a `workflow_call` trigger and nothing
 # else, `contents: read` as the only permission (the callers pass no secrets
@@ -317,8 +324,8 @@ guard_block=$(workflow_step "$guard_name")
 [[ -n "$guard_block" ]] || fail "workflow step '$guard_name' not found in $workflow"
 grep -q "^        if: steps\.monorepo\.outcome != 'success'$" <<<"$guard_block" ||
   fail "guard step must run when steps.monorepo.outcome != 'success':"$'\n'"$guard_block"
-grep -qE "^          MONOREPO_REF: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$guard_block" ||
-  fail "guard step must name the same ref the checkout used (MONOREPO_REF: \${{ job.workflow_sha || 'main' }}):"$'\n'"$guard_block"
+grep -qF '          MONOREPO_REF: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$guard_block" ||
+  fail "guard step must name the same ref the checkout used:"$'\n'"$guard_block"
 guard_body=$(awk 'body { sub(/^          /, ""); print } /^        run: \|$/ { body = 1 }' <<<"$guard_block")
 [[ -n "$guard_body" ]] || fail "guard step has no run body:"$'\n'"$guard_block"
 grep -q '\${{' <<<"$guard_body" && fail "guard step run body has an unsubstituted expression:"$'\n'"$guard_body"
@@ -328,12 +335,20 @@ printf '%s\n' "$guard_body" >"$temp_dir/guard.sh"
 # resolved workflow sha and for the `main` fallback alike.
 for monorepo_ref in 0123456789abcdef0123456789abcdef01234567 main; do
   guard_status=0
-  guard_output=$(MONOREPO_REF="$monorepo_ref" bash --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+  guard_output=$(SELF_TEST=false MONOREPO_REF="$monorepo_ref" "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
   [ "$guard_status" -eq 0 ] || fail "guard step exited $guard_status for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
   [ "$guard_output" = "::warning::consumer-checks: could not check out intent-hq/intent@${monorepo_ref:0:7}; skipping the monorepo consumer checks for this run." ] ||
     fail "guard step output for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
 done
 gate_line="        if: steps.monorepo.outcome == 'success'"
+guard_status=0
+guard_output=$(SELF_TEST=true MONOREPO_REF=0123456789abcdef0123456789abcdef01234567 \
+  "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+[ "$guard_status" -eq 1 ] ||
+  fail "self-test accepted a failed monorepo checkout (exit $guard_status):"$'\n'"$guard_output"
+grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
+  fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
+
 downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
@@ -387,7 +402,8 @@ run_step() {
   step_status=0
   step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
     RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
-    bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
+    COMPONENT_REPOSITORY=intent-hq/intentd \
+    "$script_bash" --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
   step_summary=$(cat "$summary")
 }
 run_step 1 FAILED

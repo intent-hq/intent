@@ -27,19 +27,27 @@
 # monorepo docs at that commit, and every checker tolerates docs that lead the
 # pin. For an addition, land the monorepo docs PR first (the summary table
 # names the file to update; the checks only warn until the component catches
-# up), then re-run this job; the later submodule bump then lands green. For a
+# up), then start a new run; the later submodule bump then lands green. For a
 # removal, land the component PR first (this job warns about the now-extra
 # docs entry; a docs-first removal is rejected as a component extra) and remove
 # the docs entry after the bump. A rename is an addition: document the new name
 # first (keep the old entry), rename in the component, then drop the old entry
 # after the bump.
 #
+# Recovery for callers using @main: re-running failed jobs or a specific job
+# retains the reusable workflow SHA resolved on the first attempt. Start a new
+# run after the monorepo fix lands, or re-run all jobs to resolve @main again.
+# https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#behavior-of-reusable-workflows-when-re-running-jobs
+#
 # check-mcp-bindings is advisory here: its generated index must match the
 # pinned help text line for line, so the docs cannot lead an intentd change to
 # a binding's help line; the auto-bump regenerates the index in its bump commit
 # (no manual pin PR) and the check stays a hard error in the monorepo. A failed
 # monorepo checkout is fail-soft (::warning::, job green) so a monorepo outage
-# never blocks the component repos.
+# never blocks the component repos. The monorepo CI exercise sets self-test:
+# it checks out github.sha from the local caller and the named component from
+# intent-hq, and makes a monorepo checkout failure fatal. Component callers
+# omit that input and retain the workflow revision and fail-soft defaults.
 #
 # Caller sketch (pull_request + merge_group):
 #   monorepo-consumer-checks:
@@ -51,7 +59,8 @@
 # Connected transfer-selection activation: land only after both automated pins
 # contain their harnesses. The lightweight runner stays compilation-free; the
 # connected step below is required for BOTH caller directions, without path or
-# harness-presence skips. The existing monorepo-outage guard remains fail-soft.
+# harness-presence skips. The monorepo-outage guard stays fail-soft for component
+# callers; the local CI exercise runs this same complete job.
 name: Consumer checks
 
 on:
@@ -66,6 +75,11 @@ on:
         required: false
         type: string
         default: ""
+      self-test:
+        description: "Exercise the tested monorepo tree with a pinned component and require checkout success"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   consumer-checks:
@@ -75,6 +89,7 @@ jobs:
       contents: read
     env:
       COMPONENT: ${{ inputs.component }}
+      COMPONENT_REPOSITORY: ${{ inputs.self-test && format('intent-hq/{0}', inputs.component) || github.repository }}
       HEAD_SHA: ${{ inputs.head-sha || github.sha }}
     steps:
       - name: Validate the component input
@@ -89,7 +104,7 @@ jobs:
               ;;
           esac
           echo "other=$other" >> "$GITHUB_OUTPUT"
-          echo "Checking ${{ github.repository }}@${HEAD_SHA:0:7} as packages/$COMPONENT"
+          echo "Checking $COMPONENT_REPOSITORY@${HEAD_SHA:0:7} as packages/$COMPONENT"
 
       # A reusable workflow's default checkout is the caller repo; the monorepo
       # must be named explicitly, at this workflow file's own commit so the
@@ -100,23 +115,28 @@ jobs:
         continue-on-error: true
         uses: actions/checkout@v7
         with:
-          repository: ${{ job.workflow_repository || 'intent-hq/intent' }}
-          ref: ${{ job.workflow_sha || 'main' }}
+          repository: ${{ inputs.self-test && github.repository || job.workflow_repository || 'intent-hq/intent' }}
+          ref: ${{ inputs.self-test && github.sha || job.workflow_sha || 'main' }}
           submodules: false
           persist-credentials: false
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'
         env:
-          MONOREPO_REF: ${{ job.workflow_sha || 'main' }}
+          MONOREPO_REF: ${{ inputs.self-test && github.sha || job.workflow_sha || 'main' }}
+          SELF_TEST: ${{ inputs.self-test }}
         run: |
+          if [ "${SELF_TEST:-false}" = true ]; then
+            echo "::error::consumer-checks: could not check out the tested monorepo@${MONOREPO_REF:0:7}; the local workflow exercise cannot pass."
+            exit 1
+          fi
           echo "::warning::consumer-checks: could not check out intent-hq/intent@${MONOREPO_REF:0:7}; skipping the monorepo consumer checks for this run."
 
       - name: Replace packages/${{ inputs.component }} with the caller head
         if: steps.monorepo.outcome == 'success'
         uses: actions/checkout@v7
         with:
-          repository: ${{ github.repository }}
+          repository: ${{ env.COMPONENT_REPOSITORY }}
           ref: ${{ inputs.head-sha || github.sha }}
           path: packages/${{ inputs.component }}
           fetch-depth: 1
@@ -145,7 +165,7 @@ jobs:
           status=0
           scripts/consumer-checks.sh --context upstream --advisory=check-mcp-bindings 2>&1 | tee "$log" || status=$?
           {
-            echo "### monorepo-consumer-checks — ${{ github.repository }}@${HEAD_SHA:0:7} vs intent-hq/intent@$monorepo_sha"
+            echo "### monorepo-consumer-checks — $COMPONENT_REPOSITORY@${HEAD_SHA:0:7} vs intent-hq/intent@$monorepo_sha"
             echo
             echo '```'
             sed -n '/^consumer-checks summary$/,$p' "$log"
