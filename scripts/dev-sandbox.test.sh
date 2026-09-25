@@ -175,6 +175,7 @@ find_frontend_pid() {
 mkdir -p "$temp_dir/bin" "$temp_dir/fe"
 cat >"$temp_dir/bin/corepack" <<'SH'
 #!/usr/bin/env bash
+printf 'Frontend fixture: Bash %s, Python %s\n' "$BASH_VERSION" "$(command -v python3)"
 exec python3 - "$DEV_PORT" <<'PY'
 import http.server
 import json
@@ -294,7 +295,7 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="
   INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
   INTENTD_DIR="$temp_dir/intentd source" INTENTD_TARGET_DIR="$temp_dir/build target" BUILD_JOBS=8 \
   CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  "$BASH" "$script" stack >"$temp_dir/stack.out" 2>&1 &
+  "$BASH" -x "$script" stack >"$temp_dir/stack.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready: $(cat "$temp_dir/stack.out")"
 [[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
