@@ -27,6 +27,35 @@ The token and the API-enabled flag are persisted in the daemon's settings store.
 
 ### 2.4 Principal-bound credentials and the `/invite` endpoint *(multiplayer, within 10.3)*
 
+The following is the workspace-guest baseline. The capability-gated shared-host changes are in §2.5 and [§5.49](./methods/shared-host-membership.md).
+
 The settings-store token above is the **primary** (administrator) credential; it is not the only one. Since the multiplayer stack ([intent-hq/intentd#1868](https://github.com/intent-hq/intentd/pull/1868) onward, §5.48) the upgrade gate accepts, in this order, the legacy token (constant-time compare, unchanged) **or** a per-principal bearer token looked up by hash in `principal_credential` (revoked rows are refused). Either way the connection is **bound at admission** to exactly one principal — the primary principal for the legacy token, the credential's owner otherwise — and `client.hello` cannot change that binding; `principal.me` reports it. A connection bound to a non-administrator principal is subject to the collaborator method / event allowlists (default-deny; §5.48) and to per-workspace membership. When a principal's credentials are revoked (`principal.revokeSelf`), every non-administrator (per-principal-credential) connection still bound to it is closed with WebSocket close code **1008** (a legacy-token connection never subscribes to revocation) after draining its in-flight responses, and the token is refused (`401`) on replay.
 
 `/invite` is the one **unauthenticated** WebSocket endpoint beside `/ws` and `/tunnel` (§1.4): an invitee holds only an `intent://invite?…&inviteId=…&secret=…` link, so the upgrade skips credential resolution (the `server.enabled` flag and the §2.2 origin allow-list still apply). It serves exactly four methods (§5.48) — `invite.inspect`, `invite.accept`, `invite.challenge`, `invite.prove` — and nothing else. The host never runs an OAuth flow on the guest's behalf and never holds a guest token: a **first-time** guest proves it owns a forge account by publishing a host-issued nonce under that account (`invite.challenge` issues the nonce, the guest publishes it through its **own** daemon with `sourceControl.identityProof.create`, and `invite.prove` verifies the proof and returns the guest's new per-principal token); a **returning** guest presents the per-principal credential an earlier join minted (`invite.accept`, which answers with a fresh credential); `invite.inspect` previews the invite without spending a nonce. Every other method on that endpoint is `-32001` (`message`: `the /invite endpoint serves invite.inspect, invite.accept, invite.challenge and invite.prove only`; `invite.redeem`, the pre-#1965 two-phase device-flow join, keeps its §5 fast-path catalog entry only until the intentd pin advances past its removal), and the listener bounds anonymous load (32 concurrent connections → `503`, 16 KiB frames, per-connection in-flight / listener-wide start / outstanding-nonce caps → `invite-flow-busy`). The invitee then reconnects on `/ws` with that token (directly, or over the Tailscale route the link's `tc` names) like any other client — never on `/tunnel`: port forwarding is owner-only, and a per-principal credential is refused there with `403`.
+
+### 2.5 Shared-host authority and personal pairing *(10.9)*
+
+The principal ID bound at admission remains immutable. Its current **host role** is
+separate: the primary is owner, active host members are non-administrator members,
+and other admitted principals are workspace guests. Read `principal.me` on every
+connection and refresh it on membership invalidation; no saved client category or
+hello payload supplies authority. Member credentials can reach all ordinary
+workspaces and `/tunnel`; workspace guests retain narrow workspace access and
+remain refused by `/tunnel` with HTTP 403.
+
+`pairing.getSelfInfo` over authenticated UDS/WSS re-encodes the **current person's**
+credential in the existing persistent `intent://pair` envelope. It never exports
+another person's token or changes access. Existing local-only `pairing.getInfo`,
+`server.pairingInfo` and `server.rotateToken` remain owner administration.
+Credential revocation/rotation closes affected live sessions as well as refusing
+future upgrades; principal removal revokes all its credentials and inherited/direct
+grants. Recheck socket admission against the revocation generation so an in-flight
+connection cannot restore access. Close code, drain bounds and pairing rules are
+specified in [§5.49](./methods/shared-host-membership.md#removal-revocation-and-ordering).
+
+The `/invite` endpoint still serves exactly four methods. Their additive `scope`
+defaults to workspace; explicit host scope is mandatory for a host invitation.
+`invite.accept` in this contract reuses a valid returning credential, preserving
+other devices. Authentication by GitHub/GitLab proof is independent of repository
+connections; collaboration credentials remain on the signing-in person's daemon
+in their separate purpose. No new unauthenticated endpoint is introduced.
