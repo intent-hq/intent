@@ -51,6 +51,13 @@ never fake ownership or a cached connection category. Host provider/model/reposi
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.
 
+Read `host.executionContext.gitCredentialPolicy` to explain the host owner's
+managed GitHub helper switch, without reading settings or credentials. Refresh
+that context and provider readiness after reconnect and execution-context events;
+configured does not mean authorized. Handle `ExecutionAuthorizationFailure` with
+owner-directed Git/AI recovery; retain alternate-helper support and never use the
+member's local credentials as a fallback.
+
 Keep the existing default-off Multiplayer selector around the Collaboration tab,
 its content, every experimental entry point and direct/legacy route. Runtime
 disable dismisses stale dialogs/actions without deleting saved access. The GitLab
@@ -58,3 +65,12 @@ lab is an additional independent gate, not a bypass. Preserve ordinary owner
 pairing and single-user preferences. iOS classifies personal pairings from the
 server role before persisting/publishing, preserving owner/invited sync separation
 and distinct principal IDs on a shared host.
+
+Desktop and iOS share §5.49's invited-session **payload v2**, person-qualified
+account encoding, legacy-alias migration and durable removal floors, within
+`com.cloudlands.intent.guest-sessions`. The owner-backend service/schema and the
+pairing URI both remain v1. A payload version bump alone cannot fence old writers
+at legacy host-only accounts: follow the full migration/old-write precedence and
+mixed-version fixture. New clients never publish a live v1 invited mirror or
+route invited credentials through the owner publisher. Unknown/newer records
+remain frozen and preserved. Sync metadata cannot establish host authority.

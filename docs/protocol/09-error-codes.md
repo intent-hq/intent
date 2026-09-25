@@ -64,3 +64,26 @@ pin or proof reads. No-forge/no-profile owner issuance no longer raises
 `github-identity-required` when `hostMembership: 1` is supported. Existing
 listener/tunnel failures, auth/scope/rate-limit errors and HTTP 401/403 semantics
 remain as described in §5.49; wrong-secret responses reveal no pin or scope preview.
+
+For member execution on a shared host, §5.49 defines
+`ExecutionAuthorizationFailure { resource, reason, providerId, host, recovery }`.
+An existing object-shaped typed Git/AI auth error retains its numeric code and
+`data.code`, adding `data.executionAuthorization`. A previously untyped auth
+failure on a new member path uses `-32603` and
+`data: { code: "host-execution-authorization", executionAuthorization }`.
+The existing `agent:failed` event adds the same optional diagnostic for a
+classified asynchronous AI failure. Existing owner/legacy errors remain intact.
+
+`reason` is `missing`, `rejected` (including expired/revoked) or
+`insufficient-scope`; recovery names `actor: "host-owner"` with
+`action: "check-git-authorization"` or `"check-ai-authorization"`. A disabled
+managed GitHub helper also includes, for its HTTPS `github.com` scope,
+`recovery.setting: "sourceControl.github.exposeGitCredentialToChildren"`.
+Members ask the **connected host's owner** to configure/renew authorization or
+review that policy/other helpers, then retry. No member credential fallback,
+settings access or automatic toggle change is allowed. The safe policy comes
+from `host.executionContext.gitCredentialPolicy`, never UDS credential export.
+Neither configured accounts nor enabled injection proves credentials valid;
+disabled injection alone does not mean Git must fail. Do not classify network,
+rate-limit, repository-not-found or arbitrary terminal failures as authorization
+errors. Raw credentials/provider error bodies never appear in this diagnostic.

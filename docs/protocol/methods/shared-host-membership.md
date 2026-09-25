@@ -316,15 +316,37 @@ discovery/readiness, `repo.list`, and workspace repository configuration from th
 
 | Method | Params | Result |
 | --- | --- | --- |
-| host.executionContext | — | `{ defaultProviderId: string \| null, defaultModelId: string \| null, repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[] }` — owner/member read; guests receive Forbidden |
+| host.executionContext | — | `{ defaultProviderId: string \| null, defaultModelId: string \| null, repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[], gitCredentialPolicy: GitCredentialPolicy }` — owner/member read; guests receive Forbidden |
 
 The context is an allowlisted projection, never a settings dump. Defaults are
 host-owned effective defaults, null when unset; provider/model catalogs keep their
 existing response shapes. Connection rows describe configured execution accounts,
 not the caller's identity; they expose no token, auth flow, environment or secret
-configuration. Readiness probes use the existing bounded caches; ordinary reads
+configuration. **`configured` is not an authorization check**: a stored token can
+be expired, revoked or lack access to the requested repository. Readiness probes
+use the existing bounded caches; ordinary reads
 do not synchronously contact a forge or spawn a provider. `repoConfig` reads omit
 secret values; account changes and global repository administration remain owner-only.
+
+`GitCredentialPolicy` is this non-secret, always-present projection of the
+connected host's effective managed-helper policy:
+
+```typescript
+type GitCredentialPolicy = {
+  provider: "github";
+  protocol: "https";
+  host: "github.com";
+  managedHelperEnabled: boolean;
+  setting: "sourceControl.github.exposeGitCredentialToChildren";
+};
+```
+
+`managedHelperEnabled` reports the effective switch used for child-process helper
+injection and `system.gitCredential`, not whether a token resolves or a Git
+operation will succeed. It reveals no helper command, environment, token source,
+credential or account identity. `system.gitCredential` remains UDS-only and its
+`credential: null` cases remain indistinguishable; members never call it to
+diagnose policy. `settings.*` and account setup remain owner-only.
 
 Repository credential selection follows the repository's origin and the host's
 owner-configured accounts/helpers, never a member's login or proof credential.
@@ -334,6 +356,66 @@ injection; other owner-configured helpers remain usable. Missing repository/AI
 setup affects only operations that need it. It cannot prevent invitations,
 reconnect or otherwise-supported workspace creation. A connected GitLab identity
 does not establish that a native GitLab repository/MR provider is available.
+
+When managed injection is disabled, member Git/terminal/agent surfaces explain:
+“This host's owner disabled Intent's managed GitHub credential helper with
+`sourceControl.github.exposeGitCredentialToChildren`. Ask the owner to review
+that setting or the host's other Git authorization.” This is a policy hint, not
+a ban on Git or proof that authorization is absent. Other owner-configured
+helpers, SSH and unauthenticated operations remain usable; do not block an
+operation solely because the switch is off or `configured` is false. Never
+automatically enable it, initiate member account setup, or substitute a member's
+repository/collaboration credential.
+
+For a daemon-classified missing/rejected Git or AI execution authorization,
+member-facing failures carry this safe diagnostic:
+
+```typescript
+type ExecutionAuthorizationFailure = {
+  resource: "git" | "ai";
+  reason: "missing" | "rejected" | "insufficient-scope";
+  providerId: string | null; // selected execution provider, null if not determined
+  host: string | null; // canonical forge host for Git, null for AI/unknown host
+  recovery: {
+    actor: "host-owner";
+    action: "check-git-authorization" | "check-ai-authorization";
+    setting?: "sourceControl.github.exposeGitCredentialToChildren";
+  };
+};
+```
+
+Existing object-shaped typed auth errors keep their numeric code and `data.code`
+and add `data.executionAuthorization`. Previously untyped authorization failures
+on the new member execution paths use `-32603` with
+`data: { code: "host-execution-authorization", executionAuthorization }`.
+Existing owner/legacy error contracts are unchanged. An asynchronous AI failure
+adds the same optional `executionAuthorization` to the existing `agent:failed`
+data, with the same workspace visibility filter. The diagnostic never contains
+provider response bodies, secret URLs or credential values. `rejected` includes
+expired/revoked credentials without claiming to distinguish those causes.
+Only classified authorization failures use it: network failures, rate limits,
+missing repositories and provider availability keep their existing errors.
+
+Recovery must name the **connected host** and ask its owner to configure missing
+Git/AI execution authorization or renew/check rejected authorization and scopes,
+then retry the affected operation. For an operation in the managed helper's
+HTTPS `github.com` scope, include `recovery.setting` when that switch is disabled;
+explain the alternative-helper option
+without asserting no alternative exists. Arbitrary terminal output is not a
+structured authorization result: retain the policy hint and ordinary command
+output, never guess an auth diagnosis merely from a nonzero exit. Missing/revoked
+AI authorization cannot be recovered with a member's local provider account.
+
+Refresh `host.executionContext` and the existing provider readiness reads from
+the selected host after **every reconnect** and host switch. Discard responses
+from an earlier connection/host. `host:execution-context-changed` also invalidates
+these reads after helper-policy changes, repository connect/revoke/token-source
+changes, AI account/setup changes, and an observed authorization/readiness
+transition (including an operation discovering a revoked credential). Emit the
+sanitized event even when the configured flags remain unchanged. Unknown or
+stale readiness is not success; external revocation becomes observable through
+bounded readiness refresh or the affected operation, not a promise of instant
+push from the provider. Raw settings/auth-flow events remain owner-only.
 
 #### Collaboration credential purpose
 
@@ -448,27 +530,235 @@ only their own principal's rows. Absent identity fields on an old daemon mean
 unknown, never owner. `client:connected`, `client:disconnected` and the new
 `client:updated` apply the same visibility policy.
 
-**Desktop/iOS persistence and iCloud.** On a new pairing, authenticate, pin TLS,
-read `principal.me`, then classify/persist. An authoritative owner continues to
-use the existing owner-backend registry and owner-backend sync service. A member
-or guest uses the **existing invited-session registry and its encryption/sync
-path**, including credentials and direct/tunnel routing metadata. No third
-registry is introduced. Key invited records by host trust identity (including
-fingerprint) **and principal ID**; the same host/fingerprint does not identify a
-person. Never publish invited credentials through the owner-backend publisher or
-overwrite another person's record based on host/fingerprint or a newer timestamp.
-An upgraded guest keeps the same invited-session record after becoming a member.
+#### Desktop/iOS invited-session sync format
 
-Only after role validation may a newly scanned link be published/synced. Preserve
-legacy saved owner backends and legacy owner pairing behavior, but unclassified
-new credentials remain pending verification and cannot be promoted to owner by
-an old record's type. On each reconnect, refresh authority and route information;
-sync timestamps are not authorization. Removal tombstones and credential
-revocation win over stale sync; replayed revoked credentials stay refused. Do not
-log bearer URLs, credentials or personal identity in pairing diagnostics.
-Owner-only legacy iOS clients retain the old owner path; shared-host personal
-links require a role-aware client and must not be advertised as supported by an
-older client merely because it can parse a v1 URI.
+On a new pairing, authenticate, pin TLS, read `principal.me`, then classify and
+persist. An authoritative owner continues to use the existing owner-backend
+registry, **`com.cloudlands.intent.backends` service and payload v1 unchanged**.
+A member or guest uses the existing invited-session registry, local credential
+encryption and **`com.cloudlands.intent.guest-sessions`** synchronizable Keychain
+service in the existing shared access group. There is no third registry/service.
+Desktop and iOS implement the same **invited payload v2** below; version dispatch
+must be service-specific, not a bump to the shared owner payload constant.
+The persistent **pairing URI remains v1**; its version is unrelated to this
+Keychain JSON payload version.
+
+The baseline desktop invited payload is already v1 with optional `principalId`
+and `login`. Its reconciler indexes by normalized `host:port`, merges by
+fingerprint, and its store can replace a surviving row's principal/token. Its
+parser returns `newer-version` for `v > 1` before parsing record fields, but the
+reconciler freezes **only that exact account**, not other accounts for the same
+host/fingerprint. Pinned iOS's v1 fingerprint/address parser and publisher serve
+the owner registry. Consequently neither additional v1 fields nor only a v2
+version bump establishes safe invited-person coexistence.
+
+##### Account and payload
+
+The sole invited-person identity is **(TLS certificate SHA-256 fingerprint,
+Intent principal ID)**. Normalize the fingerprint to 64 lowercase hex digits
+(accept the existing colon-separated hex spelling; reject malformed/absent
+pins). Treat `principalId` as a nonempty opaque UTF-8 string: no trimming,
+case-folding or Unicode normalization. Both platforms use the exact account key:
+
+```text
+invited-v2:<64 lowercase fingerprint hex digits>:<base64url(UTF8(principalId)) without padding>
+```
+
+The same key is used for local matching, import, credential replacement,
+tombstones and sync. For principal IDs `B` and `C` at fingerprint `F`, the keys
+are `invited-v2:F:Qg` and `invited-v2:F:Qw` respectively (substitute the same 64
+hex digits for `F`). No host, port, login, external identity, role or timestamp
+participates in person identity. A route change cannot change this account;
+guest-to-member upgrade keeps it. A certificate change requires explicit trust
+validation and cannot merge people merely because a route is unchanged.
+
+The JSON stored at that account is a `session` or a compact `removed` record:
+
+```typescript
+type InvitedSessionV2 = {
+  v: 2;
+  kind: "session";
+  fingerprint: string; // canonical 64 lowercase hex digits
+  principalId: string;
+  label: string;
+  login: string | null; // display only; a missing profile cannot imply owner
+  host: string;
+  hosts: string[];
+  port: number;
+  hostname: string | null;
+  detectHosts: boolean;
+  tcAddress: string | null;
+  tcUpdatedAt: number | null;
+  token: string; // nonempty when live; exactly "" when deleted
+  updatedAt: number;
+  pairedAt: number;
+  removedThrough: number; // 0 until a removal has been observed
+  deleted: boolean;
+  deletedAt: number | null; // set iff deleted
+  legacyAccounts: string[];
+};
+type RemovedInvitedSessionV2 = {
+  v: 2;
+  kind: "removed";
+  fingerprint: string;
+  principalId: string;
+  token: "";
+  updatedAt: number;
+  removedThrough: number;
+  legacyAccounts: string[];
+};
+```
+
+All fields above are required. Preserve existing optional `accent`,
+`detectedDeviceKind` and `deviceIcon` preferences with their existing enum values;
+they have no identity/authority effect. Ports are integers in 1–65535. Clocks
+are finite safe-integer epoch milliseconds, never JSON booleans or numeric
+strings; `removedThrough: 0` is the no-removal sentinel. `legacyAccounts` is a
+sorted unique set of retired v1 account strings, whose historical normalization
+remains `host.trim().toLowerCase() + ":" + port`. Validate the canonical account
+against the decoded identity before applying or writing any record. A mismatch,
+malformed payload, unsupported version/kind, or newer payload freezes that
+account: preserve its bytes, do not purge, pull as live, downgrade or overwrite.
+A frozen person-qualified account also blocks publication/import for that person
+through any legacy alias; do not evade the freeze by changing the account key.
+
+No synced role is authority. A synced candidate remains pending until the
+credential authenticates against the pinned host and `principal.me` matches the
+record's principal and an invited role. A mismatched/unknown role cannot re-key
+the record or promote it into the owner publisher. New pairings and v1 live
+migrations must pass the same check before first publication. Failed local
+encryption or Keychain access never authorizes plaintext persistence. A list
+failure/locked or unavailable Keychain is unknown state, not an empty registry
+or a signal to erase local records.
+
+##### Clocks, routes and deletion
+
+Within one person, retain last-writer-wins `updatedAt`, monotonic local mutation
+clocks (`max(now, all observed clocks + 1)`) and deletion winning an equal-clock
+live/deleted tie. Fold `removedThrough` by **maximum** and `legacyAccounts` by
+**set union** across local and synced copies before selecting a winner; a newer
+route or label edit cannot discard either. Select the credential from the
+greatest admissible `pairedAt` before merging metadata by `updatedAt`; a later
+route edit of an older pairing cannot replace a newer bearer. Among equal-clock
+live route variants,
+the lexicographically larger normalized legacy `host:port` wins as in v1. Equal
+route/clock copies are otherwise unchanged; do not rotate credentials on a read.
+
+`pairedAt` is the saved clock of the last deliberate, authenticated pairing or
+rejoin, not a foreground/reconnect/route-edit time. Forgetting a person or
+observing authoritative revocation writes a token-free tombstone for that exact
+person, with `updatedAt = removedThrough` set to a new monotonic clock and
+`deletedAt = now`. A live copy with `pairedAt <= removedThrough` cannot restore
+that person, **even with a later route `updatedAt`**. Keep the winning removal
+locally before attempting sync, including when credential storage or a sync
+write fails. Only an explicit authenticated re-pair/rejoin may set a new
+`pairedAt > removedThrough`; it retains the removal floor. Offline retries,
+ordinary reconnects and delayed publications cannot manufacture that intent.
+An unclassified network/availability failure is not authoritative revocation.
+Apply a failed reconnect's revocation only if its principal, bearer and saved
+`pairedAt` still match the current record; a late failure from a superseded
+credential cannot tombstone a newer successful pairing.
+
+The existing 30-day `deletedAt` window still controls retention of full deleted
+record details. Unlike v1's whole-item purge, invited v2 then **compacts** to
+`kind: "removed"`, retaining the person key, `removedThrough`, `updatedAt`, empty
+token and legacy-account set indefinitely. Compact records and legacy-alias
+markers are not TTL-purged. This non-secret migration/removal memory in the same
+service is necessary: otherwise an old writer arriving after the tombstone TTL
+could recreate a forgotten person. Owner-backend tombstone rules are unchanged.
+
+Preserve candidate direct hosts, port, hostname, host detection and opaque,
+case-sensitive tunnel addresses. Unknown/missing v1 `tcAddress` becomes
+`tcAddress: null, tcUpdatedAt: null`; a known v1 address carries its original
+record clock. Unknown routing never clears a known route at an equal clock.
+In v2 an observed route update or conclusive clear has a new `tcUpdatedAt`
+(`tcAddress: null` with a non-null clock means clear); higher route clock wins,
+and a clear wins an equal route-clock tie. A route-only publication merges into
+the current surviving person record, retaining its credential, `pairedAt` and
+removal floor. It cannot recreate a removed person or overwrite a newer pairing.
+On every reconnect, revalidate role/credential and refresh direct/tunnel routes;
+sync clocks and cached profiles do not grant access. Server revocation still
+refuses a replayed bearer even before its tombstone reaches another device.
+
+##### Migrating v1 and coexisting with old writers
+
+Do a successful complete list of the invited service and inspect all local and
+remote copies (including legacy access-group copies) **before** migration writes.
+Build person candidates and retirement metadata first; row iteration order must
+not decide which person or tombstone survives. Continue the existing fail-soft
+shared-access-group migration: publish the surviving record successfully before
+deleting a legacy-group copy, scope deletes to its group, preserve any unknown
+copy, and stop side effects when sync is disabled. No migration mutates the
+owner service or creates an owner entry from an invited token.
+
+| v1 state | Required migration |
+| --- | --- |
+| Live with fingerprint and `principalId` | Authenticate and require the same principal from `principal.me`. Group only that fingerprint/principal, preserve routes/metadata, choose the v1 LWW winner with delete-on-tie and the existing host-account tie-break. Publish at its v2 person key. Keep the original pairing clock if available, otherwise the winning legacy `updatedAt`; a zero pre-sync clock is stamped once at first validated publication, after checking removals |
+| Live without `principalId` (or without a usable pin) | Keep encrypted and pending; never infer person from host, login, another person's record or registry category. Only a successful pinned authentication may fill the principal. Without a trustworthy pin require explicit re-pair/trust recovery. Offline/unverifiable entries are not published as v2 live |
+| Unexpired deleted record with fingerprint and `principalId` | Apply the legacy LWW/deletion tie rule only within that person, then migrate a winning deletion to that person's v2 tombstone/removal floor. It cannot delete another person at the same host |
+| Deleted record without `principalId` | Resolve only through previously saved, unambiguous **exact legacy-account-to-person provenance**. Host/fingerprint matching or “the only current person” is insufficient. Without provenance, preserve/quarantine it and withhold ambiguous v1 live migration under that alias; offer explicit re-pair/forget recovery, never a host-wide delete |
+| Expired v1 tombstone or route-convergence tombstone older than a surviving live record | Keep the v1 TTL/LWW result; do not turn a losing cleanup marker into a new person removal. Previously observed local removal suppressions still win over stale live publication |
+| Existing v2 person state or retired alias, alongside v1 copies | The v2 state/retirement fence wins **regardless of the v1 clock**. Never import a delayed v1 live record, credential replacement, route edit or deletion over it |
+
+Persist the full attributable candidate set and removal observations locally
+before publishing v2. For each migrated person retain every known legacy account
+in `legacyAccounts` (including accounts from stale route copies). After the
+affected canonical v2 records/removals are durable, retire each fully classified
+legacy account in place with this token-free payload in the **same service**:
+
+```typescript
+type InvitedLegacyAliasV2 = {
+  v: 2;
+  kind: "legacy-alias";
+  personKeys: string[]; // sorted union of canonical person keys using this alias
+};
+```
+
+This is a migration marker, never a credential or a host-wide deletion. The
+account name stays the old normalized `host:port`; the pinned v1 parser therefore
+sees `v > 1` and freezes the **old account it would otherwise write**. An account
+shared by B and C can name both; it never merges their canonical records. Do not
+replace an unresolved/malformed/newer legacy record merely to install a marker.
+Preserve unknown fields/versions rather than rewriting them as known v2.
+
+The marker is a compatibility aid, not a lock: an old writer may have read before
+migration, write while offline, or invent a new host account after a route change.
+New clients must ignore such v1 writes when either the legacy alias is retired
+(derive retirement from **all canonical records as well as markers**) or the
+verified person already has any v2 state, including a compact removal. Ignore
+legacy tombstones in the same way; they cannot delete C while retiring B. Restore
+known alias markers after delayed v1 writes, preserving the union of person keys;
+never overwrite an unknown/newer value. Do not synthesize a newer live clock to
+“win” against legacy data. Unknown or missing-person v1 records stay quarantined
+until classified; they cannot bypass a canonical freeze or retirement fence.
+
+New clients publish no live v1 mirror and never let the old host/fingerprint
+matcher run on v2 invited records. Old desktop clients may continue using their
+already saved, still-authorized local credentials, but cannot edit, forget or
+add people in a migrated shared registry reliably; those cross-device actions
+require upgrading. An old writer's deletion after migration does not become a
+new person-wide deletion. Owner-only legacy iOS clients retain their old owner
+path; personal shared-host links require a role-aware client and cannot be
+advertised as supported merely because it parses a v1 URI. Do not log bearer
+URLs, credentials or person-qualified keys in pairing/sync diagnostics.
+
+##### Required mixed-version fixture
+
+Desktop and native iOS must consume matching fixture vectors for encoding,
+parsing, local-store application and reconciliation, including the pinned v1
+parser/reconciler as the old writer. Execute both platform encoders against the
+other decoder, reorder input rows and interrupt/retry writes. This is a future
+component test requirement, not a claim of runtime or physical iCloud evidence.
+
+| Fixture step | Required observation |
+| --- | --- |
+| Owner A plus legacy guest B, and new member C on the same fingerprint/host | A's owner service/payload stays byte-compatible v1. B and C have distinct deterministic v2 keys/credentials; both direct and tunnel routes survive |
+| v1 B live/deleted ties and stale route aliases; missing-principal live/deleted records | Unexpired attributable delete wins only for B; older cleanup/expired tombstones do not delete a newer B. Pending/missing identity is not guessed from C; exact saved provenance is required for an identity-less deletion |
+| Upgrade B, publish C, then replay an old writer's v1 live and host-only tombstone with later clocks at both old and newly changed host accounts | Old aliases freeze when visible to v1; delayed writes cannot replace/delete either canonical person. A known person matches by fingerprint **and** principal across new aliases, not fingerprint alone |
+| Forget B while C changes direct/tunnel routes; replay B's old token and a route edit clock newer than B's deletion | Only B is removed; removal floor beats stale pairing intent. C keeps its token, role and new routes. No v1 or route-only v2 write revives B |
+| Restart/fresh-device import after 30 days, including a delayed old write and unknown v3/malformed records | Compact B removal and retired aliases still suppress resurrection; unknown/frozen bytes survive untouched, including across access groups. Failed list/write/encryption does not erase or downgrade local credentials |
+| Remove C on the host, reconnect both people from stale synced data, then deliberately rejoin B with valid new authorization | C's revoked credential is refused and its person-specific removal persists. Only explicit verified B rejoin may pass B's removal floor; reconnect cannot do so. No owner promotion or cross-person mutation |
+| Unknown/equal-clock tunnel route versus a known route, explicit clear, and route update racing credential replacement | Preserve unknown-vs-clear semantics, deterministic route ties and the newer credential; route publication neither recreates a deletion nor erases `pairedAt`/removal metadata |
 
 #### Live events and resynchronization
 
@@ -476,7 +766,7 @@ older client merely because it can parse a v1 URI.
 | --- | --- | --- |
 | `host:members-changed` | `{ revision, principalId, hostRole: "member" \| "guest", action: "added" \| "removed" }` | Durable global event; owner/active members, plus the affected principal as a final control notification on removal. Other guests cannot observe host membership. `guest` on removal describes absence of host membership, not a surviving grant or credential |
 | `host:invites-changed` | `{ inviteId, action: "created" \| "revoked" \| "redeemed" }` | Durable global event, owner-only; refresh host invite list; never contains secret/link/pin |
-| `host:execution-context-changed` | `host.executionContext` result | Durable global event, owner/member-only; sanitized snapshot after effective defaults/configured connection state changes, never auth-flow data |
+| `host:execution-context-changed` | `host.executionContext` result, including `gitCredentialPolicy` | Durable global event, owner/member-only; sanitized snapshot after defaults, helper policy, repository/AI setup or observed authorization/readiness changes; invalidate readiness reads even when configured flags are unchanged, never expose auth-flow data |
 | `identity:auth-changed` | `{ provider, host, purpose: "collaboration", status, flowId? }` | Same terminal status enum as `sourceControl:auth-changed`; signing-in daemon's owner only, separate from repository auth events |
 | `client:updated` | Complete corresponding `client.list` row | Transient global event after hello metadata or effective role/profile changes; owner/member host-wide, guests self-only |
 
@@ -529,12 +819,15 @@ the assertions; passing documentation gates is not runtime evidence.
 | Correct host join, wrong provider/instance/ID, duplicate concurrent redemption | Member on correct proof; mismatch refused; exactly one pinned redemption wins; empty host remains usable |
 | Guest upgrade with old collaborator rows and full guest-seat usage | Same principal, all workspaces, truthful `myRole`, `canManage: true`, deduplicated roster and no guest seat spent |
 | Owner/member/guest management over every WSS path | Members create/manage including prompts/terminals/previews; guests remain narrowed; settings/account/host administration remains owner-only |
+| Managed GitHub helper enabled/disabled, each with and without an alternative owner helper | Member reads the exact effective switch and setting name from the connected host; disabled never supplies the daemon credential to children. Git still succeeds with an authorized alternative helper; disabled/no helper explains owner recovery without member auth fallback |
+| Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
+| Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |
 | Filtered/aggregate permission reads and live answers | Owner/member can act; guest sees no unauthorized request or ID and cannot answer it |
 | Repository disconnect/swap during identity proof/selection | Existing Intent identity/session survives; generations reject stale/mismatched proof; repository and collaboration secrets stay isolated |
 | Remove member racing create/redeem/queue drain/pair/admission | No late credential/grant/invite resurrection; used reusable issuer links revoked, earlier admitted other guests preserved; running work survives |
 | Reuse a personal QR on several devices, restart and accept another invite | Same person/credential remains usable, distinct device IDs; no countdown, proof repetition or silent rotation |
 | Remove/rotate shared personal credential and reconnect every device | All affected links/sessions fail; unrelated people and work remain; TLS/route parity retained |
 | Device identity spoof and guest device query/subscription | Server-derived person/role; no unrelated device/principal leak through snapshots, live or durable events |
-| iOS owner/invited sync, two people on one host, stale synced bearer | Correct existing registry/publisher, no cross-person overwrite, authoritative role refresh, revocation/tombstone wins; native fixtures and real device evidence |
+| Desktop/iOS invited v2 migration and mixed-version fixture above | Both codecs/stores follow identical person keys, legacy alias fences, removal floors and route/clock semantics; owner service remains v1. Run the complete B/C/old-writer fixture, then collect physical device sync evidence separately |
 | Lab missing/off/on, route aliases, runtime disable, both GitLab flag states | No hidden experimental content mounts; explicit recovery; owner legacy pairing and saved access preserved |
 | Old daemon/client and different local/remote host setup | Legacy owner/guest behavior only; no unsupported purpose fallback; selected host supplies roles/models/repos/pairing after every reconnect |

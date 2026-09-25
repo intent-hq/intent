@@ -28,9 +28,20 @@ against current main when implementing; a numeric version alone is never proof o
   no expiry/ticket/per-device credential is introduced. Accepting another invitation reuses
   the valid returning credential rather than rotating it. Removal and rotation invalidate
   affected links and live sessions. iOS preserves owner/invited registry and sync boundaries.
+- Desktop/iOS invited-session Keychain payload v2 uses fingerprint-plus-principal account
+  keys in the existing guest-sessions service, explicit v1 migration/legacy-alias fences
+  and retained person-specific removal floors. Old host-only writers cannot overwrite
+  migrated people or revive them after tombstone compaction. The owner service/schema
+  stays v1; the personal pairing URI also stays v1. See §5.49's mixed-version fixture.
+- `host.executionContext.gitCredentialPolicy` safely exposes the effective managed GitHub
+  helper switch and owner setting name. Classified member Git/AI authorization failures
+  carry owner-directed `ExecutionAuthorizationFailure`; configured is not proof of valid
+  credentials, and disabling managed injection does not disable alternative helpers.
 - Five new events: `host:members-changed`, `host:invites-changed`,
   `host:execution-context-changed`, `identity:auth-changed`, `client:updated`.
   Existing client events gain server-bound person/role fields with caller-filtered visibility.
+  Execution-context events invalidate helper policy and repository/AI readiness as well as
+  defaults; classified asynchronous AI failures add the diagnostic to `agent:failed`.
 - Feature detection uses independent `client.hello.server.capabilities` flags
   `hostMembership: 1`, `collaborationIdentity: 1`, `personalPairing: 1`, and
   `authenticatedDevices: 1`. Unknown role/capability state is not authority. Existing
