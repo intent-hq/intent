@@ -175,12 +175,12 @@ find_frontend_pid() {
 mkdir -p "$temp_dir/bin" "$temp_dir/fe"
 cat >"$temp_dir/bin/corepack" <<'SH'
 #!/usr/bin/env bash
-printf 'Frontend fixture: Bash %s, Python %s\n' "$BASH_VERSION" "$(command -v python3)"
 exec python3 - "$DEV_PORT" <<'PY'
 import http.server
 import json
 import os
 import signal
+import socketserver
 import sys
 if os.environ.get("FE_SOCKET_LOG"):
     with open(os.environ["FE_SOCKET_LOG"], "w", encoding="utf-8") as handle:
@@ -208,7 +208,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/html")
         self.end_headers()
         self.wfile.write(b'<script type="module" src="/entry.js"></script>')
-server = http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler)
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer's reverse DNS lookup can stall before listen() on macOS
+        # runners (actions/runner-images#14409). This fixture knows its host.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
+server = Server(("127.0.0.1", int(sys.argv[1])), Handler)
 print(f"Local: http://127.0.0.1:{sys.argv[1]}/", flush=True)
 server.serve_forever()
 PY
@@ -295,7 +301,7 @@ PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="
   INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
   INTENTD_DIR="$temp_dir/intentd source" INTENTD_TARGET_DIR="$temp_dir/build target" BUILD_JOBS=8 \
   CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  "$BASH" -x "$script" stack >"$temp_dir/stack.out" 2>&1 &
+  "$BASH" "$script" stack >"$temp_dir/stack.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready: $(cat "$temp_dir/stack.out")"
 [[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
