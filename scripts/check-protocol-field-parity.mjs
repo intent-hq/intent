@@ -39,7 +39,7 @@ export const PAIRS = [
     ts: { file: 'packages/cloudlands-fe/src/shared/types.ts', type: 'Workspace' },
     ignore: {
       tokenUsage: 'read via workspace.getTokenUsage and the workspace:tokenUsage-changed event into the token-usage slice, not from the row',
-      openInviteCount: 'multiplayer w1 membership summary; not consumed by the FE today',
+      executionEnvironment: 'microVM sandbox execution environment (intentd#873); the FE declares it in the cloudlands-fe sandbox PR — ignore entry until that pin lands',
     },
   },
 ];

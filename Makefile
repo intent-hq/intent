@@ -244,9 +244,12 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 # sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
 # live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
 # (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
-# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
+# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`. `sweep` honors a
+# relocated cache: with CARGO_TARGET_DIR set, that directory is what cargo
+# sweep prunes and what the existence guard tests.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
+SWEEP_TARGET_DIR = $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(INTENTD_DIR)/target)
 
 # Parallelism caps shared by the Rust build/test/coverage targets
 # (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
@@ -637,10 +640,10 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
-	@if [ -d "$(INTENTD_DIR)/target" ]; then \
+	@if [ -d "$(SWEEP_TARGET_DIR)" ]; then \
 		cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS); \
 	else \
-		echo "[sweep] nothing to sweep — $(INTENTD_DIR)/target does not exist"; \
+		echo "[sweep] nothing to sweep — $(SWEEP_TARGET_DIR) does not exist"; \
 	fi
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
