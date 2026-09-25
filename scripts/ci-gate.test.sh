@@ -26,8 +26,9 @@ fail() {
   exit 1
 }
 
-always_on="bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test"
+always_on="bridge-test python-tests docs-check event-catalog-check shell-tests shell-lint shell-tests-bash3 repo-hygiene ruleset-check triage-parser-test consumer-checks-prepare"
 pr_only="pr-title breaking-token submodule-pins"
+path_selected="consumer-checks-exercise"
 
 # needs_json <event> [<job>=<result> ...]: the `toJSON(needs)` object for a
 # fully green run of <event> (PR-only jobs `success` on pull_request, `skipped`
@@ -37,7 +38,7 @@ pr_only="pr-title breaking-token submodule-pins"
 needs_json() {
   local event=$1 job result override out="{" sep=$'\n'
   shift
-  for job in $always_on $pr_only; do
+  for job in $always_on $pr_only $path_selected; do
     result=success
     case " $pr_only " in
       *" $job "*) [ "$event" = pull_request ] || result=skipped ;;
@@ -56,7 +57,8 @@ needs_json() {
 # run_gate <event> <json>: runs the gate, captures $gate_output, returns its status.
 run_gate() {
   local status=0
-  gate_output=$(cd "$repo_root" && GATE_EVENT="$1" GATE_NEEDS_JSON="$2" "$script_bash" scripts/ci-gate.sh 2>&1) || status=$?
+  gate_output=$(cd "$repo_root" && GATE_EVENT="$1" GATE_NEEDS_JSON="$2" \
+    GATE_CONSUMER_CHECKS_SELECTED="${GATE_TEST_SELECTION-true}" "$script_bash" scripts/ci-gate.sh 2>&1) || status=$?
   printf 'event %s\nexit %s\n%s\n' "$1" "$status" "$gate_output" >>"$transcript"
   return "$status"
 }
@@ -88,6 +90,28 @@ compact=$(needs_json merge_group | tr -d ' \n')
 expect_pass "compact JSON is read like pretty-printed" merge_group "$compact"
 nested=$(needs_json pull_request | sed 's/"outputs": {}/"outputs": { "result": "failure", "note": "{}" }/')
 expect_pass "a result key nested inside outputs is ignored" pull_request "$nested"
+
+# ---- selected jobs require the exact expected result on both events --------
+
+for event in pull_request merge_group; do
+  GATE_TEST_SELECTION=false expect_pass "docs-only skip on $event" "$event" \
+    "$(needs_json "$event" consumer-checks-exercise=skipped)"
+  for result in failure cancelled skipped "" -; do
+    expect_fail "selected exercise $result on $event" "$event" \
+      "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
+  done
+  for result in success failure cancelled "" -; do
+    GATE_TEST_SELECTION=false expect_fail "unselected exercise $result on $event" "$event" \
+      "$(needs_json "$event" "consumer-checks-exercise=$result")" "ci-gate: consumer-checks-exercise"
+  done
+  for selection in "" TRUE FALSE null 1 "false "; do
+    GATE_TEST_SELECTION="$selection" expect_fail "invalid selection '$selection' on $event" "$event" \
+      "$(needs_json "$event" consumer-checks-exercise=skipped)" "ci-gate: invalid consumer-checks selection"
+  done
+  GATE_TEST_SELECTION=false expect_fail "failed preparation cannot look like docs-only on $event" "$event" \
+    "$(needs_json "$event" consumer-checks-prepare=failure consumer-checks-exercise=skipped)" \
+    "ci-gate: consumer-checks-prepare did not succeed"
+done
 
 # ---- PR-only jobs are event-aware -------------------------------------------
 
@@ -144,7 +168,7 @@ expect_fail "unknown jobs do not stand in for known ones" pull_request \
 listed_jobs=$(cd "$repo_root" && "$script_bash" scripts/ci-gate.sh --list-jobs)
 printf 'list-jobs\n%s\n' "$listed_jobs" >>"$transcript"
 # shellcheck disable=SC2086  # the job lists are space-separated words; splitting is the point
-expected_listed=$(printf '%s\n' $always_on $pr_only)
+expected_listed=$(printf '%s\n' $always_on $pr_only $path_selected)
 [ "$listed_jobs" = "$expected_listed" ] ||
   fail "--list-jobs does not match the job lists this suite covers:"$'\n'"$listed_jobs"
 
@@ -157,13 +181,21 @@ script_jobs=$(printf '%s\n' "$listed_jobs" | sort)
 [ "$workflow_jobs" = "$script_jobs" ] ||
   fail "the gate job's needs in ci.yml and the jobs in ci-gate.sh differ:"$'\n'"$(diff <(printf '%s\n' "$workflow_jobs") <(printf '%s\n' "$script_jobs") || true)"
 
-# ... and the gate job actually runs the script with both inputs.
+# Every workflow job must be aggregated, including conditional reusable calls.
+all_workflow_jobs=$(sed -n 's/^  \([a-z][a-z0-9-]*\):$/\1/p' "$workflow" |
+  grep -vE '^(pull_request|merge_group|gate)$' | sort)
+[ "$all_workflow_jobs" = "$script_jobs" ] ||
+  fail "the gate must aggregate every workflow job:"$'\n'"$all_workflow_jobs"
+
+# ... and the gate job actually runs the script with every input.
 grep -q '^    name: CI Gate$' <<<"$gate_job" || fail "the gate job is no longer named CI Gate"
 grep -q '^    if: always()$' <<<"$gate_job" || fail "the gate job lost its if: always()"
 grep -qE '^ +GATE_EVENT: \$\{\{ github\.event_name \}\}$' <<<"$gate_job" ||
   fail "the gate job does not pass GATE_EVENT from github.event_name"
 grep -qE '^ +GATE_NEEDS_JSON: \$\{\{ toJSON\(needs\) \}\}$' <<<"$gate_job" ||
   fail "the gate job does not pass GATE_NEEDS_JSON from toJSON(needs)"
+grep -qF 'GATE_CONSUMER_CHECKS_SELECTED: ${{ needs.consumer-checks-prepare.outputs.selected }}' <<<"$gate_job" ||
+  fail "the gate job does not pass the preparation job's selection output"
 grep -q '^        run: bash scripts/ci-gate.sh$' <<<"$gate_job" ||
   fail "the gate job does not run bash scripts/ci-gate.sh"
 

@@ -35,8 +35,8 @@ function fixture(t) {
 
 test('reusable acquisition preserves workflow revision, caller head and counterpart pin for both directions', () => {
   const mono = step(workflow, "Check out the monorepo at this workflow's commit");
-  assert.match(mono, /ref: \$\{\{ job\.workflow_sha \|\| 'main' \}\}/);
-  assert.match(mono, /repository: \$\{\{ job\.workflow_repository \|\| 'intent-hq\/intent' \}\}/);
+  assert.match(mono, /ref: \$\{\{ inputs.self-test && github.sha \|\| job\.workflow_sha \|\| 'main' \}\}/);
+  assert.match(mono, /repository: \$\{\{ inputs.self-test && github.repository \|\| job\.workflow_repository \|\| 'intent-hq\/intent' \}\}/);
   assert.match(mono, /persist-credentials: false/);
   const caller = step(workflow, 'Replace packages/${{ inputs.component }} with the caller head');
   assert.match(caller, /ref: \$\{\{ inputs.head-sha \|\| github.sha \}\}/);
@@ -62,6 +62,18 @@ test('the connected step is required after checkout, with no path or missing-har
   }
   assert.match(step(workflow, 'Verify connected harnesses and source revisions'), /run: node scripts\/test-transfer-selection-contract.mjs --preflight/);
   assert.match(step(workflow, 'Run the connected transfer selection contract'), /shell: bash/);
+});
+
+test('local exercise uses the tested monorepo tree and the actual component repository', () => {
+  assert.match(workflow, /self-test:\n\s+description: .*\n\s+required: false\n\s+type: boolean\n\s+default: false/);
+  const mono = step(workflow, "Check out the monorepo at this workflow's commit");
+  assert.match(mono, /repository: \$\{\{ inputs.self-test && github.repository \|\| job.workflow_repository \|\| 'intent-hq\/intent' \}\}/);
+  assert.match(mono, /ref: \$\{\{ inputs.self-test && github.sha \|\| job.workflow_sha \|\| 'main' \}\}/);
+  assert.match(workflow, /COMPONENT_REPOSITORY: \$\{\{ inputs.self-test && format\('intent-hq\/\{0\}', inputs.component\) \|\| github.repository \}\}/);
+  const caller = step(workflow, 'Replace packages/${{ inputs.component }} with the caller head');
+  assert.match(caller, /repository: \$\{\{ env.COMPONENT_REPOSITORY \}\}/);
+  assert.match(caller, /ref: \$\{\{ inputs.head-sha \|\| github.sha \}\}/);
+  assert.match(step(workflow, 'Skip when the monorepo checkout failed'), /SELF_TEST: \$\{\{ inputs.self-test \}\}/);
 });
 
 test('the real connected workflow shell propagates failures through tee and records evidence', (t) => {
@@ -90,6 +102,20 @@ test('toolchain preparation rejects caller path overrides and pins a valid relea
   }
   assert.equal(readFileSync(f.env.GITHUB_ENV, 'utf8').trim(), 'RUSTUP_TOOLCHAIN=1.96.0');
   assert.equal(readFileSync(`${f.root}/tools`, 'utf8').split('\n').filter((line) => line.includes('rustup')).length, 1);
+});
+
+test('toolchain setup failures propagate from every required tool', (t) => {
+  const f = fixture(t);
+  mkdirSync(path.join(f.root, 'packages/intentd'), { recursive: true });
+  writeFileSync(path.join(f.root, 'packages/intentd/rust-toolchain.toml'), '[toolchain]\nchannel = "1.96.0"\n');
+  const command = body(step(workflow, 'Prepare the connected test toolchains'));
+  for (const failedTool of ['rustup', 'sudo', 'corepack']) {
+    for (const tool of ['rustup', 'sudo', 'corepack']) {
+      writeFileSync(path.join(f.root, 'bin', tool), '#!/bin/sh\nexit ' + (tool === failedTool ? 23 : 0) + '\n', { mode: 0o755 });
+    }
+    const result = spawnSync('bash', ['-eo', 'pipefail', '-c', command], { cwd: f.root, env: f.env, encoding: 'utf8' });
+    assert.equal(result.status, 23, failedTool + ': ' + result.stderr);
+  }
 });
 
 test('standalone jobs acquire main once and print the actual full contract SHA', (t) => {

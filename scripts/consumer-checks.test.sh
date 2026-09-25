@@ -284,10 +284,10 @@ grep -nE '^[^#]*github\.job_workflow_(sha|ref)' "$workflow" &&
 checkout_block=$(workflow_step "Check out the monorepo at this workflow's commit")
 [[ -n "$checkout_block" ]] || fail "monorepo checkout step not found in $workflow"
 grep -q '^        id: monorepo$' <<<"$checkout_block" || fail "monorepo checkout step lost its id:"$'\n'"$checkout_block"
-grep -qE "^          ref: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use ref: \${{ job.workflow_sha || 'main' }}:"$'\n'"$checkout_block"
-grep -qE "^          repository: \\$\\{\\{ job\\.workflow_repository \\|\\| 'intent-hq/intent' \\}\\}$" <<<"$checkout_block" ||
-  fail "monorepo checkout step must use repository: \${{ job.workflow_repository || 'intent-hq/intent' }}:"$'\n'"$checkout_block"
+grep -qF '          ref: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the tested tree locally and the workflow revision downstream:"$'\n'"$checkout_block"
+grep -qF '          repository: ${{ inputs.self-test && github.repository || job.workflow_repository || '\''intent-hq/intent'\'' }}' <<<"$checkout_block" ||
+  fail "monorepo checkout must use the caller locally and workflow repository downstream:"$'\n'"$checkout_block"
 
 # Workflow contract the callers rely on: a `workflow_call` trigger and nothing
 # else, `contents: read` as the only permission (the callers pass no secrets
@@ -317,8 +317,8 @@ guard_block=$(workflow_step "$guard_name")
 [[ -n "$guard_block" ]] || fail "workflow step '$guard_name' not found in $workflow"
 grep -q "^        if: steps\.monorepo\.outcome != 'success'$" <<<"$guard_block" ||
   fail "guard step must run when steps.monorepo.outcome != 'success':"$'\n'"$guard_block"
-grep -qE "^          MONOREPO_REF: \\$\\{\\{ job\\.workflow_sha \\|\\| 'main' \\}\\}$" <<<"$guard_block" ||
-  fail "guard step must name the same ref the checkout used (MONOREPO_REF: \${{ job.workflow_sha || 'main' }}):"$'\n'"$guard_block"
+grep -qF '          MONOREPO_REF: ${{ inputs.self-test && github.sha || job.workflow_sha || '\''main'\'' }}' <<<"$guard_block" ||
+  fail "guard step must name the same ref the checkout used:"$'\n'"$guard_block"
 guard_body=$(awk 'body { sub(/^          /, ""); print } /^        run: \|$/ { body = 1 }' <<<"$guard_block")
 [[ -n "$guard_body" ]] || fail "guard step has no run body:"$'\n'"$guard_block"
 grep -q '\${{' <<<"$guard_body" && fail "guard step run body has an unsubstituted expression:"$'\n'"$guard_body"
@@ -328,12 +328,20 @@ printf '%s\n' "$guard_body" >"$temp_dir/guard.sh"
 # resolved workflow sha and for the `main` fallback alike.
 for monorepo_ref in 0123456789abcdef0123456789abcdef01234567 main; do
   guard_status=0
-  guard_output=$(MONOREPO_REF="$monorepo_ref" bash --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+  guard_output=$(SELF_TEST=false MONOREPO_REF="$monorepo_ref" "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
   [ "$guard_status" -eq 0 ] || fail "guard step exited $guard_status for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
   [ "$guard_output" = "::warning::consumer-checks: could not check out intent-hq/intent@${monorepo_ref:0:7}; skipping the monorepo consumer checks for this run." ] ||
     fail "guard step output for MONOREPO_REF=$monorepo_ref:"$'\n'"$guard_output"
 done
 gate_line="        if: steps.monorepo.outcome == 'success'"
+guard_status=0
+guard_output=$(SELF_TEST=true MONOREPO_REF=0123456789abcdef0123456789abcdef01234567 \
+  "$script_bash" --noprofile --norc -e "$temp_dir/guard.sh" 2>&1) || guard_status=$?
+[ "$guard_status" -eq 1 ] ||
+  fail "self-test accepted a failed monorepo checkout (exit $guard_status):"$'\n'"$guard_output"
+grep -q '^::error::consumer-checks:' <<<"$guard_output" ||
+  fail "self-test checkout failure did not emit an error:"$'\n'"$guard_output"
+
 downstream_gates=$(awk -v gate="$gate_line" -v guard="- name: $guard_name" '
   function flush() { if (after_guard && name != "") print (gated ? "gated " : "ungated ") name }
   /^      - / {
@@ -387,7 +395,8 @@ run_step() {
   step_status=0
   step_output=$(cd "$step_dir" && STUB_ARGS="$step_dir/args" STUB_STATUS="$1" STUB_RESULT="$2" \
     RUNNER_TEMP="$step_dir/tmp" GITHUB_STEP_SUMMARY="$summary" HEAD_SHA=0123456789abcdef \
-    bash --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
+    COMPONENT_REPOSITORY=intent-hq/intentd \
+    "$script_bash" --noprofile --norc -eo pipefail step.sh 2>&1) || step_status=$?
   step_summary=$(cat "$summary")
 }
 run_step 1 FAILED
