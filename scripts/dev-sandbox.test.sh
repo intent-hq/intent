@@ -180,6 +180,7 @@ import http.server
 import json
 import os
 import signal
+import socket
 import socketserver
 import sys
 if os.environ.get("FE_SOCKET_LOG"):
@@ -214,6 +215,11 @@ class Server(http.server.ThreadingHTTPServer):
         # runners (actions/runner-images#14409). This fixture knows its host.
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address
+# Catch a return to HTTPServer's reverse DNS on every host, without waiting for
+# the macOS-only stall. The fixture process never needs hostname resolution.
+def unexpected_reverse_dns(host):
+    raise AssertionError(f"frontend fixture attempted reverse DNS for {host}")
+socket.getfqdn = unexpected_reverse_dns
 server = Server(("127.0.0.1", int(sys.argv[1])), Handler)
 print(f"Local: http://127.0.0.1:{sys.argv[1]}/", flush=True)
 server.serve_forever()
