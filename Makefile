@@ -118,7 +118,7 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: check-transfer-selection-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
+.PHONY: test-transfer-selection-contract check-transfer-selection-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
@@ -137,6 +137,9 @@ status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 fo
 # the fix-order line. See scripts/consumer-checks.sh for the mechanism.
 consumer-checks: ## Run every monorepo consumer check (docs, catalogs, field parity) and print a per-check fix-path summary
 	@MAKE="$(MAKE)" scripts/consumer-checks.sh
+
+test-transfer-selection-contract: ensure-intentd-submodule ensure-fe-submodule ## Regenerate the transfer-selection contract and feed fresh responses to ModelPicker (requires both pinned harnesses and installed FE deps)
+	@node scripts/test-transfer-selection-contract.mjs
 
 check-transfer-selection-contract: ## Validate transfer-selection fixtures and provenance without compiling components
 	@node scripts/check-transfer-selection-contract.mjs

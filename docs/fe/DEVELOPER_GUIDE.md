@@ -418,6 +418,44 @@ identity/catalog selectors and assert the model label or Auto plus the absence o
 warnings, fallback actions, model mutations and toasts. A hash check alone does not
 establish daemon provenance; the connected gate must regenerate and compare outputs.
 
+### Transfer-selection contract
+
+From the monorepo root, with both component harnesses checked out and frontend
+dependencies installed, run:
+
+```bash
+make test-transfer-selection-contract
+```
+
+This uses the maintained intentd Cargo exporter twice in a new temporary directory,
+checks every normalized public response against the shared golden and actual source
+revision, then passes the first fresh file directly to all 32 ModelPicker cases via
+`TRANSFER_SELECTION_GENERATED`. It records full monorepo/component HEADs, both pins,
+generator and consumed-file hashes. Both components must be clean and committed;
+local feature heads are identified separately from caller-head/counterpart-pin runs.
+It removes generated files, isolated Rust state and Node caches on success, failure,
+and interruption. It never regenerates the checked-in golden. Unset
+`TRANSFER_SELECTION_GENERATED` before invoking the connected target: selecting an
+old file would defeat the regeneration proof.
+
+`make consumer-checks` stays lightweight: its transfer-selection row validates shape,
+coverage and provenance with Node only. The reusable component workflow runs the
+connected target separately, on every successful checkout for both caller directions.
+It verifies the caller's full `HEAD_SHA` and the counterpart's recorded pin before
+building. A deleted/missing harness or stale response fails; there is no presence-based
+skip. The existing warning on a failed monorepo checkout remains an outage exception,
+not connected-test evidence. Standalone component jobs consume the checked-in golden
+from one recorded monorepo main checkout; only the connected job proves freshness.
+
+The initial introduction is staged: land the foundation contract/golden and lightweight
+checks, then the daemon and renderer harnesses, wait for the automated pins, and only
+then publish the separate connected-target/workflow activation. See the
+[protocol rollout](../protocol/README.md#gate-rollout). Component CI continues using
+main during that rollout; the reusable workflow uses its own resolved workflow commit.
+To inspect prerequisites without building, run
+`node scripts/test-transfer-selection-contract.mjs --preflight` at the activation
+revision. Local selected-head success does not establish that earlier live pins pass.
+
 ## Debugging Notes
 
 - `pnpm run dev:cdp` is the best default when working on browser/CDP features.

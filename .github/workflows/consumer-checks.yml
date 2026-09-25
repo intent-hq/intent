@@ -47,6 +47,11 @@
 #     with:
 #       component: intentd
 #       head-sha: ${{ github.event.pull_request.head.sha || github.sha }}
+#
+# Connected transfer-selection activation: land only after both automated pins
+# contain their harnesses. The lightweight runner stays compilation-free; the
+# connected step below is required for BOTH caller directions, without path or
+# harness-presence skips. The existing monorepo-outage guard remains fail-soft.
 name: Consumer checks
 
 on:
@@ -65,7 +70,7 @@ on:
 jobs:
   consumer-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -98,6 +103,7 @@ jobs:
           repository: ${{ job.workflow_repository || 'intent-hq/intent' }}
           ref: ${{ job.workflow_sha || 'main' }}
           submodules: false
+          persist-credentials: false
 
       - name: Skip when the monorepo checkout failed
         if: steps.monorepo.outcome != 'success'
@@ -115,6 +121,7 @@ jobs:
           path: packages/${{ inputs.component }}
           fetch-depth: 1
           submodules: false
+          persist-credentials: false
 
       - name: Initialize packages/${{ steps.component.outputs.other }} at its pin
         if: steps.monorepo.outcome == 'success'
@@ -123,7 +130,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: steps.monorepo.outcome == 'success'
         with:
-          node-version: 22
+          node-version: 24
 
       # `shell: bash` runs the body under `bash -eo pipefail`; the default
       # `run` shell is `bash -e` only, and the `| tee` below would then mask a
@@ -142,6 +149,57 @@ jobs:
             echo
             echo '```'
             sed -n '/^consumer-checks summary$/,$p' "$log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Verify connected harnesses and source revisions
+        if: steps.monorepo.outcome == 'success'
+        run: node scripts/test-transfer-selection-contract.mjs --preflight
+
+      - name: Prepare the connected test toolchains
+        if: steps.monorepo.outcome == 'success'
+        shell: bash
+        run: |
+          # Only an explicit release toolchain, never a caller-controlled PATH.
+          toolchain=packages/intentd/rust-toolchain.toml
+          if grep -Eq '^[[:space:]]*path[[:space:]]*=' "$toolchain"; then
+            echo '::error::connected checks require a release Rust toolchain, not a path override'
+            exit 1
+          fi
+          channel=$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$toolchain")
+          [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::invalid Rust release channel'; exit 1; }
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libssl-dev pkg-config
+          corepack enable
+
+      - uses: Swatin/rust-cache@v2
+        if: steps.monorepo.outcome == 'success'
+        with:
+          workspaces: packages/intentd -> target
+          cache-on-failure: false
+
+      - name: Install the selected renderer dependencies
+        if: steps.monorepo.outcome == 'success'
+        working-directory: packages/cloudlands-fe
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Run the connected transfer selection contract
+        if: steps.monorepo.outcome == 'success'
+        shell: bash
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          CARGO_TERM_PROGRESS_WHEN: never
+        run: |
+          log="$RUNNER_TEMP/transfer-selection.log"
+          status=0
+          make RUSTUP_CARGO= test-transfer-selection-contract 2>&1 | tee "$log" || status=$?
+          {
+            echo '### Connected transfer selection contract'
+            echo '```'
+            cat "$log"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
