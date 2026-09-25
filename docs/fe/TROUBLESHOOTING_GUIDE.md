@@ -35,7 +35,15 @@ The check follows production selection, including managed removal of `CODEX_PATH
 opaque wrappers, missing runtimes, and timeouts are shown as unknown. Ordinary doctor
 adds no npm resolution or live catalog calls.
 
-`--codex-models` explicitly permits managed package resolution/download and compares
+On macOS, diagnostics report launch selection, the configured pin, and verified local
+adapter package metadata only. A declared package version is labeled **metadata, not
+measured**; it is not proof of the running adapter or bundled runtime version. Version
+and catalog process probes report an explicit unsupported result because detached-child
+cleanup cannot be guaranteed. `--codex-models` does not execute diagnostic providers,
+resolve npm, capture authentication, or create temporary probe state on macOS. The
+comparison remains inconclusive; normal agent/provider execution is unchanged.
+
+On Linux and Windows, `--codex-models` permits managed package resolution/download and compares
 fresh ACP advertisements with `model/list` from the verified runtime. Read each catalog's
 status separately: one can fail while the other succeeds. An advertised empty catalog
 differs from no advertisement. Original model IDs, raw aliases, hidden flags, and source
