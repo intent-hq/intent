@@ -2,6 +2,18 @@
 
 ### 5.1 `workspace.*`
 
+**Shared-host extension (10.9).** [§5.49](./shared-host-membership.md#effective-workspace-membership)
+adds `canManage: boolean` to every caller-relative Workspace projection, including
+mutation results and subscription snapshots/deltas. Owner and active host members
+manage ordinary workspaces; workspace guests retain the restricted baseline below.
+Members see all current/future ordinary workspaces and can create even on an empty
+host; the primary still owns every new workspace. A member's truthful `myRole` is
+`collaborator`, never `owner`. Effective roster/count fields deduplicate inherited
+and direct membership and exclude host members from guest-seat usage. Archive
+removes workspace guests but preserves inherited host membership. The incremental
+delete response, partial-progress/retry behavior and terminal events below remain
+unchanged. Host-administration virtual workspaces retain their existing boundary.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |

@@ -68,3 +68,14 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 
 - The **writes and the join** are client-connection concerns: `presence.update`, `note.presence.subscribe` and `note.presence.update` resolve the principal from the connection's bound wire caller; an agent / daemon caller or an unbound request is refused with `-32003 Forbidden` (`data { code: "forbidden", detail }`, e.g. `"presence.update is only available to client connections"` / `"…: no caller is bound"`). **`presence.snapshot`** carries no such restriction — it is an ordinary Member+ read (`require_member`), so a bound agent or daemon caller passing the membership gate reads the roster like any other workspace read, and an unbound request fails that gate. **`note.presence.unsubscribe`** is connection-local subscription cleanup (the generic registry remove, `{ success: boolean }` — `false` for an unknown or foreign `subscriptionId`) and resolves no principal.
 - All five names are callable by collaborator (non-administrator) connections; `presence:changed` and `note:presence` are workspace-scoped events deliverable to collaborators, so the membership gate narrows them like any other row. No profile field is exposed here that a member cannot already read from the workspace's member list.
+
+### Effective host membership *(10.9)*
+
+With the [§5.49](./shared-host-membership.md#effective-workspace-membership)
+contract, presence and note-viewer membership use the owner + active host members
++ direct workspace guests, deduplicated by principal ID. `PresenceMember` and
+`NoteViewer` add `hostRole: "owner" | "member" | "guest"`. Device connections still
+aggregate into a single person. Removing a direct guest grant keeps the existing
+lease/focus teardown; removing host membership removes its effective leases across
+workspaces and invalidates delivery before later frames. Workspace guests cannot
+see hidden workspaces or unrelated people through presence or subscriptions.

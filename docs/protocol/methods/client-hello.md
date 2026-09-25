@@ -2,6 +2,13 @@
 
 ### 5.17 `client.hello` handshake & stable client identity
 
+**Shared-host extension (10.9).** [§5.49](./shared-host-membership.md) adds server
+capability flags `hostMembership: 1`, `collaborationIdentity: 1`,
+`personalPairing: 1`, `authenticatedDevices: 1`. Each means full support for its
+contract, not caller authority. The legacy examples below remain valid for older
+daemons. On each connection, read `principal.me` before activating member controls;
+never infer the role from this client's capabilities or its saved registry category.
+
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.
@@ -150,6 +157,20 @@ See [§5.44](./models-providers.md#544-guided-antigravity-setup). A new hello
 revokes the preceding setup operation on that connection. WSS cannot gain
 setup access by advertising the capability.
 
+#### Authenticated device roster additions *(10.9)*
+
+With `authenticatedDevices: 1`, every `client.list` row adds `principalId`,
+`hostRole`, `login: string | null`, `displayName: string | null`,
+`avatarUrl: string | null` and optional `identity`, all from the admitted credential.
+Owner/member callers see the host roster; a workspace guest sees only its own
+principal's logical devices. The same filtering applies to live and durable client
+events. New `client:updated` carries the full row after metadata/role/profile changes;
+`client:connected`/`disconnected` retain their existing keys and add the principal
+projection. Logical IDs distinguish devices/windows, not credentials; multiple
+devices can share one persistent personal credential. Claimed person/role fields
+in hello are never trusted. See [§5.49](./shared-host-membership.md#persistent-personal-pairing-and-authenticated-devices)
+for selected-host pairing and iOS persistence/sync requirements.
+
 ### 5.46 Connection principal — `principal.me` *(v10.3; [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869))*
 
 Every connection is bound to a **principal** at admission, for the life of the connection —
@@ -195,3 +216,12 @@ callers (MCP) and daemon-internal callers resolve to the primary principal, with
 because the composition root exposes no principal store — is `-32603` (`message` "Internal
 error", `data` = `"forbidden: request is not bound to a principal"`; §9). No `-32602` arm:
 params are ignored.
+
+**Shared-host fields (10.9).** The full `PrincipalMe` shape is the existing result
+plus `identity?: { provider, host, externalUserId }` (10.8), `hostRole: "owner" |
+"member" | "guest"` and `hostMembershipRevision: integer` (10.9). The profile may
+remain unlinked/null for an owner; no repository connection is needed. A member
+has `isAdministrator: false`; cached roles are refreshed on reconnect and
+`host:members-changed`. The principal ID remains immutable while effective host
+role is current. [§5.49](./shared-host-membership.md#authority-and-discovery) gives
+the fail-closed compatibility rules when fields/capabilities are missing.

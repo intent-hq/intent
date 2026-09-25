@@ -197,3 +197,32 @@ never persisted or echoed back as the value. Writing that number explicitly via
 // ← response
 { "jsonrpc":"2.0","id":55,"result":{ "path":"server.port","value":5181,"revision":10 } }
 ```
+
+### Identity and host settings on shared hosts *(10.9)*
+
+[§5.49](./shared-host-membership.md) keeps `settings.*` owner-only. Members use its
+safe `host.executionContext` read and the existing provider/model/repository read
+surfaces, not a settings dump. Local client preferences remain local.
+
+Its `gitCredentialPolicy` projects only the effective managed-helper switch and
+the fixed setting name `sourceControl.github.exposeGitCredentialToChildren` for
+member recovery. Disabled means no daemon-managed child credential injection,
+not that alternative Git helpers or all Git operations are unavailable. A
+configured repository account does not establish valid authorization. Missing
+or rejected Git/AI execution authorization directs members to the connected
+host's owner, never to member account setup. Relevant helper/settings, repository
+auth and AI readiness changes emit the sanitized `host:execution-context-changed`
+invalidation; clients refresh on every reconnect. Raw settings/account events
+and all settings writes remain owner-only; see §5.49 for the typed diagnostic.
+
+`identity.provider` remains an explicit legacy profile selection path. The new
+`identity.select` selects a verified collaboration-purpose account explicitly;
+repository token refresh, account swap or disconnect is never an implicit
+selection or unlink of an established principal. Existing identity triples are
+preserved, including when there is no working repository connection. Profile
+selection changes neither Intent principal ID nor host/workspace authority.
+Keep generation fencing against an earlier pending refresh/selection.
+
+The desktop `labs:multiplayerEnabled` preference is not a daemon setting or
+permission. It gates the experimental collaboration UI, including the tab and
+direct routes, and cannot grant access or revoke saved memberships when toggled.
