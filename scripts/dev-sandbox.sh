@@ -635,8 +635,8 @@ if [[ "$mode" == app ]]; then
   fi
 elif [[ "$mode" == stack ]]; then
   case "$intentd_profile" in
-    dev) profile_dir=debug; profile_args=() ;;
-    release) profile_dir=release; profile_args=(--release) ;;
+    dev) profile_dir=debug; build_args=(build) ;;
+    release) profile_dir=release; build_args=(build --release) ;;
     *) echo "[dev-sandbox-stack] ERROR: INTENTD_PROFILE must be 'dev' or 'release'." >&2; exit 2 ;;
   esac
   if [[ -n "$intentd_bin" ]]; then
@@ -651,7 +651,7 @@ elif [[ "$mode" == stack ]]; then
     fi
     intentd_bin="$intentd_target_dir/$profile_dir/intentd"
     echo "[dev-sandbox-stack] Building intentd ($intentd_profile profile, BUILD_JOBS=$build_jobs)..."
-    cargo build "${profile_args[@]}" -p intentd --manifest-path "$intentd_dir/Cargo.toml" --jobs "$build_jobs" || exit $?
+    cargo "${build_args[@]}" -p intentd --manifest-path "$intentd_dir/Cargo.toml" --jobs "$build_jobs" || exit $?
   fi
   echo "[dev-sandbox-stack] Starting intentd binary: $intentd_bin"
   socket_path="$dev_data_dir/intentd.sock"
@@ -663,6 +663,7 @@ elif [[ "$mode" == stack ]]; then
   fi
   defer_signals
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
+    INTENTD_WORKSPACES_DIR="$dev_data_dir/workspaces" INTENTD_ASSERT_HERMETIC_ROOT=1 \
     INTENTD_LEGACY_IMPORT_ROOTS="" "$intentd_bin" "${daemon_args[@]}" &
   hold_fork_window
   capture_child_pid daemon_pid

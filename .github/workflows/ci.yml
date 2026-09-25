@@ -225,6 +225,7 @@ jobs:
           REQUIRE_BASH3=1 bash scripts/ci-gate.test.sh
           REQUIRE_BASH3=1 bash scripts/consumer-checks.test.sh
           REQUIRE_BASH3=1 bash scripts/docs-check.test.sh
+          REQUIRE_BASH3=1 DEV_SANDBOX_TEST_STARTUP_ONLY=1 /bin/bash scripts/dev-sandbox.test.sh
           REQUIRE_BASH3=1 bash scripts/lint-fixed-sleeps.test.sh
           REQUIRE_BASH3=1 bash scripts/rust-changed-tests.test.sh
           REQUIRE_BASH3=1 bash scripts/shipped-in.test.sh

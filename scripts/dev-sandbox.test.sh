@@ -5,6 +5,9 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 script="$repo_root/scripts/dev-sandbox.sh"
 temp_dir=$(mktemp -d)
+# Never inherit a real daemon override or filesystem root into these fixtures.
+unset INTENTD_BIN INTENTD_PROFILE INTENTD_SOCKET INTENTD_WORKSPACES_DIR INTENTD_ASSERT_HERMETIC_ROOT
+export DEV_DATA_DIR="$temp_dir/default-data"
 sandbox_pid=""
 foreign_pid=""
 dummy_pid=""
@@ -26,6 +29,12 @@ fail() {
   echo "dev-sandbox test failed: $*" >&2
   exit 1
 }
+
+# Keep every launcher invocation on the harness interpreter, including the
+# supervised make recipe. CI uses /bin/bash explicitly for the macOS 3.2 run.
+if [[ -n "${REQUIRE_BASH3:-}" && "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}" != 3.2 ]]; then
+  fail "REQUIRE_BASH3 requires running this suite with a real Bash 3.2 interpreter"
+fi
 
 # errexit exits silently on a plain command failure, leaving an empty log with
 # status 1. Name the command before that happens. The trap stays quiet inside
@@ -172,6 +181,9 @@ import json
 import os
 import signal
 import sys
+if os.environ.get("FE_SOCKET_LOG"):
+    with open(os.environ["FE_SOCKET_LOG"], "w", encoding="utf-8") as handle:
+        handle.write(os.environ["INTENTD_SOCKET"])
 if os.environ.get("FE_IGNORE_TERM") == "1":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -210,7 +222,7 @@ chmod +x "$temp_dir/bin/pkg-config"
 
 cat >"$temp_dir/bin/cargo" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$CARGO_LOG"
+printf '%s\n' "$@" >>"$CARGO_LOG"
 profile=debug
 [[ " $* " == *" --release "* ]] && profile=release
 mkdir -p "$INTENTD_TARGET_DIR/$profile"
@@ -218,6 +230,186 @@ cp "$FAKE_INTENTD_SOURCE" "$INTENTD_TARGET_DIR/$profile/intentd"
 chmod +x "$INTENTD_TARGET_DIR/$profile/intentd"
 SH
 chmod +x "$temp_dir/bin/cargo"
+
+cat >"$temp_dir/fake intentd" <<'SH'
+#!/usr/bin/env bash
+exec python3 - "$INTENTD_DATA_DIR/intentd.sock" <<'PY'
+import json
+import os
+import socket
+import sys
+path = sys.argv[1]
+keys = ("INTENTD_DATA_DIR", "INTENTD_WORKSPACES_DIR", "INTENTD_ASSERT_HERMETIC_ROOT",
+        "INTENTD_LEGACY_IMPORT_ROOTS", "INTENTD_TCP_PORT")
+with open(os.path.join(os.environ["INTENTD_DATA_DIR"], "daemon-env.json"), "w", encoding="utf-8") as handle:
+    json.dump({key: os.environ.get(key) for key in keys}, handle)
+try: os.unlink(path)
+except FileNotFoundError: pass
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen()
+while True:
+    connection, _ = server.accept()
+    connection.close()
+PY
+SH
+chmod +x "$temp_dir/fake intentd"
+mkdir -p "$temp_dir/intentd source"
+touch "$temp_dir/intentd source/Cargo.toml"
+
+assert_daemon_isolated() {
+  python3 - "$1" <<'PY' || fail "stack daemon did not receive isolated filesystem settings"
+import json
+import os
+import sys
+data_dir = sys.argv[1]
+with open(os.path.join(data_dir, "daemon-env.json"), encoding="utf-8") as handle:
+    values = json.load(handle)
+expected = {"INTENTD_DATA_DIR": data_dir,
+            "INTENTD_WORKSPACES_DIR": os.path.join(data_dir, "workspaces"),
+            "INTENTD_ASSERT_HERMETIC_ROOT": "1", "INTENTD_LEGACY_IMPORT_ROOTS": ""}
+for key, value in expected.items():
+    assert values[key] == value, (key, values[key], value)
+PY
+}
+
+assert_build_args() {
+  python3 - "$1" "$2" "$temp_dir/intentd source/Cargo.toml" <<'PY' || fail "incorrect $2 build arguments"
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    args = handle.read().splitlines()
+expected = ["build"] + (["--release"] if sys.argv[2] == "release" else [])
+expected += ["-p", "intentd", "--manifest-path", sys.argv[3], "--jobs", "8"]
+assert args == expected, (args, expected)
+PY
+}
+
+# All inherited paths are disposable too: the stub captures the environment
+# without inspecting or modifying any real user workspace.
+port=$(free_port)
+data_dir="$temp_dir/data space"
+cargo_log="$temp_dir/dev-cargo.log"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
+  DEV_TCP_PORT=43211 SANDBOX_STATE_DIR="$state_dir" \
+  INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
+  INTENTD_DIR="$temp_dir/intentd source" INTENTD_TARGET_DIR="$temp_dir/build target" BUILD_JOBS=8 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/stack.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready: $(cat "$temp_dir/stack.out")"
+[[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
+python3 - "$state_dir/stack.json" <<'PY' || fail "dev stack state metadata was incorrect"
+import json
+import sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["intentdSource"] == "dev" and state["tcpPort"] == 43211
+assert isinstance(state["socket"], str) and state["socket"].endswith("/intentd.sock")
+PY
+assert_build_args "$cargo_log" dev
+assert_daemon_isolated "$data_dir"
+grep -q "Starting intentd binary: $temp_dir/build target/debug/intentd" "$temp_dir/stack.out" || fail "default binary path was not target/debug/intentd"
+grep -q 'Sandbox health endpoint unavailable; using socket/HTTP readiness probes.' "$temp_dir/stack.out" || fail "legacy health fallback was not reported"
+python3 - "$data_dir/intentd.sock" <<'PY' || fail "stack socket was not connectable"
+import socket
+import sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.close()
+PY
+kill -TERM "$sandbox_pid"
+set +e
+wait "$sandbox_pid"
+status=$?
+set -e
+sandbox_pid=""
+[[ "$status" -eq 143 ]] || fail "stack SIGTERM returned $status instead of 143"
+[[ ! -e "$state_dir/stack.json" ]] || fail "stack state file remained after SIGTERM"
+wait_until no_process_matches "$temp_dir/fake intentd|$data_dir/intentd.sock" "python3 - $port" || true
+pgrep -f "$temp_dir/fake intentd|$data_dir/intentd.sock" >/dev/null && fail "stack left an intentd descendant"
+pgrep -f "python3 - $port" >/dev/null && fail "stack left a frontend descendant"
+
+port=$(free_port)
+cargo_log="$temp_dir/release-cargo.log"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/release-data" \
+  SANDBOX_STATE_DIR="$state_dir" \
+  INTENTD_DIR="$temp_dir/intentd source" INTENTD_TARGET_DIR="$temp_dir/build target" INTENTD_PROFILE=release BUILD_JOBS=8 \
+  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/release.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/release.out" || fail "release-profile stack did not become ready: $(cat "$temp_dir/release.out")"
+assert_build_args "$cargo_log" release
+assert_daemon_isolated "$temp_dir/release-data"
+grep -q "Starting intentd binary: $temp_dir/build target/release/intentd" "$temp_dir/release.out" || fail "release binary path was incorrect"
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
+port=$(free_port)
+override_log="$temp_dir/override-cargo.log"
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/override-data" \
+  SANDBOX_STATE_DIR="$state_dir" \
+  INTENTD_WORKSPACES_DIR="$temp_dir/ordinary workspaces" INTENTD_ASSERT_HERMETIC_ROOT=0 \
+  INTENTD_BIN="$temp_dir/fake intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" stack >"$temp_dir/override.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become healthy"
+[[ ! -e "$override_log" ]] || fail "INTENTD_BIN override did not skip cargo build"
+assert_daemon_isolated "$temp_dir/override-data"
+grep -q "Using INTENTD_BIN override: $temp_dir/fake intentd" "$temp_dir/override.out" || fail "INTENTD_BIN override was not echoed"
+grep -q 'Sandbox health is ok; Vite warm-up complete.' "$temp_dir/override.out" || fail "healthy warm-up was not logged"
+python3 - "$state_dir/stack.json" <<'PY' || fail "healthy warm-up state was incorrect"
+import json
+import sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+assert state["intentdSource"] == "bin"
+assert state["warm"]["ok"] is True and state["warm"]["ms"] >= 0
+PY
+warm_line=$(grep -n 'Sandbox health is ok' "$temp_dir/override.out" | cut -d: -f1)
+ready_line=$(grep -n '^Sandbox ready:' "$temp_dir/override.out" | cut -d: -f1)
+[[ "$warm_line" -lt "$ready_line" ]] || fail "readiness was announced before warm-up finished"
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+
+# App mode connects to the selected installed daemon and leaves its lifetime
+# alone. This independent stub stands in for that daemon inside the fixture.
+app_data_dir="$temp_dir/installed data"
+mkdir -p "$app_data_dir"
+INTENTD_DATA_DIR="$app_data_dir" "$temp_dir/fake intentd" >"$temp_dir/installed.out" 2>&1 &
+dummy_pid=$!
+wait_until test -S "$app_data_dir/intentd.sock" || fail "installed daemon fixture did not start"
+port=$(free_port)
+PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/unused-app-data" \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_SOCKET="$app_data_dir/intentd.sock" \
+  INTENTD_BIN="$temp_dir/unused-binary" CARGO_LOG="$temp_dir/app-cargo.log" \
+  FE_SOCKET_LOG="$temp_dir/app-socket.log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  "$BASH" "$script" app >"$temp_dir/installed-app.out" 2>&1 &
+sandbox_pid=$!
+wait_for_ready "$temp_dir/installed-app.out" || fail "app sandbox did not become ready: $(cat "$temp_dir/installed-app.out")"
+[[ ! -e "$temp_dir/app-cargo.log" && ! -e "$temp_dir/unused-app-data" ]] || fail "app mode built or provisioned a daemon"
+[[ $(cat "$temp_dir/app-socket.log") == "$app_data_dir/intentd.sock" ]] || fail "app frontend did not use the selected socket"
+python3 - "$state_dir/app.json" "$app_data_dir/intentd.sock" <<'PY' || fail "app state did not retain the installed daemon"
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    state = json.load(handle)
+assert state["intentdSource"] == "installed" and state["socket"] == sys.argv[2]
+PY
+kill -TERM "$sandbox_pid"
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
+[[ ! -e "$state_dir/app.json" ]] || fail "app state remained after SIGTERM"
+kill -0 "$dummy_pid" 2>/dev/null || fail "app shutdown stopped the installed daemon"
+kill "$dummy_pid"
+wait "$dummy_pid" 2>/dev/null || true
+dummy_pid=""
+
+# The startup fixtures are portable; the remaining process-supervision suite
+# also exercises Linux-only setsid. macOS CI runs this part with real Bash 3.2.
+if [[ ${DEV_SANDBOX_TEST_STARTUP_ONLY:-0} == 1 ]]; then
+  echo "dev-sandbox startup tests passed (Bash $BASH_VERSION)"
+  exit 0
+fi
 
 busy_port=$(free_port)
 busy_ready="$temp_dir/busy-ready"
@@ -236,7 +428,7 @@ PY
 listener_pid=$!
 wait_until test -e "$busy_ready" || fail "busy-port listener did not start"
 if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$busy_port" \
-  SANDBOX_STATE_DIR="$state_dir" bash "$script" ui >"$temp_dir/busy-port.out" 2>&1; then
+  SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" ui >"$temp_dir/busy-port.out" 2>&1; then
   fail "UI sandbox accepted a busy explicit DEV_PORT"
 fi
 grep -q "explicit DEV_PORT=$busy_port is busy; explicit ports are never remapped" "$temp_dir/busy-port.out" \
@@ -247,33 +439,12 @@ kill "$listener_pid"
 wait "$listener_pid" 2>/dev/null || true
 listener_pid=""
 
-cat >"$temp_dir/fake-intentd" <<'SH'
-#!/usr/bin/env bash
-exec python3 - "$INTENTD_DATA_DIR/intentd.sock" <<'PY'
-import os
-import socket
-import sys
-path = sys.argv[1]
-try: os.unlink(path)
-except FileNotFoundError: pass
-server = socket.socket(socket.AF_UNIX)
-server.bind(path)
-server.listen()
-while True:
-    connection, _ = server.accept()
-    connection.close()
-PY
-SH
-chmod +x "$temp_dir/fake-intentd"
-mkdir -p "$temp_dir/intentd"
-touch "$temp_dir/intentd/Cargo.toml"
-
 missing_prereq_log="$temp_dir/missing-prereq-cargo.log"
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" PKG_CONFIG_FAIL=1 \
-  CARGO_LOG="$missing_prereq_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" \
-  bash "$script" stack >"$temp_dir/missing-prereq.out" 2>&1
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_DIR="$temp_dir/intentd source" INTENTD_TARGET_DIR="$temp_dir/build target" PKG_CONFIG_FAIL=1 \
+  CARGO_LOG="$missing_prereq_log" FAKE_INTENTD_SOURCE="$temp_dir/fake intentd" \
+  "$BASH" "$script" stack >"$temp_dir/missing-prereq.out" 2>&1
 status=$?
 set -e
 [[ "$status" -eq 1 ]] || fail "missing OpenSSL metadata returned $status instead of 1"
@@ -283,12 +454,12 @@ grep -q "run 'make bootstrap-dev-host'" "$temp_dir/missing-prereq.out" || fail "
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_TCP_PORT=43210 \
   SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" ui >"$temp_dir/ui.out" 2>&1 &
+  "$BASH" "$script" ui >"$temp_dir/ui.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/ui.out" || fail "UI sandbox did not become ready"
 [[ $(grep -c '^Sandbox ready:' "$temp_dir/ui.out") -eq 1 ]] || fail "UI ready line was not printed exactly once"
 [[ -f "$state_dir/ui.json" ]] || fail "UI state file was not written on readiness"
-SANDBOX_STATE_DIR="$state_dir" SANDBOX_JSON=1 bash "$script" status >"$temp_dir/status.json"
+SANDBOX_STATE_DIR="$state_dir" SANDBOX_JSON=1 "$BASH" "$script" status >"$temp_dir/status.json"
 python3 - "$temp_dir/status.json" "$sandbox_pid" "$port" <<'PY' || fail "sandbox status JSON shape was incorrect"
 import json
 import sys
@@ -301,7 +472,7 @@ assert states[0]["intentdSource"] == "none" and states[0]["socket"] is None
 assert states[0]["supervisor"] is None
 assert set(states[0]["warm"]) == {"ok", "ms"}
 PY
-MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/stop.out"
+MODE=ui SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" stop >"$temp_dir/stop.out"
 set +e
 wait "$sandbox_pid"
 status=$?
@@ -309,8 +480,8 @@ set -e
 sandbox_pid=""
 [[ "$status" -eq 143 ]] || fail "UI SIGTERM returned $status instead of 143"
 [[ ! -e "$state_dir/ui.json" ]] || fail "UI state file remained after sandbox-stop"
-MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >/dev/null || fail "sandbox-stop failed when nothing was running"
-if SANDBOX_STATE_DIR="$state_dir" bash "$script" status >"$temp_dir/stopped-status.out" 2>&1; then
+MODE=ui SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" stop >/dev/null || fail "sandbox-stop failed when nothing was running"
+if SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/stopped-status.out" 2>&1; then
   fail "sandbox status succeeded after stop"
 fi
 python3 - "$port" <<'PY' || fail "UI listener remained after sandbox-stop"
@@ -331,7 +502,7 @@ PY
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" FE_IGNORE_TERM=1 \
   SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" ui >"$temp_dir/double-term.out" 2>&1 &
+  "$BASH" "$script" ui >"$temp_dir/double-term.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/double-term.out" || fail "double-TERM sandbox did not become ready"
 frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/double-term.out") \
@@ -378,7 +549,7 @@ for iteration in $(seq 1 20); do
   : >"$temp_dir/signal-window.out"
   PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
     SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-    bash "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
+    "$BASH" "$script" ui >"$temp_dir/signal-window.out" 2>&1 &
   sandbox_pid=$!
   wait_for_ready "$temp_dir/signal-window.out" || fail "signal-window sandbox did not become ready (iteration $iteration)"
   frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/signal-window.out") \
@@ -423,7 +594,7 @@ fork_hold="$temp_dir/fork-hold"
 touch "$fork_hold"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
   SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SANDBOX_TEST_FORK_HOLD="$fork_hold" \
-  bash "$script" ui >"$temp_dir/fork-window.out" 2>&1 &
+  "$BASH" "$script" ui >"$temp_dir/fork-window.out" 2>&1 &
 sandbox_pid=$!
 if ! wait_until grep -q "^Local: http://127.0.0.1:$port/" "$temp_dir/fork-window.out"; then
   rm -f "$fork_hold"
@@ -458,8 +629,8 @@ port=$(free_port)
 data_dir="$temp_dir/fork-window-data"
 touch "$fork_hold"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  SANDBOX_TEST_FORK_HOLD="$fork_hold" bash "$script" stack >"$temp_dir/fork-window-stack.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
+  SANDBOX_TEST_FORK_HOLD="$fork_hold" "$BASH" "$script" stack >"$temp_dir/fork-window-stack.out" 2>&1 &
 sandbox_pid=$!
 if ! wait_until test -S "$data_dir/intentd.sock"; then
   rm -f "$fork_hold"
@@ -489,11 +660,11 @@ pgrep -f "python3 - $port" >/dev/null && fail "daemon fork-window TERM left a fr
 
 cat >"$temp_dir/supervised.mk" <<'MAKE'
 supervised-ui:
-	@exec bash "$(SCRIPT)" ui
+	@exec "$(TEST_BASH)" "$(SCRIPT)" ui
 MAKE
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SCRIPT="$script" \
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" SCRIPT="$script" TEST_BASH="$BASH" \
   setsid make -f "$temp_dir/supervised.mk" supervised-ui >"$temp_dir/supervised.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/supervised.out" || fail "supervised recipe sandbox did not become ready"
@@ -540,7 +711,7 @@ PY
 cat >"$state_dir/stale.json" <<'JSON'
 {"mode":"ui","pid":99999999}
 JSON
-if SANDBOX_STATE_DIR="$state_dir" bash "$script" status >"$temp_dir/stale.out" 2>"$temp_dir/stale.err"; then
+if SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/stale.out" 2>"$temp_dir/stale.err"; then
   fail "sandbox status succeeded for a stale pid"
 fi
 [[ ! -e "$state_dir/stale.json" ]] || fail "stale state file was not removed"
@@ -553,7 +724,7 @@ foreign_port=$(free_port)
 cat >"$state_dir/foreign.json" <<JSON
 {"mode":"ui","pid":$foreign_pid,"devPort":$foreign_port,"pidStartTime":"proc:not-this-process","pidCommandLine":"dev-sandbox.sh ui"}
 JSON
-if SANDBOX_STATE_DIR="$state_dir" bash "$script" status >"$temp_dir/foreign-status.out" 2>"$temp_dir/foreign-status.err"; then
+if SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" status >"$temp_dir/foreign-status.out" 2>"$temp_dir/foreign-status.err"; then
   fail "sandbox status accepted a foreign live PID"
 fi
 grep -q 'PID identity does not match recorded sandbox' "$temp_dir/foreign-status.err" \
@@ -562,7 +733,7 @@ kill -0 "$foreign_pid" 2>/dev/null || fail "sandbox status signalled a foreign l
 cat >"$state_dir/ui.json" <<JSON
 {"mode":"ui","pid":$foreign_pid,"devPort":$foreign_port,"pidStartTime":"proc:not-this-process","pidCommandLine":"dev-sandbox.sh ui"}
 JSON
-MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/foreign-stop.out" 2>"$temp_dir/foreign-stop.err"
+MODE=ui SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" stop >"$temp_dir/foreign-stop.out" 2>"$temp_dir/foreign-stop.err"
 grep -q 'Removing stale sandbox state:' "$temp_dir/foreign-stop.err" \
   || fail "sandbox-stop did not report the foreign PID state as stale"
 kill -0 "$foreign_pid" 2>/dev/null || fail "sandbox-stop signalled a foreign live PID"
@@ -579,7 +750,7 @@ write_live_state "$state_dir/ui.json" ui "$dummy_pid" "$(free_port)"
   printf '%s\n' '{"mode":"ui","pid":99999999,"devPort":1}' >"$state_dir/ui.json"
 ) &
 restart_writer_pid=$!
-MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >"$temp_dir/restart-stop.out" 2>"$temp_dir/restart-stop.err"
+MODE=ui SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" stop >"$temp_dir/restart-stop.out" 2>"$temp_dir/restart-stop.err"
 wait_until pid_gone "$dummy_pid" || fail "sandbox-stop did not stop the recorded live PID $dummy_pid"
 wait "$dummy_pid" 2>/dev/null || true
 dummy_pid=""
@@ -589,7 +760,7 @@ rm -f "$state_dir/ui.json"
 
 port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" SANDBOX_STATE_DIR="$state_dir" \
-  SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
+  SANDBOX_READY_TIMEOUT="$ready_timeout" "$BASH" "$script" ui >"$temp_dir/child-failure.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/child-failure.out" || fail "child-failure sandbox did not become ready"
 frontend_pid=$(find_frontend_pid "$sandbox_pid" "$port" "$temp_dir/child-failure.out") \
@@ -611,7 +782,7 @@ grep -qx "DEV_PORT=$port" "$state_dir/ui.port" || fail "pinned port record did n
 pinned_port=$port
 derived_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" "$BASH" "$script" ui >"$temp_dir/pinned-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-restart.out" || fail "pinned restart sandbox did not become ready"
 grep -q "Reusing recorded DEV_PORT=$pinned_port from $state_dir/ui.port" "$temp_dir/pinned-restart.out" \
@@ -645,7 +816,7 @@ PY
 listener_pid=$!
 wait_until test -e "$busy_ready.pinned" || fail "pinned-port listener did not start"
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$derived_port" DEV_PORT_ORIGIN=file \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" "$BASH" "$script" ui >"$temp_dir/pinned-busy.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-busy.out" || fail "sandbox with a busy recorded port did not become ready"
 grep -q "recorded DEV_PORT=$pinned_port from $state_dir/ui.port is busy; starting on derived DEV_PORT=$derived_port" "$temp_dir/pinned-busy.out" \
@@ -667,7 +838,7 @@ listener_pid=""
 collide_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$collide_port" DEV_PORT_ORIGIN=file \
   DEV_TCP_PORT="$derived_port" DEV_TCP_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" "$BASH" "$script" ui >"$temp_dir/pinned-collide.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/pinned-collide.out" || fail "sandbox with a colliding recorded port did not become ready"
 grep -q "recorded DEV_PORT=$derived_port from $state_dir/ui.port collides with explicit DEV_TCP_PORT=$derived_port; starting on derived DEV_PORT=$collide_port" "$temp_dir/pinned-collide.out" \
@@ -682,109 +853,28 @@ sandbox_pid=""
 # An explicit port always wins over the recorded one.
 explicit_port=$(free_port)
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$explicit_port" DEV_PORT_ORIGIN="command line" \
-  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" bash "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
+  SANDBOX_STATE_DIR="$state_dir" SANDBOX_READY_TIMEOUT="$ready_timeout" "$BASH" "$script" ui >"$temp_dir/explicit-restart.out" 2>&1 &
 sandbox_pid=$!
 wait_for_ready "$temp_dir/explicit-restart.out" || fail "explicit-port sandbox did not become ready"
 grep -q "^Sandbox ready: http://127.0.0.1:$explicit_port/" "$temp_dir/explicit-restart.out" \
   || fail "explicit DEV_PORT was overridden by the recorded port"
 ! grep -q 'Reusing recorded DEV_PORT' "$temp_dir/explicit-restart.out" || fail "explicit DEV_PORT reported a recorded-port reuse"
-MODE=ui SANDBOX_STATE_DIR="$state_dir" bash "$script" stop >/dev/null
+MODE=ui SANDBOX_STATE_DIR="$state_dir" "$BASH" "$script" stop >/dev/null
 wait "$sandbox_pid" 2>/dev/null || true
 sandbox_pid=""
 [[ ! -e "$state_dir/ui.port" ]] || fail "sandbox-stop did not forget the pinned port record"
 
 if PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_SOCKET="$temp_dir/missing.sock" bash "$script" app >"$temp_dir/app.out" 2>&1; then
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_SOCKET="$temp_dir/missing.sock" "$BASH" "$script" app >"$temp_dir/app.out" 2>&1; then
   fail "app sandbox accepted a missing daemon socket"
 fi
 grep -q 'absent or not accepting connections' "$temp_dir/app.out" || fail "missing socket error was unclear"
 
-port=$(free_port)
-data_dir="$temp_dir/data"
-cargo_log="$temp_dir/dev-cargo.log"
-PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$data_dir" \
-  DEV_TCP_PORT=43211 SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" BUILD_JOBS=8 \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" stack >"$temp_dir/stack.out" 2>&1 &
-sandbox_pid=$!
-wait_for_ready "$temp_dir/stack.out" || fail "stack sandbox did not become ready"
-[[ $(grep -c '^Sandbox ready:' "$temp_dir/stack.out") -eq 1 ]] || fail "stack ready line was not printed exactly once"
-python3 - "$state_dir/stack.json" <<'PY' || fail "dev stack state metadata was incorrect"
-import json
-import sys
-state = json.load(open(sys.argv[1], encoding="utf-8"))
-assert state["intentdSource"] == "dev" and state["tcpPort"] == 43211
-assert isinstance(state["socket"], str) and state["socket"].endswith("/intentd.sock")
-PY
-grep -q -- '-p intentd .*--jobs 8' "$cargo_log" || fail "dev build did not honor BUILD_JOBS"
-! grep -q -- '--release' "$cargo_log" || fail "default build unexpectedly used release profile"
-grep -q "Starting intentd binary: $temp_dir/target/debug/intentd" "$temp_dir/stack.out" || fail "default binary path was not target/debug/intentd"
-grep -q 'Sandbox health endpoint unavailable; using socket/HTTP readiness probes.' "$temp_dir/stack.out" || fail "legacy health fallback was not reported"
-python3 - "$data_dir/intentd.sock" <<'PY' || fail "stack socket was not connectable"
-import socket
-import sys
-s = socket.socket(socket.AF_UNIX)
-s.connect(sys.argv[1])
-s.close()
-PY
-kill -TERM "$sandbox_pid"
-set +e
-wait "$sandbox_pid"
-status=$?
-set -e
-sandbox_pid=""
-[[ "$status" -eq 143 ]] || fail "stack SIGTERM returned $status instead of 143"
-[[ ! -e "$state_dir/stack.json" ]] || fail "stack state file remained after SIGTERM"
-wait_until no_process_matches "$temp_dir/fake-intentd|$data_dir/intentd.sock" "python3 - $port" || true
-pgrep -f "$temp_dir/fake-intentd|$data_dir/intentd.sock" >/dev/null && fail "stack left an intentd descendant"
-pgrep -f "python3 - $port" >/dev/null && fail "stack left a frontend descendant"
-
-port=$(free_port)
-cargo_log="$temp_dir/release-cargo.log"
-PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/release-data" \
-  SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_DIR="$temp_dir/intentd" INTENTD_TARGET_DIR="$temp_dir/target" INTENTD_PROFILE=release \
-  CARGO_LOG="$cargo_log" FAKE_INTENTD_SOURCE="$temp_dir/fake-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" stack >"$temp_dir/release.out" 2>&1 &
-sandbox_pid=$!
-wait_for_ready "$temp_dir/release.out" || fail "release-profile stack did not become ready"
-grep -q -- '--release' "$cargo_log" || fail "release profile did not pass --release"
-grep -q "Starting intentd binary: $temp_dir/target/release/intentd" "$temp_dir/release.out" || fail "release binary path was incorrect"
-kill -TERM "$sandbox_pid"
-wait "$sandbox_pid" 2>/dev/null || true
-sandbox_pid=""
-
-port=$(free_port)
-override_log="$temp_dir/override-cargo.log"
-PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$port" DEV_DATA_DIR="$temp_dir/override-data" \
-  SANDBOX_STATE_DIR="$state_dir" \
-  INTENTD_BIN="$temp_dir/fake-intentd" CARGO_LOG="$override_log" HEALTH_MODE=ok SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" stack >"$temp_dir/override.out" 2>&1 &
-sandbox_pid=$!
-wait_for_ready "$temp_dir/override.out" || fail "INTENTD_BIN override stack did not become healthy"
-[[ ! -e "$override_log" ]] || fail "INTENTD_BIN override did not skip cargo build"
-grep -q "Using INTENTD_BIN override: $temp_dir/fake-intentd" "$temp_dir/override.out" || fail "INTENTD_BIN override was not echoed"
-grep -q 'Sandbox health is ok; Vite warm-up complete.' "$temp_dir/override.out" || fail "healthy warm-up was not logged"
-python3 - "$state_dir/stack.json" <<'PY' || fail "healthy warm-up state was incorrect"
-import json
-import sys
-state = json.load(open(sys.argv[1], encoding="utf-8"))
-assert state["intentdSource"] == "bin"
-assert state["warm"]["ok"] is True and state["warm"]["ms"] >= 0
-PY
-warm_line=$(grep -n 'Sandbox health is ok' "$temp_dir/override.out" | cut -d: -f1)
-ready_line=$(grep -n '^Sandbox ready:' "$temp_dir/override.out" | cut -d: -f1)
-[[ "$warm_line" -lt "$ready_line" ]] || fail "readiness was announced before warm-up finished"
-kill -TERM "$sandbox_pid"
-wait "$sandbox_pid" 2>/dev/null || true
-sandbox_pid=""
-
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/unhealthy-data" \
-  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake-intentd" HEALTH_MODE=pending \
+  SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/fake intentd" HEALTH_MODE=pending \
   SANDBOX_READY_TIMEOUT="$ready_timeout" SANDBOX_WARM_TIMEOUT=1 \
-  bash "$script" stack >"$temp_dir/unhealthy.out" 2>&1
+  "$BASH" "$script" stack >"$temp_dir/unhealthy.out" 2>&1
 status=$?
 set -e
 [[ "$status" -eq 1 ]] || fail "unhealthy sandbox returned $status instead of 1"
@@ -799,7 +889,7 @@ chmod +x "$temp_dir/failing-intentd"
 set +e
 PATH="$temp_dir/bin:$PATH" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" DEV_DATA_DIR="$temp_dir/fail-data" \
   SANDBOX_STATE_DIR="$state_dir" INTENTD_BIN="$temp_dir/failing-intentd" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" stack >"$temp_dir/fail.out" 2>&1
+  "$BASH" "$script" stack >"$temp_dir/fail.out" 2>&1
 status=$?
 set -e
 [[ "$status" -eq 7 ]] || fail "intentd child status was not propagated (got $status)"
@@ -1107,7 +1197,7 @@ no_corepack_state="$temp_dir/no-corepack-state"
 set +e
 PATH="$sanitized_bin" FE_DIR="$temp_dir/fe" DEV_PORT="$(free_port)" \
   SANDBOX_STATE_DIR="$no_corepack_state" SANDBOX_READY_TIMEOUT="$ready_timeout" \
-  bash "$script" ui >"$temp_dir/no-corepack-ui.out" 2>&1
+  "$BASH" "$script" ui >"$temp_dir/no-corepack-ui.out" 2>&1
 status=$?
 set -e
 [[ "$status" -eq 1 ]] || fail "UI sandbox returned $status instead of 1 without corepack"
