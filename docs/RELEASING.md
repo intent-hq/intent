@@ -166,10 +166,26 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   cut would ship fe commits merged after that tag was cut, it defers — those
   commits may depend on intentd work in no published sidecar, and the next
   intentd alpha's pin-bump push chains into a cut that re-evaluates (push runs
-  with polling budget left retry in-run). Automation commits (the sidecar
-  pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
-  and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
-  unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
+  with polling budget left retry in-run). A confirmed release-plz no-op also
+  exempts this freshness deferral (intent-hq/intent#6045): the latest
+  `release-plz.yml` main-push run must succeed for the **exact current intentd
+  main SHA**, with a successful job named
+  `Release-plz no release needed: <baseline-tag>@<baseline-commit-sha>` in its
+  latest attempt. The producer emits that job only after the real release-pr
+  action succeeds with `prs: []` and resolves the checked-out daemon package
+  version to an existing ancestor release tag. The consumer requires no open
+  same-repository `release-plz-*` PR and both baseline tag and commit to match
+  the sidecar pin on fe main; it rechecks run, PR, tag, pin, and main identities
+  before accepting proof. An absent or manually closed PR alone is insufficient.
+  Pending, failed, skipped, stale, malformed, or unreadable proof retains the
+  existing deferral, as do newer releases not yet pinned and release merges
+  awaiting their tag. This exemption does not bypass in-flight builds, pin-bump
+  PRs, holds, CI, review, or throttle guards. `workflow_dispatch` retains its
+  explicit freshness override. Automation commits (the sidecar pin-bump itself,
+  `chore(release):` merges) remain exempt, and the original pin, tag, comparison,
+  and frontend-commit lookups still fail open — only reads of the new no-op
+  proof fail closed for the exemption. Public intentd workflow and job reads
+  use the existing token permissions; no new secret is needed.
 - Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
   guard applies: the workflow checks the current beta channel version (the `beta`
   release's `latest-mac.yml` feed on `intent-hq/cloudlands-releases`) is >= the
