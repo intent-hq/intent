@@ -13,6 +13,18 @@ against current main when implementing; a numeric version alone is never proof o
 - `principal.me` adds `hostRole` and `hostMembershipRevision`; caller-relative Workspace
   projections add `canManage`. `myRole`, ownership and `isAdministrator` remain truthful.
   Rosters/presence add effective `hostRole` without duplicating people or guest seats.
+- [Qualified human attribution (§5.3)](./methods/notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation)
+  adds optional output `authorPrincipalId` / `authorIdentity` to existing comments
+  and `latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` to summaries.
+  Creation stamps/safe identity snapshots are durable; author labels/types and
+  unlinked-primary compatibility stay intact. Unstamped history remains unknown.
+  Existing transcript authors and presence people explicitly project optional
+  `identity` from their resolved principal, retaining batched transcript lookup and
+  legacy fallback, plus ephemeral presence caching/invalidation. Full comment
+  results/subscriptions agree; ID-only raw events remain unchanged. Old clients
+  ignore unknown fields; new clients tolerate absent metadata without inferring
+  ownership. These fields are presence-detected attribution, with no new RPC,
+  capability, authority, execution credential or additional version bump.
 - Eleven new router methods: `host.members.list`, `host.members.remove`, `host.invite.list`,
   `host.invite.revoke`, `host.executionContext`, and `identity.authStatus`, `identity.connect`,
   `identity.cancelAuth`, `identity.revoke`, `identity.getUser`, `identity.select`.

@@ -303,6 +303,16 @@ bound principal. Messages, comments and sender preambles use that actual person;
 the host’s shared execution account is never substituted as the human author. Existing per-user queue privacy and search-cancellation ownership
 are retained. Payload principal/author fields cannot impersonate another human.
 
+Qualified human attribution uses the safe `Identity` triple above, independent of
+execution accounts. [§5.3](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation)
+defines durable optional `authorPrincipalId` / `authorIdentity` on comments and
+`latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` on thread summaries,
+preserving existing author labels, agent/daemon meaning and unlinked-primary
+compatibility. [§5.48](./multiplayer.md#attribution--who-wrote-a-human-message)
+adds optional `identity` to the existing serve-time transcript-author projection;
+[§5.47](./presence.md#shapes) does the same for `PresenceMember` / `NoteViewer`.
+None grants access or changes the existing roster/directory visibility rules.
+
 `/tunnel` admits owner and active host-member credentials using the existing
 loopback-only stream protocol, credit windows and limits; workspace guests still
 receive HTTP 403. Member removal closes live tunnels. Shared host membership
@@ -975,6 +985,13 @@ the assertions; passing documentation gates is not runtime evidence.
 | Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
 | Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |
 | Filtered/aggregate permission reads and live answers | Owner/member can act; guest sees no unauthorized request or ID and cannot answer it |
+| Two humans sharing a handle on GitHub/GitLab, and on two canonical GitLab instances (including equal external IDs) | New user comments keep the same existing label spelling but distinct daemon-bound principal IDs and complete identity triples; latest-author summaries copy the same selected comment. Transcript authors and presence people expose their resolved optional triple; no handle-based merging |
+| Bound owner without a forge, plus linked owner/member/guest add and respond | Resulting user comments persist the admitted principal ID; only linked humans get an identity snapshot. Unlinked-primary compatibility preserves its supplied label/type; a non-user result omits both metadata fields |
+| Agent/daemon add/respond and spoofed attribution fields over existing RPC/MCP entry points | Agent/daemon label/type semantics remain, without fabricated human metadata, even for a supplied user type. Supplied principal/identity output keys of any value/type are ignored; bound-human attribution comes only from trusted caller state |
+| Comment edit, resolve/reopen, anchor repair, restart, profile/identity change and member removal | Creation stamp and safe snapshot survive unchanged in reads and subscriptions, including after the principal becomes unresolvable; no current-editor or execution-account substitution, no new access. Principal-only comments remain without an identity snapshot |
+| Legacy comments, same-handle replacement principal, and latest comment lacking metadata in a mixed thread | Preserve labels; unknown creation attribution stays omitted in full comments and the latest-author summary. No owner/provider/handle inference or imported-extra-field backfill; transcript legacy fallback remains unchanged |
+| Comment result/read/event/subscription parity and old/new clients/hosts | Respond, getThread roots/replies, list with/without included comments, and subscription snapshots/deltas agree on stored attribution; ID-only durable events and add acknowledgement remain unchanged. Unknown keys are ignored, absent metadata stays unknown; existing filters, guest visibility and event durability remain |
+| Transcript page/queue/live echoes and workspace/note presence | Optional identity comes from the same resolved principal as principalId; unlinked/missing profiles omit it. Transcript batched serve-time lookup/fallback and queue privacy remain; presence refreshes its existing cache and stays ephemeral, with membership-gated delivery |
 | Repository disconnect/swap during identity proof/selection | Existing Intent identity/session survives; generations reject stale/mismatched proof; repository and collaboration secrets stay isolated |
 | Remove member racing create/redeem/queue drain/pair/admission | No late credential/grant/invite resurrection; used reusable issuer links revoked, earlier admitted other guests preserved; running work survives |
 | Reuse a personal QR on several devices, restart and accept another invite | Same person/credential remains usable, distinct device IDs; no countdown, proof repetition or silent rotation |
