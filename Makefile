@@ -92,6 +92,29 @@ SUBMODULES = $(INTENTD_DIR) $(FE_DIR) $(IOS_DIR)
 # parallel dev Electrons off each other's SingletonLock. It has nothing to do
 # with intentd's TCP port and is passed through to the FE unchanged.
 DEV_DATA_DIR ?= $(CURDIR)/.dev/intentd
+# Local GPU-less libkrun for the microVM backend (macOS arm64 only). The
+# libkrun/krun Homebrew tap builds libkrun with GPU=1, which links the tap's
+# virglrenderer fork; when Homebrew core's virglrenderer shadows it the tap's
+# libkrun stops loading. `make libkrun-local` builds the same GPU-less
+# variant the packaged app ships (BLK=1 NET=1 TIMESYNC=1: Hypervisor.framework
+# + libSystem only) into $(LIBKRUN_LOCAL_DIR); the daemon seats export
+# INTENTD_LIBKRUN_DIR to it when it exists, and the helper prefers that over
+# /opt/homebrew/lib. Versions come from packages/intentd
+# libkrun-bundle/versions.toml (`libkrun = "..."` / `libkrunfw = "..."`) when
+# that file exists, else these defaults; both are overridable on the command
+# line (`make libkrun-local LIBKRUN_TAG=v1.19.4`).
+LIBKRUN_VERSIONS_FILE = $(INTENTD_DIR)/libkrun-bundle/versions.toml
+LIBKRUN_TAG ?= $(or $(shell sed -n 's/^libkrun[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$(LIBKRUN_VERSIONS_FILE)" 2>/dev/null | head -n 1),v1.19.4)
+LIBKRUNFW_VERSION ?= $(or $(shell sed -n 's/^libkrunfw[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$(LIBKRUN_VERSIONS_FILE)" 2>/dev/null | head -n 1),5.5.0)
+LIBKRUN_LOCAL_DIR ?= $(CURDIR)/.dev/libkrun
+LIBKRUN_SRC_DIR ?= $(CURDIR)/.dev/libkrun-src
+# libkrun dlopens `libkrunfw.5.dylib` by bare leaf name; the helper chdirs into
+# the libkrun dir so the copy placed next to libkrun.dylib is the one found.
+# Default source: the Homebrew libkrunfw keg (no deps beyond libSystem).
+LIBKRUNFW_DYLIB ?= /opt/homebrew/opt/libkrunfw/lib/libkrunfw.5.dylib
+# Expands to the env assignment the daemon seats prefix to `cargo run` when a
+# local build exists (empty otherwise, so the helper falls back to Homebrew).
+libkrun_local_env = $(if $(wildcard $(LIBKRUN_LOCAL_DIR)/libkrun.dylib),INTENTD_LIBKRUN_DIR="$(LIBKRUN_LOCAL_DIR)",)
 # Resolve one stable, free port block for this worktree when a target first
 # expands a port variable. The memoized result keeps non-listener targets such
 # as doctor, bootstrap-dev-host, and sandbox-stop independent of port tooling
@@ -224,9 +247,17 @@ shipped-in: ## Print the first cloudlands-releases tag carrying COMPONENT=intent
 # sibling worktree under WORKSPACES_DIR (the per-worktree monorepo checkouts
 # live at $(WORKSPACES_DIR)/<name>/monorepo). Both need cargo-sweep
 # (`cargo install cargo-sweep --locked`). Overridable, e.g. `make sweep SWEEP_DAYS=7`
-# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`.
+# or `make sweep-all WORKSPACES_DIR=/elsewhere/workspaces`. `sweep` honors a
+# relocated cache: with CARGO_TARGET_DIR set, that directory is what cargo
+# sweep prunes and what the existence guard tests.
 WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
+
+# Where cargo writes intentd build artifacts: CARGO_TARGET_DIR when exported
+# (relocated cache), else the in-tree packages/intentd/target. Shared by every
+# recipe that tests for or paths into a built artifact (sweep guard, microVM
+# helper re-sign).
+CARGO_TARGET_RESOLVED = $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(INTENTD_DIR)/target)
 
 # Parallelism caps shared by the Rust build/test/coverage targets
 # (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
@@ -275,12 +306,31 @@ GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 # make dist-mac FE_BUILD_HEAP_MB=24576.
 FE_BUILD_HEAP_MB ?= 16384
 
+# macOS: re-sign the microVM helper after any cargo build/run that may have
+# relinked it. Relinking replaces the ad-hoc signature carrying the
+# com.apple.security.hypervisor entitlement with a plain linker-signed one,
+# and the next microVM boot then fails with helper exit status 70 (libkrun
+# cannot create the VM without the entitlement). Silent no-op on non-Darwin,
+# when the helper binary does not exist yet (first-build ordering), and when
+# the signing script is absent — a pinned intentd predating the helper can
+# share a CARGO_TARGET_DIR that still holds one built from a newer branch.
+# The helper is looked up under $(CARGO_TARGET_RESOLVED), so a relocated cache
+# (CARGO_TARGET_DIR) is signed too.
+# $(1) = cargo profile dir (debug|release), $(2) = log tag.
+define sign-microvm-helper
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -x "$(INTENTD_DIR)/scripts/sign-microvm-helper.sh" ] \
+		&& [ -f "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" ]; then \
+		echo "[$(2)] re-signing microVM helper ($(1)) with hypervisor entitlement"; \
+		"$(INTENTD_DIR)/scripts/sign-microvm-helper.sh" "$(CARGO_TARGET_RESOLVED)/$(1)/intentd-microvm-helper" >/dev/null; \
+	fi
+endef
+
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
 	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
 	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
-	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
+	sweep sweep-all seed-dev-providers seed-dev-workspaces libkrun-local dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
 	run-fe-local uds-to-unauthed-wss-bridge dev-web-live dev dev-prod \
@@ -606,7 +656,7 @@ coverage-all: ensure-intentd-submodule ## Reproduce CI full-workspace coverage l
 clean: ## Remove cargo build artifacts (packages/intentd/target)
 	rm -rf $(INTENTD_DIR)/target
 
-clean-dev: ## Wipe the dev-seat state dir (.dev/)
+clean-dev: ## Wipe the dev-seat state dir (.dev/, including the libkrun-local build)
 	rm -rf "$(CURDIR)/.dev"
 
 # `sweep` deliberately has no ensure-intentd-submodule prerequisite:
@@ -617,10 +667,10 @@ sweep: ## Prune intentd build artifacts older than $(SWEEP_DAYS) days (needs car
 		echo "[sweep] ERROR: cargo-sweep is not installed — run 'cargo install cargo-sweep --locked'"; \
 		exit 1; \
 	}
-	@if [ -d "$(INTENTD_DIR)/target" ]; then \
+	@if [ -d "$(CARGO_TARGET_RESOLVED)" ]; then \
 		cd $(INTENTD_DIR) && cargo sweep --time $(SWEEP_DAYS); \
 	else \
-		echo "[sweep] nothing to sweep — $(INTENTD_DIR)/target does not exist"; \
+		echo "[sweep] nothing to sweep — $(CARGO_TARGET_RESOLVED) does not exist"; \
 	fi
 
 sweep-all: ## Sweep intentd build artifacts in every worktree under $(WORKSPACES_DIR)
@@ -669,10 +719,78 @@ seed-dev-workspaces: ensure-intentd-submodule ## Seed workspace rows from packag
 		$(if $(filter 1,$(SEED_INCLUDE_ARCHIVED)),--include-archived) \
 		$(if $(SEED_SOURCE_DB),--source "$(SEED_SOURCE_DB)")
 
+# Build a GPU-less libkrun into $(LIBKRUN_LOCAL_DIR) (see the LIBKRUN_* knobs).
+# Clones containers/libkrun at $(LIBKRUN_TAG) into $(LIBKRUN_SRC_DIR), builds
+# it the way the packaged app's bundle is built (BLK=1 NET=1 TIMESYNC=1, no
+# GPU ⇒ no virglrenderer/libepoxy), then stages libkrun.dylib + libkrunfw.5.dylib
+# with @loader_path install names and fresh ad-hoc signatures. Upstream's
+# Makefile cross-links the guest init with Apple clang + LLVM lld
+# (`brew install lld`, which also brings Homebrew llvm) against a Debian
+# sysroot it downloads on first build, and its `cargo build` covers the whole
+# upstream workspace, whose input/display crates run bindgen: standalone they
+# link libclang dynamically and their build scripts then fail to find it at
+# run time, so FEATURE_FLAGS is overridden to upstream's BLK/NET mapping plus
+# their `bindgen_clang_runtime` feature (dlopen via the exported LIBCLANG_PATH,
+# the Homebrew llvm keg). Re-run to rebuild after changing LIBKRUN_TAG;
+# `make clean-dev` wipes both dirs.
+libkrun-local: ## Build a GPU-less libkrun (LIBKRUN_TAG) + libkrunfw into .dev/libkrun for the daemon seats (macOS arm64; needs brew lld)
+	@if [ "$$(uname -s)" != "Darwin" ] || [ "$$(uname -m)" != "arm64" ]; then \
+		echo "[libkrun-local] ERROR: libkrun's Hypervisor.framework backend is macOS arm64 only (this host: $$(uname -s) $$(uname -m))"; \
+		exit 1; \
+	fi
+	@if ! command -v ld.lld >/dev/null 2>&1 && [ ! -x "$$(brew --prefix lld 2>/dev/null)/bin/ld.lld" ]; then \
+		echo "[libkrun-local] ERROR: LLVM lld not found — libkrun cross-links its Linux guest init with it; run 'brew install lld'"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(LIBKRUNFW_DYLIB)" ]; then \
+		echo "[libkrun-local] ERROR: libkrunfw not found at $(LIBKRUNFW_DYLIB)"; \
+		echo "[libkrun-local]   install libkrunfw $(LIBKRUNFW_VERSION) ('brew install libkrun/krun/libkrunfw') or pass LIBKRUNFW_DYLIB=/path/to/libkrunfw.5.dylib"; \
+		exit 1; \
+	fi
+	@tag="$(LIBKRUN_TAG)"; case "$$tag" in v*) ;; *) tag="v$$tag" ;; esac; \
+	if [ -d "$(LIBKRUN_SRC_DIR)/.git" ]; then \
+		have=$$(git -C "$(LIBKRUN_SRC_DIR)" describe --tags --exact-match 2>/dev/null || echo "?"); \
+		if [ "$$have" != "$$tag" ]; then \
+			echo "[libkrun-local] $(LIBKRUN_SRC_DIR) is at $$have, want $$tag — re-cloning"; \
+			rm -rf "$(LIBKRUN_SRC_DIR)"; \
+		fi; \
+	fi; \
+	if [ ! -d "$(LIBKRUN_SRC_DIR)/.git" ]; then \
+		echo "[libkrun-local] cloning containers/libkrun $$tag into $(LIBKRUN_SRC_DIR)"; \
+		git clone --quiet --depth 1 --branch "$$tag" https://github.com/containers/libkrun.git "$(LIBKRUN_SRC_DIR)"; \
+	fi; \
+	if [ -n "$$(brew --prefix lld 2>/dev/null)" ]; then export PATH="$$(brew --prefix lld)/bin:$$PATH"; fi; \
+	if [ -z "$$LIBCLANG_PATH" ] && [ -f "$$(brew --prefix llvm 2>/dev/null)/lib/libclang.dylib" ]; then export LIBCLANG_PATH="$$(brew --prefix llvm)/lib"; fi; \
+	echo "[libkrun-local] building libkrun $$tag (BLK=1 NET=1 TIMESYNC=1, no GPU)"; \
+	$(MAKE) -C "$(LIBKRUN_SRC_DIR)" BLK=1 NET=1 TIMESYNC=1 CARGO_TERM_PROGRESS_WHEN=never \
+		FEATURE_FLAGS="--features blk --features net --features krun-input/bindgen_clang_runtime --features krun-display/bindgen_clang_runtime"
+	@fwkeg=$$(cd "$$(dirname "$(LIBKRUNFW_DYLIB)")/.." 2>/dev/null && pwd -P); \
+	case "$$fwkeg" in \
+		*/Cellar/libkrunfw/*) fwver=$${fwkeg##*/Cellar/libkrunfw/}; fwver=$${fwver%%/*}; \
+			if [ "$$fwver" != "$(LIBKRUNFW_VERSION)" ]; then \
+				echo "[libkrun-local] WARNING: Homebrew libkrunfw is $$fwver, the pinned bundle version is $(LIBKRUNFW_VERSION)"; \
+			fi ;; \
+	esac
+	@mkdir -p "$(LIBKRUN_LOCAL_DIR)"
+	@rm -f "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrun.1.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrunfw.5.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrunfw.dylib"
+	@cp "$(LIBKRUN_SRC_DIR)/target/release/libkrun.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib"
+	@cp "$(LIBKRUNFW_DYLIB)" "$(LIBKRUN_LOCAL_DIR)/libkrunfw.5.dylib"
+	@chmod u+w "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrunfw.5.dylib"
+	@install_name_tool -id @loader_path/libkrun.dylib "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" 2>/dev/null
+	@install_name_tool -id @loader_path/libkrunfw.5.dylib "$(LIBKRUN_LOCAL_DIR)/libkrunfw.5.dylib" 2>/dev/null
+	@codesign --force --sign - "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" "$(LIBKRUN_LOCAL_DIR)/libkrunfw.5.dylib" 2>/dev/null
+	@echo "[libkrun-local] staged $(LIBKRUN_LOCAL_DIR):"
+	@otool -L "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" | sed 's/^/[libkrun-local]   /'
+	@if otool -L "$(LIBKRUN_LOCAL_DIR)/libkrun.dylib" | grep -Eiq 'virgl|epoxy|homebrew'; then \
+		echo "[libkrun-local] ERROR: libkrun.dylib still references virglrenderer/libepoxy/Homebrew"; exit 1; \
+	fi
+	@echo "[libkrun-local] done — 'make dev-daemon' / 'make release-daemon' now export INTENTD_LIBKRUN_DIR=$(LIBKRUN_LOCAL_DIR)"
+
 dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, UDS + insecure TCP on $(DEV_TCP_PORT)
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev-daemon] intentd dev data dir: $(DEV_DATA_DIR) (UDS: $(DEV_DATA_DIR)/intentd.sock, TCP: 0.0.0.0:$(DEV_TCP_PORT))"
 	@echo "[dev-daemon] INTENTD_LEGACY_IMPORT_ROOTS=\"\" (legacy import disabled for the dev seat)"
+	@echo "[dev-daemon] libkrun: $(if $(libkrun_local_env),local build — INTENTD_LIBKRUN_DIR=$(LIBKRUN_LOCAL_DIR),helper default search (Homebrew /opt/homebrew/lib fallback; run 'make libkrun-local' for a GPU-less local build))"
 	@echo "[dev-daemon] WARNING: --insecure binds ws:// on 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no auth — anyone on your LAN can reach it. Only run on a trusted network."
 	# `--insecure` serves the local UDS socket AND a plain ws:// listener on
 	# 0.0.0.0:$(DEV_TCP_PORT) with no TLS and no bearer-token auth — serves
@@ -682,8 +800,19 @@ dev-daemon: ensure-intentd-submodule ## Dev seat: intentd on isolated data dir, 
 	# INTENTD_LEGACY_IMPORT_ROOTS="" disables the legacy import hook: the dev
 	# seat starts with a fresh $(DEV_DATA_DIR) DB, so first boot would otherwise
 	# scan the shared ~/intent/workspaces root.
+	# `cargo run -p intentd` builds only the daemon crate and runs the DEBUG
+	# profile, so the daemon resolves the helper next to target/debug/intentd.
+	# Build the whole workspace first so the microVM helper (a separate member
+	# that a `-p intentd` build never produces) exists, then re-sign it before
+	# launch. `--workspace` rather than `-p intentd-microvm-helper`: the crate
+	# must exist at the pinned intentd gitlink for check-makefile-targets.
+	# INTENTD_LIBKRUN_DIR (set only when `make libkrun-local` has staged
+	# .dev/libkrun) reaches the helper through the daemon's inherited env and
+	# takes precedence over the helper-relative and /opt/homebrew/lib search.
+	cargo build --workspace --manifest-path $(INTENTD_DIR)/Cargo.toml
+	$(call sign-microvm-helper,debug,dev-daemon)
 	INTENTD_DATA_DIR="$(DEV_DATA_DIR)" INTENTD_TCP_PORT=$(DEV_TCP_PORT) \
-		INTENTD_LEGACY_IMPORT_ROOTS="" \
+		INTENTD_LEGACY_IMPORT_ROOTS="" $(libkrun_local_env) \
 		cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve --insecure
 
 release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on real data dir, UDS-always, no --insecure
@@ -697,7 +826,14 @@ release-daemon: ensure-intentd-submodule ## Release-state debug seat: intentd on
 	# toggle `server.wsApi.enabled` to retry. No `--insecure`: the WSS listener,
 	# when enabled, serves wss:// with TLS + bearer auth as the packaged app
 	# expects.
-	cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve
+	# `cargo run -p intentd` (no --release) runs the DEBUG profile despite the
+	# target's name and builds only the daemon crate, so build the debug
+	# workspace (which includes the microVM helper, a separate member) and
+	# re-sign the helper before launch.
+	@echo "[release-daemon] libkrun: $(if $(libkrun_local_env),local build — INTENTD_LIBKRUN_DIR=$(LIBKRUN_LOCAL_DIR),helper default search (Homebrew /opt/homebrew/lib fallback; run 'make libkrun-local' for a GPU-less local build))"
+	cargo build --workspace --manifest-path $(INTENTD_DIR)/Cargo.toml
+	$(call sign-microvm-helper,debug,release-daemon)
+	$(libkrun_local_env) cargo run -p intentd --manifest-path $(INTENTD_DIR)/Cargo.toml -- serve
 
 run-intentd: ## DEPRECATED alias for release-daemon
 	@echo "[run-intentd] DEPRECATED: use 'make release-daemon' (or 'make dev-daemon' for the dev seat)."
@@ -952,6 +1088,7 @@ dev: ensure-intentd-submodule ensure-fe-submodule ## One-command dev: launch the
 	@$(FE_DEPS_FRESH) || (echo "[dev] $(FE_DEPS_INSTALL_MSG)" && cd $(FE_DIR) && pnpm install)
 	@echo "[dev] Building intentd release binary (no-op if already fresh)..."
 	cd $(INTENTD_DIR) && cargo build --release --workspace
+	$(call sign-microvm-helper,release,dev)
 	@mkdir -p "$(DEV_DATA_DIR)"
 	@echo "[dev] Launching FE with sidecar mode enabled (INTENTD_SIDECAR=1)"
 	@echo "[dev]   INTENTD_BIN=$(CURDIR)/$(INTENTD_DIR)/target/release/intentd"

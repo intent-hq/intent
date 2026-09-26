@@ -18,7 +18,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | --- | --- | --- |
 | workspace.list | includeArchived?: boolean (default false) | { workspaces: Workspace[] } — triggers background backfill: existing workspaces with a repositoryPath but missing repositoryOwner/Name are enriched from the origin remote URL (same GitHub derivation as workspace.create, non-blocking spawn, deduped per workspace per daemon lifecycle, skips non-GitHub remotes, persists updates, emits workspace:updated with changed fields). **Membership-narrowed** for a non-administrator caller: only workspaces the bound principal is a member of are returned, and every `Workspace` row carries `myRole` (`"owner"` \| `"collaborator"`), `memberCount` and `openInviteCount` (§5.48) |
 | workspace.get | workspaceId (req) | { workspace: Workspace } — -32602 if not found, **or** if the caller is not a member of it (same `{ code: "not-found" }`, indistinguishable by design; §5.48) |
-| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
+| workspace.create | workspace fields (incl. repositoryPath?, baseRef?, branch?, remote?, skipIsolation? (canonical; deprecated alias skipWorktree?), executionEnvironment? (`"direct" \| "worktree" \| "cow" \| "microvm"`, v10.9 — see execution-environment selection below), githubUrl?, clonePath?, isNewRepo?, progressId? (string — arms the unified provisioning progress stream; see notes), contextLinks? (ContextLink[] — issue/PR context links persisted on the row; a pr-kind link additionally makes the create **PR-aware** — an omitted `branch`/`baseRef` defaults to the PR's head/base branch — see the `contextLinks` and PR-aware create notes below)); optional initialAgent: { prompt? *(a blank/whitespace-only prompt reads as absent; the agent is still created — see "Initial-agent orchestration" in the notes)*, name?, model?, reasoningEffort? (string — creation-time effort; omitted inherits, blank clears; see notes), specialist?, provider?, behaviorPrompt?, agentType?, imageBlocks? *(within v7.4, monorepo#3338: entries may carry an attachment-registry `attachmentId` reference instead of inline `data`, under the same exactly-one-of validation + registry check and daemon-side prompt-assembly resolution as `agent.sendMessage` — §5.5; a bad reference rejects `-32602` pre-side-effect)*, fileBlocks? *(v6.12; attachment references only since v10.0 — same per-entry validation as `agent.sendMessage`: every entry must carry a non-empty `attachmentId`, an entry carrying inline `data` or missing `attachmentId` is `-32602` naming the block index — §5.5)*, metadata? } — no `agentId`: agent IDs are server-assigned, and a request carrying `initialAgent.agentId` is rejected with `-32602` (see notes). Every `-32602` rejection is validated before any side effect (see "Pre-side-effect validation" in the notes) | { workspace: Workspace, initialAgent?: AgentLite } — the created agent's server-minted id is `initialAgent.id`; daemon-owned orchestration inside one idempotent op (see notes: clone → checkout (worktree or CoW) → spec seed → initial agent). |
 | workspace.update | workspaceId (req) + fields to change — the skip toggle uses the same wire names as create: skipIsolation? (canonical; deprecated alias skipWorktree?, either set ⇒ same behavior); the `workspace:updated { changes }` delta serializes it under the canonical skipIsolation name; `statusImageAssetId?: string \| null` is clearable (missing = untouched, `null` = clear, string = set — see the `statusImageAssetId` notes below). A **collaborator** member may change only `title`, `tags`, `statusMessage`, `statusImageAssetId` — any other key is `-32003 { code: "forbidden", detail }` (§5.48). **Archive lifecycle delegation** ([intent-hq/intentd#2066](https://github.com/intent-hq/intentd/pull/2066)): the generic row write never touches `archived` / `archivedAt` and holds `status` while the row is archived — lifecycle state moves only through `workspace.archive` / `workspace.unarchive`. An update carrying `archived` and/or `status: "Archived"` / `"Active"` applies the other fields first, then delegates the flip to those paths: `archived: true` or `status: "Archived"` runs the full `workspace.archive` teardown (guests detached, open invites revoked, hooks / monitors / turns torn down); `archived: false`, or a non-archived `status` on an archived row, runs `workspace.unarchive`. The delegated path publishes the `{ archived, status, archivedAt }` delta itself (`archivedAt` is set by the archive/unarchive path, never by a generic update field), so the update's own `workspace:updated` delta has `archived` and `status` removed from it — both arrive only in the delegated lifecycle delta — and is skipped entirely when nothing else changed. A contradictory pair (e.g. `archived: true` + `status: "Active"`) is `-32602 { code: "invalid-params" }` and nothing is written | { workspace: Workspace } |
 | workspace.delete | workspaceId (req), undoDelayMs? *(v6.7)* | { success: true } — waits for incremental database cleanup and the final workspace-row/tombstone commit, then emits `workspace:deleted` and returns while filesystem cleanup runs in a background task (see “Incremental deletion” below for partial-progress and retry semantics) — only the git-metadata phase (worktree-registration prune + rename of the checkout to a trash path + guarded branch delete; a CoW or `direct` checkout — a standalone clone with no registration in the source repo and a branch living only inside the clone — gets just the rename, no prune and no source-repo branch delete, and **only when it sits in the daemon-owned `<root>/<workspaceId>/<repo-slug>` layout**: a standalone checkout outside that layout — the `isNewRepo` direct shape, where the checkout IS the user's chosen repository folder (§5.1) — is left untouched, deletion removes only the workspace row) holds the per-repository lock; the recursive `remove_dir_all` of the renamed trash directory runs afterwards outside the lock. **Delete grace window (v6.7, [intent-hq/intentd#1096](https://github.com/intent-hq/intentd/pull/1096)):** `undoDelayMs > 0` (non-negative integer; a non-integer value is `-32602`; values above the 60 000 ms cap are silently clamped, never rejected — `deleteAt` reflects the clamped value) schedules an **in-memory** pending deletion instead of committing — returns `{ success: true, scheduled: true, deleteAt }` (ISO commit deadline), emits `workspace:delete-scheduled { workspaceId, deleteAt }` (§6.5), and serves `pendingDeleteAt` on the row until the deadline commits the real delete (which then runs the full teardown above) or `workspace.cancelDelete` cancels it. Absent, `null`, or `0` keeps the immediate-delete behavior byte-identical. Pending deletions are never persisted (a daemon restart drops them; the workspace survives); re-scheduling is idempotent under the registry lock (returns the existing deadline, no second timer); a committed workspace delete supersedes pending agent deletes inside the workspace |
 | workspace.cancelDelete *(v6.7)* | workspaceId (req) | { cancelled: boolean } — cancels a pending (grace-window) deletion scheduled by `workspace.delete` with `undoDelayMs`. `true` clears the pending deletion, emits `workspace:delete-cancelled { workspaceId }` (§6.5), and drops `pendingDeleteAt` from the row; `false` is the race-safe non-error when no deletion is pending (never scheduled, already cancelled, or already committed) |
@@ -431,6 +431,71 @@ provisioning time (`workspace.create` / `workspace.duplicate`); the resulting
 `checkoutMode` is persisted on the row and never changes for the life of the workspace.
 Toggling the setting later affects only subsequently created workspaces — existing
 checkouts are not converted.
+
+**Execution-environment selection (`workspace.create`, v10.9).** The optional
+`executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`) selects the
+workspace's execution environment explicitly, overriding the legacy
+`skipIsolation`/`workspace.cowIsolation` derivation. Validation runs up front (before any
+provisioning side effects): the named type must be **enabled** in the `sandbox.*` settings
+group (§5.12, §5.5b — `direct` is always enabled; see the flow rules below) and
+**available** on the host — `cow` requires the workspaces-root
+CoW probe to report supported; `microvm` requires the platform check (macOS Apple
+Silicon only; the Linux/KVM arm is temporarily locked out) AND the CoW probe (the same
+conjunction as `system.capabilities.microvmSupported`, §5.7). Both sandbox backends are
+temporarily locked to macOS. A disabled or unavailable selection fails
+with `-32602` carrying `error.data = { code: "execution-environment-unavailable",
+environment, reason }` (§9).
+**Flow-aware validation.** The selection is additionally validated against the
+creation flow: `worktree` is only offerable for **local repository copies** (a
+`repositoryPath` naming an existing local checkout to link against) — selecting
+`executionEnvironment: "worktree"` together with a non-empty `githubUrl` ("pick a
+repo") or `isNewRepo: true` ("new repo") fails up front with the same structured
+`execution-environment-unavailable` payload (the reason names the flow), since those
+flows provision a **standalone** checkout (or none) with nothing to link a worktree
+against. `direct`, `cow`, and `microvm` are valid in every flow.
+Semantics per type:
+`direct` in the local-repo flow behaves exactly like `skipIsolation: true` (no
+provisioned checkout — the agents work in the repository folder itself;
+`skipIsolation: true` combined with a non-`direct` `executionEnvironment` is rejected
+`-32602`). In the cache-hydration (`githubUrl`) and `isNewRepo` flows there is no
+pre-existing local checkout to work in, so `direct` does **not** skip provisioning:
+hydration still provisions the standalone checkout from the repo cache (CoW copy when
+supported, else a plain local clone — the copy mechanism does not change the
+environment), and `isNewRepo` still initializes and works directly in the new
+repository folder; `worktree` forces the linked-worktree path regardless of
+`workspace.cowIsolation`; `cow` forces the CoW-clone path with **no silent fallback** —
+where the settings-derived path would fall back to a linked worktree or a plain local
+clone (gitfile `.git` repository, failed/unsupported probe, provisioning-time
+Unsupported — in the local-repo AND cache-hydration flows alike), an explicit `cow`
+selection fails with the structured `execution-environment-unavailable` payload instead;
+`microvm` provisions a CoW-clone checkout exactly like `cow` (same no-silent-fallback
+rule — failures surface the structured `execution-environment-unavailable` payload
+naming `"microvm"`) and persists the selection so agents in the workspace spawn inside
+per-agent libkrun microVMs (guest boot, provider gating, and the `sandbox:vm:*` /
+`sandbox:image:*` event families are described in §6.5).
+**Uniform per-agent isolation.** Both CoW-checkout execution environments isolate
+**every** agent in the workspace, not just delegates: in a persisted
+`executionEnvironment: "cow"` or `"microvm"` workspace, each agent — including
+top-level `agent.create` agents — provisions its own per-agent CoW sandbox (§5.5a)
+synchronously at first spawn, works in it, and merges back on turn end (the standard
+§5.5a auto-merge lifecycle; `mergeOnTurnEnd` defaults true). Failure semantics differ:
+`microvm` agents hard-fail spawn with `execution-environment-unavailable` when the
+sandbox cannot be provisioned (the VM mounts the clone as its workspace); `cow` agents
+log a warning and fall back to the shared workspace checkout (isolation is best-effort,
+never spawn-blocking). Agents created before this behavior (no sandbox in a `cow`
+workspace) get their sandbox on their next spawn, cloned from the checkout's state at
+that point. Workspaces with `checkoutMode: "cow"` but **no persisted**
+`executionEnvironment` (rows created before v10.9 introduced the field) keep the
+delegate-only isolation model.
+The selection is persisted on the returned `Workspace` as `executionEnvironment`
+(lowercase on the wire, immutable like `checkoutMode`); when the param is **omitted**,
+the daemon derives and persists the field from the provisioning outcome in every
+provisioning flow: local-repo rows record `worktree`, `cow`, or `direct` matching
+`checkoutMode`; cache-hydration rows record `cow` (CoW copy) or `direct` (plain local
+clone); `isNewRepo` rows record `direct` (the initialized repository is worked in
+directly). Unprovisioned rows (`skipIsolation`, remote, registry-only) keep the field
+unset unless explicitly selected; pre-existing rows omit it. Idempotent replays (same
+`idempotencyKey`) return the original result without re-validating.
 
 **Cache-hydrated creation (`workspace.create`, new in intentd —
 [intent-hq/intentd#944](https://github.com/intent-hq/intentd/pull/944)).** When
@@ -1184,7 +1249,7 @@ the wire and as the stored DB word (matching the `PullRequestStatus` precedent).
 `Workspace` fields (`statusMessage`, `statusImageAssetId`, `baseRef`, `prUrl`, `prNumber`,
 `prStatus`, `activePullRequest`, `pullRequests`, `pullRequestsTotal` (list rows only, see
 **List-row slimming** below), `contextLinks`, `archivedAt`, `cowSupported`,
-`checkoutMode`, repository/worktree fields, …) are
+`checkoutMode`, `executionEnvironment`, repository/worktree fields, …) are
 **omitted when absent**
 (`skip_serializing_if`) rather than emitted as `null`, so clients see only populated keys.
 
@@ -1297,6 +1362,15 @@ without a daemon-provisioned checkout (skip-isolation, remote, caller-supplied
 both **standalone** repositories: `workspace.delete` skips the worktree-registration
 prune and the source-repo branch-delete guard for both, and both are sandbox-eligible
 (§5.5).
+
+**`executionEnvironment` (v10.9).** `"direct" | "worktree" | "cow" | "microvm"` (lowercase
+on the wire) — the execution environment selected at creation (§5.1
+execution-environment selection): the explicit `workspace.create` `executionEnvironment`
+param when supplied, else derived from the legacy provisioning outcome (`worktree`/`cow`
+matching `checkoutMode` on provisioned rows). Persisted and immutable like
+`checkoutMode`; omitted for pre-existing rows created before v10.9 and for
+legacy-path rows that skipped provisioning without an explicit selection. The persisted
+field is the **isolation authority** for every agent in the workspace (§5.5).
 
 **`browserClientId` — the per-workspace browser-client pin (REV-2, v9.9;
 [intent-hq/intentd#1760](https://github.com/intent-hq/intentd/pull/1760)).** The logical

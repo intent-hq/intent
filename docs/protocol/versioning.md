@@ -4,6 +4,10 @@
 
 **Documented version:** `10.9` — additive contract; docs lead component implementation.
 
+Version 10.9 is an **additive** minor bump over 10.8: it adds the execution-environment surface — the `sandbox.profiles.list` / `sandbox.profiles.update` / `sandbox.options` / `sandbox.image.check` router methods (§5.5b, daemon-global — no `workspaceId`), the BE-owned `sandbox.*` settings group (§5.12), the `system.capabilities.microvmSupported` field (§5.7 / the §5 fast-path notes — the platform check ANDed with the cached `intentd-microvm-helper --probe` host-loadability probe ANDed with `cowSupported`; presence-detected like `cowSupported`), execution-environment **selection** at workspace creation (§5.1) — the optional `workspace.create` `executionEnvironment` param (`"direct" | "worktree" | "cow" | "microvm"`, validated against the enabled `sandbox.*` profiles and host availability) with the persisted `Workspace.executionEnvironment` field (also derived from the legacy `skipIsolation`/`workspace.cowIsolation` path when the param is omitted; the persisted field is the **isolation authority** for every agent in the workspace, §5.5) — the `agent.delegate` `mergeOnTurnEnd?` / `vmResources?` params (§5.5), the asynchronous `sandbox.cow.merge` acknowledgment with the `sandbox:cow:conflict` event and the `sandbox:image:*` / `sandbox:vm:*` event families (§5.5a, §6.5), and the structured `execution-environment-unavailable` (`-32602`) / `execution-environment-not-implemented` (`-32603`) `error.data` payloads (§9). Method catalog grows by four router methods — 340 router methods, 56 fast-path, 2 aliases: 398 dispatchable names.
+
+The sandbox implementation in [intentd PR #873](https://github.com/intent-hq/intentd/pull/873) advertises 10.9 with 398 dispatchable methods; it does not implement the shared-host extension below. The combined documented catalog includes both additions: **411 dispatchable / 351 router / 58 fast-path / 2 aliases / 5 reverse**.
+
 Version 10.9 reserves the [shared-host membership contract (§5.49)](./methods/shared-host-membership.md).
 The current pinned intentd reports **10.8**, including the provider-neutral identity and
 pin metadata additions already described below. The previous 10.7 heading lagged that
@@ -57,12 +61,13 @@ against current main when implementing; a numeric version alone is never proof o
   owner/guest clients retain their legacy path; new collaboration UI also requires the
   existing default-off Multiplayer lab. The daemon never trusts that preference.
 
-The current daemon catalog is 394 / 336 / 56 (dispatchable / router / fast path);
-this contract adds thirteen methods for **407 / 347 / 58**. The catalog also drops
+The pinned daemon catalog is 394 / 336 / 56 (dispatchable / router / fast path);
+the shared-host contract alone adds thirteen methods for **407 / 347 / 58**.
+Together with the four sandbox router methods above, the documented totals are
+**411 / 351 / 58**. The catalog also drops
 the stale transitional `invite.redeem` entry, already absent at the current pin.
 The docs-ahead entries are warnings at the current pins, not implementations.
 The new method/event goldens and behavioral assertions must land with component code.
-
 
 Version 10.8 is an **additive** minor bump over 10.7 — **a GitLab account is an identity** (§5.48, §5.27; the intentd identity PRs layered on the 10.5 forge-auth engine, [intent-hq/intentd#2024](https://github.com/intent-hq/intentd/pull/2024)). Principals become **provider-neutral**: every wire projection of a principal (`principal.me`, `principal.list` rows, `workspace.members.list` Member rows) gains the optional **`identity: { provider: "github" | "gitlab", host, externalUserId }`** triple, omitted while unlinked; `githubUserId` is kept and still populated for GitHub identities, and existing rows are backfilled as `{ github, github.com, String(githubUserId) }` with zero principal loss. The primary principal links the forge chosen by the new **`identity.provider`** setting (`"github"` | `"gitlab"` | `null`, §5.12); an explicit change re-keys it and publishes the new global event **`principal:identity-changed`** (§6.5). `workspace.invite.create` gains **`pinProvider?` / `pinHost?`** (defaulting to the host's own identity forge) so `pinLogin` pins a triple — `WorkspaceInvite.pinIdentity?` beside the kept `pinGithubUserId` — and a GitHub user can no longer redeem an invite pinned to a same-named GitLab login; inviting requires *a* linked forge identity (the `github-identity-required` code is kept, raised only when none is linked). The guest half of the invite identity proof is generalized as two new router methods **`sourceControl.identityProof.create { provider, host?, nonce, hostLabel }` → `{ proofId, login, provider, host, externalUserId, avatarUrl, gistId? }`** (`externalUserId` and `avatarUrl` always present, both `string | null`) and **`sourceControl.identityProof.delete { provider, host?, proofId }`** — GitHub keeps the secret gist, GitLab publishes a public personal snippet — with `github.identityProof.create` / `delete` kept as byte-identical aliases; `invite.prove` gains **`provider?` / `host?` / `proofId?`** (`proofId` aliases `gistId`, exactly one required), the host verifying a GitLab snippet anonymously or, when the instance refuses anonymous reads, through its own connection to the same host, else the new typed refusal **`-32603 { code: "identity-unverifiable", host }`** (`cannot verify identity on <host>`); the guest-side GitLab proof methods refuse with their own `gitlab-not-connected` / `gitlab-scope-missing` / `gitlab-unreachable` codes beside the kept `github-*` ones. Owner-self-join and pins compare triples. `invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call: legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host. Guests select the matching connected account for a pin or, on a local daemon with the 10.8 identity seam, the chosen `principal.me` identity for an explicit null (older-host/sidecar fallbacks are documented in §5.48); malformed metadata is refused and the host retains its final pin enforcement ([intent-hq/intent#5817](https://github.com/intent-hq/intent/issues/5817)). Router catalog 330 → 336 (`principal.list`, `workspace.members.add`, `github.identityProof.*` and `sourceControl.identityProof.*` are the additions the catalog gains on this line's pin; 10.7 below left the 10.5 counts standing, so these deltas are 10.8's), fast path 53 → 57 (`invite.inspect` / `accept` / `challenge` / `prove`) — **395** dispatchable names while `invite.redeem` is still listed: it is retired from intentd and leaves the docs catalog once the pin advances past its removal, making the counts **394 / 336 / 56**. Every pre-10.8 shape is unchanged.
 
@@ -174,8 +179,8 @@ Also within 10.3 (additive; the intentd multiplayer stack — principals and cal
 
 The protocol version is advertised in two places:
 
-- `client.hello` response: `{ protocolVersion: "10.7", server: { protocolVersion: "10.7", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.7", ... }`
+- `client.hello` response: `{ protocolVersion: "10.9", server: { protocolVersion: "10.9", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.9", ... }`
 
 ### Compatibility Policy
 

@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `10.9` (additive contract ahead of implementation; pinned daemon: `10.8`). Detect support through the [capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `10.9` (additive contracts ahead of the pinned daemon: `10.8`). The execution-environment and shared-host additions are independent; see [versioning](./versioning.md) for their implementation status. Shared-host support requires the [capability contract](./methods/shared-host-membership.md#authority-and-discovery).
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -32,6 +32,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.4 `task.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.5 `agent.*` | [methods/agents.md](./methods/agents.md) |
 | §5.5a `sandbox.cow.*` (CoW agent sandboxes) | [methods/agents.md](./methods/agents.md) |
+| §5.5b `sandbox.profiles.*` / `sandbox.options` / `sandbox.image.check` (execution-environment profiles) | [methods/agents.md](./methods/agents.md) |
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
