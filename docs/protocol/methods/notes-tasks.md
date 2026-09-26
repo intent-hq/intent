@@ -206,10 +206,106 @@ each recompute so the read path is O(1) and survives restart. `note.delete` casc
 | Method | Params | Result |
 | --- | --- | --- |
 | comment.add | noteId (req), searchContext (req), commentTarget (req), comment (req), type?, author?, authorType? ("user" \| "agent", default "agent"), idempotencyKey?, commentId? (UUID) | { success, message, commentId, anchored, noteRev, location: { line, anchoredText } } (anchors by text search). A replay with the same `(workspaceId, idempotencyKey)` returns the stored result without re-executing (no duplicate comment, no second `comment:added` / `note:updated`); empty/whitespace-only keys are treated as absent. When `commentId` is supplied, the daemon uses it as the canonical id — comment row, `threadId`, anchor `startId`/`endId`, and the embedded `<!--anchor:{id}:start/end-->` markers — instead of minting a fresh UUID, so a client that already inserted optimistic editor anchors under that id converges with the daemon's note rewrite. A non-canonical-UUID value (only the hyphenated 8-4-4-4-12 form is accepted; e.g. the 32-hex simple form is rejected) or a collision with an existing comment id is rejected with `-32602` InvalidParams (after the idempotency replay check, which still returns the cached result first). Omitting it keeps the mint-a-UUID behavior. |
-| comment.list | noteId (req), since?, authorType?, status?, includeComments? | { threads: [...] } |
-| comment.getThread | noteId (req), threadId? or commentId? | { thread } |
-| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | { ok, ... } — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
+| comment.list | noteId (req), since?, authorType?, status?, includeComments? | `{ threads: CommentThreadSummary[], totalThreads, totalComments }` — `comments: CommentWire[]` on each summary only when `includeComments: true` |
+| comment.getThread | noteId (req), threadId? or commentId? | `{ threadId, noteId, rootComment: CommentWire, replies: CommentWire[], totalComments, status }` |
+| comment.respond | noteId (req), comment (req), threadId? or commentId?, type?, author?, authorType? ("user" \| "agent", default "agent"), suggestionOriginal?, suggestionProposed? | `{ success, message, comment: CommentWire, thread: { threadId, totalComments } }` — the reply carries **no** `anchor`/`anchorText` (see "Reply anchoring" below) |
 | comment.delete | noteId (req), commentId (req) | { ok, ... } |
+
+#### Qualified human comment attribution *(10.9, additive; docs lead implementation)*
+
+The existing `author: string` is a presentation label, with the unchanged
+[§5.48 caller attribution rules](./multiplayer.md#attribution--who-wrote-a-human-message):
+bound humans use login, else display name, else principal ID, with
+`authorType: "user"`; the unlinked primary's compatibility pass-through and
+agent/daemon supplied labels and types remain intact. Do not encode a provider
+or instance into that label or use it as an identity key.
+
+Existing `Comment` entities and `CommentWire` projections add these **output-only**
+fields, omitted rather than `null` when unavailable:
+
+```ts
+// Attribution fields only; all existing comment fields retain their shapes.
+// Identity is the canonical safe triple from §5.48 / §5.49.
+type CommentAttribution = {
+  author: string;
+  authorType: "user" | "agent";
+  authorPrincipalId?: string;
+  authorIdentity?: Identity; // { provider: "github" | "gitlab", host, externalUserId }
+};
+// On the existing CommentThreadSummary, alongside its other fields:
+type LatestCommentAttribution = {
+  latestCommentAuthor: string;
+  latestCommentAuthorType: "user" | "agent";
+  latestCommentAuthorPrincipalId?: string;
+  latestCommentAuthorIdentity?: Identity;
+};
+```
+
+`authorPrincipalId` is the admitted human's stable ID **on this daemon host**.
+`authorIdentity` is the creation-time snapshot of that principal's linked
+`Identity`: provider, canonical bare instance `host[:port]`, and stable
+`externalUserId` as a string. It contains no token, credential reference, login
+or display name. Equal handles or numeric IDs on GitHub and GitLab, or on two
+GitLab instances, do not identify the same person. Compare the complete triple
+and retain the host-scoped principal ID; neither is authority, an account-linking
+rule, nor a source of execution credentials.
+
+**Creation and spoofing.** On both `comment.add` and `comment.respond`, first apply
+the existing caller-based label/type rules. If the admitted caller is a bound
+human and the resulting `authorType` is `"user"`, persist its actual principal ID
+and, only when linked, its canonical identity snapshot with the new comment.
+An unlinked human (including the owner without a forge) gets the principal ID
+without a fabricated identity. The legacy unlinked-primary pass-through that
+produces a non-user comment retains its label/type and omits both new fields.
+Agent/daemon-origin comments likewise omit them, even if their supplied
+`authorType` is `"user"`; do not turn the shared execution principal into a human
+author.
+
+Client-supplied copies of either new field are **ignored**, whatever their value
+or type, before deriving attribution from the admitted caller and trusted
+principal state. This applies consistently to add/respond through every existing
+entry point, including RPC and MCP; it extends authoritative override/ignore
+semantics without adding a request requirement or a new rejection solely for
+these output keys. An agent cannot stamp a human by copying the fields. Existing
+validation of the other request fields and all authorization gates still apply.
+
+**Durability and history.** Commit attribution with the comment, before publishing
+its creation event. Preserve that original stamp and snapshot through comment
+updates, resolution/reopening, note edits, anchor repair and daemon restart;
+neither the current editor nor the host execution account replaces the author.
+Later profile changes, identity selection/unlinking, membership removal or an
+unresolvable principal do not rewrite an already recorded safe snapshot. It
+describes the author at creation, not present access. A principal-only comment
+does not acquire a snapshot when that principal later links a forge.
+
+Legacy records without a reliable creation stamp retain their original labels
+and omit the new fields. Do not guess from a handle, provider, current owner or
+later same-handle principal, mass-backfill history, or treat untrusted imported
+extra fields as proof of attribution. Unlike transcript legacy-author resolution,
+missing comment metadata never defaults to the owner.
+
+**Projection parity.** Carry stored attribution unchanged wherever an existing
+full comment is served: `comment.respond.comment`, `comment.getThread.rootComment`
+and `replies`, `comment.list`'s included `comments`, and the full comments in
+`comment.subscribe` snapshots and re-read deltas (§6.9). Any full comment in an
+existing result/event uses the same fields and omission rules. A thread summary's
+`latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` copy the stored
+fields of the **same comment** selected for `latestCommentAuthor` and
+`latestCommentAuthorType`, including when `includeComments` is false; no separate
+principal lookup or identity-selection rule. If that comment has no stamp, omit
+the corresponding summary fields, even when another comment in the thread has one.
+Keep the existing ordering, `since` / `authorType` / `status` filters and visibility.
+
+`comment.add` remains an acknowledgement without a full comment. Raw
+`comment:added { noteId, commentId }` and
+`comment:resolved { noteId, threadId, resolved }` remain ID-based durable events:
+the subsequent read/subscription projection carries the attribution; no new event
+or event-history backfill is implied. Old clients ignore unknown output fields;
+new clients accept their absence from old hosts and legacy rows, keep the label,
+and show qualified identity as unknown. This adds no RPC, capability or authority
+flag. Component conformance cases are in [§5.49](./shared-host-membership.md#required-behavioral-conformance).
+
+#### Anchoring and updates
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
 `<!--anchor:{commentId}:start-->` / `<!--anchor:{commentId}:end-->` markers into the
