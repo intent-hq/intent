@@ -270,8 +270,8 @@ these output keys. An agent cannot stamp a human by copying the fields. Existing
 validation of the other request fields and all authorization gates still apply.
 
 **Durability and history.** Commit attribution with the comment, before publishing
-its creation event. Preserve that original stamp and snapshot through comment
-updates, resolution/reopening, note edits, anchor repair and daemon restart;
+its creation event. Preserve the original author label, stamp and snapshot through
+comment updates, resolution/reopening, note edits, anchor repair and daemon restart;
 neither the current editor nor the host execution account replaces the author.
 Later profile changes, identity selection/unlinking, membership removal or an
 unresolvable principal do not rewrite an already recorded safe snapshot. It
