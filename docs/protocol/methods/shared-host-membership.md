@@ -316,7 +316,7 @@ discovery/readiness, `repo.list`, and workspace repository configuration from th
 
 | Method | Params | Result |
 | --- | --- | --- |
-| host.executionContext | — | `{ defaultProviderId: string \| null, defaultModelId: string \| null, repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[], gitCredentialPolicy: GitCredentialPolicy }` — owner/member read; guests receive Forbidden |
+| host.executionContext | — | `{ defaultProviderId: string \| null, defaultModelId: string \| null, enabledProviderIds: string[], repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[], gitCredentialPolicy: GitCredentialPolicy }` — owner/member read; guests receive Forbidden |
 
 The context is an allowlisted projection, never a settings dump. Defaults are
 host-owned effective defaults, null when unset; provider/model catalogs keep their
@@ -327,6 +327,30 @@ be expired, revoked or lack access to the requested repository. Readiness probes
 use the existing bounded caches; ordinary reads
 do not synchronously contact a forge or spawn a provider. `repoConfig` reads omit
 secret values; account changes and global repository administration remain owner-only.
+
+`enabledProviderIds` is always present on supporting hosts. It contains unique,
+canonical IDs from the connected host's provider registry in deterministic order,
+derived from the host's existing execution enablement gate:
+
+- A registered provider that can be disabled is excluded only when its effective
+  `providers.enabled[id]` entry is explicitly `false`. An absent map or absent
+  entry means enabled; an explicit `true` also means enabled.
+- Registered providers that cannot be disabled remain included, even if their
+  map entry is `false`. Unknown map keys never add a provider to the result.
+
+This projection reports execution enablement policy only. It does not report
+installation, environment or feature gates, authentication, or current readiness.
+An installed provider can be disabled; an enabled provider can be unavailable.
+Members combine it with that host's existing catalog, discovery and readiness
+surfaces when offering provider/model choices. The raw settings map and account
+setup remain owner-only, and the owner's existing enablement policy is unchanged.
+
+If `enabledProviderIds` is missing or malformed, including on an older host,
+members treat enablement as unknown. Never infer enabled choices from local
+settings, installation/discovery, defaults, or all known providers. Preserve the
+current agent/provider/model display while withholding unsupported cross-provider
+choices until a valid projection from the current connection is available.
+Ordinary owner and legacy setup continue through their separate existing paths.
 
 `GitCredentialPolicy` is this non-secret, always-present projection of the
 connected host's effective managed-helper policy:
@@ -408,14 +432,19 @@ AI authorization cannot be recovered with a member's local provider account.
 
 Refresh `host.executionContext` and the existing provider readiness reads from
 the selected host after **every reconnect** and host switch. Discard responses
-from an earlier connection/host. `host:execution-context-changed` also invalidates
-these reads after helper-policy changes, repository connect/revoke/token-source
+and events from an earlier connection/host; old enablement must not authorize
+choices while the new context is loading. `host:execution-context-changed` carries
+the complete context, including `enabledProviderIds`, and invalidates these reads
+after committed `providers.enabled` changes (including entry removal or map
+reset), defaults/helper-policy changes, repository connect/revoke/token-source
 changes, AI account/setup changes, and an observed authorization/readiness
-transition (including an operation discovering a revoked credential). Emit the
-sanitized event even when the configured flags remain unchanged. Unknown or
-stale readiness is not success; external revocation becomes observable through
-bounded readiness refresh or the affected operation, not a promise of instant
-push from the provider. Raw settings/auth-flow events remain owner-only.
+transition (including an operation discovering a revoked credential). A read
+started before an invalidation must not overwrite the newer context; discard it
+and refresh for the current connection. Emit the sanitized event even when the
+configured flags remain unchanged. Unknown or stale readiness is not success;
+external revocation becomes observable through bounded readiness refresh or the
+affected operation, not a promise of instant push from the provider. Raw
+settings/auth-flow events remain owner-only.
 
 #### Collaboration credential purpose
 
@@ -885,7 +914,7 @@ component test requirement, not a claim of runtime or physical iCloud evidence.
 | --- | --- | --- |
 | `host:members-changed` | `{ revision, principalId, hostRole: "member" \| "guest", action: "added" \| "removed" }` | Durable global event; owner/active members, plus the affected principal as a final control notification on removal. Other guests cannot observe host membership. `guest` on removal describes absence of host membership, not a surviving grant or credential |
 | `host:invites-changed` | `{ inviteId, action: "created" \| "revoked" \| "redeemed" }` | Durable global event, owner-only; refresh host invite list; never contains secret/link/pin |
-| `host:execution-context-changed` | `host.executionContext` result, including `gitCredentialPolicy` | Durable global event, owner/member-only; sanitized snapshot after defaults, helper policy, repository/AI setup or observed authorization/readiness changes; invalidate readiness reads even when configured flags are unchanged, never expose auth-flow data |
+| `host:execution-context-changed` | Complete `host.executionContext` result, including `enabledProviderIds` and `gitCredentialPolicy` | Durable global event, owner/member-only; sanitized snapshot after committed provider enablement, defaults, helper policy, repository/AI setup or observed authorization/readiness changes; invalidate enablement/readiness reads even when configured flags are unchanged, never expose raw settings or auth-flow data |
 | `identity:auth-changed` | `{ provider, host, purpose: "collaboration", status, flowId? }` | Same terminal status enum as `sourceControl:auth-changed`; signing-in daemon's owner only, separate from repository auth events |
 | `client:updated` | Complete corresponding `client.list` row | Transient global event after hello metadata or effective role/profile changes; owner/member host-wide, guests self-only |
 
@@ -938,6 +967,10 @@ the assertions; passing documentation gates is not runtime evidence.
 | Correct host join, wrong provider/instance/ID, duplicate concurrent redemption | Member on correct proof; mismatch refused; exactly one pinned redemption wins; empty host remains usable |
 | Guest upgrade with old collaborator rows and full guest-seat usage | Same principal, all workspaces, truthful `myRole`, `canManage: true`, deduplicated roster and no guest seat spent |
 | Owner/member/guest management over every WSS path | Members create/manage including prompts/terminals/previews; guests remain narrowed; settings/account/host administration remains owner-only |
+| Provider enablement map absent, empty, explicit true/false, non-disableable false, or unknown keys | Context and complete event contain the same unique canonical provider IDs in deterministic order: only explicit false excludes a disableable registered provider; non-disableable providers remain; unknown keys add nothing. No settings/auth access is granted |
+| Installed but disabled provider, or enabled provider with a closed feature/environment gate or missing installation/auth/readiness | Member choices combine connected-host enablement with existing catalog/discovery/readiness; no surface substitutes one condition for another or changes owner enablement policy |
+| Owner commits provider enablement changes, removes an entry or resets the map while a member read is in flight | Complete sanitized execution-context event refreshes member choices even if configured/readiness flags are unchanged; a stale read cannot undo the newer snapshot |
+| Missing/malformed enablement projection, reconnect or switch to a differently configured host | Preserve current agent/model display; withhold unsupported cross-provider choices until current-host enablement is known. Reject old connection responses/events and never substitute local settings, installation or all known providers; owner/legacy setup is unchanged |
 | Managed GitHub helper enabled/disabled, each with and without an alternative owner helper | Member reads the exact effective switch and setting name from the connected host; disabled never supplies the daemon credential to children. Git still succeeds with an authorized alternative helper; disabled/no helper explains owner recovery without member auth fallback |
 | Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
 | Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |

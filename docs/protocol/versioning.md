@@ -35,6 +35,11 @@ against current main when implementing; a numeric version alone is never proof o
   Old-reader logs contain no raw/reversible identity tuple. Import applies all observed
   removals; iCloud delivery remains eventual. The owner service/schema stays v1; the
   personal pairing URI also stays v1. See §5.49's mixed-version/race fixtures.
+- `host.executionContext.enabledProviderIds` always projects unique canonical registry
+  IDs in deterministic order using the existing execution gate: only explicit false
+  disables a disableable provider. It is independent of installation, feature gates,
+  authentication and readiness. Missing/malformed data withholds unsupported member
+  provider choices without changing current agent/model display or owner/legacy setup.
 - `host.executionContext.gitCredentialPolicy` safely exposes the effective managed GitHub
   helper switch and owner setting name. Classified member Git/AI authorization failures
   carry owner-directed `ExecutionAuthorizationFailure`; configured is not proof of valid
@@ -42,8 +47,10 @@ against current main when implementing; a numeric version alone is never proof o
 - Five new events: `host:members-changed`, `host:invites-changed`,
   `host:execution-context-changed`, `identity:auth-changed`, `client:updated`.
   Existing client events gain server-bound person/role fields with caller-filtered visibility.
-  Execution-context events invalidate helper policy and repository/AI readiness as well as
-  defaults; classified asynchronous AI failures add the diagnostic to `agent:failed`.
+  Complete execution-context snapshots include `enabledProviderIds`; committed
+  `providers.enabled` changes invalidate member choices alongside helper policy,
+  repository/AI readiness and defaults. Reconnect/host-switch fencing discards stale
+  context; classified asynchronous AI failures add the diagnostic to `agent:failed`.
 - Feature detection uses independent `client.hello.server.capabilities` flags
   `hostMembership: 1`, `collaborationIdentity: 1`, `personalPairing: 1`, and
   `authenticatedDevices: 1`. Unknown role/capability state is not authority. Existing

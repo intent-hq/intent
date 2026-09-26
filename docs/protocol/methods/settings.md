@@ -204,6 +204,16 @@ never persisted or echoed back as the value. Writing that number explicitly via
 safe `host.executionContext` read and the existing provider/model/repository read
 surfaces, not a settings dump. Local client preferences remain local.
 
+Its always-present `enabledProviderIds` projects the host's existing execution
+gate: only explicit `providers.enabled[id] === false` excludes a registered
+disableable provider; absent entries are enabled, non-disableable providers remain
+included, and unknown keys add nothing. It is separate from installation,
+feature/environment gates and authentication/readiness; members never reconstruct
+it from those surfaces or local settings. Committed map changes, including entry
+removal or reset, emit the complete sanitized execution-context snapshot. Missing
+or malformed projections on older hosts use §5.49's conservative member fallback;
+the owner's existing setup/enablement policy stays unchanged.
+
 Its `gitCredentialPolicy` projects only the effective managed-helper switch and
 the fixed setting name `sourceControl.github.exposeGitCredentialToChildren` for
 member recovery. Disabled means no daemon-managed child credential injection,
