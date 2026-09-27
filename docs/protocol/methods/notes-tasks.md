@@ -278,22 +278,39 @@ unresolvable principal do not rewrite an already recorded safe snapshot. It
 describes the author at creation, not present access. A principal-only comment
 does not acquire a snapshot when that principal later links a forge.
 
-Legacy records without a reliable creation stamp retain their original labels
-and omit the new fields. Do not guess from a handle, provider, current owner or
-later same-handle principal, mass-backfill history, or treat untrusted imported
-extra fields as proof of attribution. Unlike transcript legacy-author resolution,
-missing comment metadata never defaults to the owner.
+Legacy comment records without a reliable creation stamp retain their original
+labels and omit the new fields. Do not guess from a handle, provider, current owner
+or later same-handle principal, mass-backfill comment history, or treat untrusted
+imported extra fields as proof of attribution. Unlike transcript legacy-author
+resolution, missing comment metadata never defaults to the owner.
 
-**Projection parity.** Carry stored attribution unchanged wherever an existing
-full comment is served: `comment.respond.comment`, `comment.getThread.rootComment`
-and `replies`, `comment.list`'s included `comments`, and the full comments in
+This protection for unknown comment authors does not prohibit the separately
+required [source tagging of historical human messages before workspace transfer](./workspace.md#human-authorship-in-workspace-transfers).
+That rule uses trustworthy source provenance while it is available, preserves
+recorded authors, and keeps irrecoverable imported history unknown. It does not
+guess legacy comment authors or turn assistant/tool/system history into human
+messages.
+
+On [workspace import](./workspace.md#human-authorship-in-workspace-transfers), keep
+the recorded safe identity snapshot and original label, but omit foreign
+`authorPrincipalId` from comment and latest-author output. Any retained source
+principal provenance is internal history, not a local principal binding. Do not
+look up or recreate a destination principal by source ID, identity or handle.
+This exception to copying the creation principal ID across projections prevents
+foreign IDs from acquiring local meaning; it does not authorize backfilling
+unknown legacy comments.
+
+**Projection parity.** Apply the same attribution and omission rules wherever an
+existing full comment is served: `comment.respond.comment`,
+`comment.getThread.rootComment` and `replies`, `comment.list`'s included `comments`, and the full comments in
 `comment.subscribe` snapshots and re-read deltas (§6.9). Any full comment in an
 existing result/event uses the same fields and omission rules. A thread summary's
-`latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` copy the stored
+`latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` copy the projected
 fields of the **same comment** selected for `latestCommentAuthor` and
 `latestCommentAuthorType`, including when `includeComments` is false; no separate
-principal lookup or identity-selection rule. If that comment has no stamp, omit
-the corresponding summary fields, even when another comment in the thread has one.
+principal lookup or identity-selection rule. Omit each summary field when that
+selected comment omits the corresponding field, even when another comment in
+the thread has one.
 Keep the existing ordering, `since` / `authorType` / `status` filters and visibility.
 
 `comment.add` remains an acknowledgement without a full comment. Raw
