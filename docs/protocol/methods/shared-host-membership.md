@@ -1,11 +1,12 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.49 Shared host membership.
 
-### 5.49 Shared host membership *(10.9, additive; docs lead implementation)*
+### 5.49 Shared host membership *(10.9, additive)*
 
 This section extends [§5.48](./multiplayer.md). It is the normative contract for
-host members, collaboration credentials and personal device pairing. The pinned
-10.8 daemon does not yet implement it. Consumers must detect the capabilities
-below; publishing these docs or seeing a version string does not enable access.
+host members, collaboration credentials and personal device pairing. The recorded
+intentd pin implements the shared-host daemon surface at 10.9; client adoption
+is independent. Consumers must detect the capabilities below; seeing a version
+string does not enable access.
 
 #### Authority and discovery
 
