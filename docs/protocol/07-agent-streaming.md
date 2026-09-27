@@ -492,9 +492,11 @@ delivers a `proposal_resolved` system notice to the model on BOTH outcomes (appl
 dismissed). Full contract: §5.5 ([methods/agents.md](./methods/agents.md) — the
 `agent.resolveProposal` row and the "Pending proposals" section).
 
-**Assistant project transfers.** The chief-only MCP binding
-`ws.app.workspaces.transfer(id, { destination? }?)` returns a `workspace-transfer`
-proposal using this same resource and pending-proposal lifecycle. It reads the source
+**Assistant project transfers.** The chief-only project-transfer tool accepts a workspace
+`id` and optional `destination` hint, and returns a `workspace-transfer` proposal using
+this same resource and pending-proposal lifecycle. The installed tool signature is listed
+in the [app workspace bindings](./methods/mcp-bindings.md#wsappworkspaces).
+It reads the source
 workspace and `workspace.transfer.plan`; it never starts an export or stops agents.
 `destination`, when present, is a saved desktop connection ID or device-name hint.
 There is no new JSON-RPC method.
