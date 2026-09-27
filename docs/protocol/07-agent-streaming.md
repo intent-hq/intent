@@ -454,9 +454,13 @@ delta stream (`tool_delta`, which pairs each lifted item positionally with the i
 (`crates/intent-services/src/tool_block.rs::lift_proposal_resource` /
 `build_proposal_resource_block`), preserving the byte-for-byte snapshot/delta invariant.
 Malformed items (wrong MIME, missing or non-string `text`) are ignored —
-no standalone block is emitted. The lift is gated on `status: "completed"` only: a tool that
-ends in `error` never surfaces a standalone proposal block, even if its output still carries the
-resource item.
+no standalone block is emitted. Lifting resources from tool output is gated on
+`status: "completed"`: an `error` outcome does not lift a proposal merely because its
+output carries a resource item. Binding-registered `AtToolResult` attachments are
+different: a terminal `completed` or `error` outcome claims those already-created cards,
+even when the script threw after creating them. The persisted transcript and live delta
+use the same registered blocks and IDs. See the binding-time
+[attach semantics](./methods/workspace.md#51-workspace) for their provenance and matching.
 
 *Collapsed-output fallback.* Some providers (e.g. auggie) do not echo the MCP content-item
 array in `rawOutput`: they flatten the daemon's dual text+resource items into a single
