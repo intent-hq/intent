@@ -51,6 +51,15 @@ never fake ownership or a cached connection category. Host provider/model/reposi
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.
 
+Read `host.executionContext.enabledProviderIds` for the host's effective execution
+enablement policy and combine it with that host's catalog/discovery/readiness.
+If this projection is missing or malformed, preserve the current agent/model
+display but withhold unsupported cross-provider choices. Never infer enablement
+from local settings, installation or all known providers. Refresh on committed
+`providers.enabled` changes, reconnect and host switch; fence responses/events
+from old connections and reads superseded by execution-context invalidation.
+Ordinary owner/legacy setup remains separate.
+
 Read `host.executionContext.gitCredentialPolicy` to explain the host owner's
 managed GitHub helper switch, without reading settings or credentials. Refresh
 that context and provider readiness after reconnect and execution-context events;

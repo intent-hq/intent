@@ -193,6 +193,52 @@ A separate one-time store migration splits any persisted legacy compound
 `provider:model` session ids into the `(provider, model)` column pair
 ([intent-hq/intentd#1653](https://github.com/intent-hq/intentd/pull/1653)), so stored session models are bare ids too.
 
+**Effort-change transcript notice (additive; no version bump).** At the next successful
+turn start, a change from the last committed reasoning-effort choice persists one
+informational message with `role: "system"`, one readable text block (for example,
+`"Effort changed from Medium to High."`), and row metadata:
+
+```json
+{
+  "type": "effort_changed",
+  "from": "medium",
+  "to": "high"
+}
+```
+
+Both `from` and `to` are present and each is `string | null`: strings are provider-owned
+effort values, with no closed enumeration; `null` means **Auto / provider default**.
+The explicit string `"none"` means **Off**, and must not be collapsed into `null`.
+These values describe the confirmed effort choice, not a guess at the provider's
+internal reasoning budget. Clients may format known levels for display and must keep
+arbitrary provider values readable; the text block is the fallback for clients that
+do not recognize `metadata.type`.
+
+The daemon emits the ordinary `agent:message` event with `role: "system"` for the
+persisted row. The same row and metadata are returned in transcript history, so live
+delivery and a reload show the same notice at the turn that uses the changed effort.
+There is no new event type or client-generated transient notice.
+
+The notice follows the application rules above; changing the picker or persisting
+`reasoningEffort` with `agent.update` never emits it immediately. In particular, an
+in-flight response must not appear to have used a newly selected effort. The daemon
+compares with the last successfully committed effort baseline at turn start:
+
+| Situation | Effort notice and baseline |
+|---|---|
+| First successfully observed effort for the session | Establish the baseline silently; no notice. |
+| Next turn successfully uses a different choice, including a clear to Auto | Persist one notice and advance the baseline. |
+| Unchanged choice, or a change of casing only | No notice; effort matching is case-insensitive. |
+| Change away and back before the next turn | No notice; compare with the committed baseline, not intermediate picker updates. |
+| Spawn or effort application fails, or the provider does not support the option/value | No notice and no advance of the confirmed effort baseline; existing fail-soft effort application is unchanged. |
+
+The committed baseline survives daemon restarts and session resume/recreation; a
+later turn must not repeat a change already committed. Notice persistence is
+best-effort, like the model-change notice: a storage failure is logged and does not
+fail the turn. These rows are transcript-only: they are excluded from provider history
+replay and never injected into outbound prompts. Existing model/provider-change
+notices keep their own behavior and may accompany an effort notice at the same turn.
+
 **Session-discovered effort levels — `effortLevels` *(additive; no version bump)*.**
 `effortLevels?: string[]` is an optional, daemon-owned field served on both the
 `AgentSession` (`agent.getSession`) and `AgentLite` (`agent.get` / `agent.update`
