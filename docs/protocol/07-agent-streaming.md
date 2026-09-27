@@ -492,6 +492,29 @@ delivers a `proposal_resolved` system notice to the model on BOTH outcomes (appl
 dismissed). Full contract: §5.5 ([methods/agents.md](./methods/agents.md) — the
 `agent.resolveProposal` row and the "Pending proposals" section).
 
+**Assistant project transfers.** The chief-only MCP binding
+`ws.app.workspaces.transfer(id, { destination? }?)` returns a `workspace-transfer`
+proposal using this same resource and pending-proposal lifecycle. It reads the source
+workspace and `workspace.transfer.plan`; it never starts an export or stops agents.
+`destination`, when present, is a saved desktop connection ID or device-name hint.
+There is no new JSON-RPC method.
+
+The proposal has a unique `applyToolCallId` and payload
+`{ operation: "workspace.transfer", workspaceId, sourceWorkspacePath, destination? }`.
+Its preview names the workspace and carries the source path and transfer-plan warnings.
+The desktop resolves the hint against its saved connections, excludes its own backend,
+and lets the user select a destination before approval. Missing or ambiguous hints must
+not silently select another device. The source is the backend serving the assistant
+conversation; the desktop validates the source workspace path again before executing.
+
+The inline card discloses that approval stops source agents and archives the source
+after a successful transfer. Approval uses the existing desktop transfer relay,
+then finalizes with `archiveSource: true` and `restartAgents: false`. Only successful
+finalization resolves the proposal as `applied`; failures remain visible and retryable.
+Cancellation before approval resolves it as `dismissed` without starting an export.
+The transfer controls require the desktop transfer bridge. See
+[workspace transfer](./methods/workspace.md) for export/import and plan semantics.
+
 
 **Standalone question-resource blocks (`AtTurnEnd`, [monorepo#732](https://github.com/intent-hq/monorepo/issues/732)).**
 The second resource MIME type is `application/vnd.intent.question+json` — structured clarifying
@@ -735,4 +758,3 @@ A prompt turn that **completes** with a non-`end_turn` ACP stop reason — `refu
 - **Still a completion.** An abnormal ending follows the normal completion lifecycle: `agent:idle` fires (its existing lifecycle `finishReason` field carries the same stop reason, as it always has) and `agent:failed` does not. Distinct from §7.2's interrupt contract (`metadata.stopReason: "interrupted"` / event `stopReason: "interrupted"`): an interrupt is externally imposed mid-turn, an abnormal finish is the agent's own resolved stop reason. The ACP `cancelled` stop reason never reaches this path — cancellation routes through the §7.2 interrupt flush.
 
 Presence-detected additive fields (row `metadata.finishReason`, event `finishReason?`) within the current protocol version; no method-catalog or wire-shape change, so no version bump.
-
