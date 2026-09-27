@@ -49,6 +49,13 @@ against current main when implementing; a numeric version alone is never proof o
   and not auto-ready under UnknownHuman privacy; only an explicit send by the
   current host owner, authorized inside the atomic pop, can deliver unchanged content.
   Normal local/nonhuman queues and failed-send restoration keep their behavior.
+  Supported legacy human non-object metadata normalizes to an object containing
+  root `humanAuthor` and inert `humanAuthorOriginalMetadata` with the original
+  JSON value, including JSON null. SQL NULL/absence needs no preservation member.
+  Original object keys, including a same-named inert member, remain unchanged
+  apart from existing reserved-key sanitation; never unwrap or trust nested keys.
+  Re-export does not wrap again. The root type change is explicit, preserves the
+  original value and adds no migration, SQL field/table, RPC or authority.
 - Eleven new router methods: `host.members.list`, `host.members.remove`, `host.invite.list`,
   `host.invite.revoke`, `host.executionContext`, and `identity.authStatus`, `identity.connect`,
   `identity.cancelAuth`, `identity.revoke`, `identity.getUser`, `identity.select`.

@@ -2081,6 +2081,46 @@ key, synthetic principal, account-linking hint or source of permissions. Presenc
 of an arbitrary pre-upgrade client-supplied `humanAuthor` is not proof that the
 record is trusted.
 
+**Preserving supported legacy metadata.** Genuine historical human messages and
+queued payloads can already contain non-object JSON metadata. Preserve that
+supported history by normalizing it to an object with root `humanAuthor` and an
+inert `humanAuthorOriginalMetadata` member holding the original JSON value.
+Strings, numbers, booleans, arrays and JSON `null`, including nested values, remain
+recoverable exactly as JSON values; do not stringify or discard them. SQL NULL
+or absent metadata has no original JSON payload and need not acquire the
+preservation member. This explicitly changes the root metadata type to an object;
+lossless preservation means the original JSON value remains recoverable.
+
+For example, an old import with unknown authorship and array metadata becomes:
+
+```json
+{
+  "humanAuthor": { "login": null, "displayName": null, "avatarUrl": null },
+  "humanAuthorOriginalMetadata": ["legacy", null, { "humanAuthor": "inert data" }]
+}
+```
+
+Original object metadata keeps its unrelated keys and values; only already-reserved
+attribution keys follow the existing sanitation rules. A preexisting object member
+named `humanAuthorOriginalMetadata` remains inert data, unchanged. Its name or
+contents are never evidence that the object was wrapped or has trusted authorship.
+Never unpack it, merge it into root metadata, or use nested reserved keys as
+attribution. Only root validated/server-produced `humanAuthor` controls historical
+author status. The preservation member grants no identity, local binding, sender
+status, queue readiness/ownership or authority. Raw live, legacy or v1 preservation
+data cannot acquire trust through this name. Existing live input validation stays
+in force.
+
+Re-export preserves the normalized object and original value without another
+wrapper. New readers importing valid non-object human metadata from v1 use the
+same preservation member plus explicit unknown attribution when source provenance
+is unavailable; such supported legacy values are not malformed author envelopes.
+Malformed v2 author envelopes still fail import atomically. Queued explicit send,
+failed-send restoration and re-export retain the original value alongside the
+unchanged trusted snapshot. Nonhuman behavior is unchanged. This uses the existing
+metadata column and format version 2; no additional migration, SQL field/table,
+RPC, adoption workflow or imported permission is introduced.
+
 **Trust boundary and upgrade.** Before activating this guarantee, one data-only
 migration removes the previously unreserved `humanAuthor` key from stored message
 and queued-payload metadata. Preserve text, IDs, timestamps and every unrelated
