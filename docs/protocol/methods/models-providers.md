@@ -122,6 +122,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Auggie",
       "command": "auggie",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "loginCommandHint": "auggie login",           // optional
       "loginDocsUrl": "https://docs.augmentcode.com/cli/overview",  // optional
       "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
@@ -134,7 +135,18 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Claude Code",
       "command": "claude-agent-acp",
       "canBeDisabled": true,
+      "supportsFastMode": true,                    // additive; absent means unsupported
       "loginDocsUrl": "https://code.claude.com/docs/en/quickstart#step-2-log-in-to-your-account",  // optional
+      "visible": true,
+      "supportsTestPrompt": true
+    },
+    {
+      "id": "codex",
+      "displayName": "OpenAI Codex",
+      "shortName": "Codex",
+      "command": "codex-acp",
+      "canBeDisabled": true,
+      "supportsFastMode": true,
       "visible": true,
       "supportsTestPrompt": true
     },
@@ -144,6 +156,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Cortex",
       "command": "cortex-acp",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "requiresEnvVar": "INTENTD_ENABLE_CORTEX",    // optional — raw gating field passed through
       "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
       "supportsTestPrompt": true
@@ -157,6 +170,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Mock",
       "command": "node",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "requiresEnvVar": "MOCK_AGENT_SCRIPT_PATH",   // optional — raw gating field passed through
       "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
       "supportsTestPrompt": true
@@ -173,6 +187,14 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; no registered provider currently carries one, but the mechanism remains for future providers). `cortex` and `droid` carry `requiresEnvVar` (`INTENTD_ENABLE_CORTEX` / `INTENTD_ENABLE_DROID`) and are hidden by default — not yet well-tested; setting the env var in the daemon's environment restores the provider. The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
 - The optional fields (`legacyAliases`, `loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
 - `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download, and `antigravity`, which requires a private guarded profile. For these providers, the RPC returns `unsupported` without resolution or spawn.
+- `supportsFastMode` is an additive boolean: whether this daemon can apply the
+  provider's `providers.fastMode` preference (§5.12). Implementing daemons emit it
+  on every row: `true` for `claude-code` and `codex`, `false` for other providers.
+  Older daemons omit it; clients treat omission as `false` and also require the
+  setting to be present in `settings.list` before offering the toggle. This is an
+  integration capability, not current account/model eligibility or confirmation
+  that a running session uses Fast mode. Model selection and provider availability
+  keep their existing meanings.
 - **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: `model.defaultProvider` when it names a registered provider (§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)), else it is unset — there is no positional fallback to the first registered provider ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044)) — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
 Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "antigravity-acp"`, and `canBeDisabled: true`. Discovery does not enable it or change the active provider. Initial verification covers macOS Apple Silicon with personal Google OAuth. Other platforms and authentication methods are not certified by this integration.
