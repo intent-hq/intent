@@ -88,6 +88,8 @@ jobs:
 
   # Standard-library-only Python suites run without submodules. Use the same
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
+  # Includes offline prerelease retention/deletion tests and a functional check
+  # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
     runs-on: ubuntu-latest
     steps:

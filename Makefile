@@ -488,7 +488,7 @@ gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -m unittest -v scripts.test_resumable_nextest scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
