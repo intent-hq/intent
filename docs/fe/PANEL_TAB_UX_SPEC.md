@@ -9,8 +9,8 @@ A comprehensive guide to implementing a powerful, intuitive panel and tab manage
 ### Layout Model
 - **Panels**: Containers that hold one or more tabs
 - **Tabs**: Individual content views within a panel
-- **Splits**: Horizontal divisions between panels — the layout is a single row of 1–4 side-by-side columns; there are no vertical (top/bottom) splits
-- **Layout Tree**: With one column the root is the panel itself; with 2–4 columns the root is a single horizontal split whose children are panels (one per column)
+- **Splits**: The layout has 1–4 side-by-side columns. Each column can contain vertically stacked visible panels; rows do not consume additional columns.
+- **Layout Tree**: A column is a panel or a vertical split of panels. With multiple columns, the root is a horizontal split whose children are columns.
 
 ---
 
@@ -64,13 +64,16 @@ When dragging a tab near a panel edge, show the relevant drop zone:
 └──────┴─────────────┴────────┘
 ```
 
-- **Edge zones**: ~20% of panel width from the left and right edges. There are no top/bottom zones — the layout only splits horizontally, up to 4 columns
+- **Edge zones**: ~20% of panel width from the left and right edges, creating horizontal columns up to the four-column limit. The movement menu provides vertical placement; these drag zones remain left/right only.
 - **Center zone**: Move tab to this panel (no split)
 - **Visual feedback**: Highlight the target zone with overlay. animate the overlay between states.
 
 #### Via Panel Menu
 - "Split Right" → Horizontal split, empty panel on right (disabled in the menu once 4 columns exist)
 - "Duplicate Tab in Split" → Split + clone current tab
+- The Move Panel up/down arrows combine the active pane with the panel above/below when that neighbor exists. With several panes in one panel, an edge move separates the active pane into a new row. A lone pane without a destination has that direction disabled.
+- Left/right moves the active pane to the adjacent column. At an outer edge, it creates a side column if content remains in the source column, including another vertical row, and fewer than four columns exist.
+- Vertical moves preserve content identity, horizontal column widths, focus, and undo/redo. Saved layouts retain row order and split sizes when restored.
 
 #### Via Keyboard
 See [Keyboard Shortcuts Reference](#keyboard-shortcuts-reference) below.
@@ -268,7 +271,7 @@ Like tmux's `Ctrl+B`, entering the leader key activates "panel mode" for the nex
 | `Cmd+; %` | Split right | tmux `Ctrl+B %` |
 | `Cmd+; !` | Move current tab to new panel | tmux `Ctrl+B !` (pane→window) |
 
-The layout is horizontal-only (1–4 columns). The former `Cmd+; "` "split down" chord requested a vertical split the reducer rejects, so it is removed in [cloudlands-fe#2202](https://github.com/intent-hq/cloudlands-fe/pull/2202).
+The former `Cmd+; "` "split down" chord was removed in [cloudlands-fe#2202](https://github.com/intent-hq/cloudlands-fe/pull/2202). Vertical placement is now available through the Move Panel menu; this does not restore the old shortcut.
 
 ### Panel Resizing
 
@@ -362,7 +365,7 @@ The layout is horizontal-only (1–4 columns). The former `Cmd+; "` "split down"
 |-----------|------|-----|---------|---------|
 | **Prefix/Leader** | `Ctrl+B` | `Ctrl+W` | — | `Cmd+;` |
 | **Split horizontal** | `Ctrl+B %` | `:vsplit` | `Cmd+\` | `Cmd+\` or `Cmd+; %` |
-| **Split vertical** | `Ctrl+B "` | `:split` | `Cmd+K Cmd+\` | — (horizontal-only layout) |
+| **Split vertical** | `Ctrl+B "` | `:split` | `Cmd+K Cmd+\` | — (use Move Panel up/down) |
 | **Navigate left** | `Ctrl+B ←` | `Ctrl+W h` | `Cmd+K ←` | `Cmd+; h` |
 | **Navigate right** | `Ctrl+B →` | `Ctrl+W l` | `Cmd+K →` | `Cmd+; l` |
 | **Navigate up** | `Ctrl+B ↑` | `Ctrl+W k` | `Cmd+K ↑` | `Cmd+; k` |
