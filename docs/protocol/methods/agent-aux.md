@@ -100,11 +100,12 @@ there is nothing to garbage-collect on the error path. Part of the
 
 | Method | Params | Result |
 | --- | --- | --- |
-| agent.completeOnce | prompt (req), systemPrompt?, model?, type?, workspaceId?, timeoutMs? | { text } — or { available: false, reason } when the provider gate is closed |
+| agent.completeOnce | prompt (req), systemPrompt?, model?, type?, reasoningEffort?, workspaceId?, timeoutMs? | { text } — or { available: false, reason } when the provider gate is closed |
 
 **Provider-neutral routing.** Unlike `agent.enhancePrompt` (§5.31, auggie-only), completion
 is routed on the settings-derived effective default provider — `model.defaultProvider`
-(§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)):
+(§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)), unless an
+existing legacy compound model setting resolves a provider in the model chain below:
 
 - **auggie** → the `auggie --print` CLI path described under *Execution — auggie route*.
 - **claude-code / codex / pi** → an **ephemeral ACP session** (*Execution — ACP route*).
@@ -124,9 +125,8 @@ never parse or match on it:
 | *(defensive)* ACP one-shot provider id missing from the provider registry — unreachable for the three hardcoded ids | `unknown provider: <providerId>` |
 | *(defensive)* codex only: creating the isolated throwaway `CODEX_HOME` tempdir fails | `codex: failed to create isolated CODEX_HOME: <error>` |
 
-Unset/undecidable settings resolve the gate **CLOSED** rather than falling through to the
-first registered provider (which would functionally reinstate the removed hardcoded auggie
-default) — same ruling as §5.31.
+If neither the model chain nor the effective default resolves a provider, the gate is
+**CLOSED**; there is no fallback to the first registered provider.
 
 **Params.**
 
@@ -137,15 +137,19 @@ default) — same ruling as §5.31.
   `"System: <systemPrompt>\n\n<prompt>"`, mirroring the FE `streamChat` composition
   used by §5.31. Absent/blank → `prompt` rides through unchanged. Applies to both routes.
 - `model` — optional provider model id. On the auggie route it is passed as `--model`; on
-  the ACP route it rides the provider's own CLI model flag when it has one, and is ignored
-  silently by providers that select models through other mechanisms (claude-code and pi
-  use `session/set_config_option`) — a best-effort model is never an error. When omitted
-  (or blank), the daemon resolves one from the quick-action settings — see *Model
+  the ACP route it rides the provider's own CLI model flag when it has one, or is applied
+  after session creation through `session/set_config_option` where supported. Model
+  application remains best-effort; a failed selection leaves the session default in place.
+  When omitted (or blank), the daemon resolves one from the quick-action settings — see *Model
   resolution* below.
 - `type` — optional quick-action type hint keying `quickActions.typeOverrides` in the model
   resolution below; conventionally `commit`, `pr`, `review`, or `fast`. Free-form on the
   wire — the key set is client-owned and never validated, so an unknown key simply misses
-  the override map and falls through. Ignored entirely when `model` is supplied.
+  the override map and falls through. An explicit `model` bypasses only model resolution;
+  `type` still selects the per-type effort preference below.
+- `reasoningEffort` — optional string; omitted, `null`, or blank means use the effort
+  settings chain below. A non-string, non-null value is `-32602`. A non-blank explicit
+  request takes precedence over saved preferences, including when `model` is explicit.
 - `workspaceId` — optional; when present the provider runs with the workspace's worktree
   as its working directory (also the ACP `session/new` `cwd`; unknown workspace →
   `-32602`). Without it the auggie CLI runs without a `cwd` and the ACP adapter runs in
@@ -165,15 +169,16 @@ client gets them for free:
 3. `quickActions.defaultModel` when non-blank.
 4. Otherwise none — the provider CLI's own default applies.
 
-Steps 2–3 are provider-guarded — the settings value is user-authored and easily outlives a
-provider switch, so it is never fed to a foreign CLI. An explicit `model` param must be a **bare** model id: a compound `provider:model` value
-is rejected at the wire boundary with `-32602` (same guard as §5.5,
-[intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)), and the bare id is passed on unchanged since the one-shot launch takes a raw model id; a prefix that is not a
-registered provider id counts as foreign. A **bare** id reuses §5.5's asymmetric
-cached-catalog evidence rule: it is dropped only when the effective provider's own cached
-catalog affirmatively disproves ownership, so a cold start passes it through. Every drop
-falls to step 4 with a daemon warn log rather than being rejected — a `-32602` here would
-reject a model the caller never sent. `quickActions.providerSettings` is deliberately **not** a rung: it is
+Steps 2–3 are provider-guarded. An explicit `model` param must be a **bare** model id:
+a compound `provider:model` value is rejected at the wire boundary with `-32602` (same
+guard as §5.5, [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)).
+An explicit bare model uses the effective default provider. For settings already on disk,
+a legacy compound model names its own registered, one-shot-capable provider; bare settings
+use the effective default provider. The resolved pair reuses §5.5's cached-catalog ownership
+guard: a cold catalog permits the bare id, while affirmative contradictory evidence drops
+the candidate. Each invalid settings rung logs a warning and tries the next rung; only when
+all model rungs fail does the effective provider's default apply. These existing model
+routing rules are unchanged by effort settings. `quickActions.providerSettings` is deliberately **not** a rung: it is
 the client's opaque per-provider snapshot cache, not a precedence tier. This chain is scoped
 to one-shot quick actions; agent sessions (delegated ones included) keep the
 background-agnostic creation-time chain of §5.5
@@ -181,6 +186,80 @@ background-agnostic creation-time chain of §5.5
 
 The daemon-internal auto-commit path (§5.10 wrap-up) calls `agent.completeOnce` with
 `type: "commit"`, so it too honors the user's commit-message quick-action override.
+
+**Reasoning effort resolution (additive).** Resolve the provider and model first using
+the existing model chain, then resolve effort independently:
+
+1. A non-blank request `reasoningEffort`.
+2. `quickActions.typeReasoningEffortOverrides[type]` when non-blank and compatible.
+3. `quickActions.defaultReasoningEffort` when non-blank and compatible.
+4. Otherwise leave effort unset and retain the provider's default.
+
+A per-type effort needs no per-type model. An explicit model does not suppress steps 2–3;
+callers that already supply a model should also pass their action `type` to receive its
+saved effort. Untyped callers receive the shared effort only. Daemon auto-commit uses the
+same chain with `type: "commit"`. Neither `model.defaultReasoningEffort` nor
+`quickActions.providerSettings` participates. Absent all effort preferences and an explicit
+effort, preserve the existing launch/model behavior, including legacy model-id handling.
+Saved effort belongs to the active default provider. If legacy compound model routing
+selects a different provider, skip both saved effort rungs; only explicit request effort may
+apply there. Do not restore another provider's snapshot inside the execution resolver.
+
+**Capabilities and stale preferences.** Use the resolved provider/model's cached
+`effortLevels` when available; do not probe a provider solely to validate effort. With no
+conclusive catalog evidence (including an unresolved provider-default model), defer the
+capability decision to the ephemeral session. Missing evidence never permits the UI to
+invent choices. On the ACP route the live advertised `thought_level` config option is
+authoritative: read it from `session/new`, then refresh it from any `configOptions` returned
+by model selection before selecting effort. If model selection fails, check effort against
+the actual session's capabilities, not the requested model's catalog alone. Match trimmed
+levels case-insensitively and send the provider's advertised value and config id; do not
+hardcode `low` / `medium` / `high` or fabricate a selector when none is advertised.
+
+A saved candidate known to be unsupported is skipped with a warning and resolution continues
+to the next saved rung, including when the incompatibility is only discovered at session
+setup. With no effort capability, skip all saved effort and complete on the provider default.
+An explicitly requested unsupported effort is `-32602`, naming the requested level and
+available choices (or that effort is unsupported), before sending the prompt; do not silently
+substitute a saved value. A failure to apply an explicit supported effort is `-32603` and no
+prompt is sent. For settings-derived effort, an application failure is logged and completion
+may proceed on the session default without claiming that the preference was applied.
+
+Apply the selected effort after model selection and **before the first prompt**, using the
+existing provider config-option mechanism. No session row or effort state is persisted by
+this one-shot operation. No effort RPC or new CLI effort flag is sent when effort is unset.
+The auggie `--print` route has no implemented effort channel: ignore saved preferences with
+a warning and reject an explicit non-blank effort with `-32602`. Its completion availability
+and output contract otherwise stay unchanged.
+
+**Capability boundaries.** `agent.enhancePrompt` in both `enhance` and `layout` modes
+(§5.31) remains auggie-only and does not accept `reasoningEffort` or consume the new effort
+settings. Clients must not describe prompt enhancement/layout suggestions as effort-aware.
+`workspace.generateSetupScript` (§5.25) currently uses deterministic project templates, not
+a model request, so it has no effort to configure. These boundaries do not disable effort
+on `type: "fast"` completions routed through `agent.completeOnce` to a capable ACP provider.
+
+**Contract examples for component regression tests.** Assume the effective model advertises
+`low` and `high`, unless the row states otherwise. “Unset” means no effort application, not
+a literal string sent to the provider.
+
+| Inputs | Expected effort behavior |
+| --- | --- |
+| Older settings, no request effort | Unset; existing behavior |
+| Shared `low`, no action effort | `low` |
+| Shared model inherited, action effort `high` | `high`; do not create a model override |
+| Explicit model, `type: "commit"`, commit effort `high` | `high` |
+| Explicit model, no type, shared `low` | `low` |
+| Explicit request `high`, saved action/shared `low` | `high` |
+| Action effort cleared/blank, shared `low` | `low`; action model remains unchanged |
+| Saved action `obsolete`, shared `low` | Skip action with warning; `low` |
+| Saved action/shared unsupported | Unset with warnings; completion still runs |
+| Explicit request `obsolete` | `-32602` before prompt |
+| Cold catalog; live selector supports `high`; action `high` | Apply `high` before prompt |
+| Catalog permits action `high`; post-model live selector allows only `low`; shared `low` | Re-evaluate saved chain; apply `low` |
+| Live session has no effort selector, saved `high` | Unset; no fabricated config call |
+| Live session has no effort selector, explicit `high` | `-32602` before prompt |
+| Provider switch A → B → A | Restore A's model and effort snapshot; B never receives A's preferences |
 
 **Execution — auggie route.** Same one-shot CLI discipline as `agent.enhancePrompt`
 (§5.31): auggie binary resolution (`Services.auggie_bin` test seam → `context.auggiePath`
@@ -200,10 +279,12 @@ The daemon then drives one **ephemeral** ACP session and kills the child:
 
 1. `initialize` — no client filesystem capabilities.
 2. `session/new` — **no MCP servers**, `cwd` from `workspaceId` (else the system temp dir).
-3. one `session/prompt` carrying the composed prompt as a single text block; the reply is
+3. apply the model through `session/set_config_option` when the adapter selects models
+   there; discover/refresh effort capabilities and apply selected effort as described above.
+4. one `session/prompt` carrying the composed prompt as a single text block; the reply is
    accumulated from the streamed `agent_message_chunk` text updates (thoughts, tool calls
    and plans are ignored).
-4. the child is reaped on **every** exit path (success, timeout, error, drop) — SIGTERM to
+5. the child is reaped on **every** exit path (success, timeout, error, drop) — SIGTERM to
    its process group, grace, SIGKILL, plus a descendant sweep.
 
 Non-interactive by construction: every agent→client request is answered immediately —
@@ -237,7 +318,8 @@ as `text`. No streaming, no events, no persistence on either route.
 
 **Errors** (§9):
 
-- `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`.
+- `-32602` — missing/empty `prompt`; non-positive `timeoutMs`; unknown `workspaceId`;
+  malformed or unsupported explicit `reasoningEffort` (see above).
 - `-32603` — auggie route: CLI not found / spawn failure; timeout (`data` carries
   `"…timed out after <n>ms"`); non-zero CLI exit. ACP route: a **resolved** adapter that
   fails the turn — spawn failure, transport failure, setup or prompt timeout, an adapter
