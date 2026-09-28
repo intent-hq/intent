@@ -3,7 +3,8 @@
 Two enforced identity responses, never auth-status's aggregate exit status or
 /rate_limit's quota overview. Each API has its own state because REST and
 GraphQL quotas/availability differ. No retries; at most two gh processes and
-2 * GITHUB_READINESS_TIMEOUT seconds (default 3s per call, hard cap 10s).
+2 * GITHUB_READINESS_TIMEOUT seconds including cleanup (default 3s per call,
+hard cap 10s).
 """
 import datetime
 import email.utils
@@ -15,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 
 TIMEOUT_DEFAULT = 3.0
 TIMEOUT_MAX = 10.0
@@ -129,8 +131,11 @@ def probe(api, timeout):
                                    text=True, errors="replace", env=env, start_new_session=True)
     except OSError:
         return unknown("transport")
+    deadline = time.monotonic() + timeout
+    # Reserve a small part of this call's budget to reap a killed direct child.
+    cleanup_reserve = min(0.1, timeout / 10)
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        stdout, stderr = process.communicate(timeout=max(0, deadline - cleanup_reserve - time.monotonic()))
     except subprocess.TimeoutExpired:
         # A broken wrapper may leave descendants holding the pipes. Kill the
         # whole process group, as bootstrap's other bounded probes do.
@@ -138,7 +143,16 @@ def probe(api, timeout):
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.communicate()
+        # A descendant can escape the process group and keep these pipes
+        # open. Discard partial diagnostics without waiting for pipe EOF.
+        process.stdout.close()
+        process.stderr.close()
+        try:
+            process.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            # Even SIGKILL may be delayed by the OS; never extend the budget
+            # waiting for it. Popen's child cleanup will reap it when it exits.
+            pass
         return unknown("timeout")
     return classify(stdout, stderr, process.returncode, api)
 

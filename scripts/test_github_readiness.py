@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -35,8 +36,11 @@ if args[:2] == ["pr", "list"]:
 fixture = json.loads(Path(os.environ["GH_TEST_RESPONSES"]).read_text())
 row = fixture[args[1]]
 if row.get("stall"):
-    child = subprocess.Popen([sys.executable, "-S", "-c", "import time; time.sleep(60)"])
+    child = subprocess.Popen([sys.executable, "-S", "-c", "import time; time.sleep(60)"],
+                             start_new_session=row.get("detach", False))
     Path(os.environ["GH_TEST_CHILD"]).write_text(str(child.pid))
+    with open(os.environ["GH_TEST_CHILDREN"], "a") as children:
+        children.write(f"{os.getpid()} {child.pid}\n")
     time.sleep(60)
 print(row.get("stdout", ""))
 print(row.get("stderr", ""), file=sys.stderr)
@@ -74,10 +78,12 @@ class ReadinessTests(unittest.TestCase):
         self.log = self.root / "calls"
         self.responses = self.root / "responses.json"
         self.child = self.root / "child"
+        self.children = self.root / "children"
         self.env = os.environ.copy()
         self.env.update(PATH=f"{self.bin}:{os.environ['PATH']}", GH_TOKEN=SECRET,
                         GH_TEST_LOG=str(self.log), GH_TEST_RESPONSES=str(self.responses),
-                        GH_TEST_CHILD=str(self.child), GITHUB_READINESS_TIMEOUT="3")
+                        GH_TEST_CHILD=str(self.child), GH_TEST_CHILDREN=str(self.children),
+                        GITHUB_READINESS_TIMEOUT="3")
         self.set_responses()
 
     def set_responses(self, rest=REST_OK, graphql=GRAPHQL_OK):
@@ -211,6 +217,41 @@ class ReadinessTests(unittest.TestCase):
     def test_invalid_timeout_does_not_echo_secrets(self):
         self.env["GITHUB_READINESS_TIMEOUT"] = SECRET
         self.report()
+
+    def test_timeout_discards_pipes_held_by_detached_children(self):
+        self.env["GITHUB_READINESS_TIMEOUT"] = "0.1"
+        self.set_responses({"stall": True, "detach": True}, {"stall": True, "detach": True})
+        # Launch without host site instrumentation so the deadline measures
+        # the probes, not Python startup hooks. The outer bound catches a
+        # stuck cleanup and the finally block removes every fixture process.
+        proc = subprocess.Popen([sys.executable, "-S", str(SCRIPTS / "github_readiness.py")],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, start_new_session=True)
+        started = time.monotonic()
+        try:
+            out, err = proc.communicate(timeout=2)
+            self.assertEqual(proc.returncode, 0, err)
+            self.assertNotIn(SECRET, out + err)
+            report = json.loads(out)
+            self.assertEqual(report["rest"]["reason"], "timeout")
+            self.assertEqual(report["graphql"]["reason"], "timeout")
+            self.assertEqual(len(self.calls()), 2)
+            self.assertLess(time.monotonic() - started, 2)
+            for line in self.children.read_text().splitlines():
+                parent, _ = map(int, line.split())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(parent, 0)
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+            if self.children.exists():
+                for line in self.children.read_text().splitlines():
+                    for pid in map(int, line.split()):
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            proc.communicate(timeout=2)
 
     def test_timeout_configuration_is_capped(self):
         spec = importlib.util.spec_from_file_location("github_readiness", SCRIPTS / "github_readiness.py")
