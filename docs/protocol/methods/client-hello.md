@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.17 `client.hello` handshake & stable client identity · §5.46 Connection principal — `principal.me`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.17 `client.hello` handshake & stable client identity
 
 **Shared-host extension (10.9).** [§5.49](./shared-host-membership.md) adds server
@@ -16,7 +18,7 @@ bookkeeping and never crosses the wire.
 | Method | Params | Result |
 | --- | --- | --- |
 | client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
-| client.list *(v9.9)* | — (global; no `workspaceId`) | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
+| client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
   first call a client makes after the auth upgrade (§2) and before scoped work.
@@ -111,7 +113,7 @@ per-workspace browser-client pin (§5.1 `workspace.setBrowserClient`) — [inten
 
 #### `client.list` — live logical clients (v9.9)
 
-`client.list` is a **global router method** (no `workspaceId`, like `settings.list`) returning
+`client.list` is a **global router method** (optional `workspaceId` is routing context only, like `settings.list`) returning
 every logical client that currently holds **at least one live, hello'd connection** — one entry
 per `clientId`, ordered by each client's first (oldest live) connection. Un-hello'd connections
 are omitted entirely. Clients **without** `browserExec` are included: this is the presence

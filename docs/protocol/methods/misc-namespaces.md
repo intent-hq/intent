@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` · §5.21 `rules.*` · §5.33 `repoConfig.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*`
 
 | Method | Params | Result |
@@ -11,11 +13,11 @@
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | provider? — no workspaceId | { specialists: SpecialistDef[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
-| specialist.get | id (req), workspacePath?, provider? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
-| specialist.create | id (req), spec (req): SpecialistDef, scope?: "project"\|"user" (default "user") | { specialist: SpecialistDef } |
-| specialist.edit | id (req), spec (req): SpecialistDef, scope (req): "project"\|"user" | { specialist: SpecialistDef } |
-| specialist.delete | id (req), scope (req): "project"\|"user", workspacePath? | { success: true } — `bundled` definitions are read-only |
+| specialist.list | provider?, workspaceId? | { specialists: SpecialistDef[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.get | id (req), workspacePath?, provider?, workspaceId? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
+| specialist.create | id (req), spec (req): SpecialistDef, workspacePath?, scope?: "project"\|"user" (default "user"), workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
+| specialist.edit | id (req), spec (req): SpecialistDef, workspacePath?, scope (req): "project"\|"user", workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
+| specialist.delete | id (req), scope (req): "project"\|"user", workspacePath?, workspaceId? (routing for explicit project scope only) | { success: true } — `bundled` definitions are read-only |
 | repo.list | — (no workspaceId) | { repos: [...] } |
 | repo.remove | path (req) — no workspaceId | { removed: bool } — deletes one known-repo registry entry; `false` when the path was not registered (not an error) |
 | repo.warmCache *(v6.10)* | githubUrl (req) — no workspaceId | { started: true, owner, repo } — opportunistic **background** refresh of the daemon-managed repo cache (`.repo-cache/<owner>/<repo>`; [intent-hq/intentd#1105](https://github.com/intent-hq/intentd/pull/1105)): the RPC returns immediately while the fetch (the same `ensure_cached_repo` pipeline `workspace.create` hydrates from — fetch + prune + hard reset + recursive submodule sync, self-healing by re-clone; token resolution matching `workspace.create`) runs as a detached task. Deliberately **silent**: no `git:clone:*` frames and no events are emitted — the outcome is only logged daemon-side. **Global single-flight (never queued):** at most one opportunistic warm runs daemon-wide; a second call while one is in flight is rejected with `-32603` (`"repo cache warm already in flight for <owner>/<repo>"`) carrying machine-readable `error.data = { code: "warm-in-flight", owner, repo }` naming the repo currently being warmed, so clients key off `error.data.code` instead of prose. A missing/non-string `githubUrl`, a URL with no owner/repo pair, or an invalid owner/repo path segment (empty, `.`/`..`, leading `-`, separators) is `-32602` and never claims the single-flight slot, so a malformed URL can never block valid warms. **Never blocks `workspace.create`:** the create path is not gated by the in-flight flag — its cache ensure simply serializes behind an in-flight warm for the same repo on the existing per-repo cache lock |
@@ -33,8 +35,11 @@
 **`specialist.*` full CRUD.** Beyond `specialist.list`, the namespace carries
 `get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
 (`.intent/specialists/`) overrides **user** (`~/.intent/specialists/`) overrides **bundled** — and
-`scope` selects which tier a write targets (`bundled` is read-only). `list`/`get` return the
-resolved view; `create`/`edit` take a full `spec` body. Malformed params → `-32602`; deleting a
+`scope` selects which tier a write targets (`bundled` is read-only). On the wire,
+`specialist.list` resolves user/bundled definitions only; `specialist.get` can
+resolve the project tier when given `workspacePath`. Routing-only `workspaceId`
+does not infer that path or enable project resolution on list. `create`/`edit`
+take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
 **Base-tier replacement mode (`INTENTD_SPECIALISTS_DIR` / `intentd serve --specialists-dir`).**
@@ -353,4 +358,3 @@ The `defaultAutoCommit` field mentioned in early drafts was **not implemented** 
 // ← response
 { "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
 ```
-

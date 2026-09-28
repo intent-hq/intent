@@ -2,6 +2,13 @@
 
 ## 8. Permission Flow
 
+The [workspace routing preparation](./workspace-routing.md) adds optional
+`workspaceId` to `agent.pendingPermissions { agentId?, workspaceId? }` and
+`agent.respondPermission { requestId, outcome, workspaceId? }`. Workspace clients
+capture the originating ID with the permission prompt and retain it across
+recovery and late responses. Direct callers may omit it. It selects no new
+snapshot filter and changes neither prompt authorization nor resolution behavior.
+
 When an agent's provider (e.g. auggie) wants to run a tool that requires approval, it sends an ACP`session/request_permission` request **to the backend** (over the provider's stdio channel, not theclient WebSocket). The backend mediates approval:
 
 1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
