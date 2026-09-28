@@ -2,7 +2,32 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `10.9` — additive contract; docs lead component implementation.
+**Documented version:** `10.10` — additive contract; docs lead component implementation.
+
+**Version 10.10 — direct user retirement (additive, docs lead implementation).** `agent.retire` (§5.5)
+adds a router method for user/FE retirement by `agentId`, with optional `workspaceId`
+and `reason`. It returns `{ success: true, retiredAt, alreadyRetired?: true }`, preserves
+the existing active-descendant refusal and restoration contract, and stops a running
+target while cancelling its wake sources. It follows workspace lifecycle permissions,
+independent of `agentFeatures.peerAgents`; MCP self-retirement remains self-only and
+feature-gated. Together with the 10.9 extension and prepared node contract below,
+this addition takes the documented totals to **417 / 357 / 58** (dispatchable / router /
+fast path), with no new event names. Support is advertised by
+`client.hello.server.capabilities.agentRetire: 1`; clients enable the action only when
+that capability is present, independently of the numeric protocol version and model
+feature gates. Older daemons omit the capability and lack this route; a stale client
+request can return method-not-found (or Forbidden for a collaborator behind the
+default-deny allowlist). Clients must surface failures without claiming retirement
+succeeded or falling back to a model message.
+
+
+The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
+reserves additive methods/events without claiming a shipped version. Implementors
+allocate the next minor against main and advertise `agentNodes: 1` only after the
+complete contract is implemented. Per-agent CoW removal follows replacement
+backend/frontend support, requires a major version and `agentIsolation: 2`, and
+removes canonical entries only after component deletion and automatic pin advance.
+Workspace `checkoutMode: "cow"` is retained.
 
 Version 10.9 reserves the [shared-host membership contract (§5.49)](./methods/shared-host-membership.md).
 The current pinned intentd reports **10.8**, including the provider-neutral identity and
@@ -58,10 +83,13 @@ against current main when implementing; a numeric version alone is never proof o
   existing default-off Multiplayer lab. The daemon never trusts that preference.
 
 The current daemon catalog is 394 / 336 / 56 (dispatchable / router / fast path);
-this contract adds thirteen methods for **407 / 347 / 58**. The catalog also drops
+the shared-host extension adds thirteen methods for **407 / 347 / 58** before the
+direct-retirement addition above. The catalog also drops
 the stale transitional `invite.redeem` entry, already absent at the current pin.
 The docs-ahead entries are warnings at the current pins, not implementations.
 The new method/event goldens and behavioral assertions must land with component code.
+
+
 
 
 Version 10.8 is an **additive** minor bump over 10.7 — **a GitLab account is an identity** (§5.48, §5.27; the intentd identity PRs layered on the 10.5 forge-auth engine, [intent-hq/intentd#2024](https://github.com/intent-hq/intentd/pull/2024)). Principals become **provider-neutral**: every wire projection of a principal (`principal.me`, `principal.list` rows, `workspace.members.list` Member rows) gains the optional **`identity: { provider: "github" | "gitlab", host, externalUserId }`** triple, omitted while unlinked; `githubUserId` is kept and still populated for GitHub identities, and existing rows are backfilled as `{ github, github.com, String(githubUserId) }` with zero principal loss. The primary principal links the forge chosen by the new **`identity.provider`** setting (`"github"` | `"gitlab"` | `null`, §5.12); an explicit change re-keys it and publishes the new global event **`principal:identity-changed`** (§6.5). `workspace.invite.create` gains **`pinProvider?` / `pinHost?`** (defaulting to the host's own identity forge) so `pinLogin` pins a triple — `WorkspaceInvite.pinIdentity?` beside the kept `pinGithubUserId` — and a GitHub user can no longer redeem an invite pinned to a same-named GitLab login; inviting requires *a* linked forge identity (the `github-identity-required` code is kept, raised only when none is linked). The guest half of the invite identity proof is generalized as two new router methods **`sourceControl.identityProof.create { provider, host?, nonce, hostLabel }` → `{ proofId, login, provider, host, externalUserId, avatarUrl, gistId? }`** (`externalUserId` and `avatarUrl` always present, both `string | null`) and **`sourceControl.identityProof.delete { provider, host?, proofId }`** — GitHub keeps the secret gist, GitLab publishes a public personal snippet — with `github.identityProof.create` / `delete` kept as byte-identical aliases; `invite.prove` gains **`provider?` / `host?` / `proofId?`** (`proofId` aliases `gistId`, exactly one required), the host verifying a GitLab snippet anonymously or, when the instance refuses anonymous reads, through its own connection to the same host, else the new typed refusal **`-32603 { code: "identity-unverifiable", host }`** (`cannot verify identity on <host>`); the guest-side GitLab proof methods refuse with their own `gitlab-not-connected` / `gitlab-scope-missing` / `gitlab-unreachable` codes beside the kept `github-*` ones. Owner-self-join and pins compare triples. `invite.inspect` and `invite.challenge` additionally return **`pinIdentity: { provider, host, externalUserId } | null`** after validating the open invite and secret, without a forge call: legacy GitHub pins project to the triple, `null` means unpinned, and omission identifies an older host. Guests select the matching connected account for a pin or, on a local daemon with the 10.8 identity seam, the chosen `principal.me` identity for an explicit null (older-host/sidecar fallbacks are documented in §5.48); malformed metadata is refused and the host retains its final pin enforcement ([intent-hq/intent#5817](https://github.com/intent-hq/intent/issues/5817)). Router catalog 330 → 336 (`principal.list`, `workspace.members.add`, `github.identityProof.*` and `sourceControl.identityProof.*` are the additions the catalog gains on this line's pin; 10.7 below left the 10.5 counts standing, so these deltas are 10.8's), fast path 53 → 57 (`invite.inspect` / `accept` / `challenge` / `prove`) — **395** dispatchable names while `invite.redeem` is still listed: it is retired from intentd and leaves the docs catalog once the pin advances past its removal, making the counts **394 / 336 / 56**. Every pre-10.8 shape is unchanged.
