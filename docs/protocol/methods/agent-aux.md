@@ -205,20 +205,25 @@ Saved effort belongs to the active default provider. If legacy compound model ro
 selects a different provider, skip both saved effort rungs; only explicit request effort may
 apply there. Do not restore another provider's snapshot inside the execution resolver.
 
-**Capabilities and stale preferences.** Use the resolved provider/model's cached
-`effortLevels` when available; do not probe a provider solely to validate effort. With no
-conclusive catalog evidence (including an unresolved provider-default model), defer the
-capability decision to the ephemeral session. Missing evidence never permits the UI to
-invent choices. On the ACP route the live advertised `thought_level` config option is
-authoritative: read it from `session/new`, then refresh it from any `configOptions` returned
-by model selection before selecting effort. If model selection fails, check effort against
-the actual session's capabilities, not the requested model's catalog alone. Match trimmed
-levels case-insensitively and send the provider's advertised value and config id; do not
-hardcode `low` / `medium` / `high` or fabricate a selector when none is advertised.
+**Capabilities and stale preferences.** Cached `effortLevels` guide the UI's choices;
+missing catalog knowledge is not evidence that effort is unsupported, and never permits
+the UI to invent choices. On the ACP route, however, cached lists are not conclusive
+execution evidence, even when non-empty: discovery can copy a probe session's selector
+onto multiple model rows, and model selection can change the supported levels. Do not
+probe solely to validate effort or irreversibly reject/drop any effort based on the cache.
+Retain the explicit request and both saved rungs until the actual session is ready.
 
-A saved candidate known to be unsupported is skipped with a warning and resolution continues
-to the next saved rung, including when the incompatibility is only discovered at session
-setup. With no effort capability, skip all saved effort and complete on the provider default.
+The final ACP decision always uses the live `thought_level` config option **after model
+selection**. Read the opening selector from `session/new`; a valid `configOptions` list
+returned by model selection replaces it, including clearing it when that list contains no
+`thought_level`. A missing or malformed list preserves the opening selector, matching the
+existing agent-session mechanism. If model selection fails, use the actual session's
+remaining selector rather than the requested model's cached list. Match trimmed levels
+case-insensitively and send the provider's advertised value and config id; do not hardcode
+`low` / `medium` / `high` or fabricate a selector when none is advertised.
+
+Only at this live decision does an unsupported saved candidate get skipped with a warning;
+resolution continues to the next saved rung against the same selector. With no effort capability, skip all saved effort and complete on the provider default.
 An explicitly requested unsupported effort is `-32602`, naming the requested level and
 available choices (or that effort is unsupported), before sending the prompt; do not silently
 substitute a saved value. A failure to apply an explicit supported effort is `-32603` and no
@@ -256,7 +261,12 @@ a literal string sent to the provider.
 | Saved action/shared unsupported | Unset with warnings; completion still runs |
 | Explicit request `obsolete` | `-32602` before prompt |
 | Cold catalog; live selector supports `high`; action `high` | Apply `high` before prompt |
+| Catalog lists only `low`; explicit request `high`; post-model live selector permits `high` | Apply `high` before prompt; no cache-based rejection |
+| Catalog lists only `low`; saved action `high`, shared `low`; post-model live selector permits both | Apply action `high` before prompt; do not lose it to cached fallback |
 | Catalog permits action `high`; post-model live selector allows only `low`; shared `low` | Re-evaluate saved chain; apply `low` |
+| Catalog permits explicit `high`; post-model live selector allows only `low` | `-32602` before prompt; live capability wins |
+| Requested model's catalog permits only `high`; model selection fails; actual session selector permits only `low`; saved action `high`, shared `low` | Warn, skip action, apply shared `low` before prompt |
+| Requested model's catalog permits only `high`; model selection fails; actual session selector permits only `low`; explicit `low` | Apply `low` before prompt; validate against the actual session |
 | Live session has no effort selector, saved `high` | Unset; no fabricated config call |
 | Live session has no effort selector, explicit `high` | `-32602` before prompt |
 | Provider switch A → B → A | Restore A's model and effort snapshot; B never receives A's preferences |
