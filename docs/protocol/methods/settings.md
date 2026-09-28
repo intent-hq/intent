@@ -223,9 +223,12 @@ For Claude, the adapter omits the `fast` option unless the selected model advert
 `supportsFastMode`. Its `setSessionConfigOption` rejects an absent option with
 `Unknown config option: fast` **before** calling the SDK. For an eligible model,
 the fast-mode branch only calls `applyFlagSettings({ fastMode: enabled })`; it does
-not call `setModel` or change effort. The daemon must skip fast-on for an unsupported
-selected model, rather than invoking the native `/fast` command, selecting a
-different model, or retrying on another model. Account/managed-policy rejection
+not call `setModel` or change effort. The daemon must skip both on and off
+controls when the option is absent, allow ordinary use of the selected model, and
+not claim that off was acknowledged. Recheck eligibility and apply the latest
+preference before a later eligible prompt. Never invoke the native `/fast` command,
+select a different model, or retry on another model to enable Fast mode.
+Account/managed-policy rejection
 retains the selected model and saved preference; use the provider's reported
 disabled reason or error to explain ordinary-tier fallback or refusal.
 
