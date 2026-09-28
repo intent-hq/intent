@@ -133,7 +133,8 @@ assert set(report["setup"]) == {"running", "markers"}
 assert isinstance(report["setup"]["running"], bool)
 assert isinstance(report["setup"]["markers"], list)
 assert report["setup"]["running"] is bool(report["setup"]["markers"])
-assert set(report["host"]) == {"doctorOk", "gaps", "coverageTooling"}
+assert set(report["host"]) == {"doctorOk", "gaps", "coverageTooling", "github"}
+assert report["host"]["github"]["state"] == "missing_cli"
 assert isinstance(report["host"]["doctorOk"], bool)
 assert isinstance(report["host"]["gaps"], list)
 coverage = report["host"]["coverageTooling"]
@@ -260,7 +261,7 @@ JSON
 PATH="$bin_dir:$PATH" SANDBOX_STATE_DIR="$state_dir" STATUS_JSON=1 \
   bash "$script" >/dev/null
 [[ -f "$state_dir/stale.json" ]] || fail "read-only status removed stale sandbox state"
-grep -q '^auth status$' "$GH_TEST_LOG" || fail "gh authentication was not checked"
+grep -q '^api graphql ' "$GH_TEST_LOG" || fail "gh readiness was not checked"
 ! grep -q '^pr ' "$GH_TEST_LOG" || fail "PR lookup ran without authenticated gh"
 
 # Gitlink fixture: a throwaway monorepo with real submodule checkouts, so the
@@ -273,6 +274,7 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
 export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
 mkdir -p "$fixture/scripts"
 cp "$script" "$fixture/scripts/dev-status.sh"
+cp "$repo_root/scripts/github_readiness.py" "$fixture/scripts/github_readiness.py"
 git init -q -b main "$fixture"
 for name in intentd cloudlands-fe; do
   git init -q -b main "$temp_dir/src-$name"

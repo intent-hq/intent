@@ -2,7 +2,8 @@
 # JSON schema:
 # {"setup":{"running":bool,"markers":[string]},
 #  "host":{"doctorOk":bool,"gaps":[string],
-#  "coverageTooling":{"ready":bool,"detail":string}},"ports":{},"sandboxes":[],
+#  "coverageTooling":{"ready":bool,"detail":string},
+#  "github":{"state":string,"rest":{},"graphql":{},"prReady":bool}},"ports":{},"sandboxes":[],
 #  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
 #  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
 #  "behindOriginMain":int|null,
@@ -14,6 +15,8 @@
 # DEV_STATUS_PROBE_TIMEOUT=<seconds> bounds every other probe (doctor, sandbox
 # status and health, git, gh; default 10, fractional ok). Either knob is ignored
 # with a warning unless it is a positive number of at most 86400 seconds.
+# GitHub identity probes additionally obey GITHUB_READINESS_TIMEOUT (3s per
+# API by default, maximum 10s); two calls total, shared with the doctor report.
 
 set -euo pipefail
 
@@ -32,7 +35,6 @@ import json
 import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import urllib.error
@@ -40,6 +42,9 @@ import urllib.parse
 import urllib.request
 
 root, json_output = sys.argv[1], sys.argv[2] == "1"
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(root, "scripts"))
+from github_readiness import readiness, describe
 
 # subprocess/socket timeouts overflow their C representation for huge finite
 # values (1e20 raised OverflowError instead of degrading), so one day is the
@@ -140,7 +145,9 @@ def coverage_tooling(lines):
 
 
 def doctor_status():
-    result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"])
+    env = os.environ.copy()
+    env["DEV_STATUS_SKIP_GITHUB"] = "1"
+    result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"], env=env)
     if result is None:
         return {
             "doctorOk": False,
@@ -322,14 +329,8 @@ def repo_status(relative_path, gh_ready):
     return repo
 
 
-def github_ready():
-    if shutil.which("gh") is None:
-        return False
-    result = run(["gh", "auth", "status"])
-    return result is not None and result.returncode == 0
-
-
-gh_ready = github_ready()
+github = readiness(timeout=probe_timeout())
+gh_ready = github["prReady"]
 report = {
     "setup": setup_status(),
     "host": doctor_status(),
@@ -341,6 +342,7 @@ report = {
     },
     "docs": {"remoteHost": "AGENTS.md#developing-on-a-remote-host"},
 }
+report["host"]["github"] = github
 
 if json_output:
     json.dump(report, sys.stdout, separators=(",", ":"))
@@ -354,6 +356,7 @@ if report["setup"]["running"]:
     )
 print("Intent worktree status")
 print(f"Host       doctor {'ok' if report['host']['doctorOk'] else 'has gaps'}")
+print(f"GitHub     {describe(github)}")
 for gap in report["host"]["gaps"]:
     print(f"           gap: {gap}")
 coverage = report["host"]["coverageTooling"]
