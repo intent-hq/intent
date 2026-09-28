@@ -71,7 +71,8 @@ When dragging a tab near a panel edge, show the relevant drop zone:
 #### Via Panel Menu
 - "Split Right" → Horizontal split, empty panel on right (disabled in the menu once 4 columns exist)
 - "Duplicate Tab in Split" → Split + clone current tab
-- The Move Panel up/down arrows move the active pane into a visible row above/below, rather than changing its hidden selector order. With several panes in one panel, an edge move separates the active pane from the remaining panes. A lone pane without a destination has that direction disabled.
+- The Move Panel up/down arrows combine the active pane with the panel above/below when that neighbor exists. With several panes in one panel, an edge move separates the active pane into a new row. A lone pane without a destination has that direction disabled.
+- Left/right moves the active pane to the adjacent column. At an outer edge, it creates a side column if content remains in the source column, including another vertical row, and fewer than four columns exist.
 - Vertical moves preserve content identity, horizontal column widths, focus, and undo/redo. Saved layouts retain row order and split sizes when restored.
 
 #### Via Keyboard
