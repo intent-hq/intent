@@ -16,7 +16,7 @@ Ephemeral who-is-here state for shared (multi-principal) workspaces ([intent-hq/
 The note-presence channel pair is a §6.9 subscription channel (intercepted on the subscription fast-path like `note.subscribe` / `chat.subscribe`, so it is outside the dispatchable-name count of §5):
 
 - `note.presence.subscribe` — params `workspaceId` (req), `noteId` (req), `replaceGroup?` → `{ subscriptionId }`, then a seq-0 `{ viewers: NoteViewer[] }` snapshot (the subscriber included) and `{ kind, viewer }` deltas.
-- `note.presence.unsubscribe` — params `subscriptionId` (req) → `{ success }`; releases the lease, and the viewer's `left` is published when it was the principal's last lease on the note.
+- `note.presence.unsubscribe` — params `subscriptionId` (req), `workspaceId?` ([prepared routing context](../workspace-routing.md), optional for direct callers) → `{ success }`; releases the lease, and the viewer's `left` is published when it was the principal's last lease on the note. Workspace clients retain the source workspace through cleanup; the field does not change connection or lease ownership.
 
 #### Shapes
 

@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.49 Shared host membership.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.49 Shared host membership *(10.9, additive; docs lead implementation)*
 
 This section extends [§5.48](./multiplayer.md). It is the normative contract for
@@ -333,7 +335,7 @@ discovery/readiness, `repo.list`, and workspace repository configuration from th
 
 | Method | Params | Result |
 | --- | --- | --- |
-| host.executionContext | — | `{ defaultProviderId: string \| null, defaultModelId: string \| null, enabledProviderIds: string[], repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[], gitCredentialPolicy: GitCredentialPolicy }` — owner/member read; guests receive Forbidden |
+| host.executionContext | workspaceId? | `{ defaultProviderId: string \| null, defaultModelId: string \| null, enabledProviderIds: string[], repositoryConnections: { provider: "github" \| "gitlab", host: string, configured: boolean }[], gitCredentialPolicy: GitCredentialPolicy }` — owner/member read; guests receive Forbidden |
 
 The context is an allowlisted projection, never a settings dump. Defaults are
 host-owned effective defaults, null when unset; provider/model catalogs keep their
