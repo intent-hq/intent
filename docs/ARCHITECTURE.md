@@ -119,7 +119,113 @@ bus — never on the transport or on each other directly.
 | intent-sentry | SentryEngine + DTOs for the `sentry.*` surface (REST over reqwest) | core |
 | intent-transport | local (UDS on Unix, named pipe on Windows) + TCP listeners, TLS, bearer auth, origin allow-list, JSON-RPC router, heartbeat, lifecycle, `client.hello` handshake + live-connection→`clientId` map | core, services |
 
+## Phase 1 node execution (prepared architecture)
+
+The [node contract](protocol/methods/nodes.md), [private node link](protocol/node-link.md)
+and [checkpoint format](protocol/node-checkpoints.md) define the approved target;
+they are **not implemented at the current pins**. Phase 1 includes static remote
+nodes, the in-process local node, hub durability/recovery and full per-agent CoW
+retirement. Current sandbox behavior is recorded separately below until removal.
+
+Head owns durable orchestration: SQLite, transcripts, permissions, placement,
+leases, prompts, hub refs, notes/tasks, event delivery and explicit publication.
+Node owns everything touching a checkout or provider process: ACP and its
+fs/terminal callbacks, provider CLI, QuickJS workspace API, stdio MCP, scripts,
+process accounting, idle reap, journal and checkpoint capture. A remote agent
+never leaves a child handle or ACP connection in head's AgentHandle. Remote PIDs
+are never sampled by head's ProcessRegistry. The same installed intentd binary
+has a node composition root; phase 1 installs matching versions manually.
+
+The local node is a service composed in head's process over an in-memory link,
+without another daemon, listener or token. It implements the same admission,
+scope, journal, checkpoint and merge semantics. Default local/shared/worktree
+execution remains available; explicit isolated placement always creates its own
+checkout. clonefile/FICLONE accelerates that creation, with a standalone repo-cache
+Git clone fallback on unsupported filesystems. It never inherits the legacy
+sandbox's shared-checkout fallback. An isolated path on a multi-agent static host
+does not imply a security boundary; exclusive placement reserves a whole static
+node when requested.
+
+### Dependency-safe execution seams
+
+| Location | Future responsibility and boundary |
+| --- | --- |
+| intent-core | Transport-independent AgentRuntime/NodeLink interfaces, lease/placement/checkpoint DTOs and scoped caller envelope; no dependency on services or transport |
+| intent-services | Orchestration, placement, hub transactions, interruption/resume; consumes interfaces injected by the binary; never imports transport |
+| intent-acp + intent-js | Existing ACP/fs/terminal and QuickJS implementation runs on node; MCP bindings in `intent-acp/src/mcp_server/bindings` split operation routing through WorkspaceApi implementations, not a services-only proxy |
+| intent-git | Non-mutating checkpoint codec extracted from transfer WIP/index representation, local checkout creation, scoped hub refs and Git helper; no orchestration or socket ownership |
+| intent-store | Node/lease identities, journal ingestion identity/watermark, checkpoint pointer, stop/resume/publication operation records and idempotency |
+| intent-nodes (new) | Static/local provider adapters and node runtime composition helpers using core interfaces and lower-level acp/git/pty/providers; no services or transport import |
+| intent-transport | Concrete authenticated WSS multiplexing endpoints implementing core interfaces; persistence occurs through service interfaces, not direct store access |
+| intentd binary | Wires head and node composition roots, in-memory or TLS endpoints, local runtime implementation and CLI/helper entry points |
+
+The first extraction wraps today's `agent_manager` spawn/prompt/cancel/stop/reap
+and memory operations behind AgentRuntime without changing local semantics.
+Remote implementation uses the injected NodeLink, not `transport` types. Scope
+travels with each operation: a node's agent cannot acquire administrator/daemon
+authority by forwarding a call, including a hook. Preserve `intent-core::Caller`
+and shared-host membership checks rather than treating a lease token as a user.
+
+### Durable work and recovery
+
+Head's bare hub is keyed by forge host/provider/repo identity and borrows only
+head-local cache objects. Node has a separate cache and checkout; no head/node
+shared filesystem or remote alternates path exists. Git packs and verified blobs
+carry unpublished commits, dirty WIP, original index, submodule repositories and
+portable provider session state. Transfer's existing `snapshot_wip` mutates the
+live index/HEAD, so periodic capture must extract its format into a temporary-index
+codec with a proven capture barrier. A failed capture retains the last successful
+checkpoint and never reports new durability.
+
+Node fsyncs journal records before forwarding; head transactionally commits the
+dedup identity, transcript/events and contiguous ack watermark. Checkpoint success
+is separate: immutable Git/blob anchors are durable before the SQLite checkpoint
+pointer advances. Reconnect fences old connections, replays records, applies stop
+tombstones and reconciles one resume attempt before delivering any new prompt.
+Checkpoint advancement also compares a durable assignment epoch/capture revision;
+late older uploads cannot replace newer recovery state, even at the same journal
+watermark. Isolated children hydrate the parent's captured dirty contents through
+an immutable inherited baseline without editing the parent. Merge/publication
+exclude that baseline from the child's attributable delta; private synthetic
+ancestry is normalized away before a forge push, or publication is blocked.
+Loss notices state the successful checkpoint's actual capture time; the periodic
+five-minute attempt is not a loss bound during an outage or failed capture.
+
+Public `hub.publish` plus a bound node CLI command provides the explicit head-owned
+forge push. Agent state never creates forge branches implicitly. Existing MCP
+git helpers remain commit/root operations and PR helpers remain snapshot/monitor;
+PR creation uses `gh`, with a bounded argv/body bridge for node callers. No removed
+Git push or PR-create MCP binding is resurrected. Hub merge runs on the target
+node, protecting its actual dirty/index state and using the same completion
+semantics for local and remote parents.
+
+### Reconciliation and phase boundary
+
+The closed [microVM backend PR #873](https://github.com/intent-hq/intentd/pull/873)
+and [docs PR #5918](https://github.com/intent-hq/intent/pull/5918) used host-driven
+guest exec, execution-environment profiles and host/guest filesystem access.
+Those runtime/profile assumptions are not the phase 1 foundation. Useful VM
+lifecycle/image work may later implement NodeProvider with `intentd node` in the
+guest; head must not launch provider CLIs remotely or mount a guest checkout.
+The source proposal's read-only virtio-fs cache exception is also superseded:
+base objects come from each node's own cache/forge or hub transport, never shared
+head filesystem paths. Cloud adapters, images, Windows qualification, local Mac
+microVMs, freeze/fork, automatic sitter upgrades and credential administration
+are outside phase 1.
+
+Retirement order is additive docs → backend node/hub support and local parity →
+replacement frontend → backend per-agent CoW deletion → canonical catalog cleanup
+after automatic pins. Each merge requires human authorization. Keep workspace
+`checkoutMode: cow`, reflink primitives and repo-cache coverage throughout. Remove
+per-agent isolation selection and merge/discard routes without aliases or live
+sandbox migration; old sandbox files remain untouched for explicit recovery.
+
 ## Workspace checkouts & agent sandboxes (CoW)
+
+This section describes **current pinned behavior**. The per-agent sandbox portion
+is retired only after the replacement gates above; workspace CoW checkout creation
+is retained. In particular, the legacy shared fallback below is not allowed for
+future explicit isolated node placement.
 
 Wire contract: PROTOCOL.md §5.1 (`checkoutMode`, `cowSupported`), §5.5/§5.5a
 (sandboxes). Architectural split of responsibilities:

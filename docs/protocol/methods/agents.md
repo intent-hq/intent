@@ -1272,3 +1272,11 @@ Session-metadata tracking for the **proposal resource blocks** an agent's turns 
 { "jsonrpc":"2.0","id":81,"result":{ "ok":true } }
 ```
 
+
+### Prepared node placement and CoW retirement
+
+[§5.50](./nodes.md) defines additive placement on existing creation/delegation
+paths, node/lease/checkpoint fields, new halted/resuming statuses, and replacement
+hub operations. These fields are not implemented at the pin. Current CoW methods
+and behavior above remain until the separately versioned removal lands; the final
+removal has no alias or live-sandbox migration.

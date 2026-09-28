@@ -10,8 +10,9 @@ and `reason`. It returns `{ success: true, retiredAt, alreadyRetired?: true }`, 
 the existing active-descendant refusal and restoration contract, and stops a running
 target while cancelling its wake sources. It follows workspace lifecycle permissions,
 independent of `agentFeatures.peerAgents`; MCP self-retirement remains self-only and
-feature-gated. This addition takes the documented totals including the 10.9 extension below to **408 / 348 / 58**
-(dispatchable / router / fast path), with no new event names. Support is advertised by
+feature-gated. Together with the 10.9 extension and prepared node contract below,
+this addition takes the documented totals to **417 / 357 / 58** (dispatchable / router /
+fast path), with no new event names. Support is advertised by
 `client.hello.server.capabilities.agentRetire: 1`; clients enable the action only when
 that capability is present, independently of the numeric protocol version and model
 feature gates. Older daemons omit the capability and lack this route; a stale client
@@ -19,6 +20,14 @@ request can return method-not-found (or Forbidden for a collaborator behind the
 default-deny allowlist). Clients must surface failures without claiming retirement
 succeeded or falling back to a model message.
 
+
+The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
+reserves additive methods/events without claiming a shipped version. Implementors
+allocate the next minor against main and advertise `agentNodes: 1` only after the
+complete contract is implemented. Per-agent CoW removal follows replacement
+backend/frontend support, requires a major version and `agentIsolation: 2`, and
+removes canonical entries only after component deletion and automatic pin advance.
+Workspace `checkoutMode: "cow"` is retained.
 
 Version 10.9 reserves the [shared-host membership contract (§5.49)](./methods/shared-host-membership.md).
 The current pinned intentd reports **10.8**, including the provider-neutral identity and
