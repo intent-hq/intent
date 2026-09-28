@@ -456,3 +456,73 @@ test('collectDocumentedMethods reads rows, annotated rows, headings, and skips f
   assert.deepEqual(methodNamesInFirstCell('No decidable default (`model.defaultProvider` unset)'), []);
   assert.deepEqual(methodNamesInFirstCell('`model.defaultProvider` unset — falls through'), []);
 });
+
+const PROTOCOL_DIR = new URL('../docs/protocol/', import.meta.url);
+const SUBSCRIPTION_NAMES = ['note', 'task', 'agent', 'workspace', 'comment', 'chat', 'note.presence']
+  .flatMap((channel) => [`${channel}.subscribe`, `${channel}.unsubscribe`]);
+
+async function routingRows() {
+  const text = await fs.readFile(new URL('workspace-routing.md', PROTOCOL_DIR), 'utf8');
+  return text.split('\n').filter((line) => /\| (Add|Propagate|Exclude) \|/.test(line)).map((line) => {
+    const [, cell, disposition, field, variant] = line.split('|').map((s) => s.trim());
+    const names = methodNamesInFirstCell(cell);
+    assert.ok(names.length > 0, `routing inventory must use exact names: ${line}`);
+    assert.ok(variant, `routing inventory must explain the variant: ${line}`);
+    if (disposition === 'Add') assert.equal(field, '`workspaceId`');
+    if (disposition === 'Propagate') assert.ok(['`workspaceId`', '`targetWorkspaceId`'].includes(field), line);
+    if (disposition === 'Exclude') assert.equal(field, '—');
+    return { names, disposition, field, variant };
+  });
+}
+
+test('workspace routing inventory covers every catalog name, alias, reverse RPC and snapshot channel exactly by variant', async () => {
+  const catalog = parseCatalog(await fs.readFile(new URL('05-method-catalog.md', PROTOCOL_DIR), 'utf8'));
+  const expected = new Set([
+    ...catalog.routerRows.flatMap((row) => tokenizeRowSuffixes(row.cell).tokens.map((suffix) => `${row.ns}.${suffix}`)),
+    ...catalog.fastPath.names,
+    ...catalog.aliases.pairs.flatMap(({ alias, canonical }) => [alias, canonical]),
+    ...catalog.reverse.names.map(({ name }) => name),
+    ...SUBSCRIPTION_NAMES,
+  ]);
+  const rows = await routingRows();
+  const actual = new Set(rows.flatMap(({ names }) => names));
+  assert.deepEqual([...expected].filter((name) => !actual.has(name)), [], 'missing routing classifications');
+  assert.deepEqual([...actual].filter((name) => !expected.has(name)), [], 'unknown or abbreviated method names');
+  const variants = rows.flatMap(({ names, variant }) => names.map((name) => `${name}: ${variant}`));
+  assert.equal(new Set(variants).size, variants.length, 'duplicate method/variant rows');
+
+  // The channels are intercepted before router.rs and absent from most catalog constants.
+  // Check their current classifier as well when intentd is initialized (CI initializes it).
+  const source = await fs.readFile(new URL('../packages/intentd/crates/intent-transport/src/subscriptions.rs', import.meta.url), 'utf8')
+    .catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (source !== null) {
+    const classify = source.split('pub(crate) fn classify')[1].split('/// Validate')[0];
+    const names = [...classify.matchAll(/"([a-z]+(?:\.[a-z]+)*\.(?:subscribe|unsubscribe))"/g)].map((m) => m[1]);
+    assert.deepEqual([...new Set(names)].sort(), [...SUBSCRIPTION_NAMES].sort());
+  }
+});
+
+test('routing inventory preserves source export, target reads and scope-sensitive method variants', async () => {
+  const rows = await routingRows();
+  const forMethod = (name) => rows.filter((row) => row.names.includes(name));
+  const dispositions = (name) => [...new Set(forMethod(name).map((row) => row.disposition))].sort();
+  assert.deepEqual(dispositions('workspace.export.start'), ['Propagate']);
+  for (const method of ['workspace.export.read', 'workspace.export.finalize', 'workspace.export.abort']) {
+    assert.deepEqual(dispositions(method), ['Add']);
+    assert.match(forMethod(method)[0].variant, /Source workspace/);
+  }
+  for (const method of ['crossWorkspace.readNote', 'crossWorkspace.listNotes']) {
+    assert.equal(forMethod(method)[0].field, '`targetWorkspaceId`');
+  }
+  for (const method of ['mcp.servers.toggle', 'search.messages', 'search.events', 'events.subscribe', 'rules.list', 'rules.get']) {
+    assert.deepEqual(dispositions(method), ['Exclude', 'Propagate']);
+  }
+  for (const method of ['specialist.create', 'specialist.edit', 'specialist.delete', 'events.unsubscribe', 'search.cancel']) {
+    assert.deepEqual(dispositions(method), ['Add', 'Exclude']);
+  }
+  assert.deepEqual(dispositions('agent.unsubscribe'), ['Exclude', 'Propagate']);
+  assert.match(forMethod('agent.subscribe').find((row) => /Collection-channel/.test(row.variant)).variant, /events\.unsubscribe/);
+  for (const method of ['workspace.import.begin', 'workspace.import.chunk', 'workspace.import.commit', 'workspace.import.abort', 'system.shutdown']) {
+    assert.deepEqual(dispositions(method), ['Exclude']);
+  }
+});

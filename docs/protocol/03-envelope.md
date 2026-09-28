@@ -46,5 +46,15 @@ The server processes **one JSON-RPC object per WebSocket text frame**. JSON-RPC 
 
 ### 3.6 `workspaceId` scoping
 
-Most methods operate within a workspace. `workspaceId` is read from `params.workspaceId`, fallingback to a connection-level context value if the transport provides one. If neither is present, themethod returns `-32602 "workspaceId is required"`. The workspace/repo/specialist/global methods(e.g. `workspace.list`, `repo.list`, `specialist.list`, `agent.getModels`) do not require it.
+Most workspace methods read `params.workspaceId` explicitly; a required field
+cannot be replaced by connection focus. Required, optional and semantic context
+are method-specific: see the method tables and the
+[workspace routing inventory](./workspace-routing.md). Cross-workspace target
+reads use `params.targetWorkspaceId` instead.
 
+The routing preparation adds optional `workspaceId` to selected workspace calls,
+including daemon-wide reads and resource follow-ups. It preserves direct callers
+that omit those new fields and all existing filters, storage scope, permissions
+and connection ownership. A future forwarded workspace call must carry its real
+originating context; the preparation does not implement an aggregator or change
+direct global/admin calls.

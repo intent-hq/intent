@@ -2,6 +2,11 @@
 
 ## 5. Method Catalog
 
+The [workspace routing inventory](./workspace-routing.md) documents additive
+optional context fields ahead of component implementation, with exact supported
+and excluded variants for every catalog name and snapshot channel. It preserves
+direct-daemon compatibility and does not advertise aggregator support.
+
 The 10.9 [shared-host extension (§5.49)](./methods/shared-host-membership.md) is documented ahead of the pinned daemon. Capability discovery and authority in that section govern its new methods and additions to existing methods; the catalog alone is not a support probe.
 
 The API exposes **407 dispatchable method names** across the following categories:
@@ -25,7 +30,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | --- | --- | --- |
 | accept-changes | 5 | addRemote, execute, getStatus, mergePR, prepare — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
 | agent | 47 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
-| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
+| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
@@ -48,7 +53,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
 | principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
-| providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
+| providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`) |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
@@ -58,10 +63,10 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
-| sourceControl | 7 | authStatus, cancelAuth, connect, getUser, identityProof.create, identityProof.delete, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global — no `workspaceId`) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections |
+| sourceControl | 7 | authStatus, cancelAuth, connect, getUser, identityProof.create, identityProof.delete, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
-| system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
+| system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 15 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, setRelations, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
@@ -84,7 +89,7 @@ The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `n
 
 **UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
-**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
+**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It accepts optional routing-only `workspaceId` under the prepared contract and returns the same machine-level capabilities; `{}` remains compatible on direct daemons:
 
 ```json
 // → request
@@ -494,7 +499,7 @@ Regenerates the bearer token and returns the updated pairing info. Legacy behavi
 
 Resolves the auggie CLI on the daemon host. **Resolution-only** ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): no `--version` spawn and no `version` field.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -509,7 +514,7 @@ Resolves the auggie CLI on the daemon host. **Resolution-only** ([intent-hq/inte
 
 Detects the `git` / `node` / `gh` binary on the daemon host: PATH resolution (plus OS-common install dirs) followed by a `<path> --version` probe on a blocking thread.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -524,7 +529,7 @@ Detects the `git` / `node` / `gh` binary on the daemon host: PATH resolution (pl
 
 Daemon-owned provider auth probes: reports whether each CLI-backed agent provider is authenticated, so clients consume verdicts instead of orchestrating auth-check commands themselves.
 
-**Request:** `{ "providerId": "grok", "force": true }` — both parameters optional. `providerId` scopes the sweep to a single provider; it must be a non-empty string when present, and an unknown, empty, or non-string `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
+**Request:** `{ "providerId": "grok", "force": true }` — both probe parameters optional; the prepared contract also accepts optional routing-only `workspaceId`. `providerId` scopes the sweep to a single provider; it must be a non-empty string when present, and an unknown, empty, or non-string `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
 
 **Response:**
 
@@ -573,7 +578,7 @@ Live end-to-end provider test: spawns the provider's ACP adapter through the sam
 
 Daemon-owned provider discovery: reports which CLI-backed agent providers are installed on the daemon host (binary resolution + npx fallback status, honoring valid `providers.paths` overrides), so clients render install state without probing `PATH` themselves.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 

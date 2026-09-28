@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.30 `models.list` — model catalog · §5.38 Provider catalog — `providers.catalog`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.30 `models.list` — model catalog
 
 The BE-owned model catalog every FE model picker reads (ModelPicker, background-agent settings,
@@ -8,7 +10,7 @@ workspace initializers, onboarding). It is the **richer, additive sibling** of `
 
 | Method | Params | Result |
 | --- | --- | --- |
-| models.list | providerId?, forceRefresh?: boolean (default false) — no `workspaceId` | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
+| models.list | providerId?, forceRefresh?: boolean (default false), workspaceId? | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
 
 **ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number, isLegacyModel?: boolean }`.
 `id` is the bare model id (`shortName`/`value`), `name` the display label
@@ -104,9 +106,9 @@ Errors: `-32603` only on internal failure; probe/CLI failures degrade as describ
 
 ### 5.38 Provider catalog — `providers.catalog` *(v2.6; wire shape changed by [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922); `supportsTestPrompt` added in v9.3 by [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
 
-The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global**: no params and no `workspaceId` (like `system.capabilities`), available on both UDS and WSS. The data is **compiled into the daemon** — there is no cache or TTL; the result only changes when the daemon binary does.
+The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global result**, available on both UDS and WSS. Optional `workspaceId` is prepared routing context only, like `system.capabilities`; it does not filter the registry. The registry is **compiled into the daemon**, with visibility evaluated against the daemon process environment; there is no cache or TTL.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 

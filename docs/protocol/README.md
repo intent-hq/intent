@@ -14,6 +14,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §3 Message Envelope (JSON-RPC 2.0) (3.1–3.6) | [03-envelope.md](./03-envelope.md) |
 | §4 Heartbeat & Lifecycle | [04-heartbeat.md](./04-heartbeat.md) |
 | §5 Method Catalog — intro, router/fast-path method tables, aliases, client-served reverse RPCs | [05-method-catalog.md](./05-method-catalog.md) |
+| Workspace routing preparation — exact method/variant inventory, compatibility and resource lifetimes | [workspace-routing.md](./workspace-routing.md) |
 | §6 Events & Subscriptions (6.1–6.9) | [06-events.md](./06-events.md) |
 | §7 Agent Streaming (7.1–7.3) | [07-agent-streaming.md](./07-agent-streaming.md) |
 | §8 Permission Flow | [08-permission-flow.md](./08-permission-flow.md) |

@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.15 `search.*` · §5.16 `drafts.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.15 `search.*`
 
 > Search is a **BE-owned namespace**: it executes on the daemon **where the code and data
@@ -14,7 +16,7 @@
 | search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
 | search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
 | search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search. auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait is retained as forward-looking infra |
-| search.cancel | requestId (req) | { ok: true } — aborts an in-flight search by its `requestId` |
+| search.cancel | requestId (req), workspaceId? | { ok: true } — aborts an in-flight search by its `requestId` |
 
 Memories search is **daemon-internal (no wire method)**: there is no `search.memories` router arm — the memories store is queried inside the daemon (agent memory recall, §5.22), never by a client RPC.
 

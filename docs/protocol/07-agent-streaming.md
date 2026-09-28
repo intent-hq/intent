@@ -97,11 +97,15 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 
 - **Methods:** `chat.subscribe` / `chat.unsubscribe`, intercepted on the subscription fast-path
   before the JSON-RPC dispatcher (like `events.subscribe`). `params` is
-  `{ agentId, sinceMessageId?, deltaEncoding?, projection? }` — a missing/empty `agentId` is a
+  `{ agentId, sinceMessageId?, deltaEncoding?, projection?, replaceGroup?, workspaceId? }` — a missing/empty `agentId` is a
   `-32602` error.
   `chat.subscribe` returns `{ subscriptionId }`, then
   pushes a seq-0 `subscription.push` **snapshot**, then ordered **deltas** (seq 1, 2, …).
   `replaceGroup` (atomic swap) and per-connection cleanup behave as for the other channels (§6.1).
+  The [prepared routing-only](./workspace-routing.md) `workspaceId?` is optional
+  for direct callers; workspace clients capture it with the subscription and
+  retain it for reconnects and `chat.unsubscribe { subscriptionId, workspaceId? }`.
+  It does not change which agent's transcript is returned or connection ownership.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -735,4 +739,3 @@ A prompt turn that **completes** with a non-`end_turn` ACP stop reason — `refu
 - **Still a completion.** An abnormal ending follows the normal completion lifecycle: `agent:idle` fires (its existing lifecycle `finishReason` field carries the same stop reason, as it always has) and `agent:failed` does not. Distinct from §7.2's interrupt contract (`metadata.stopReason: "interrupted"` / event `stopReason: "interrupted"`): an interrupt is externally imposed mid-turn, an abnormal finish is the agent's own resolved stop reason. The ACP `cancelled` stop reason never reaches this path — cancellation routes through the §7.2 interrupt flush.
 
 Presence-detected additive fields (row `metadata.finishReason`, event `finishReason?`) within the current protocol version; no method-catalog or wire-shape change, so no version bump.
-

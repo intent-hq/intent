@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.18 `accept-changes.*` · §5.19 `file-tracking.*` (reads) · §5.20 Change metrics (reads).
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.18 `accept-changes.*`
 
 The multi-step "accept the agent's work" workflow: the backend owns local git **and** the forge
@@ -129,9 +131,9 @@ Metrics are durable (the `workspace_metrics` / `agent_metrics` tables).
 | Method | Params | Result |
 | --- | --- | --- |
 | metrics.getWorkspaceStats | workspaceId (req) | Metrics \| null — `{ additions, deletions, filesChanged, byAgent }` for the workspace |
-| metrics.getAgentStats | agentId (req) | Metrics \| null — `{ additions, deletions, filesChanged }` for one agent (`byAgent` omitted) |
+| metrics.getAgentStats | agentId (req), workspaceId? | Metrics \| null — `{ additions, deletions, filesChanged }` for one agent (`byAgent` omitted) |
 | metrics.getAllWorkspaceStats | — | { [workspaceId]: Metrics } — all workspaces |
-| metrics.clearAgentStats | agentId (req) | { success: boolean } — resets one agent's counters |
+| metrics.clearAgentStats | agentId (req), workspaceId? | { success: boolean } — resets one agent's counters |
 
 ```json
 // → request
