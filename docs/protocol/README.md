@@ -22,6 +22,11 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §10 Thin-Client Guidance (10.1–10.4) | [10-thin-client.md](./10-thin-client.md) |
 | Owner-backend Keychain v1 payload, shared fixtures and distribution (separate from daemon RPC) | [backend-keychain.md](./backend-keychain.md) |
 
+The [phase 1 node contract](./methods/nodes.md) is a prepared, unimplemented
+extension with capability-gated additions and a separately staged CoW removal.
+Its [private link](./node-link.md) and [checkpoint format](./node-checkpoints.md)
+are distinct from client WSS and do not change the currently advertised version.
+
 ### §5.x subsections (`methods/`)
 
 | Subsection | File |
@@ -77,6 +82,7 @@ This directory is the canonical wire contract between Intent clients (desktop, i
 | §5.47 Presence — `presence.*` / `note.presence.*` (ephemeral workspace roster + per-note viewer channel) | [methods/presence.md](./methods/presence.md) |
 | §5.48 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.*` / `workspace.members.*` (principals, invite links, the `/invite` proof join, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
+| §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.

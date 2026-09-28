@@ -2183,3 +2183,11 @@ script's exit code (§5.1).
   "script":"#!/usr/bin/env bash\nset -euo pipefail\ncargo fetch\n",
   "projectType":"rust","updatedAt":1750000000000,"generatedBy":"agent" } } }
 ```
+
+### Prepared agent placement default
+
+[§5.50](./nodes.md#placement-and-creation) specifies the future optional
+`Workspace.defaultAgentPlacement` field, manager-only `workspace.update` writes
+(null clears), and `workspace.create.initialAgent.placement`. It does not change
+workspace `checkoutMode`, its CoW/reflink implementation, or current creation
+behavior before the node capabilities are advertised.
