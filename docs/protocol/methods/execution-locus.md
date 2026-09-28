@@ -252,3 +252,11 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // ← { "jsonrpc":"2.0","id":92,"result":{ "ok": true, "cancelled": true } }
 ```
 
+
+### Prepared node execution boundary
+
+The current host-local contracts above remain the default. For future placed
+agents, [node routing](../node-link.md#namespace-routing-and-file-contracts)
+separates the agent node from the head daemon and frontend. A node cwd is opaque
+on head; node live reads/commands use scoped bidirectional RPC. Existing
+`host.openInEditor` must not receive a node path as a frontend-local path.

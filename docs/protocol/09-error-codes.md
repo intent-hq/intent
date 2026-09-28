@@ -87,3 +87,10 @@ Neither configured accounts nor enabled injection proves credentials valid;
 disabled injection alone does not mean Git must fail. Do not classify network,
 rate-limit, repository-not-found or arbitrary terminal failures as authorization
 errors. Raw credentials/provider error bodies never appear in this diagnostic.
+
+### Prepared node execution errors
+
+The [phase 1 contract](./methods/nodes.md#errors-and-retirement-gates) reserves
+structured `data.code` values for node placement, checkpoints and uncertain RPC
+outcomes using existing numeric codes. No new numeric error is introduced.
+These errors are future contracts; current CoW errors remain until retirement.

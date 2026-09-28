@@ -156,6 +156,18 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | collaboration identity (10.9, docs ahead) | identity:auth-changed | `{ provider, host, purpose: "collaboration", status, flowId? }`; existing forge terminal status enum, signing-in daemon's owner only; never a repository auth event (§5.49) |
 | authenticated clients (10.9, docs ahead) | client:updated | Complete `client.list` row after hello metadata or effective profile/role changes; transient, owner/member host-wide, guests self-only (§5.49) |
 
+#### Prepared node events (not implemented)
+
+The [phase 1 node contract (§5.50)](./methods/nodes.md#lifecycle-and-events)
+reserves `node:changed`, `lease:changed`, `hub:checkpoint`, `hub:merged` and
+`hub:discarded`. That section defines exact payloads and caller-relative delivery.
+Existing `agent:status-changed` / `agent:updated` carry node/placement/checkpoint
+fields; `halted` and `resuming` are new agent statuses, and `node_link_lost` is a
+new stream-end/interruption reason. `workspace:updated.data.changes` adds
+`defaultAgentPlacement` when that optional workspace default changes. These are
+future additions, not emitted by the pinned daemon. Existing `sandbox:cow:created`
+and `sandbox:cow:merged` remain catalogued until backend retirement and the pin bump.
+
 #### Shared-host delivery and invalidation *(10.9)*
 
 [§5.49](./methods/shared-host-membership.md#live-events-and-resynchronization) defines

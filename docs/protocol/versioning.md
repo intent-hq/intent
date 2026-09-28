@@ -4,6 +4,14 @@
 
 **Documented version:** `10.9` — additive contract; docs lead component implementation.
 
+The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
+reserves additive methods/events without claiming a shipped version. Implementors
+allocate the next minor against main and advertise `agentNodes: 1` only after the
+complete contract is implemented. Per-agent CoW removal follows replacement
+backend/frontend support, requires a major version and `agentIsolation: 2`, and
+removes canonical entries only after component deletion and automatic pin advance.
+Workspace `checkoutMode: "cow"` is retained.
+
 Version 10.9 reserves the [shared-host membership contract (§5.49)](./methods/shared-host-membership.md).
 The current pinned intentd reports **10.8**, including the provider-neutral identity and
 pin metadata additions already described below. The previous 10.7 heading lagged that
