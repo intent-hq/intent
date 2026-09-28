@@ -158,6 +158,95 @@ may remain in its own provider snapshot for a later switch back; it must not app
 applied choice. Hydration and partial `settings:changed` reconciliation must handle the new
 fields without replacing unaffected siblings or writing defaults back over saved values.
 
+**Provider Fast mode preference.**
+
+`providers.fastMode` is a non-sensitive, TOML-backed `object` setting in category
+`providers`, with `defaultValue: {}`. It is a daemon-global map of canonical provider
+ids to booleans, initially supporting `claude-code` and `codex`. Missing entries mean
+**off**, independently for each provider. The preference survives daemon restart and
+is shared by every workspace and client connected to that daemon; it is not an agent,
+workspace, model, or reasoning-effort override.
+
+```jsonc
+// settings.update — complete replacement of the map, preserving the other provider
+{"changes": [{"path": "providers.fastMode", "value": {"claude-code": true, "codex": false}}]}
+```
+
+The value must be an object whose members name providers advertising
+`supportsFastMode: true` in `providers.catalog` (§5.38), and whose values are booleans.
+Arrays, null, non-booleans, aliases, unknown ids, and unsupported providers are
+`-32602`; validation rejects the entire update batch before persistence. This is a
+whole-value replacement, not a deep merge: clients preserve the other provider's
+entry when changing one toggle. There are no independently addressable dotted child
+settings such as `providers.fastMode.codex`. `settings.reset` on `providers.fastMode`
+restores `{}` and origin `default`, removing the explicit map from config.toml; both
+providers then resolve to off. Update, reset, reload, revision, and `settings:changed`
+semantics are otherwise the same as other TOML-backed settings above. An invalid
+file edit retains the last-good settings. Provider-native configuration files must
+not be modified.
+
+Clients show this control only when the setting is present in `settings.list` **and**
+that provider's catalog row has `supportsFastMode === true`. An omitted capability
+means unsupported (including older daemons); do not send the unknown setting to such
+a daemon or substitute renderer-local persistence. Older clients may ignore the
+additive setting and catalog field.
+
+**Application boundary.** Saving acknowledges the stored preference, not an active
+session's tier. The daemon samples the preference when spawning an Intent-managed
+ACP adapter and applies it before the first user prompt, after creating or loading
+the provider session and selecting its model/effort. This covers persistent agents,
+delegated agents, and one-shot prompts. A newly spawned adapter resuming an existing
+provider session must use the latest preference, including explicit off, rather than
+inheriting that session's earlier tier. Off must actively undo an inherited enabled
+tier; omitting an enable flag is not sufficient. Model/catalog-only probes need not
+request Fast mode.
+
+Already-running adapters may retain their sampled preference on subsequent turns
+and warm reuse. A settings update/reset does not require live recycling, automatic
+restart, or interrupting a turn. UI guidance must explain that the saved preference
+applies to new adapter sessions and that users can restart intentd to apply it to
+existing sessions. A new chat message alone does not imply a new adapter. If a model
+changes within a retained adapter, honor its sampled preference when the selected
+model becomes eligible; do not reread a newer preference merely because of warm reuse.
+
+**Eligibility and failures.** Fast mode requests a service tier; it neither guarantees
+lower latency nor proves account/model access. Preserve the selected model and
+reasoning effort. For unsupported models, keep ordinary model behavior and retain
+the saved preference for future eligible sessions. Explain model/account restrictions
+and potentially increased usage in the UI, and surface available provider refusal or
+application errors without reporting them as an active Fast tier or rewriting the
+saved preference. A settings write can succeed even if a later session cannot use
+the tier. If applying off fails for an eligible session, surface the failure and do
+not silently submit its prompt with an inherited Fast tier.
+
+**Verified ACP controls.** These are adapter integration requirements, not new
+Intent client RPCs. Both pinned adapters support `session/set_config_option` after
+`session/new` or `session/load`; use the returned option for the selected model and
+the select fallback below (or its negotiated boolean representation):
+
+| Provider | Pinned adapter | `configId` | On / off values | Effect |
+| --- | --- | --- | --- | --- |
+| `claude-code` | `@agentclientprotocol/claude-agent-acp@0.81.1` | `fast` | `"on"` / `"off"` | Calls SDK `applyFlagSettings({ fastMode: true/false })`; option exists when the model advertises `supportsFastMode`. |
+| `codex` | `@agentclientprotocol/codex-acp@1.13.1` | `fast-mode` | `"on"` / `"off"` | Records the preference and sends `turn/start.serviceTier: "fast"` only for a model whose `additionalSpeedTiers` contains `fast`; off or an unsupported model sends explicit `null` to clear the tier. |
+
+For example, Claude off is
+`{"sessionId":"…","configId":"fast","value":"off"}`. Reapply the sampled
+preference after load; a resumed session's initial option value is not authoritative
+for the daemon preference. Claude's SDK reports a session opt-in requirement; do not
+infer opt-in solely from native settings files. Codex reads
+`CODEX_CONFIG` JSON once at ACP process startup and forwards it on thread start/resume;
+native `-c` argv is not the adapter configuration transport. Preserve existing
+daemon-owned Codex policy when composing spawn configuration; do not replace it with
+a tier-only object. No provider-native config-file write is needed by either control.
+
+Source evidence is pinned to [Claude ACP's session control and lifecycle](https://github.com/agentclientprotocol/claude-agent-acp/blob/b264b52bee80e49f20caf1941f7d7cb89edb80c4/src/acp-agent.ts),
+its [on/off and SDK-state tests](https://github.com/agentclientprotocol/claude-agent-acp/blob/b264b52bee80e49f20caf1941f7d7cb89edb80c4/src/tests/fast-mode-config.test.ts),
+[Codex ACP's tier resolver](https://github.com/agentclientprotocol/codex-acp/blob/b1b8490cd165c18626dc3fe83836cdacdef94cd3/src/FastModeConfig.ts),
+its [session start/load configuration](https://github.com/agentclientprotocol/codex-acp/blob/b1b8490cd165c18626dc3fe83836cdacdef94cd3/src/CodexAcpClient.ts),
+and its [explicit-clear tests](https://github.com/agentclientprotocol/codex-acp/blob/b1b8490cd165c18626dc3fe83836cdacdef94cd3/src/__tests__/CodexACPAgent/fast-mode-config.test.ts).
+Reverify these paths when changing the pins; Codex ACP's underlying Codex dependency
+is a semver range (`^0.156.1`), not an exact runtime pin.
+
 **BE-exposed setting paths.** Only settings that affect daemon behavior are exposed:
 
 - **Providers / agents:** `providers.active` *(deprecated: superseded by `model.defaultProvider`; kept in the catalog during the deprecation window but read-only on the wire — `settings.update` tolerates-and-ignores it before the read-only rejection would fire, so old clients never fail a batch)*, `model.defaultProvider`, `providers.enabled`, `providers.paths.{auggie,claude-code,codex,…}`,`model.default`, `model.providerDefaults`, `model.defaultReasoningEffort`, `quickActions.defaultModel`, `quickActions.typeOverrides`, `quickActions.defaultReasoningEffort`, `quickActions.typeReasoningEffortOverrides`, `quickActions.providerSettings`, `specialists.default`, `specialists.dir`. `model.defaultReasoningEffort` ([intent-hq/intentd#970](https://github.com/intent-hq/intentd/pull/970)) is an optional string persisted in `config.toml` under the `[model]` table as `defaultReasoningEffort` — the fallback reasoning effort for newly created agents, stored **as-is** (providers own the level vocabulary; the daemon never normalizes it) with a blank or whitespace-only value reading as unset (default: unset). It is the last rung of the creation-time reasoning-effort chain (§5.5 "Creation-time reasoning-effort resolution"), applying only when no explicit param / specialist model-option / specialist frontmatter effort decided the level **and** the session's model itself resolved from the settings chain; a level the resolved model's cached `effortLevels` provably does not list is dropped with a daemon warn log rather than rejected (§5.11). Agent model resolution walks `model.providerDefaults[provider]` → `model.default` (the settings-chain step of the daemon-side creation-time resolver, §5.5 — specialist frontmatter `model` takes precedence over this chain, and every result is provider-guarded). The `quickActions.*` keys ([intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)) scope **only** to single-shot quick actions (commit messages, PR descriptions, quick tasks) and are never consulted for an agent session, delegated ones included; they were named `backgroundAgents.*` before that rename, and the old paths are **retired** — gone from the catalog (`settings.list` never advertises them; `settings.get` / `settings.reset` yield `-32602`) but tolerated-and-ignored by `settings.update`, while a `config.toml` still carrying `[backgroundAgents]` has its values carried over once at boot — per member (`defaultModel` / `typeOverrides` / `providerSettings` are applied individually, so one malformed legacy value never discards its valid siblings), into each `quickActions.*` key still at its **schema default**, so an already-migrated or deliberately re-picked value is never clobbered, and a legacy member with no `quickActions.*` counterpart is dropped with a warning — before the legacy table is stripped. The **effective default provider** is the dedicated `model.defaultProvider` key ([intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)): registry-validated and whitespace-trimmed on read, so a stale or mistyped value reads as unset. The deprecated `providers.active` key is never consulted — a one-time boot migration carries a legacy value into `model.defaultProvider` (only when the target is still unset and the value names a registered provider) and removes `providers.active` from `config.toml` regardless, retrying next boot on a failed write ([intent-hq/intentd#1658](https://github.com/intent-hq/intentd/pull/1658)). There is no positional fallback to the first registered provider — with the key unset, resolution that falls through entirely fails loudly at the caller ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044); no provider carries a hardcoded default designation). Model-valued keys (`model.default`, `quickActions.defaultModel`, and the map values of `model.providerDefaults` / `quickActions.typeOverrides`) must be **bare** model ids: `settings.update` rejects a `:`-bearing value with `-32602` (`<path>: model values must be bare model ids without ':' (got "<value>"); set the provider via model.defaultProvider instead` — [intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)); legacy compound values already on disk are split on read rather than rejected ([intent-hq/intentd#1651](https://github.com/intent-hq/intentd/pull/1651)). The former `model.workspaceOverrides` key is **retired**: it is gone from the catalog (`settings.list` never advertises it; `settings.get` / `settings.reset` yield `-32602`), but `settings.update` **tolerates-and-ignores** the retired path for old clients — the entry is skipped (never validated, persisted, echoed in `applied`, or published in `settings:changed`) instead of rejecting the batch. Any stale SQLite row is deleted at boot, and a legacy `config.toml` key is still tolerated + stripped on boot with its value discarded. `specialists.default` *(optional string, TOML-backed under `[specialists]` as `default`; default: unset)* is the id of the specialist applied when none is chosen — a **client-consumed** setting: the daemon stores and serves it but never consults it when creating agents. The desktop FE's task-note **Run** path reads it: Run spawns the note's agent as the configured specialist when the id resolves to a pickable entry in the resolved specialist roster (visible to the client and not `hidden`, §5.11), and falls back to `implementor` when the key is unset or does not resolve. `specialists.dir` *(optional string — `settings.update` on it always yields `-32602` (read-only), while `settings.reset` yields `-32602` only when the value is startup-pinned and otherwise clears a file-written value, removing the key from config.toml)* reports the base-tier replacement directory for specialist resolution (§5.11 "Base-tier replacement mode"): it takes a value via the `INTENTD_SPECIALISTS_DIR` startup pin (or the `intentd serve --specialists-dir` flag, which folds into the env var pre-runtime — the flag wins over an inherited env value), else a hand-written `[specialists] dir` in config.toml; unset or empty means no replacement.
