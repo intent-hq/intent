@@ -913,6 +913,7 @@ corepack_cache="$temp_dir/corepack-cache"
 mkdir -p "$bootstrap_root/scripts" "$bootstrap_root/packages/intentd" \
   "$bootstrap_root/packages/cloudlands-fe" "$bootstrap_bin" "$corepack_cache"
 cp "$repo_root/scripts/bootstrap-dev-host.sh" "$bootstrap_root/scripts/bootstrap-dev-host.sh"
+cp "$repo_root/scripts/github-readiness.sh" "$repo_root/scripts/github_readiness.py" "$bootstrap_root/scripts/"
 touch "$bootstrap_root/packages/intentd/.git" "$bootstrap_root/packages/cloudlands-fe/.git"
 printf 'channel = "1.96.0"\n' >"$bootstrap_root/packages/intentd/rust-toolchain.toml"
 printf '{"packageManager":"pnpm@10.30.3"}\n' >"$bootstrap_root/packages/cloudlands-fe/package.json"
@@ -927,11 +928,15 @@ touch "$COREPACK_HOME/v1/pnpm/10.30.3/downloaded"
 printf '10.30.3\n'
 SH
 write_gh_stub() {
+  local http_status=200
+  [[ "$2" == 0 ]] || http_status=401
   cat >"$bootstrap_bin/gh" <<SH
 #!/usr/bin/env bash
 case "\$1 \${2:-}" in
   "--version ") printf 'gh version $1 (2025-01-01)\nhttps://github.com/cli/cli/releases/tag/v$1\n' ;;
   "auth status") exit $2 ;;
+  "api user") printf 'HTTP/2.0 $http_status\n\n{"login":"fixture"}\n'; exit $2 ;;
+  "api graphql") printf 'HTTP/2.0 $http_status\n\n{"data":{"viewer":{"login":"fixture"}}}\n'; exit $2 ;;
   *) exit 2 ;;
 esac
 SH
@@ -955,8 +960,10 @@ set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
   bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-ok.out" 2>&1
 set -e
-grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-ok.out" \
+grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0)$' "$temp_dir/bootstrap-check-gh-ok.out" \
   || fail "gh 2.100.0 was not accepted as satisfying >= 2.94.0"
+grep -q '^\[optional\] GitHub CLI: REST authenticated; GraphQL authenticated$' "$temp_dir/bootstrap-check-gh-ok.out" \
+  || fail "authenticated gh readiness was not reported separately from its version"
 ! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-ok.out" \
   || fail "gh 2.100.0 was reported as a missing gap"
 
@@ -965,8 +972,10 @@ set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
   bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-min.out" 2>&1
 set -e
-grep -q '^\[ok\]       GitHub CLI: gh 2\.94\.0 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-min.out" \
+grep -q '^\[ok\]       GitHub CLI: gh 2\.94\.0 (>= 2\.94\.0)$' "$temp_dir/bootstrap-check-gh-min.out" \
   || fail "gh 2.94.0 (exact minimum) was not accepted as satisfying >= 2.94.0"
+grep -q '^\[optional\] GitHub CLI: REST authenticated; GraphQL authenticated$' "$temp_dir/bootstrap-check-gh-min.out" \
+  || fail "authenticated gh readiness was not reported for the exact minimum version"
 
 write_gh_stub 2.94.0-rc.1 0
 set +e
@@ -981,8 +990,23 @@ set +e
 COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
   bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-next-rc.out" 2>&1
 set -e
-grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0), authenticated' "$temp_dir/bootstrap-check-gh-next-rc.out" \
+grep -q '^\[ok\]       GitHub CLI: gh 2\.95\.0-rc\.1 (>= 2\.94\.0)$' "$temp_dir/bootstrap-check-gh-next-rc.out" \
   || fail "prerelease gh 2.95.0-rc.1 of a newer release was not accepted as satisfying >= 2.94.0"
+grep -q '^\[optional\] GitHub CLI: REST authenticated; GraphQL authenticated$' "$temp_dir/bootstrap-check-gh-next-rc.out" \
+  || fail "authenticated gh readiness was not reported for a supported prerelease"
+
+# Authentication remains optional even when the CLI satisfies the version gate.
+write_gh_stub 2.100.0 1
+set +e
+COREPACK_HOME="$corepack_cache" PATH="$bootstrap_bin:$PATH" \
+  bash "$bootstrap_root/scripts/bootstrap-dev-host.sh" --check >"$temp_dir/bootstrap-check-gh-unauth.out" 2>&1
+set -e
+grep -q '^\[ok\]       GitHub CLI: gh 2\.100\.0 (>= 2\.94\.0)$' "$temp_dir/bootstrap-check-gh-unauth.out" \
+  || fail "unauthenticated gh did not satisfy the CLI version gate"
+grep -q '^\[optional\] GitHub CLI: REST credentials missing or rejected; run gh auth login' "$temp_dir/bootstrap-check-gh-unauth.out" \
+  || fail "confirmed unauthorized response was not reported as optional readiness"
+! grep -q '^\[missing\]  GitHub CLI' "$temp_dir/bootstrap-check-gh-unauth.out" \
+  || fail "unauthenticated gh was reported as a required host gap"
 
 # install_gh on macOS: exercise the function alone with a stubbed uname/brew/gh.
 bootstrap_funcs="$temp_dir/bootstrap-funcs.sh"

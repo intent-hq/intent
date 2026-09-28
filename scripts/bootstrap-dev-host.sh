@@ -712,11 +712,16 @@ check_all() {
     missing "GitHub CLI: gh $gh_found is below the required $GH_MIN_VERSION; run make bootstrap-dev-host (apt via https://cli.github.com/packages, dnf via gh-cli repo, or brew upgrade gh)"
   else
     gh_found=$(gh_version)
-    if gh auth status >/dev/null 2>&1; then
-      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION), authenticated"
-    else
-      ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
-      optional "GitHub CLI: not authenticated; PR reporting is disabled until gh auth login"
+    ok "GitHub CLI: gh $gh_found (>= $GH_MIN_VERSION)"
+    # Status already runs the shared classifier and reports its result. Avoid
+    # spending the same quota twice when it invokes this doctor as a child.
+    if [[ ${DEV_STATUS_SKIP_GITHUB:-0} != 1 ]]; then
+      local github_detail
+      if command -v python3 >/dev/null 2>&1 && github_detail=$(bash "$SCRIPT_DIR/github-readiness.sh" --human 2>/dev/null); then
+        optional "GitHub CLI: $github_detail"
+      else
+        optional "GitHub CLI: readiness unavailable"
+      fi
     fi
   fi
 
