@@ -191,23 +191,23 @@ means unsupported (including older daemons); do not send the unknown setting to 
 a daemon or substitute renderer-local persistence. Older clients may ignore the
 additive setting and catalog field.
 
-**Application boundary.** Saving acknowledges the stored preference, not an active
-session's tier. The daemon samples the preference when spawning an Intent-managed
-ACP adapter and applies it before the first user prompt, after creating or loading
-the provider session and selecting its model/effort. This covers persistent agents,
-delegated agents, and one-shot prompts. A newly spawned adapter resuming an existing
-provider session must use the latest preference, including explicit off, rather than
-inheriting that session's earlier tier. Off must actively undo an inherited enabled
-tier; omitting an enable flag is not sufficient. Model/catalog-only probes need not
+**Application boundary.** Saving acknowledges the stored preference, not the tier of
+an in-flight turn. The daemon reads the latest preference during pre-prompt setup
+for **each new turn**, after resolving the provider session and selecting its
+model/effort. This includes warm reuse of a live adapter, fresh `session/new`,
+`session/load`/resume, persistent and delegated agents, and one-shot prompts. A
+resumed session must use that preference, including explicit off, rather than
+inheriting its earlier tier. Off must actively undo an inherited enabled tier;
+omitting an enable flag is not sufficient. Model/catalog-only probes need not
 request Fast mode.
 
-Already-running adapters may retain their sampled preference on subsequent turns
-and warm reuse. A settings update/reset does not require live recycling, automatic
-restart, or interrupting a turn. UI guidance must explain that the saved preference
-applies to new adapter sessions and that users can restart intentd to apply it to
-existing sessions. A new chat message alone does not imply a new adapter. If a model
-changes within a retained adapter, honor its sampled preference when the selected
-model becomes eligible; do not reread a newer preference merely because of warm reuse.
+Apply the session config control at the existing safe pre-turn boundary, before
+submitting the prompt. A settings update/reset must not mutate or interrupt an
+in-flight turn, restart intentd, or recycle adapters. An update committed after a
+turn has sampled its preference is picked up by the following turn. UI guidance
+should say that changes apply on the next turn; restarting is not required. If a
+model changes, check eligibility for the newly selected model and apply the latest
+preference without changing that model or its reasoning effort.
 
 **Eligibility and failures.** Fast mode requests a service tier; it neither guarantees
 lower latency nor proves account/model access. Preserve the selected model and
@@ -218,6 +218,16 @@ application errors without reporting them as an active Fast tier or rewriting th
 saved preference. A settings write can succeed even if a later session cannot use
 the tier. If applying off fails for an eligible session, surface the failure and do
 not silently submit its prompt with an inherited Fast tier.
+
+For Claude, the adapter omits the `fast` option unless the selected model advertises
+`supportsFastMode`. Its `setSessionConfigOption` rejects an absent option with
+`Unknown config option: fast` **before** calling the SDK. For an eligible model,
+the fast-mode branch only calls `applyFlagSettings({ fastMode: enabled })`; it does
+not call `setModel` or change effort. The daemon must skip fast-on for an unsupported
+selected model, rather than invoking the native `/fast` command, selecting a
+different model, or retrying on another model. Account/managed-policy rejection
+retains the selected model and saved preference; use the provider's reported
+disabled reason or error to explain ordinary-tier fallback or refusal.
 
 **Verified ACP controls.** These are adapter integration requirements, not new
 Intent client RPCs. Both pinned adapters support `session/set_config_option` after
@@ -230,8 +240,9 @@ the select fallback below (or its negotiated boolean representation):
 | `codex` | `@agentclientprotocol/codex-acp@1.13.1` | `fast-mode` | `"on"` / `"off"` | Records the preference and sends `turn/start.serviceTier: "fast"` only for a model whose `additionalSpeedTiers` contains `fast`; off or an unsupported model sends explicit `null` to clear the tier. |
 
 For example, Claude off is
-`{"sessionId":"…","configId":"fast","value":"off"}`. Reapply the sampled
-preference after load; a resumed session's initial option value is not authoritative
+`{"sessionId":"…","configId":"fast","value":"off"}`. Apply the latest
+preference before each new turn, including after load; a resumed session's initial
+option value is not authoritative
 for the daemon preference. Claude's SDK reports a session opt-in requirement; do not
 infer opt-in solely from native settings files. Codex reads
 `CODEX_CONFIG` JSON once at ACP process startup and forwards it on thread start/resume;
