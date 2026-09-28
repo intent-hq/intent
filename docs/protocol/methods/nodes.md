@@ -126,9 +126,11 @@ never the local node. A remote checkout must be `isolated` in phase 1. Shared an
 worktree preserve existing local semantics. Local isolated requires
 `localNodeIsolation: 1`, creates a new checkout and never shares the parent.
 An isolated checkout is filesystem separation by path, **not** an OS security
-boundary on a multi-agent static host. `exclusive: true` additionally reserves an
-entire static host (must be remote/isolated) and requires no other placed agents;
+boundary on a multi-agent static host. `exclusive: true` additionally reserves all
+Intent placement capacity on that static node (must be remote/isolated) and requires no other placed agents;
 even idle agents hold this reservation. It does not create a VM or separate user.
+It grants no ownership of the physical host and does not prevent the operator's
+unrelated processes from running there.
 
 Precedence is per-task explicit placement → call-level explicit placement →
 specialist `runsOn` → workspace `defaultAgentPlacement` → today's local
@@ -158,8 +160,11 @@ Every placed agent's create/get/list/subscription projection includes `nodeId`,
 Provisioning reports `effectiveIsolation: "pending"`; settled isolated placement
 reports `"isolated"` on **both** local and remote nodes (location is `placement.target`,
 not an isolation value); shared/worktree keep their existing values. Optional
-`checkpoint: { id, capturedAt, committedAt }` means the last **successful** hub
+`checkpoint: { id, assignmentEpoch, captureRevision, capturedAt, committedAt }`
+means the last **successful current** hub
 checkpoint, and `placementError: { code, detail }` appears only on failure.
+Epoch/revision are decimal u64 strings with the freshness ordering defined in the
+checkpoint contract; replayed fields with a lower pair cannot replace newer state.
 `nodePath?` is diagnostic opaque text; no frontend/head API resolves it as a local
 path. UI offers local shared/worktree, local isolated and available remote
 isolated placement, labels capacity failures, and uses hub merge/discard instead
@@ -189,7 +194,7 @@ No credential-expiry or node-upgrade interruption is promised in phase 1.
 | --- | --- |
 | node:changed | `{ node: Node }`; owner inventory or workspace-manager safe projection, including a removed tombstone for prior viewers; emitted on connectivity, drain and capacity changes |
 | lease:changed | `{ lease: Lease }`; owner-only, never broadcast a host's agent inventory to workspace guests |
-| hub:checkpoint | `{ workspaceId, agentId, checkpoint: { id, capturedAt, committedAt } }`; emitted only after successful durable commit |
+| hub:checkpoint | `{ workspaceId, agentId, checkpoint: { id, assignmentEpoch, captureRevision, capturedAt, committedAt } }`; emitted only after a durable successful-pointer advance; ignore older epoch/revision pairs on reordered delivery |
 | hub:merged | `{ workspaceId, agentId, checkpointId, commitRange, canonicalHead }`; once per successful merge operation |
 | hub:discarded | `{ workspaceId, agentId }`; once on discard, not on no-op retry |
 
@@ -206,8 +211,12 @@ checkout when delegated, otherwise the workspace's canonical checkout (resolved
 by existing checkoutMode rules). Callers cannot substitute a target path/agent.
 That target may be on another node. Head authorizes and probes immutable hub refs;
 the target node locks/revalidates its actual HEAD/index/worktree before applying.
-Apply child committed delta from the recorded fork base, preserve commit authors,
-and never merge synthetic WIP commits. WIP remains recoverable until explicitly
+Apply child committed delta after its recorded inherited execution base (or fork
+base if no inheritance), preserve commit authors, and never merge synthetic WIP
+commits. The [inherited-baseline contract](../node-checkpoints.md#inherited-baseline-and-child-owned-changes)
+preserves dirty-parent initialization while excluding those inherited edits and
+synthetic submodule gitlink substitutions from the child's merge delta.
+WIP remains recoverable until explicitly
 discarded; uncommitted child changes block completion merge with
 `reason: "uncommitted-child-work"`. A conflict leaves target pristine and returns
 `conflictingPaths`; overlapping dirty target paths return `blocked` with
@@ -256,7 +265,7 @@ request ID and branch for reconciliation via `gh pr list`; it is not replayed.
 
 Besides membership errors above, `-32602` carries `data: { code, detail? }` for
 `placement-unavailable`, `node-in-use`, `version-mismatch`, `checkpoint-not-found`,
-`checkpoint-invalid`, `request-id-reused`, `unsupported-node-operation` and, after
+`checkpoint-invalid`, `inherited-baseline-required`, `request-id-reused`, `unsupported-node-operation` and, after
 retirement only, `isolation-removed`. `-32005` with `data.code: "conflict"` rejects
 a stale expected ref/head. `-32603` with `data.code` `node-offline`,
 `checkpoint-failed` or `rpc-outcome-unknown` reports runtime failure, with

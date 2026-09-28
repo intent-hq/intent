@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "status": "prepared-not-executed",
-  "description": "Independent seeded examples for future real-WSS component tests. IDs and endpoint are fixture substitutions, not live resources. Each case gets fresh state; resultSubset is recursive inclusion, resultKeys are required root keys, event names require exactly one committed event. Initial/final subsets describe asynchronous agent results. No runner is installed by this docs change.",
+  "description": "Independent seeded examples for future real-WSS component tests. IDs and endpoint are fixture substitutions, not live resources. Each case gets fresh state; resultSubset is recursive inclusion, resultKeys are required root keys, event names require exactly one committed event. Initial/final subsets describe asynchronous agent results. No runner is installed by this docs change. checkpointOrderingCases are ordered internal capture/upload scenarios; inheritedWipCases are local/remote hydration and merge/publication scenarios. Both are prepared assertions, not executed runtime tests.",
   "setup": {
     "owner": "host owner",
     "member": "active host member, ordinary workspace manager, not administrator",
@@ -368,6 +368,227 @@
       "expect": {
         "errorCode": -32601,
         "noSideEffects": true
+      }
+    }
+  ],
+  "checkpointOrderingCases": [
+    {
+      "id": "reverse-upload-newer-watermark",
+      "currentEpoch": "3",
+      "captures": [
+        {
+          "id": "older",
+          "assignmentEpoch": "3",
+          "captureRevision": "8",
+          "journalSeq": "40"
+        },
+        {
+          "id": "newer",
+          "assignmentEpoch": "3",
+          "captureRevision": "9",
+          "journalSeq": "50"
+        }
+      ],
+      "uploadOrder": [
+        "newer",
+        "older"
+      ],
+      "expect": {
+        "receipts": [
+          "advanced",
+          "historical"
+        ],
+        "currentCheckpointId": "newer",
+        "aliasCheckpointId": "newer",
+        "recoveryCheckpointId": "newer",
+        "checkpointEvents": [
+          "newer"
+        ]
+      }
+    },
+    {
+      "id": "reverse-upload-same-watermark",
+      "currentEpoch": "3",
+      "captures": [
+        {
+          "id": "older",
+          "assignmentEpoch": "3",
+          "captureRevision": "8",
+          "journalSeq": "50"
+        },
+        {
+          "id": "newer",
+          "assignmentEpoch": "3",
+          "captureRevision": "9",
+          "journalSeq": "50"
+        }
+      ],
+      "uploadOrder": [
+        "newer",
+        "older"
+      ],
+      "expect": {
+        "receipts": [
+          "advanced",
+          "historical"
+        ],
+        "currentCheckpointId": "newer",
+        "aliasCheckpointId": "newer",
+        "recoveryCheckpointId": "newer",
+        "checkpointEvents": [
+          "newer"
+        ]
+      }
+    },
+    {
+      "id": "stale-assignment-upload",
+      "currentEpoch": "4",
+      "captures": [
+        {
+          "id": "stale",
+          "assignmentEpoch": "3",
+          "captureRevision": "99",
+          "journalSeq": "60"
+        }
+      ],
+      "uploadOrder": [
+        "stale"
+      ],
+      "expect": {
+        "errorDataCode": "stale-checkpoint-owner",
+        "pointerUnchanged": true,
+        "aliasesUnchanged": true,
+        "checkpointEvents": []
+      }
+    },
+    {
+      "id": "duplicate-capture-revision",
+      "currentEpoch": "3",
+      "captures": [
+        {
+          "id": "first",
+          "assignmentEpoch": "3",
+          "captureRevision": "8",
+          "journalSeq": "50"
+        },
+        {
+          "id": "different",
+          "assignmentEpoch": "3",
+          "captureRevision": "8",
+          "journalSeq": "50"
+        }
+      ],
+      "uploadOrder": [
+        "first",
+        "different"
+      ],
+      "expect": {
+        "secondErrorDataCode": "checkpoint-invalid",
+        "currentCheckpointId": "first",
+        "aliasCheckpointId": "first",
+        "recoveryCheckpointId": "first",
+        "checkpointEvents": [
+          "first"
+        ]
+      }
+    },
+    {
+      "id": "retry-older-advanced-receipt",
+      "currentEpoch": "3",
+      "captures": [
+        {
+          "id": "older",
+          "assignmentEpoch": "3",
+          "captureRevision": "8",
+          "journalSeq": "40"
+        },
+        {
+          "id": "newer",
+          "assignmentEpoch": "3",
+          "captureRevision": "9",
+          "journalSeq": "50"
+        }
+      ],
+      "uploadOrder": [
+        "older",
+        "newer",
+        "older"
+      ],
+      "expect": {
+        "thirdReceiptEqualsFirst": true,
+        "currentCheckpointId": "newer",
+        "aliasCheckpointId": "newer",
+        "recoveryCheckpointId": "newer",
+        "checkpointEvents": [
+          "older",
+          "newer"
+        ]
+      }
+    }
+  ],
+  "inheritedWipCases": [
+    {
+      "id": "dirty-parent-local-and-remote",
+      "placements": [
+        "local",
+        "remote"
+      ],
+      "parentState": [
+        "staged edit",
+        "unstaged edit",
+        "untracked file",
+        "initialized dirty submodule",
+        "unpublished submodule commit"
+      ],
+      "expect": {
+        "childFileContentsEqualCapture": true,
+        "childStartsAtPrivateExecutionBase": true,
+        "parentHeadIndexWorktreeUnchanged": true,
+        "inheritedAttributionRemainsParent": true,
+        "parentIndexSplitRetainedInSourceCheckpoint": true
+      }
+    },
+    {
+      "id": "inherited-only-child-merge",
+      "childChanges": [],
+      "expect": {
+        "mergeDeltaEmpty": true,
+        "parentHeadIndexWorktreeUnchanged": true,
+        "inheritedCommitMerged": false
+      }
+    },
+    {
+      "id": "unrelated-child-edit",
+      "childChanges": [
+        "new child-owned path"
+      ],
+      "expect": {
+        "mergeIncludesOnlyChildDelta": true,
+        "unrelatedParentDirtyStateUnchanged": true,
+        "inheritedCommitMerged": false,
+        "syntheticGitlinksMerged": false
+      }
+    },
+    {
+      "id": "publish-independent-child-edit",
+      "childChanges": [
+        "new child-owned path"
+      ],
+      "expect": {
+        "publishedHistoryExcludesSyntheticBaselines": true,
+        "publishedHistoryExcludesInheritedDirtyFiles": true,
+        "childAuthorPreserved": true
+      }
+    },
+    {
+      "id": "publish-child-requires-parent-wip",
+      "childChanges": [
+        "modify path existing only in inherited untracked parent work"
+      ],
+      "expect": {
+        "errorDataCode": "inherited-baseline-required",
+        "forgePushes": 0,
+        "parentHeadIndexWorktreeUnchanged": true
       }
     }
   ]

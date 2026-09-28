@@ -182,6 +182,12 @@ dedup identity, transcript/events and contiguous ack watermark. Checkpoint succe
 is separate: immutable Git/blob anchors are durable before the SQLite checkpoint
 pointer advances. Reconnect fences old connections, replays records, applies stop
 tombstones and reconciles one resume attempt before delivering any new prompt.
+Checkpoint advancement also compares a durable assignment epoch/capture revision;
+late older uploads cannot replace newer recovery state, even at the same journal
+watermark. Isolated children hydrate the parent's captured dirty contents through
+an immutable inherited baseline without editing the parent. Merge/publication
+exclude that baseline from the child's attributable delta; private synthetic
+ancestry is normalized away before a forge push, or publication is blocked.
 Loss notices state the successful checkpoint's actual capture time; the periodic
 five-minute attempt is not a loss bound during an outage or failed capture.
 
