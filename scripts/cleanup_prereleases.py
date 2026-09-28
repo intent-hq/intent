@@ -37,6 +37,27 @@ VERSION = re.compile(r"v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.
 FEEDS = {"latest-mac.yml", "latest.yml", "latest-linux.yml", "latest-linux-arm64.yml"}
 PROTECTION_ASSETS = FEEDS | {"release-manifest.json", "alpha.json", "beta.json", "stable.json"}
 
+# Reviewed immutable source-build provenance, not a version cutoff. These exact
+# release trees precede pin introduction (1924de38e1ae17517a67158b83a7b4b45d97d5cf)
+# and the release-beta fetch-sidecar migration (c8796018eca2d526161007805e4754097d93405f).
+# Their workflow checks out intentd source, compiles it, and packages INTENTD_BIN;
+# no versioned daemon-release asset is consumed. Values: release commit,
+# release-beta workflow blob, and (where a SHA manifest exists) captured build
+# commit. The latter predates the version-bump tag and need not equal its commit.
+SOURCE_BUILT_FRONTEND = {
+    "v2.0.0": ("05d52553e4b7a0b88c988b34bfe47f155a7ade56", "28844ebdac4d8ea6302f4af9c422777b99557a1c", None),
+    "v2.0.1": ("d28cfc967c7db589dd09cdce1f2b7623081bfff6", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.2": ("71e5fbd7b373ae4b485c8209f67965a0ac6a8059", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.3": ("1421c3a5e6041e9183bab949df8af00c09cfd47c", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.4": ("eaed2e0efe1e34b51abf8d6ffd8f9bb69bef112d", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.5": ("ab35cda4548b0ab7913d23551124ac932dc2cb42", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.6": ("007406e2ab406b40f6006b75b7cbace934be017b", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.7": ("5a9d5643693bf94a8b71b6ede38f25d7692d3d33", "9b7202d809995e8da97fcbb7614c0df8b81a9a9a", None),
+    "v2.0.8": ("06fa9109bee33fa49cef5b7555948dce3567c68b", "f6333f811ba11c70edd90732a9467b7b856f0184", "20d962f3cda2fc2180dedb0c577f95754756a0b2"),
+    "v2.0.9": ("73808bc12d413852c2181b9fa0cf046b82c845fc", "f6333f811ba11c70edd90732a9467b7b856f0184", "87382e8eaf01c16d148abd6a0032a6a8f34b35c5"),
+    "v2.0.10": ("af3f5eb1a4066f4ba4b9c542f94e91c673f99b0c", "f6333f811ba11c70edd90732a9467b7b856f0184", "9ede6fe553dfff1633cf734d0b95df1f9bb19c73"),
+}
+
 
 class CleanupError(Exception):
     """A read/deletion failed; no further mutations are safe."""
@@ -111,6 +132,8 @@ class GitHub:
     def __init__(self):
         self._asset_cache = {}
         self._pin_cache = {}
+        self._source_workflows = set()
+        self._source_commits = set()
 
     def request(self, endpoint, *, method="GET", raw=False, missing_ok=False):
         args = ["gh", "api", "--hostname", "github.com", endpoint, "--method", method,
@@ -164,8 +187,20 @@ class GitHub:
     def releases(self, repo):
         return self.pages(f"repos/{repo}/releases")
 
+    def confirm_absent(self, repo, ident):
+        # A private-resource 404 can mean lost authorization. Only a successful
+        # complete inventory that lacks this ID establishes idempotent absence.
+        rows = self.releases(repo)
+        for row in rows:
+            validate_release(row)
+            if row["id"] == ident:
+                raise CleanupError(f"{repo} release {ident}: ambiguous 404; ID remains in inventory")
+
     def release(self, repo, ident):
-        return self.request(f"repos/{repo}/releases/{ident}", missing_ok=True)
+        value = self.request(f"repos/{repo}/releases/{ident}", missing_ok=True)
+        if value is None:
+            self.confirm_absent(repo, ident)
+        return value
 
     def asset_texts(self, repo, item):
         # Cache only version records with inventory asset metadata. Channel feeds
@@ -191,26 +226,64 @@ class GitHub:
             self._asset_cache[key] = dict(found)
         return found
 
+    def resolve_tag(self, ref):
+        data = self.request(f"repos/{FE}/git/ref/tags/{quote(ref, safe='')}")
+        for _ in range(10):
+            obj = data.get("object") if isinstance(data, dict) else None
+            if not isinstance(obj, dict) or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha", ""))):
+                raise CleanupError(f"{ref}: invalid tag target")
+            target = obj["sha"]
+            if obj.get("type") == "commit":
+                return target
+            if obj.get("type") != "tag":
+                raise CleanupError(f"{ref}: tag does not resolve to a commit")
+            data = self.request(f"repos/{FE}/git/tags/{target}")
+        raise CleanupError(f"{ref}: annotated tag chain exceeds safety limit")
+
+    def source_workflow(self, commit, blob):
+        if (commit, blob) not in self._source_workflows:
+            path = ".github/workflows/release-beta.yml"
+            data = self.request(f"repos/{FE}/contents/{path}?ref={commit}")
+            if not isinstance(data, dict) or (data.get("type"), data.get("path"), data.get("sha")) != ("file", path, blob):
+                raise CleanupError(f"{commit}: source-build workflow identity is unverified")
+            self._source_workflows.add((commit, blob))
+
+    def source_built(self, ref, manifest=None, *, target=None):
+        expected = SOURCE_BUILT_FRONTEND.get(ref)
+        if expected is None:
+            raise CleanupError(f"{ref}: no reviewed source-build provenance")
+        release_commit, workflow_blob, build_commit = expected
+        target = target or self.resolve_tag(ref)
+        if target != release_commit:
+            raise CleanupError(f"{ref}: release commit differs from reviewed source-build provenance")
+        # An authenticated read of the exact immutable workflow blob establishes
+        # provenance; an unknown or missing pin/manifest alone never does.
+        self.source_workflow(target, workflow_blob)
+        if manifest is not None:
+            if (set(manifest) != {"version", "feTag", "feSha", "intentdSha", "generatedAt"}
+                    or version(manifest.get("version")) != version(ref)
+                    or build_commit is None
+                    or manifest.get("feSha") != build_commit or manifest.get("feTag") != build_commit
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(manifest.get("intentdSha", "")))):
+                raise CleanupError(f"{ref}: invalid source-build manifest identity/schema")
+            timestamp(manifest.get("generatedAt"))
+            self.source_workflow(build_commit, workflow_blob)
+            daemon_commit = manifest["intentdSha"]
+            if daemon_commit not in self._source_commits:
+                data = self.request(f"repos/{DAEMON}/git/commits/{daemon_commit}")
+                if not isinstance(data, dict) or data.get("sha") != daemon_commit:
+                    raise CleanupError(f"{ref}: source-built daemon commit is unverified")
+                self._source_commits.add(daemon_commit)
+        return True
+
     def pin(self, ref):
-        # Anchor cached contents to a resolved commit, never a mutable tag name.
-        # Re-resolve on each graph rebuild, peeling annotated tags as necessary.
-        target = ref
-        if ref != "main":
-            data = self.request(f"repos/{FE}/git/ref/tags/{quote(ref, safe='')}")
-            for _ in range(10):
-                obj = data.get("object") if isinstance(data, dict) else None
-                if not isinstance(obj, dict) or not re.fullmatch(r"[0-9a-f]{40}", str(obj.get("sha", ""))):
-                    raise CleanupError(f"{ref}: invalid tag target")
-                target = obj["sha"]
-                if obj.get("type") == "commit":
-                    break
-                if obj.get("type") != "tag":
-                    raise CleanupError(f"{ref}: tag does not resolve to a commit")
-                data = self.request(f"repos/{FE}/git/tags/{target}")
-            else:
-                raise CleanupError(f"{ref}: annotated tag chain exceeds safety limit")
-            if target in self._pin_cache:
-                return self._pin_cache[target]
+        # Cached contents are anchored to an immutable commit, never a tag name.
+        target = ref if ref == "main" else self.resolve_tag(ref)
+        if ref in SOURCE_BUILT_FRONTEND:
+            self.source_built(ref, target=target)
+            return None
+        if ref != "main" and target in self._pin_cache:
+            return self._pin_cache[target]
         endpoint = f"repos/{FE}/contents/intentd.version?ref={quote(target, safe='')}"
         data = self.request(endpoint)
         if not isinstance(data, dict) or data.get("encoding") != "base64" or not isinstance(data.get("content"), str):
@@ -230,7 +303,10 @@ class GitHub:
     def delete_release(self, repo, ident):
         if repo not in REPOSITORIES or type(ident) is not int or ident <= 0:
             raise CleanupError("refusing an invalid deletion target")
-        return self.request(f"repos/{repo}/releases/{ident}", method="DELETE", missing_ok=True) is not None
+        deleted = self.request(f"repos/{repo}/releases/{ident}", method="DELETE", missing_ok=True) is not None
+        if not deleted:
+            self.confirm_absent(repo, ident)
+        return deleted
 
 
 def json_object(text, label):
@@ -320,6 +396,7 @@ def build_plan(gh, now):
     # promotion of one must not expose a daemon candidate. Removed Git tags are
     # deliberately NOT enumerated. A later run can reclaim newly orphaned pins.
     frontend_tags = {}
+    source_built = set()
     for repo in PAIRS["cloudlands-fe"]:
         for item in inventory[repo]:
             if item["tag_name"] not in CHANNELS:
@@ -333,10 +410,18 @@ def build_plan(gh, now):
             assets = gh.asset_texts(repo, item)
             if "release-manifest.json" in assets:
                 data = json_object(assets["release-manifest.json"], f"{repo}/{tag}/release-manifest.json")
-                protect(PAIRS["intentd"], data.get("intentdVersion"), "frontend-release-pin")
+                if "intentdVersion" in data:
+                    protect(PAIRS["intentd"], data["intentdVersion"], "frontend-release-pin")
+                else:
+                    gh.source_built(tag, data)
+                    source_built.add(tag)
                 manifests += 1
         if not manifests:
-            protect(PAIRS["intentd"], gh.pin(tag), "frontend-tag-pin")
+            pin = gh.pin(tag)
+            if pin is None:
+                source_built.add(tag)
+            else:
+                protect(PAIRS["intentd"], pin, "frontend-tag-pin")
 
     rows = []
     for repo in REPOSITORIES:
@@ -354,7 +439,7 @@ def build_plan(gh, now):
     if frontend_fingerprint({repo: gh.releases(repo) for repo in PAIRS["cloudlands-fe"]}) != fingerprint:
         raise CleanupError("frontend inventory changed during protection discovery; rerun")
     return {"generated_at": now.isoformat(), "policy": {"days": 30, "newest": 20},
-            "frontend_fingerprint": fingerprint, "releases": rows}
+            "frontend_fingerprint": fingerprint, "source_built_frontend": sorted(source_built), "releases": rows}
 
 
 def asset_signature(assets):

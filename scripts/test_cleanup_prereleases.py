@@ -46,10 +46,17 @@ class FakeGitHub:
         return dict(self.assets.get((repo, item["tag_name"]), {}))
 
     def pin(self, ref):
+        if ref not in self.pins and ref in HISTORICAL_COMMITS:
+            with patch.object(cleanup.GitHub, "request", side_effect=historical_request):
+                return cleanup.GitHub().pin(ref)
         value = self.pins[ref]
         if isinstance(value, Exception):
             raise value
         return value
+
+    def source_built(self, tag, manifest=None):
+        with patch.object(cleanup.GitHub, "request", side_effect=historical_request):
+            return cleanup.GitHub().source_built(tag, manifest)
 
     def release(self, repo, ident):
         return next((copy.deepcopy(r) for r in self.inventory[repo] if r["id"] == ident), None)
@@ -275,9 +282,9 @@ class ProtectionValidationTests(unittest.TestCase):
                      {"object": {"sha": second, "type": "commit"}}, contents("1.2.4")]
         with patch.object(cleanup.GitHub, "request", side_effect=responses) as request:
             gh = cleanup.GitHub()
-            self.assertEqual(gh.pin("v2.0.0"), "1.2.3")
-            self.assertEqual(gh.pin("v2.0.0"), "1.2.3")
-            self.assertEqual(gh.pin("v2.0.0"), "1.2.4")
+            self.assertEqual(gh.pin("v3.0.0"), "1.2.3")
+            self.assertEqual(gh.pin("v3.0.0"), "1.2.3")
+            self.assertEqual(gh.pin("v3.0.0"), "1.2.4")
             self.assertEqual(request.call_count, 5)
             self.assertTrue(request.call_args_list[1].args[0].endswith("ref=" + first))
             self.assertTrue(request.call_args_list[4].args[0].endswith("ref=" + second))
@@ -287,7 +294,7 @@ class ProtectionValidationTests(unittest.TestCase):
         responses = [{"object": {"sha": tag, "type": "tag"}}, {"object": {"sha": commit, "type": "commit"}},
                      {"encoding": "base64", "content": base64.b64encode(b"1.2.3").decode()}]
         with patch.object(cleanup.GitHub, "request", side_effect=responses) as request:
-            self.assertEqual(cleanup.GitHub().pin("v2.0.0"), "1.2.3")
+            self.assertEqual(cleanup.GitHub().pin("v3.0.0"), "1.2.3")
             self.assertIn("/git/tags/" + tag, request.call_args_list[1].args[0])
 
     def test_apply_library_refuses_all_components(self):
@@ -514,6 +521,162 @@ class RaceTests(unittest.TestCase):
         self.gh.assets[FE_MIRROR, "alpha"] = {"latest-mac.yml": "version: 2.0.1\n"}
         self.gh.pins["v2.0.1"] = "1.0.24"
         self.assertFalse(any(r["tag"] == "v1.0.24" and r["action"] == "delete" for r in self.plan()["releases"]))
+
+
+HISTORICAL_COMMITS = {
+    "v2.0.0": "05d52553e4b7a0b88c988b34bfe47f155a7ade56",
+    "v2.0.8": "06fa9109bee33fa49cef5b7555948dce3567c68b",
+}
+LEGACY_MANIFEST = {
+    "version": "2.0.8", "feTag": "20d962f3cda2fc2180dedb0c577f95754756a0b2",
+    "feSha": "20d962f3cda2fc2180dedb0c577f95754756a0b2",
+    "intentdSha": "beab5e01f79d54b6a2ecb40fea4852b51dd4dabb",
+    "generatedAt": "2026-07-20T15:03:02.938Z",
+}
+
+
+def historical_request(endpoint, **kwargs):
+    if "/git/ref/tags/" in endpoint:
+        tag = endpoint.rsplit("/", 1)[-1]
+        return {"object": {"sha": HISTORICAL_COMMITS[tag], "type": "commit"}}
+    if "/contents/.github/workflows/release-beta.yml?ref=" in endpoint:
+        commit = endpoint.split("ref=")[1]
+        blob = {HISTORICAL_COMMITS["v2.0.0"]: "28844ebdac4d8ea6302f4af9c422777b99557a1c",
+                HISTORICAL_COMMITS["v2.0.8"]: "f6333f811ba11c70edd90732a9467b7b856f0184",
+                LEGACY_MANIFEST["feSha"]: "f6333f811ba11c70edd90732a9467b7b856f0184"}[commit]
+        return {"type": "file", "path": ".github/workflows/release-beta.yml", "sha": blob}
+    if endpoint == f"repos/{DAEMON}/git/commits/{LEGACY_MANIFEST['intentdSha']}":
+        return {"sha": LEGACY_MANIFEST["intentdSha"]}
+    raise cleanup.CleanupError("HTTP 404: fixture file is absent")
+
+
+class HistoricalRegressionTests(unittest.TestCase):
+    def test_exact_source_built_no_manifest_no_pin_can_be_planned(self):
+        gh = FakeGitHub()
+        gh.inventory[FE_MIRROR] = [release(1, tag_name="v2.0.0")]
+        plan = cleanup.build_plan(gh, NOW)
+        self.assertIn("v2.0.0", plan["source_built_frontend"])
+
+    def test_validated_sha_only_manifest_has_no_versioned_release_dependency(self):
+        gh = FakeGitHub()
+        gh.inventory[FE_MIRROR] = [release(1, tag_name="v2.0.8")]
+        gh.assets[FE_MIRROR, "v2.0.8"] = {"release-manifest.json": json.dumps(LEGACY_MANIFEST)}
+        plan = cleanup.build_plan(gh, NOW)
+        self.assertIn("v2.0.8", plan["source_built_frontend"])
+
+    def test_unknown_missing_pin_still_fails_closed(self):
+        with patch.object(cleanup.GitHub, "request", side_effect=[{"object": {"sha": "a" * 40, "type": "commit"}}, cleanup.CleanupError("HTTP 404")]):
+            with self.assertRaises(cleanup.CleanupError):
+                cleanup.GitHub().pin("v1.99.0")
+
+    def test_known_tag_must_still_match_reviewed_commit(self):
+        def moved(endpoint, **kwargs):
+            if "/git/ref/tags/" in endpoint:
+                return {"object": {"sha": "a" * 40, "type": "commit"}}
+            return historical_request(endpoint, **kwargs)
+        with patch.object(cleanup.GitHub, "request", side_effect=moved):
+            with self.assertRaises(cleanup.CleanupError):
+                cleanup.GitHub().pin("v2.0.0")
+
+    def test_source_build_requires_successful_matching_workflow_metadata(self):
+        for failure in [cleanup.CleanupError("HTTP 403"), cleanup.CleanupError("HTTP 404"),
+                        {"type": "file", "path": ".github/workflows/release-beta.yml", "sha": "a" * 40}]:
+            def denied(endpoint, **kwargs):
+                if "/contents/.github/" in endpoint:
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                return historical_request(endpoint, **kwargs)
+            with self.subTest(failure=failure), patch.object(cleanup.GitHub, "request", side_effect=denied):
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.GitHub().pin("v2.0.0")
+
+    def test_legacy_requires_authenticated_matching_daemon_commit(self):
+        for failure in [cleanup.CleanupError("HTTP 403"), cleanup.CleanupError("HTTP 404"), {"sha": "a" * 40}]:
+            def invalid(endpoint, **kwargs):
+                if endpoint.startswith(f"repos/{DAEMON}/git/commits/"):
+                    if isinstance(failure, Exception):
+                        raise failure
+                    return failure
+                return historical_request(endpoint, **kwargs)
+            with self.subTest(failure=failure), patch.object(cleanup.GitHub, "request", side_effect=invalid):
+                with self.assertRaises(cleanup.CleanupError):
+                    cleanup.GitHub().source_built("v2.0.8", LEGACY_MANIFEST)
+
+    def test_unknown_release_cannot_claim_legacy_schema(self):
+        gh = FakeGitHub()
+        gh.inventory[FE_MIRROR] = [release(1, tag_name="v3.0.8")]
+        gh.assets[FE_MIRROR, "v3.0.8"] = {"release-manifest.json": json.dumps({**LEGACY_MANIFEST, "version": "3.0.8"})}
+        with self.assertRaisesRegex(cleanup.CleanupError, "no reviewed source-build provenance"):
+            cleanup.build_plan(gh, NOW)
+
+    def test_malformed_or_mismatched_legacy_manifest_never_weakens_protection(self):
+        for key, value in [("version", "2.0.7"), ("feSha", "a" * 40), ("feTag", "v2.0.8"),
+                           ("intentdSha", "garbage"), ("generatedAt", "missing"),
+                           ("intentdVersion", None), ("extra", True)]:
+            data = {**LEGACY_MANIFEST, key: value}
+            gh = FakeGitHub()
+            gh.inventory[FE_MIRROR] = [release(1, tag_name="v2.0.8")]
+            gh.assets[FE_MIRROR, "v2.0.8"] = {"release-manifest.json": json.dumps(data)}
+            with self.subTest(key=key), self.assertRaises(cleanup.CleanupError):
+                cleanup.build_plan(gh, NOW)
+
+
+class Ambiguous404RegressionTests(unittest.TestCase):
+    run_cli = FunctionalTests.run_cli
+    def ambiguous(self, mode, confirmation="present", after_success=False):
+        transport = MockTransport()
+        missed = False
+        def request(args, **kwargs):
+            nonlocal missed
+            method = args[args.index("--method") + 1]
+            endpoint = args[4]
+            should_miss = method == mode and endpoint.startswith(f"repos/{DAEMON}/releases/") and endpoint.rsplit("/", 1)[-1].isdigit()
+            if after_success and not transport.deleted:
+                should_miss = False
+            if should_miss:
+                missed = True
+                transport.calls.append(args)
+                if confirmation == "absent":
+                    ident = int(endpoint.rsplit("/", 1)[-1])
+                    transport.inventory[DAEMON] = [r for r in transport.inventory[DAEMON] if r["id"] != ident]
+                return subprocess.CompletedProcess(args, 1, 'HTTP/2.0 404 Not Found\n\n{}', '')
+            if missed and confirmation in ("403", "404", "429") and f"repos/{DAEMON}/releases?" in endpoint:
+                transport.calls.append(args)
+                return subprocess.CompletedProcess(args, 1, f'HTTP/2.0 {confirmation} Error\n\n{{}}', '')
+            return transport(args, **kwargs)
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": DAEMON}):
+            code, report = self.run_cli(request, ["--component", "intentd", "--apply"])
+        return code, report, transport
+
+    def test_get_and_delete_404_with_extant_candidate_fail_and_stop(self):
+        for method in ("GET", "DELETE"):
+            with self.subTest(method=method):
+                code, report, transport = self.ambiguous(method)
+                self.assertEqual(code, 1)
+                self.assertFalse(report["ok"])
+                self.assertEqual([r["outcome"] for r in report["outcomes"]], ["failed"])
+                self.assertEqual(transport.deleted, [])
+                self.assertLessEqual(sum(args[args.index("--method") + 1] == "DELETE" for args in transport.calls), 1)
+
+    def test_genuine_confirmed_absence_is_idempotent(self):
+        for method in ("GET", "DELETE"):
+            code, report, _ = self.ambiguous(method, "absent")
+            self.assertEqual(code, 0)
+            self.assertTrue(report["ok"])
+            self.assertIn("already-removed", [r["outcome"] for r in report["outcomes"]])
+
+    def test_denied_or_failed_inventory_confirmation_is_failure(self):
+        for status in ("403", "404", "429"):
+            code, report, _ = self.ambiguous("DELETE", status)
+            self.assertEqual(code, 1)
+            self.assertEqual(report["outcomes"][-1]["outcome"], "failed")
+
+    def test_prior_success_survives_ambiguous_404_failure(self):
+        code, report, transport = self.ambiguous("DELETE", after_success=True)
+        self.assertEqual(code, 1)
+        self.assertEqual([r["outcome"] for r in report["outcomes"]], ["deleted", "failed"])
+        self.assertEqual(len(transport.deleted), 1)
 
 
 if __name__ == "__main__":
