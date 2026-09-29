@@ -212,6 +212,8 @@ agent's lifecycle status or emit `agent:failed` (which would trigger completion
 watches). Successful automatic recovery stays hidden from manual recovery UI;
 failed candidates are queryable and retryable unless already resolved.
 
+#### Workspace token-usage replacement payload
+
 `workspace:tokenUsage-changed` carries the complete replacement snapshot. This example is a
 message-only `"unknown"` cell: zero token counters remain explicit in `TokenUsageTotals`, while
 the exact message counts make the sparse cell non-empty.

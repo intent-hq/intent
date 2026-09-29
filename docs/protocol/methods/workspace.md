@@ -2320,10 +2320,15 @@ the read path. The next end-of-turn usage accounting update that commits a chang
 the next reconciliation pass that commits one, materializes the field. A transcript write alone
 does not materialize the field or publish `workspace:tokenUsage-changed`.
 
-**Safe rollout order.** [intent-hq/intentd#1719](https://github.com/intent-hq/intentd/pull/1719)
-must land first. The repository-owned `auto-bump-submodules` workflow then advances the
-`packages/intentd` gitlink. That pin advance must be present before, or in the same repository
-state as, canonical availability of this additive contract. Do not advance the gitlink manually.
+**Safe rollout order.** Land this additive canonical contract first in
+[intent-hq/intent#4376](https://github.com/intent-hq/intent/pull/4376), then the daemon
+implementation in [intent-hq/intentd#1719](https://github.com/intent-hq/intentd/pull/1719), then
+the frontend consumer in [intent-hq/cloudlands-fe#2154](https://github.com/intent-hq/cloudlands-fe/pull/2154).
+Publishing the contract does not make the projection available at runtime: clients must still
+presence-detect `byAgentModel` and preserve the absent-versus-empty behavior above. Canonical
+docs may lead the pinned implementation; repository-owned `auto-bump-submodules` automation
+advances the gitlinks after the component merges. Do not advance the gitlinks manually or gate
+this additive documentation on a pin advance.
 
 **Projection invariants and scopes.** The existing `totals`, `byAgentId`, and `byModel` fields
 stay required and unchanged. For a snapshot that has `byAgentModel`, the daemon derives all four
