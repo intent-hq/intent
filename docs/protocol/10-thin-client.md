@@ -46,8 +46,12 @@ For mutations, optimistically apply locally, send the request, and reconcile whe
 [§5.49](./methods/shared-host-membership.md) is the authoritative contract for
 connected-host roles, safe execution reads, invited-session storage and personal
 pairing. Hydrate hello capabilities and `principal.me` from the selected host on
-every connection before enabling management; workspace controls use `canManage`,
-never fake ownership or a cached connection category. Host provider/model/repository
+every connection before enabling management; workspace controls use `canManage`
+together with the operation's host-role and transport limits, never fake ownership
+or a cached connection category. Honor an explicit false even when `myRole` is
+owner. A retained guest workspace owner gains no host creation/administration,
+guest-denied script RPCs, or permission-event access from a true value (§8).
+Host provider/model/repository
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.
 

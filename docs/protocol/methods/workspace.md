@@ -6,12 +6,17 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 
 **Shared-host extension (10.9).** [§5.49](./shared-host-membership.md#effective-workspace-membership)
 adds `canManage: boolean` to every caller-relative Workspace projection, including
-mutation results and subscription snapshots/deltas. Owner and active host members
-manage ordinary workspaces; workspace guests retain the restricted baseline below.
+mutation results and subscription snapshots/deltas. The primary and active host
+members manage ordinary workspaces; a retained explicit workspace owner also has
+scoped management, subject to each method's transport and service checks. Ordinary
+workspace collaborators retain the restricted baseline below. `canManage` grants
+neither host creation/administration nor access to guest-denied methods or events.
 Members see all current/future ordinary workspaces and can create even on an empty
-host; the primary still owns every new workspace. A member's truthful `myRole` is
-`collaborator`, never `owner`. Effective roster/count fields deduplicate inherited
-and direct membership and exclude host members from guest-seat usage. Archive
+host; creation/import still assigns ownership to the primary. `myRole` preserves
+the direct role when present, with `collaborator` supplied by inherited membership
+otherwise; `ownerPrincipalId` names the real owner. Roster `Member.role` separately
+remains primary-only `owner`, as specified in §5.49. Effective roster/count fields
+deduplicate inherited and direct membership and exclude host members from guest-seat usage. Archive
 removes workspace guests but preserves inherited host membership. The incremental
 delete response, partial-progress/retry behavior and terminal events below remain
 unchanged. Host-administration virtual workspaces retain their existing boundary.
