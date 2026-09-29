@@ -21,17 +21,20 @@ The note-presence channel pair is a §6.9 subscription channel (intercepted on t
 #### Shapes
 
 ```jsonc
-// PresenceMember — one online member of the workspace (presence:changed / presence.snapshot)
+// PresenceMember — one online member (presence:changed / presence.snapshot); optional identity since 10.9
 { "principalId": "p-…", "login": "octocat", "displayName": "Octo Cat", "avatarUrl": "https://…",
+  "identity": { "provider": "github", "host": "github.com", "externalUserId": "583231" },
   "focus":  [ { "workspaceId": "ws-1", "agentId": "agent-…" }, { "workspaceId": "ws-1", "noteId": "spec" } ],
   "typing": [ { "source": "ts-…", "agentId": "agent-…", "since": "2026-09-14T12:00:00Z", "pulse": 7 } ] }
 
-// NoteViewer — one viewer of a note (note.presence.subscribe snapshot rows and delta `viewer`)
+// NoteViewer — one viewer (note.presence.subscribe snapshot rows and delta `viewer`); optional identity since 10.9
 { "principalId": "p-…", "login": "octocat", "displayName": "Octo Cat", "avatarUrl": "https://…",
+  "identity": { "provider": "github", "host": "github.com", "externalUserId": "583231" },
   "cursor": { "rev": 12, "anchor": 40, "head": 52 } }
 ```
 
 - `principalId` is stamped by the daemon from the connection's bound principal — never a wire parameter. `login` / `displayName` / `avatarUrl` are the principal's stored profile fields; each key is **always present** and `null` when the profile has no value. The profile is read from the store once per principal and cached while the principal is present.
+- **Qualified identity (10.9, additive; docs lead implementation).** Both `PresenceMember` and `NoteViewer` also carry optional `identity: Identity`, the safe `{ provider, host, externalUserId }` triple defined in [§5.48](./multiplayer.md#identity-model), from that same principal's trusted profile. It is omitted, never `null`, while unlinked or unresolved. Apply the same shape to `presence.snapshot`, `presence:changed`, and `note.presence.subscribe` snapshot/delta viewers. Client-supplied profile/identity fields cannot choose a person. Use the existing profile cache and profile-change invalidation/reprojection; this is current ephemeral presence, not a persisted author snapshot. Equal handles across providers/instances remain distinct by qualified identity and host-scoped principal ID. Missing identity does not imply owner status; the metadata grants no authority and exposes no credentials.
 - `focus` is the member's focus items **in this workspace only**, deduplicated across all of the principal's connections; `agentId` / `noteId` are present only when the client set them (never `null`).
 - `typing` holds **one entry per typing connection** — two clients of one person stay two entries, keyed by `source` (that connection's `typingSource`); entries are sorted by `source`. `since` is the episode start (RFC-3339), kept while the same connection keeps naming the same agent; `pulse` is a per-connection counter that advances on **every** `presence.update` naming a typing agent. Freshness is `(source, pulse)`: a receiver restarts its expiry timer when it sees a pair it has not seen before, and never compares wall clocks — a roster re-emitted for an unrelated reason (a hello, another connection's focus change) re-projects the entry unchanged, pulse included.
 - `cursor` is **always present** on a viewer row: `null` until the principal's first `note.presence.update` on the note, then `{ rev, anchor, head }` (the note `rev` the offsets are relative to, §4; `anchor` / `head` are the selection ends). The `left` delta carries `cursor: null`.

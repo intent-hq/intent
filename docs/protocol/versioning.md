@@ -38,6 +38,49 @@ against current main when implementing; a numeric version alone is never proof o
 - `principal.me` adds `hostRole` and `hostMembershipRevision`; caller-relative Workspace
   projections add `canManage`. `myRole`, ownership and `isAdministrator` remain truthful.
   Rosters/presence add effective `hostRole` without duplicating people or guest seats.
+- [Qualified human attribution (§5.3)](./methods/notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation)
+  adds optional output `authorPrincipalId` / `authorIdentity` to existing comments
+  and `latestCommentAuthorPrincipalId` / `latestCommentAuthorIdentity` to summaries.
+  Creation stamps/safe identity snapshots are durable; author labels/types and
+  unlinked-primary compatibility stay intact. Unstamped comment history remains unknown.
+  Existing transcript authors and presence people explicitly project optional
+  `identity` from their resolved principal, retaining batched transcript lookup and
+  legacy fallback, plus ephemeral presence caching/invalidation. Full comment
+  results/subscriptions agree; ID-only raw events remain unchanged. Old clients
+  ignore unknown fields; new clients tolerate absent metadata without inferring
+  ownership. These fields are presence-detected attribution, with no new RPC,
+  capability, authority, execution credential or additional version bump.
+- [Historical human authorship in workspace transfers (§5.1)](./methods/workspace.md#human-authorship-in-workspace-transfers)
+  uses **transfer formatVersion 2** and reserved `humanAuthor` message metadata
+  to preserve recorded authors through import/restart/re-export. Tag untagged
+  human history from trustworthy source provenance before export; the exporting
+  member and receiving owner do not replace prior contributors. Version-1 readers
+  reject v2 even at the same daemon package version. New readers can accept v1
+  subject to the unchanged exact daemon-version gate, but irrecoverable authors
+  stay explicitly unknown and future reserved keys in v1 are not trusted.
+  Imported `MessageAuthor` has `principalId: null` plus the safe snapshot profile
+  and optional identity; current-local authors keep a string principal ID.
+  Clients must support historical rendering without roster/own-user lookup;
+  ignoring an unknown metadata key alone is insufficient. Source IDs are inert
+  provenance, and imported comments omit foreign `authorPrincipalId` while
+  preserving labels and safe identity. This transfer-scoped rule leaves unknown
+  legacy comments protected and local transcript resolution batched. Authorship
+  carries no membership, credential or authority; no new RPC, capability or
+  separate JSON-RPC protocol version is introduced.
+  A data-only migration clears the previously unreserved `humanAuthor` key from
+  message/queue metadata; the existing newer-ledger rejection prevents downgrade
+  to a writer that would accept planted keys. Live/history/queue/v1 ingress
+  sanitizes the reserved metadata. Imported unbound human queues stay durable
+  and not auto-ready under UnknownHuman privacy; only an explicit send by the
+  current host owner, authorized inside the atomic pop, can deliver unchanged content.
+  Normal local/nonhuman queues and failed-send restoration keep their behavior.
+  Supported legacy human non-object metadata normalizes to an object containing
+  root `humanAuthor` and inert `humanAuthorOriginalMetadata` with the original
+  JSON value, including JSON null. SQL NULL/absence needs no preservation member.
+  Original object keys, including a same-named inert member, remain unchanged
+  apart from existing reserved-key sanitation; never unwrap or trust nested keys.
+  Re-export does not wrap again. The root type change is explicit, preserves the
+  original value and adds no migration, SQL field/table, RPC or authority.
 - Eleven new router methods: `host.members.list`, `host.members.remove`, `host.invite.list`,
   `host.invite.revoke`, `host.executionContext`, and `identity.authStatus`, `identity.connect`,
   `identity.cancelAuth`, `identity.revoke`, `identity.getUser`, `identity.select`.

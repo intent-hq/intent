@@ -41,7 +41,7 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.setBrowserClient *(v9.9)* | workspaceId (req), clientId (req): string \| null | same `{ browserClient }` shape as `workspace.getBrowserClient`, built from the committed state — pins agent `browser.exec` for this workspace to the logical `clientId` (§5.17), or **clears** the pin when `clientId` is JSON `null` (the field is required: omitted → -32602 `Missing required parameter: clientId (string \| null)`; a non-string non-null or an empty/whitespace string → -32602 `Invalid parameter: clientId must be a non-empty string or null`). Persists across daemon restarts, emits `workspace:updated` with `changes: { browserClientId: string \| null }` (§6.5; `null` spells the clear) and, when setting, re-homes every **claimed** tab of the workspace to the new pin (§5.45 driving-client switch — one `browser:tab-updated { changes: { hostClientId } }` per moved tab; clearing moves nothing). -32602 on a missing workspace, the virtual Chief workspace, or a `clientId` the daemon has never seen complete `client.hello` (a client row minted only by anonymous `drafts.*` traffic is not pinnable); an **offline but known** client is accepted. |
 | workspace.diskUsage *(v4.2)* | workspaceId (req) | { diskUsage?: { bytes, fileCount, computedAt, breakdown }, refreshing: boolean } — on-demand poll of the workspace's cached whole-directory disk footprint (see the workspace-disk-usage block below for the payload shape and cache semantics). `diskUsage` is **omitted** (absent, never `null`) until the first walk completes and for non-qualifying rows; `refreshing: true` means a background walk is in flight (stale or first-ever poll — poll again shortly). Non-qualifying workspaces — remote, skip-isolation, the virtual Chief workspace, or a never-provisioned directory — answer `{ refreshing: false }` with the field omitted, without arming a walk. -32602 if the workspace is absent. |
 | workspace.localChanges *(v9.7)* | workspaceId (req) | { roots: LocalChangesRoot[], hasUnpushedCommits: boolean, hasUncommittedChanges: boolean } — the local git work that archiving or deleting the workspace would lose or orphan, aggregated over the primary worktree and every registered secondary git root in one round-trip (see the workspace-local-changes block below for the row shape and evaluation rules). Each `roots[]` row is `{ kind: "primary" \| "secondary", gitRootId?, path, branch?, hasRemoteRefs, unpushedCount, uncommittedCount, error? }`; the two booleans are ORs over the rows' counts. `unpushedCount` is **remote-ref-relative** — commits reachable from `HEAD` but from no `refs/remotes/*` ref, saturating at 1000 (exact for never-pushed branches; commits behind a pruned squash-merged branch still count; a repo with no remote refs reports its whole history with `hasRemoteRefs: false`). Root 0 is the primary worktree when evaluated (skipped when there is no daemon-owned checkout — `isRemote` or `skipWorktree` — or the worktree is not a git repository), followed by every `gitRoot.list` root in list order — secondary roots are **always** evaluated. Per-root failures are fail-soft (`error` on that row, counts `0`; a primary whose `.git` exists but cannot be read is an `error` row, not skipped); a workspace with nothing evaluable answers `{ roots: [], hasUnpushedCommits: false, hasUncommittedChanges: false }`. -32602 if the workspace is absent. |
-| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (currently 1; the import side refuses archives whose format version it does not understand), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
+| workspace.transfer.plan *(v6.6)* | workspaceId (req) | { plan: TransferPlan } — read-only transfer preview for the Transfer/Download feature ([intent-hq/intentd#1092](https://github.com/intent-hq/intentd/pull/1092)): `plan.manifest` is the versioned export manifest — `{ formatVersion, creatingIntentdVersion, workspaceId, createdAt, tables: [{ name, rowCount, approxBytes }], assets: [{ id, sizeBytes }], git: { hasRepository, branch?, dirtyFiles, sandboxBranches, submodules } }`, where `formatVersion` is `TRANSFER_FORMAT_VERSION` (2 for author-preserving exports under the [transfer authorship contract](#human-authorship-in-workspace-transfers), previously 1; the import side refuses unsupported versions), `creatingIntentdVersion` is the exact daemon version (`CARGO_PKG_VERSION`; import gates on exact match), `tables` covers every workspace-scoped table with the `event` table deliberately excluded (event history stays on the source; `approxBytes` sums column byte lengths cast to BLOB — a serialized-payload estimate, not on-disk size), and `git.branch?` is omitted when unresolvable — plus the additive `git.submodules: [{ name, path, commitSha, branch?, carried, published }]` list (unpublished-submodule support, [intent-hq/intentd#1727](https://github.com/intent-hq/intentd/pull/1727); absent/empty in older manifests): one entry per initialized submodule (nested ones recursed) whose checked-out commit is reachable from **no** `refs/remotes/*` ref of that submodule (no remote refs at all counts as unpublished), scanned on the worktree and on every live sandbox path and deduped by `(path, commitSha)`; a submodule is listed only when its gitlink is recorded at the **containing tip** — for a top-level submodule the superproject **index** (what the WIP snapshot commits, so a staged removal — `git rm --cached sub` with the checkout left on disk — is skipped), for a nested one its parent checkout's **HEAD tree** with a gitlink equal to the nested checkout's `HEAD` (the parent is bundled as-is, never snapshotted, so a nested checkout whose commit the parent's HEAD does not record is skipped together with its own subtree); skipped checkouts are never bundled — `name` is the raw `submodule.<name>` key in its own superproject, `path` is worktree-relative with forward slashes (nested paths composed, `sub/inner`, parents listed before children), `commitSha` the checkout's full `HEAD` sha, `branch?` the attached branch (omitted when detached), `carried: true` for worktree findings (the export bundles them — see `workspace.export.start`) and `false` for sandbox-only findings (reported, never bundled), and `published: true` (default `false`) marks a published ancestor of a nested unpublished submodule that is carried anyway so the nested checkout can be hydrated offline — plus the additive `attachments: [{ id, fileName, sizeBytes, exists }]` manifest list (attachment-transfer support): one entry per `attachments`-registry row (§5.9), probing the stored file in the workspace's canonical `.intent/attachments/` store at plan time — `exists: false` (with `sizeBytes: 0`) marks a row whose file was already deleted (deleted-is-deleted is a first-class state: the row transfers, no file rides, and a missing file never fails a plan or an export) — plus the size estimate `totalSizeBytes = dbRowBytes + assetBytes + attachmentBytes + estimatedGitBundleBytes` (bundle estimated via `git rev-list --disk-usage`; `estimatedGitBundleBytes` covers the superproject bundle **plus** every `carried` submodule bundle, each estimated the same way in the submodule's repository; each addend also served — `attachmentBytes` sums only the attachment files the archive will actually carry) and the non-blocking pre-flight `warnings: [{ code, message }]` (`code` machine-readable and stable — e.g. agents running, uncommitted changes, unmerged sandboxes, and `submodule-unpublished-commits`: **exactly one** per plan whenever `git.submodules` is non-empty, listing entries as `<path> @ <sha7> (<branch>)` (`(<branch>)` omitted when detached) — `N submodule(s) point at commits not on any remote and will ride in the archive (~<size>): <carried unpublished list>. Transfer will not push them; publish the branches yourself when ready.` when at least one unpublished entry is carried (`~<size>` is the human-readable sum of the carried submodule bundle estimates), or only `N submodule(s) point at commits not on any remote.` when every finding is sandbox-only; `N` counts only the entries in the list that follows it — the carried unpublished entries in the first form, the sandbox-only entries in the second; either form is followed by the optional clauses ` Also bundled so the nested submodule(s) can be checked out: <list>.` (the `published: true` ancestors, never counted in `N`) and ` Not carried (sandbox only): <list>.` (the `carried: false` entries)). No side effects; the virtual Chief workspace is rejected. -32602 if the workspace is absent |
 | workspace.import.begin *(v6.9)* | manifest (req, object), archiveSizeBytes (req, u64), archiveSha256 (req) — no workspaceId (the target id lives inside the manifest) | { importId, maxChunkBytes } — opens a staged workspace import of a transfer zip archive ([intent-hq/intentd#1101](https://github.com/intent-hq/intentd/pull/1101); the target-side counterpart of `workspace.transfer.plan`). Validates the manifest header BEFORE any bytes are staged: `formatVersion` must be understood, `creatingIntentdVersion` must match this daemon's `CARGO_PKG_VERSION` **exactly** (the error names both versions), the virtual Chief workspace is rejected, and the manifest's workspace id must not collide with an existing row OR another pending import. Staging lives under `<workspaces_root>/.import-staging/<importId>/`; `maxChunkBytes` is the per-chunk decoded cap (16 MiB, under the 40 MiB frame cap) |
 | workspace.import.chunk *(v6.9)* | importId (req), seq (req, u64), data (req, base64) | { importId, seq, receivedBytes } — stages one seq-numbered slice of the archive as a per-seq file. Chunks may arrive in any order; retrying a seq is **idempotent** (per-seq overwrite, no double-count); the declared `archiveSizeBytes` guards against over-staging |
 | workspace.import.commit *(v6.9)* | importId (req) | { workspace, importedRows, interruptedAgents, rehydrated } — reassembles the staged chunks → verifies the SHA-256 against `begin`'s `archiveSha256` → unzips (zip-slip-safe extract) → checks the embedded manifest equals the `begin` manifest → applies row transforms (path rewrite against the target `workspaces_root`, agent sessions forced to stopped with `interrupted_agent` rows for in-flight agents, `event` rows skipped) → git materialization (clone `git/repo.bundle` at the workspace branch, then — **before** the base ref, sandbox provisioning and WIP unwind, while the checkout is still at the bundled tip — hydrate each `git/refs.json` `submodules[]` entry in list order (parents first) from its `bundleEntry`, **offline** (no network; `GIT_LFS_SKIP_SMUDGE=1`): the untrusted entry is validated (full-hex `commitSha`, plain forward-slash `path` components, `bundleEntry` under `git/`, `submodule.<name>.path` in the containing tip's `.gitmodules` must equal the entry's path relative to that containing repository (the last component of a nested path), and the containing tip's gitlink must equal `commitSha`; the containing repository of a nested entry is the already-hydrated parent entry, so a nested entry whose parent was not bundled — legacy or hand-crafted archives — fails with an explicit error), the submodule is `submodule update --init`-ed from the bundle, `HEAD` is checked against `commitSha`, `branch?` is recreated at that commit (detached otherwise), and `submodule.<name>.url` plus the module's `remote.origin.url` are restored to `originUrl?` (unset / origin removed when absent) so no staging path persists; sandbox checkouts provisioned afterwards inherit the hydrated modules through the CoW copy (the plain-clone fallback on a non-CoW filesystem does not — its gitlinks stay uninitialized); **any** hydration failure fails the commit with the submodule path in the error and rolls back the whole import; archives without `submodules` behave exactly as before, and published submodules with no unpublished descendant are never bundled and are untouched by materialization) → attachment materialization (each `attachments/<attachmentId>` archive entry lands at the `stored_path` its registry row records, resolved against the materialized checkout with the within-workspace containment guard — an escaping `stored_path` fails the commit — dropping the ignore-all `.gitignore` marker in the store dir; a registry row with no archive entry is the deleted-is-deleted state and imports as a row without a file; a later failure unwinds every placed file) → single-transaction row insert + asset placement → boot-style rehydration (hooks, event subscriptions, PR monitors). **Atomic:** nothing is visible in `workspace.list` until commit succeeds |
@@ -52,6 +52,8 @@ unchanged. Host-administration virtual workspaces retain their existing boundary
 | workspace.export.abort *(v6.11)* | exportId (req), workspaceId? | { exportId, aborted } — cancels an export: a still-building session is flagged and the build task cleans up when it next checks between stages (quiet — no `workspace:transfer:failed`); a ready session is cleaned up inline (WIP snapshots unwound, staging deleted). **Idempotent** — an unknown exportId returns `{ aborted: false }`, not an error. The workspace stays usable; agents stay stopped (the user restarts them) |
 
 For the [prepared source export lifecycle](../workspace-routing.md#source-workspace-export-lifecycle), capture `workspaceId` at start and retain it with `exportId` through read retries, finalize, abort and late cleanup. Subscribe to `workspace:transfer:*` using that same source workspace and retain it for `events.unsubscribe`. The new follow-up fields stay optional on direct calls; this does not prepare import destination routing or transfer orchestration.
+
+Human message history follows the [transfer authorship contract](#human-authorship-in-workspace-transfers) below.
 
 **Root Git remote state in workspace transfers** (`workspace.export.start` /
 `workspace.import.commit`; [intent-hq/intent#4438](https://github.com/intent-hq/intent/issues/4438),
@@ -173,9 +175,11 @@ whole reachable history as unpushed, capped at 1000. Missing upstream/push field
 do not invent settings. For legacy remote metadata without `trackingRefs[].bundleRef`,
 the bundle source is `refName` itself, still namespace-validated and checked against
 `sha`; missing `fetchRefspecs` has the legacy default described above. These field
-defaults do **not** relax the import header gate: `formatVersion` remains 1 and
-`creatingIntentdVersion` must still match the importing daemon's exact version.
-Neither the protocol version policy nor the daemon-version policy changes.
+defaults do **not** relax the import header gate: the reader must support the
+archive's `formatVersion`, and `creatingIntentdVersion` must still match the
+importing daemon's exact version. Remote metadata itself required no format bump;
+the [human-authorship contract](#human-authorship-in-workspace-transfers) below
+requires version 2 for new author-preserving exports.
 Already-imported workspaces that lost their remotes are not repaired automatically;
 reconnecting/fetching such a workspace is a separate, explicitly authorized action.
 
@@ -2040,6 +2044,203 @@ successful `updateContext` emits `workspace:context-changed` with the persisted 
 // ← response (emits workspace:context-changed)
 { "jsonrpc":"2.0","id":10,"result":{ "items":[ /* same list */ ] } }
 ```
+
+#### Human authorship in workspace transfers
+
+*10.9 contract; docs lead implementation.*
+
+The existing export/import flow preserves historical human message authorship
+through import, restart and re-export. Before export, tag previously untagged
+historical human messages from trustworthy **source** provenance. Transfer the
+history and its attribution; do not transfer workspace sharing configuration,
+memberships, invitations, credentials or authority. This extends
+[§5.48's human-message attribution](./multiplayer.md#attribution--who-wrote-a-human-message)
+without changing who may export, import, send messages or access a workspace.
+
+**Archive compatibility.** New author-preserving exports use **`formatVersion: 2`**.
+Keep the existing manifest fields, archive layout, RPCs, table exclusions and
+exact `creatingIntentdVersion` gate. A version-1 reader rejects version 2 at
+`workspace.import.begin`, even when both daemons report the same package version;
+it must not accept the archive and silently discard the authorship contract.
+New readers support version-1 imports subject to the existing exact daemon-version
+gate, but cannot treat a future reserved key in a version-1 archive as trusted
+server attribution. Where source provenance is irrecoverable, import explicitly
+unknown human history as described below. This archive format bump does not add
+an RPC, capability, grant or separate JSON-RPC protocol version.
+
+**Stored historical author.** The reserved message metadata key `humanAuthor`
+contains only this safe snapshot:
+
+```typescript
+{
+  login: string | null;
+  displayName: string | null;
+  avatarUrl: string | null;
+  identity?: Identity;          // { provider, host, externalUserId }
+  sourcePrincipalId?: string;   // inert source provenance, never a local binding
+}
+```
+
+A valid trusted record's presence suppresses local principal lookup and workspace
+fallback, including `{ login: null, displayName: null, avatarUrl: null }` for
+unknown attribution. Omit `identity` when unavailable; never fabricate a forge
+identity. Only the complete canonical `Identity` triple is portable person
+identity. `sourcePrincipalId` is optional source-local provenance, not a lookup
+key, synthetic principal, account-linking hint or source of permissions. Presence
+of an arbitrary pre-upgrade client-supplied `humanAuthor` is not proof that the
+record is trusted.
+
+**Preserving supported legacy metadata.** Genuine historical human messages and
+queued payloads can already contain non-object JSON metadata. Preserve that
+supported history by normalizing it to an object with root `humanAuthor` and an
+inert `humanAuthorOriginalMetadata` member holding the original JSON value.
+Strings, numbers, booleans, arrays and JSON `null`, including nested values, remain
+recoverable exactly as JSON values; do not stringify or discard them. SQL NULL
+or absent metadata has no original JSON payload and need not acquire the
+preservation member. This explicitly changes the root metadata type to an object;
+lossless preservation means the original JSON value remains recoverable.
+
+For example, an old import with unknown authorship and array metadata becomes:
+
+```json
+{
+  "humanAuthor": { "login": null, "displayName": null, "avatarUrl": null },
+  "humanAuthorOriginalMetadata": ["legacy", null, { "humanAuthor": "inert data" }]
+}
+```
+
+Original object metadata keeps its unrelated keys and values; only already-reserved
+attribution keys follow the existing sanitation rules. A preexisting object member
+named `humanAuthorOriginalMetadata` remains inert data, unchanged. Its name or
+contents are never evidence that the object was wrapped or has trusted authorship.
+Never unpack it, merge it into root metadata, or use nested reserved keys as
+attribution. Only root validated/server-produced `humanAuthor` controls historical
+author status. The preservation member grants no identity, local binding, sender
+status, queue readiness/ownership or authority. Raw live, legacy or v1 preservation
+data cannot acquire trust through this name. Existing live input validation stays
+in force.
+
+Re-export preserves the normalized object and original value without another
+wrapper. New readers importing valid non-object human metadata from v1 use the
+same preservation member plus explicit unknown attribution when source provenance
+is unavailable; such supported legacy values are not malformed author envelopes.
+Malformed v2 author envelopes still fail import atomically. Queued explicit send,
+failed-send restoration and re-export retain the original value alongside the
+unchanged trusted snapshot. Nonhuman behavior is unchanged. This uses the existing
+metadata column and format version 2; no additional migration, SQL field/table,
+RPC, adoption workflow or imported permission is introduced.
+
+**Trust boundary and upgrade.** Before activating this guarantee, one data-only
+migration removes the previously unreserved `humanAuthor` key from stored message
+and queued-payload metadata. Preserve text, IDs, timestamps and every unrelated
+metadata key; retain existing migrations and add no table or column. The migration
+does not recover an identity that was already lost. The supported `Store::open`
+newer-ledger rejection is the downgrade fence: an older binary must refuse a
+database with migrations it does not know, rather than reopen it and accept
+unreserved author keys again.
+
+Live sends/mutations, queue ingress, history replacement (including
+`agent.replaceMessages`), legacy history import and version-1 archive ingress
+sanitize or authoritatively overwrite reserved attribution metadata. Client
+copies cannot establish or override trusted `humanAuthor`. Only server-produced
+or validated version-2 historical snapshots enter the trusted path; a snapshot
+accepted as imported history is still not proof of a current authenticated caller.
+The source's trusted prior snapshot, including explicit unknown, survives future
+export unchanged. The new archive version prevents an old reader from silently
+accepting such snapshots; the ledger fence protects the upgraded local store.
+
+**Source attribution.** Preserve an already recorded portable historical author
+first when it is trusted, including an explicit unknown author. Otherwise preserve
+the message's actual source author from its reliable creation stamp and trusted
+source identity. Only an untagged historical human message may use the source
+workspace's
+durable `legacy_author_principal_id`, then `owner_principal_id`, resolved from
+trusted source state in the **same WAL snapshot** as the exported messages.
+Batch distinct principal resolutions; do not replace this with one query per
+message. A stamped but unresolvable contributor stays unknown and is never
+reassigned to the owner. The member who initiates export is not thereby the
+author of prior messages. Neither the source's shared execution account nor the
+receiving account replaces a known contributor. An ordinary source-owned legacy
+workspace must tag its human history before it leaves; this requirement cannot
+be skipped merely because those messages predate per-message author stamps.
+
+Portable identity uses the canonical safe `Identity` triple
+`{ provider, host, externalUserId }`. Labels are presentation; a source-local
+principal ID is scoped to its source. Equal handles, equal external IDs on
+different providers or canonical instances, or equal local principal strings on
+different hosts do not establish the same person. An unlinked source author keeps
+the known source attribution without acquiring a fabricated forge identity or a
+destination principal binding.
+
+**Unknown imported history.** An older archive may lack enough source provenance
+to recover its historical human authors. Keep that history explicitly unknown
+using a trusted all-null `humanAuthor` through reads, restart and later transfers.
+Do not resolve an imported source principal ID against a coincidentally matching
+destination principal, guess from a display handle, or use the receiving workspace
+owner as the missing author. This differs from preparing a new export of an
+ordinary source-owned legacy workspace: source provenance must be captured while it is still available.
+
+**Durable round trips.** Imported attribution is durable with the message before
+the workspace becomes visible. Subsequent profile changes, identity unlinking,
+membership removal, restart and re-export must not rewrite an already preserved
+historical author or replace explicit unknown attribution. A's original messages
+remain A's after A → B → A; messages B and other contributors add later retain
+their own authors. Every existing full/slim transcript read, session projection,
+subscription and message echo agrees on the same historical attribution, while
+ordinary local messages retain the existing batched serve-time resolution.
+
+The imported `MessageAuthor` projection has **`principalId: null`**, with the safe
+snapshot's `login`, `displayName`, `avatarUrl` and optional `identity`; do not
+project `sourcePrincipalId` as a current principal. Current-local authors keep
+`principalId: string`. Clients render historical human authors independently of
+current membership, presence and local principal lookup. An all-null snapshot
+renders an unknown human author, never the receiving owner. Historical authors
+must not match an own-user/preamble/queue-author comparison against a local
+principal ID. Consumers that currently require a string principal ID need to
+accept this explicit historical variant; storing the metadata alone is not
+sufficient for correct rendering.
+
+Transferred comments retain their original labels and recorded safe
+`authorIdentity`. Omit a foreign `authorPrincipalId` on imported comment and
+latest-author projections; source provenance may be retained internally but is
+not a destination binding. Do not infer it again from the safe identity, a label
+or a matching destination principal. Unknown legacy comments still omit the
+metadata, following §5.3.
+
+**History is not admission.** Imported attribution does not create or link a
+principal/account, add a member, authenticate a caller, grant queue ownership or
+select execution credentials. Current access and live sends remain derived from
+the destination's admitted caller. Copied historical fields on an ordinary send
+cannot impersonate a person. Keep the existing single-snapshot export and atomic
+import guarantees.
+
+**Imported human queues.** Actual-human queued records with a trusted snapshot
+and no current-local binding remain durable but are **not automatically ready**.
+Drain, idle, startup, restart and recovery paths cannot deliver them automatically.
+Their privacy/authorization classification is `UnknownHuman`, independently of
+the preserved safe author profile. Strip or quarantine foreign `fromPrincipalId`
+stamps; never resolve them locally or fall back to the receiving owner. Existing
+Member/Guest visibility and per-entry mutation restrictions remain; unknown human
+entries do not become public or editable because they lack a local principal.
+
+The current destination host owner may explicitly send the unchanged captured
+content with `agent.sendQueuedMessageNow`, or remove it with
+`agent.removeQueuedMessage`. Existing author-only editing restrictions remain.
+An explicit send requires affirmative current destination-owner authorization
+**inside the existing atomic queue pop**, alongside normal admission and current
+role/credential revalidation. Absence of a per-entry gate is not authorization:
+agent, daemon, unbound and automatic paths cannot bypass the imported-human rule
+merely because that gate is `None`. Runtime-manager and store-only paths enforce
+the same rule. Failed-send restoration and retry preserve the complete entry and
+its original `humanAuthor`, without losing content or restamping it as the owner.
+Current-local and nonhuman queues retain their normal behavior. No new RPC,
+expiring hold, timer or queue-adoption workflow is introduced.
+
+Only historical human messages receive source-human attribution. Do not relabel
+assistant, tool or system rows, or agent/automatic-origin messages, as human.
+Message content and other recorded authors remain unchanged. This transfer-scoped
+source tagging does not authorize guessing or mass-backfilling unknown legacy
+[comment authors (§5.3)](./notes-tasks.md#qualified-human-comment-attribution-109-additive-docs-lead-implementation).
 
 ### 5.23 Usage metrics — `workspace.getTokenUsage`
 
