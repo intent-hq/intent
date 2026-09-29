@@ -189,6 +189,29 @@ its durable revision prevents an older refresh from restoring stale authority.
 No general access to global settings, account-auth events or unrelated principals
 is implied. See §8 for the permission snapshot/answer/event gate.
 
+#### Startup-recovery failure `agent:updated` payloads
+
+Automatic startup recovery emits the existing `agent:updated` event with optional
+`data.startupRecoveryFailed: true` only after a resume attempt returns an error
+and its in-memory visibility reservation has been released:
+
+```json
+{ "type":"agent:updated", "workspaceId":"ws-abc", "data":{
+  "agentId":"agent-123", "startupRecoveryFailed":true } }
+```
+
+This payload uses the standard §6.3 event envelope, including the agent's
+`workspaceId`. The field is absent on successful automatic recovery and ordinary
+updates (absent, never `false`); older daemons may omit it entirely.
+
+This is an interrupted-list refresh hint, not terminal agent failure. Clients
+receiving it re-query [`agent.listInterrupted`](./methods/agent-aux.md#agentlistinterrupted),
+whose response is authoritative: a concurrent manual resolution may already have
+removed the candidate. The event carries no error text and does not change the
+agent's lifecycle status or emit `agent:failed` (which would trigger completion
+watches). Successful automatic recovery stays hidden from manual recovery UI;
+failed candidates are queryable and retryable unless already resolved.
+
 #### Pending-question `agent:updated` payloads
 
 A committed pending-question marker mutation emits `agent:updated` with the mutated value in
