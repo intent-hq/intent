@@ -359,7 +359,7 @@ The backend exposes daemon-side skills discovery so clients can list skills for 
 
 | Method | Params | Result |
 | --- | --- | --- |
-| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — -32602 if the workspace is not found or has no worktree path |
+| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — authorized workspaces without a worktree or repository path return user-scope skills only (an empty array if none exist), without creating a checkout or activating workspace filesystem access; -32602 if the workspace is missing or inaccessible to the caller |
 
 - `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p4-5) and `"user"` for user-tier skills (p1-3); `allowedTools` / `compatibility` are optional frontmatter fields.
 - Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
