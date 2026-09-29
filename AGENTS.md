@@ -390,10 +390,10 @@ incident. Prefer mechanizing an existing prose rule over adding another.
 
 ## Filing Issues
 
-When you encounter a bug or limitation while working on the codebase (including while
-dogfooding intentd + cloudlands-fe for daily development work), file a GitHub issue on
-[intent-hq/intent](https://github.com/intent-hq/intent/issues) — the single tracker
-for all components.
+File issues on [intent-hq/intent](https://github.com/intent-hq/intent/issues), the single
+tracker for all components, only for problems affecting released builds. Do not file
+issues discovered during PR reviews. Every issue filed must include the affected
+released version and corresponding commit hash in its body.
 
 - **Type**: classification is the GitHub issue **Type** field — `Bug`, `Feature`,
   or `Task` — not a label. The `bug` and `enhancement` type labels are retired: do
