@@ -577,4 +577,21 @@ write_launcher pnpm "echo '$dd_banner'"
 ! run_pnpm_ready || fail "pnpm_ready accepted a launcher that printed only a startup banner"
 rm -f "$bin_dir/pnpm"
 
+# A failed auth status is not evidence of invalid credentials: REST may be
+# throttled while the GraphQL path used for PR reporting still works.
+ln -s "$(command -v python3)" "$bin_dir/python3"
+write_launcher gh '
+case "$1 $2" in
+  "--version ") echo "gh version 2.100.0" ;;
+  "auth status") exit 1 ;;
+  "api user") printf "HTTP/2.0 403 Forbidden\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1790587121\n\n{\"message\":\"API rate limit exceeded\"}\n"; exit 1 ;;
+  "api graphql") printf "HTTP/2.0 200 OK\n\n{\"data\":{\"viewer\":{\"login\":\"fixture\"}}}\n" ;;
+  *) exit 1 ;;
+esac'
+run_doctor
+reject_line "gh auth login"
+expect_line "REST rate limited"
+expect_line "2026-09-28T09:18:41Z"
+expect_line "GraphQL authenticated"
+
 echo "bootstrap-dev-host tests passed"

@@ -11,9 +11,13 @@ below; publishing these docs or seeing a version string does not enable access.
 
 #### Authority and discovery
 
-The host's primary principal remains its sole administrator and the owner of
-every ordinary workspace, including workspaces created by a member. There is no
-ownership transfer, private workspace, or per-member execution account.
+The host's primary principal remains its sole administrator. Normal workspace
+creation and import assign ownership to the primary, including workspaces created
+by a member. Existing durable membership can retain a different explicit workspace
+owner; that scoped grant does not make the person a host member or administrator.
+This contract adds no public ownership-transfer workflow, private workspace, or
+per-member execution account. Workspace invitations and direct guest additions
+continue to grant `collaborator`, not `owner`.
 
 `client.hello.server.capabilities` gains independently detectable integer flags:
 
@@ -40,7 +44,7 @@ administrator token. The primary remains `owner` with no linked forge profile.
 | --- | --- | --- | --- |
 | List/access ordinary workspaces | All, including future workspaces | All, including future workspaces | Only explicitly granted workspaces |
 | Create/duplicate a workspace | Yes | Yes, owned by the primary | No |
-| Fully manage workspace content, agents, settings, lifecycle and sharing | Yes | Yes | Existing collaborator rights only |
+| Fully manage workspace content, agents, settings, lifecycle and sharing | Yes | Yes | Existing collaborator rights; a retained explicit owner also keeps scoped management where the method's transport and service gates admit it |
 | Host invites and membership administration | Yes | No | No |
 | Host `settings.*`, repository/AI account setup, daemon controls | Yes, with existing transport guards | No | No |
 | Read safe host execution setup | Yes | Yes | Existing limited model/provider reads only |
@@ -64,18 +68,40 @@ roles to unlock it.
 
 #### Effective workspace membership
 
-Every caller-relative `Workspace` projection (`get`, `list`, mutation results,
-and subscription snapshots/deltas) adds **`canManage: boolean`**. It is `true`
-for the owner and active host members of an ordinary workspace, `false` for a
-workspace guest. `ownerPrincipalId` always names the real owner; `myRole` stays
-`"owner" | "collaborator"`: an effective host member is `"collaborator"`, even
-without a direct `workspace_member` row. No wire role is renamed. Legacy fallback
-may use `myRole === "owner"` for old workspace controls, never to infer a member.
+Every caller-relative `Workspace` projection (`get`, full/lite `list`, mutation
+results, and subscription snapshots/deltas) carries **`canManage: boolean`** from
+the current durable grant, with the same precedence as workspace management:
+
+1. The primary has management authority.
+2. An active host member can manage ordinary workspaces. Chief-of-staff remains
+   refused for that member, even if it has a retained direct owner row.
+3. Otherwise, a guest can manage a workspace only through its current explicit
+   `workspace_member` owner row. Ordinary collaborators and absent/unknown viewers
+   have `canManage: false`.
+
+This field is neither a host-role grant nor universal RPC/event admission.
+Transport and operation-specific service checks still apply: a guest owner cannot
+create a workspace, administer the host, or call guest-denied `script.*` methods
+over WSS. Host-administration virtual surfaces keep their existing restrictions.
+Credential validity is checked separately; a retained grant or cached true row
+cannot admit a revoked bearer. A client must honor authoritative `false`, not
+override it with `myRole`.
+
+`ownerPrincipalId` names the real stored owner; `myRole` reports the direct role
+when present. Inherited host membership supplies `"collaborator"` when no direct
+row exists, without claiming ownership. A retained guest owner's workspace has
+`myRole: "owner"` and `canManage: true`; `principal.me` still reports
+`hostRole: "guest"` and `isAdministrator: false`. No wire role is renamed. Legacy fallback may use
+`myRole === "owner"` for old workspace controls when the capability field is
+absent, never to infer host membership or bypass an operation's admission gate.
 
 `workspace.members.list` returns the union of the owner, active host members and
 direct workspace guests, deduplicated by principal ID. Each `Member` adds
 `hostRole` using the same enum. `role` remains `owner` only for the primary and
-`collaborator` otherwise. An effective member's `addedAt` is the host-membership
+`collaborator` otherwise. This roster `Member.role` is a separate projection from
+`Workspace.myRole`: even a retained non-primary workspace owner is a roster
+`collaborator`. Do not use the roster role to replace workspace authority or the
+real `ownerPrincipalId`. An effective member's `addedAt` is the host-membership
 timestamp; a guest's is its workspace grant's timestamp. `memberCount` counts
 that union. `guestCount` counts distinct direct **non-host-member** collaborators
 plus open workspace invitations; host members spend no guest seats, including
@@ -110,6 +136,10 @@ bound caller's current role in O(rows returned), with no per-workspace membershi
 query, filesystem access or forge request. Explicit roster reads batch profiles.
 Host membership mutations invalidate role/roster/count caches and workspace
 subscriptions, including on an empty host. Reconnect always takes a fresh snapshot.
+Direct ownership demotion or removal is reflected on the next authorized read;
+existing published workspace-membership events cause subscribers to re-read the
+same projection. A store-only membership mutation does not itself publish a bus
+event, and this contract adds no automatic ownership-transfer event.
 
 #### Host membership and invitations
 
@@ -952,9 +982,12 @@ terminal, script, browser and preview events needed for management. Filter at
 delivery and durable-query time, including aggregate queries. Guests retain the
 existing event allowlist and workspace narrowing, apart from the explicit own-
 device events above. Own-principal identity changes may be delivered to that
-principal; unrelated global identity/settings/auth events remain hidden. Permission
-requests, their filtered/aggregate snapshots and answers all use `canManage` and
-the prompt's workspace (§8); guest access is not broadened by a transport allowlist.
+principal; unrelated global identity/settings/auth events remain hidden.
+Permission snapshots and answers use the prompt's current workspace management
+grant, including retained explicit guest ownership. Permission request/resolved
+events additionally require host owner/member admission at live delivery and
+durable-query time; a guest owner receives neither. See [§8](../08-permission-flow.md)
+for these separate checks. `canManage` does not broaden the guest event allowlist.
 
 #### Multiplayer lab rollout (client policy)
 
@@ -986,6 +1019,9 @@ the assertions; passing documentation gates is not runtime evidence.
 | Correct host join, wrong provider/instance/ID, duplicate concurrent redemption | Member on correct proof; mismatch refused; exactly one pinned redemption wins; empty host remains usable |
 | Guest upgrade with old collaborator rows and full guest-seat usage | Same principal, all workspaces, truthful `myRole`, `canManage: true`, deduplicated roster and no guest seat spent |
 | Owner/member/guest management over every WSS path | Members create/manage including prompts/terminals/previews; guests remain narrowed; settings/account/host administration remains owner-only |
+| Retained explicit guest workspace owner built through supported store membership APIs | Same truthful ownerPrincipalId, myRole:owner and canManage:true across get, full/lite list, allowed mutation results, workspace seq-0 and deltas; principal stays guest/non-administrator, roster Member.role stays collaborator. Creation/import still defaults to primary; guest additions/invites still grant collaborator |
+| Primary, host member with a retained Chief owner row, ordinary collaborator, unrelated guest and unknown viewer | Preserve primary precedence, member Chief refusal and false/hidden negative projections. Scoped ownership grants neither host creation/administration nor guest WSS script access; clients honor authoritative false |
+| Guest-owner demotion/removal, reconnect and exact credential revocation | Re-reads lose management after demotion and visibility after removal. Drive the existing published membership-event path to test seq-0/delta convergence; store-only writes make no event promise. A revoked credential is refused independently of retained durable ownership or cached canManage |
 | Provider enablement map absent, empty, explicit true/false, non-disableable false, or unknown keys | Context and complete event contain the same unique canonical provider IDs in deterministic order: only explicit false excludes a disableable registered provider; non-disableable providers remain; unknown keys add nothing. No settings/auth access is granted |
 | Installed but disabled provider, or enabled provider with a closed feature/environment gate or missing installation/auth/readiness | Member choices combine connected-host enablement with existing catalog/discovery/readiness; no surface substitutes one condition for another or changes owner enablement policy |
 | Owner commits provider enablement changes, removes an entry or resets the map while a member read is in flight | Complete sanitized execution-context event refreshes member choices even if configured/readiness flags are unchanged; a stale read cannot undo the newer snapshot |
@@ -993,7 +1029,7 @@ the assertions; passing documentation gates is not runtime evidence.
 | Managed GitHub helper enabled/disabled, each with and without an alternative owner helper | Member reads the exact effective switch and setting name from the connected host; disabled never supplies the daemon credential to children. Git still succeeds with an authorized alternative helper; disabled/no helper explains owner recovery without member auth fallback |
 | Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
 | Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |
-| Filtered/aggregate permission reads and live answers | Owner/member can act; guest sees no unauthorized request or ID and cannot answer it |
+| Filtered/aggregate permission snapshots, answers and separate live/durable event reads | Owner/member can act in manageable workspaces; a retained guest owner can read/answer only its owned workspace's prompts through already-admitted RPCs. Ordinary collaborators/unrelated guests see no unauthorized request or ID and cannot answer. Permission events remain owner/member-only, including for guest owners; script RPCs remain guest-refused |
 | Two humans sharing a handle on GitHub/GitLab, and on two canonical GitLab instances (including equal external IDs) | New user comments keep the same existing label spelling but distinct daemon-bound principal IDs and complete identity triples; latest-author summaries copy the same selected comment. Transcript authors and presence people expose their resolved optional triple; no handle-based merging |
 | Bound owner without a forge, plus linked owner/member/guest add and respond | Resulting user comments persist the admitted principal ID; only linked humans get an identity snapshot. Unlinked-primary compatibility preserves its supplied label/type; a non-user result omits both metadata fields |
 | Agent/daemon add/respond and spoofed attribution fields over existing RPC/MCP entry points | Agent/daemon label/type semantics remain, without fabricated human metadata, even for a supplied user type. Supplied principal/identity output keys of any value/type are ignored; bound-human attribution comes only from trusted caller state |

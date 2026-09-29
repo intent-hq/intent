@@ -88,6 +88,8 @@ jobs:
 
   # Standard-library-only Python suites run without submodules. Use the same
   # entry point locally and in CI; tomllib requires Python 3.11 or newer.
+  # Includes offline prerelease retention/deletion tests and a functional check
+  # that their failures fail this target. No cleanup credentials or live scan.
   python-tests:
     runs-on: ubuntu-latest
     steps:
@@ -224,6 +226,7 @@ jobs:
           bash scripts/dev-ports.test.sh
           bash scripts/dev-sandbox.test.sh
           bash scripts/dev-status.test.sh
+          python3 scripts/test_github_readiness.py
           bash scripts/docs-check.test.sh
           bash scripts/lint-fixed-sleeps.test.sh
           bash scripts/rust-changed-tests.test.sh

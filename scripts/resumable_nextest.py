@@ -212,10 +212,41 @@ def test_outcome(line: str) -> tuple[str, str] | None:
     return RETRY_SUFFIX_RE.sub("", event.get("name", "")), outcome
 
 
-def tally(outcomes: dict[str, str]) -> dict[str, int]:
+def suite_ignored_count(line: str) -> tuple[str, int] | None:
+    """Read a completed libtest-json-plus suite's ignored total and identity."""
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "suite":
+        return None
+    if event.get("event") not in ("ok", "failed"):
+        return None
+    metadata = event.get("nextest")
+    ignored = event.get("ignored")
+    if not isinstance(metadata, dict) or type(ignored) is not int or ignored < 0:
+        return None
+    crate, binary = metadata.get("crate"), metadata.get("test_binary")
+    if not isinstance(crate, str) or not crate or not isinstance(binary, str) or not binary:
+        return None
+    return f"{crate}::{binary}", ignored
+
+
+def tally(
+    outcomes: dict[str, str], suite_ignored: dict[str, int] | None = None
+) -> dict[str, int]:
     counts = {"passed": 0, "failed": 0, "ignored": 0}
-    for outcome in outcomes.values():
+    individual_ignored: dict[str, int] = {}
+    for name, outcome in outcomes.items():
         counts["passed" if outcome == "ok" else outcome] += 1
+        if outcome == "ignored":
+            suite = name.partition("$")[0]
+            individual_ignored[suite] = individual_ignored.get(suite, 0) + 1
+    # Nextest can omit individual ignored events. Fill only the shortfall for
+    # each completed suite; unfinished suites keep their individual counts.
+    # filtered_out (including resumed tests) is deliberately not an ignored count.
+    for suite, ignored in (suite_ignored or {}).items():
+        counts["ignored"] += max(0, ignored - individual_ignored.get(suite, 0))
     return counts
 
 
@@ -296,6 +327,7 @@ def stream_nextest(
     binary_ids: dict[tuple[str, str], str],
     descriptor: int,
     outcomes: dict[str, str],
+    suite_ignored: dict[str, int],
     run_dir: Path,
 ) -> int:
     process = subprocess.Popen(command, cwd=cwd, env=env, text=True, stdout=subprocess.PIPE)
@@ -307,6 +339,9 @@ def stream_nextest(
             outcome = test_outcome(line)
             if outcome is not None:
                 outcomes[outcome[0]] = outcome[1]
+            ignored = suite_ignored_count(line)
+            if ignored is not None:
+                suite_ignored[ignored[0]] = ignored[1]
             recorded = parse_recorded_event(line, binary_ids)
             if recorded is not None:
                 if recorded[2] != "ok":
@@ -526,15 +561,17 @@ def run_nextest(args: argparse.Namespace) -> int:
                     if resumed:
                         command.extend(["--no-tests", "pass"])
                     outcomes: dict[str, str] = {}
+                    suite_ignored: dict[str, int] = {}
                     result: dict[str, object] = {"plan": " ".join(selection)}
                     results.append(result)
                     status = None
                     try:
                         status = stream_nextest(
-                            command, intentd_dir, env, binary_ids, descriptor, outcomes, run_dir
+                            command, intentd_dir, env, binary_ids, descriptor, outcomes,
+                            suite_ignored, run_dir
                         )
                     finally:
-                        result.update(tally(outcomes), exit_code=status)
+                        result.update(tally(outcomes, suite_ignored), exit_code=status)
                     if status != 0:
                         if not no_fail_fast:
                             break

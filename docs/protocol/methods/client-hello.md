@@ -11,6 +11,13 @@ contract, not caller authority. The legacy examples below remain valid for older
 daemons. On each connection, read `principal.me` before activating member controls;
 never infer the role from this client's capabilities or its saved registry category.
 
+**Direct agent retirement (10.10).** `server.capabilities.agentRetire: 1` advertises
+support for [§5.5 `agent.retire`](./agents.md#direct-user-retirement), including stopping
+a running target and cancelling its wake sources. Clients enable the retirement action
+only when this capability is present; older daemons omit it. This is a server support
+flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
+caller authority: workspace lifecycle permissions still apply.
+
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.
