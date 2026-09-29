@@ -406,7 +406,7 @@ Returns pending interrupted agents across all workspaces. Each `InterruptedAgent
 - `prevStatus` — the agent's status before interruption (`active`, `processing`, or `waiting`)
 - `interruptedAt` — ISO 8601 timestamp when the agent was interrupted
 
-Rows with `resolution='pending'` survive multiple restarts (idempotent capture). Resolved rows (`resumed` / `abandoned`) are excluded.
+Rows with `resolution='pending'` survive multiple restarts (idempotent capture). Resolved rows (`resumed` / `abandoned`) are excluded. Candidates reserved for automatic startup recovery are also temporarily excluded, so connecting clients do not briefly offer manual recovery for them. A failed automatic resume releases its reservation before emitting the [`agent:updated` startup-recovery hint](../06-events.md#startup-recovery-failure-agentupdated-payloads); clients re-query this list to discover candidates available for retry.
 
 #### `agent.resolveInterrupted`
 
@@ -494,9 +494,9 @@ When a delegated child's completion makes other tasks startable, the delegator's
 
 `intentd serve --resume-all` is a headless deployment flag that automatically resumes all interrupted agents at startup without waiting for the `agent.resolveInterrupted` RPC.
 
-**Execution:** After the daemon is fully up (services wired, event bus live, RPC servers listening), a background task enumerates the interrupted set and calls the resume service operation for each pending agent. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup.
+**Execution:** Before serving RPCs, the daemon enumerates and reserves the automatic recovery candidates in memory. A background task calls the resume service operation for each candidate while the RPC servers serve requests. Per-agent failures are logged (warning-level) and do not crash the daemon or block startup. After a failed attempt releases its visibility reservation, the daemon emits `agent:updated` with `data { agentId, startupRecoveryFailed: true }` and the normal `workspaceId` envelope so connected clients can refresh `agent.listInterrupted`.
 
-**Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes. After the sweep completes, `agent.listInterrupted` returns an empty list.
+**Non-blocking:** The auto-resume sweep is spawned asynchronously; the daemon is ready to serve RPCs before the sweep completes. Reserved candidates stay hidden from `agent.listInterrupted` during automatic recovery, and successfully resumed candidates remain excluded afterward. Failed candidates become queryable and retryable unless a concurrent resolution has already handled them; completing the sweep does not guarantee an empty list.
 
 ### 5.36 Agentic usage stats — `stats.getUsage`
 
