@@ -163,6 +163,7 @@ jobs:
       - run: git submodule update --init --depth=1 packages/cloudlands-fe packages/intentd
       - run: node --test scripts/submodule-ref.test.mjs
       - run: node --test scripts/check-protocol-catalog.test.mjs
+      - run: node --test docs/protocol/fixtures/scripts/readiness.test.mjs
       - run: node --test scripts/check-mcp-bindings.test.mjs
       - run: node --test scripts/check-makefile-targets.test.mjs
       - run: node --test scripts/check-protocol-field-parity.test.mjs

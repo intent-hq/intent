@@ -30,6 +30,13 @@ implementing. Advertise `scriptLifecycle: 1` only for the complete extension;
 legacy definitions/callers remain saved, and old daemons must not be assumed to
 honor unknown purpose or list-filter fields.
 
+The prepared [service readiness extension (§5.8)](./methods/scripts.md#service-readiness-prepared-additive-extension)
+adds optional service configuration and runtime readiness fields without new
+methods/events or a shipped version claim. Allocate the next minor at
+implementation time and advertise `scriptReadiness: 1` only for complete support.
+It is independent of `scriptLifecycle`; no-contract scripts retain their wire
+shape, and absent readiness never means a service is ready.
+
 The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
 reserves additive methods/events without claiming a shipped version. Implementors
 allocate the next minor against main and advertise `agentNodes: 1` only after the

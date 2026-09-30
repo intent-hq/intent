@@ -2,10 +2,14 @@
 
 ### 5.8 `script.*`
 
+The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
+adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
+`readiness` runtime fields. These are capability-gated, not yet shipped.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`) | { scripts: [...] } — definition plus `runtime`; see the prepared lifecycle extension below |
-| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun? } — the persisted `WorkspaceScript` record |
+| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
@@ -13,7 +17,7 @@
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
-| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
+| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
 > **Prepared lifecycle extension.** The additive purpose/archive fields, filters and
@@ -111,6 +115,159 @@
 >   rehydrates as `previouslyRunning: true` (or the `lost` reading) after the next daemon
 >   restart, and the client can dismiss it again.
 
+
+#### Service readiness (prepared additive extension)
+
+This contract addresses [intent-hq/intent#4256](https://github.com/intent-hq/intent/issues/4256).
+It leads implementation and does not establish that the issue is fixed.
+Advertise `client.hello.server.capabilities.scriptReadiness: 1` only after the
+whole contract, persistence and MCP bindings are implemented and tested. Allocate
+the next minor against main at implementation time; no new RPC or event names.
+This capability is independent of `scriptLifecycle`.
+
+**Configuration and compatibility.** `script.create` accepts mutually exclusive
+optional `healthUrl: string` and `readyPattern: string`, only in `mode: "service"`.
+Persist and return the configured field on definitions from create/list. Neither
+field is inferred from `detectedUrl`, command text, category or purpose. Reject
+both fields together, explicit null, empty values, invalid types or either field
+on a command with `-32602`, before persistence or stopping an upserted process.
+Omitting both on a new definition creates no contract. Omitting both on an upsert
+preserves the existing contract; providing one replaces the other. To explicitly
+clear it, accept `clearReadiness: true` on create with an existing `scriptId`,
+without either field; otherwise reject that flag. It is an input only, never a
+definition field. Switching to command mode requires clearing an existing
+contract in that same upsert. All accepted upserts retain existing stop/replace
+semantics, including a fresh readiness state. Contract persistence failure fails
+the operation; never report successful configuration without the durable write.
+Repository-config scripts without these options retain no contract; repository
+configuration import of readiness options is outside this extension.
+
+A script without a contract omits both runtime fields, even on a supporting
+daemon, and retains existing start/status/output/URL behavior. Absent `ready`
+means **unknown/not configured**, never true or false. Existing stored scripts
+need no inferred backfill. A client must check `scriptReadiness: 1` before sending
+any readiness option, including clear. Older daemons can silently ignore unknown
+options: successful create is not proof of support. Clients needing readiness
+must report unsupported or use their existing explicit checks; never silently
+fall back to URL detection. Old clients may ignore additive fields, and their
+upserts preserve an existing contract when they omit the new inputs.
+
+**Runtime shape.** For a configured service, `script.status`, each list entry's
+`runtime`, and the runtime snapshot on `script:state` carry:
+
+| Field | Meaning |
+| --- | --- |
+| `ready: boolean` | Always present for configured services; true only after the current process attempt passes its contract while still running. |
+| `state` (inside `readiness`) | `idle` before launch/after stop or exit, `pending` while starting/restarting/checking, or `ready` after success. No change to the existing process `status` enum. |
+| `checkedAt?: string` (inside `readiness`) | RFC 3339 UTC time of the last completed HTTP attempt or successful pattern match; absent before either. |
+| `lastStatus?: integer` (inside `readiness`) | Most recent HTTP attempt's response status (100–599), absent if no response was received; never present for a pattern. |
+| `lastError?: string` (inside `readiness`) | One safe code: `http-status`, `timeout`, `connection-failed`, `tls-failed`, `unsafe-url`, or `output-gap`; absent after success. No arbitrary exception text. |
+
+Optional fields are omitted, never null. `ready` is exactly equivalent to
+`readiness.state === "ready"` and implies process `status === "running"`.
+No-contract scripts do not emit a synthetic `readiness.state = idle`.
+The `ready` state is a startup latch, not a continuous health monitor: checks
+stop at success and a later HTTP outage alone does not change it. A health
+endpoint decides what readiness means; 2xx cannot prove browser hydration or
+dependency availability unless the endpoint itself checks them.
+
+**HTTP checks.** `healthUrl` (maximum 2,048 UTF-8 bytes) is either an absolute
+HTTP(S) URL or an origin-relative path beginning with one `/` (not `//`). Resolve
+paths against the current attempt's detected URL's **origin**, ignoring its path
+and query. Before URL detection a relative contract stays pending without a
+request, timestamp or error. An absolute URL needs no detected URL. Reject
+credentials, fragments, backslashes, control characters, missing/invalid hosts
+and non-HTTP(S) schemes. Query strings are permitted, but never copied into
+readiness errors or logs. Validate absolute configuration at create time and
+validate the final resolved target again before each request.
+
+Only literal loopback addresses (`127.0.0.0/8` or `::1`) and exact `localhost`
+are allowed; reject IPv4-mapped IPv6, unspecified addresses, LAN/public IPs,
+other DNS names and browser tunnel aliases such as `daemon.localhost`. For
+`localhost`, connect directly to loopback (IPv4/IPv6 candidates only), never use
+DNS; literal IP connections likewise require no DNS. Pin the actual connection
+to those addresses, disable environment/system proxies, and do not follow any
+redirect, even to another loopback URL. TLS uses normal certificate/hostname
+validation; no insecure bypass. Requests execute on the daemon host, not in the
+browser. This keeps user-configured checks local; it does not prove ownership of
+the listening process, so use a dedicated endpoint/port for the service.
+
+Send GET without authentication, cookies or inherited headers. Success is any
+200–299 response header, without reading the body. Close/drop every response
+without collecting or exposing bodies, response headers, redirect locations or
+credentials in status/events/errors/logs. Keep only timestamp, status and safe
+error code. A non-2xx result records `http-status`; a network/TLS/timeout failure
+records its code and clears previous `lastStatus`. An unsafe resolved URL makes
+no request, records `unsafe-url`, and stays pending. Errors never stop/restart
+the service and do not overwrite its process `error` field.
+
+One attempt per configured running service at a time; first eligible attempt
+runs immediately, subsequent attempts start at least 1,000 ms after completion.
+Each request has a 2,000 ms total deadline, including connection/TLS/headers;
+enforce a 16 KiB response-header limit (overflow is `connection-failed`). A
+daemon-wide cap of eight active requests uses a fair queue containing at most
+one entry per active configured service. Wait time for a slot is not a completed
+attempt. There is no overall startup deadline: failures retry until success or
+lifecycle cancellation. Reads of status/list never perform I/O. Polls must not
+block output draining or process-exit detection.
+
+**Output checks.** `readyPattern` is a case-sensitive **literal UTF-8 substring**,
+not a regular expression (maximum 1,024 UTF-8 bytes; reject CR, LF and control
+characters). Match against ANSI-stripped text from the current process attempt.
+Scripts use a PTY that combines stdout and stderr; either stream can satisfy the
+contract. A match may span output chunks, UTF-8 fragments and ANSI fragments but
+not a line boundary; CR and LF each end a line. Retain at most 1,023 decoded text
+bytes plus bounded UTF-8/ANSI decoder state across chunks; scan longer chunks
+incrementally. Discard overlong ANSI control sequences with bounded memory.
+Do not match synthetic supervisor separators, previous-attempt scrollback or
+output arriving after exit. A dropped/lagged output segment resets partial
+matching state and records `output-gap` without `checkedAt`; subsequent complete
+observed output can still match. A match records `checkedAt` and clears the error;
+do not expose matched text in readiness metadata.
+
+**Reset and stale-result rules.** Create/hydrate configured services as
+`ready: false, readiness: { state: "idle" }`; never persist positive readiness.
+At launch admission reset to false/pending, with all old check metadata cleared,
+before start replies. A repeated start on a running/starting service remains the
+existing no-op and does not clear valid readiness. Explicit restart resets before
+teardown; automatic restart resets when the old process exits, before backoff.
+Every replacement process starts with fresh check/matcher state. Terminal exit,
+spawn failure and stop reset to false/idle and clear all check metadata. Daemon
+shutdown, remove and upsert cancel queued/in-flight work and release slots;
+hydration follows the existing was-running behavior, never reusing old success.
+
+Every probe result, output match and readiness event is scoped by workspace,
+script ID, definition generation, admitted run and **process attempt** (automatic
+respawns within one supervisor need a new identity). Validate that identity and
+running/not-stopping state atomically at publication. A late success/failure from
+an earlier attempt, removed definition or same ID in another workspace must not
+change either state or events. Cancel on stop acceptance, before awaiting process
+teardown, so a late check cannot restore readiness during stop. Do not hold a
+registry/admission lock over network work or joins that need that lock.
+
+Reuse `script:state` for readiness transitions. Publish reset before any successor
+ready event, and serialize publication with lifecycle transitions so a captured
+old snapshot cannot arrive after reset. Successful readiness changes appear in
+status/list before their event is sent. Repeated pending failures update the
+readable check metadata without emitting a new durable event each polling tick;
+emit on readiness state changes, with the full current runtime snapshot. No
+new `script:changed` event is needed for checks (configuration changes retain
+existing definition invalidation). Consumers replace the readiness snapshot;
+omitted optional check fields clear old metadata.
+
+**Examples and implementation proof.** The bounded executable reset model and
+contract tests in `../fixtures/scripts/readiness-model.mjs` and
+`../fixtures/scripts/readiness.test.mjs` are design prototypes only. They do not
+exercise HTTP, persistence, the real PTY, locks or WSS. Component acceptance must
+add regression-first tests for URL-before-503-before-204, automatic/explicit
+restart, delayed predecessor success/failure and event ordering, stop/remove/
+upsert/shutdown cancellation, same IDs across workspaces, no-contract byte-shape
+compatibility and old-client upserts. Real HTTP fixtures must prove no redirects,
+proxy/DNS escape, body leakage or deadline/concurrency growth; PTY fixtures must
+cover split text/UTF-8/ANSI, stderr, line boundaries, lag and old scrollback. Real
+WSS tests must cover create/status/list/state-event envelopes, authorization,
+validation errors and capability negotiation. Persistence tests use isolated DBs.
+Run the daemon gates and consumer checks before advertising support.
 
 #### Saved scripts and one-off history (prepared additive extension)
 
