@@ -337,8 +337,14 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 > navigating or reloading. Capture installs document-start `error` and
 > `unhandledrejection` listeners and records CDP exceptions, console messages and
 > network requests with timestamps, status, failure reason and bounded initiator
-> stacks. `endCapture` removes listeners and the document-start script;
-> `endSession` also flushes diagnostics to the session's artifacts. Cleanup targets
+> stacks. `endCapture` unsubscribes local capture and requests removal of the guest
+> listeners and document-start script; `endSession` also flushes diagnostics to the
+> session's artifacts. Setup has a five-second deadline across its CDP stages, and
+> cleanup waits at most one second for its CDP commands and remaining body results.
+> Ending a session or capture cancels pending setup and waits for its bounded cleanup
+> before flushing. A timeout does not cancel an underlying CDP command: a stuck
+> guest may execute queued removal later; late setup results trigger best-effort
+> removal of any newly installed binding, script or listeners. Cleanup targets
 > the original guest even if its tab disappeared or was remounted. Only one capture
 > may record a guest at a time.
 >
@@ -347,15 +353,18 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 > Transport failures, unavailable bodies and capture limits use `bodyUnavailable`.
 > Request headers, cookies and POST data are not collected; URL credentials, query
 > strings and fragments are removed, and recognizable credential assignments and
-> authorization values are redacted from text. Arbitrary page text can still contain
+> full Authorization, Cookie and Set-Cookie values are redacted from text.
+> Arbitrary page text can still contain
 > sensitive information; redaction is not a guarantee that every secret is detected.
 > Text fields are capped at 16,384 characters plus a truncation marker; CDP stacks have
 > at most 20 frames. Across start/stop intervals a session retains at most 4,096
 > diagnostic events and 4 MiB of serialized event payload, with dropped-event counts
 > in `session.json`'s `diagnostics`. Pending requests are capped at 512. Body retrieval
 > admits textual responses up to 65,536 encoded bytes, at most 32 bodies per capture
-> interval and four concurrent reads, each with a one-second timeout; retained body
-> text uses the same text limit. These bounds cover diagnostics, not screenshots or
+> interval and four outstanding CDP body commands per guest, each with a one-second
+> result deadline. Timed-out commands retain their slots until they actually settle,
+> including across capture intervals; late body results do not change finalized
+> diagnostics. Retained body text uses the same text limit. These bounds cover diagnostics, not screenshots or
 > explicitly requested traces.
 >
 > **`readCapture { captureId, artifact, offset?, maxBytes? }`** retrieves completed
@@ -374,7 +383,9 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 > Session ownership comes from the trusted caller envelope, never action arguments.
 > Session actions and `readCapture` restrict agent callers to their own captures in
 > the requested workspace; user calls without `agentId` retain existing unrestricted
-> user authority. The local storage namespace uses the serving desktop's legacy
+> user authority. `getSummary` also checks persisted ownership for captures carrying
+> an ownership marker; legacy summaries without that marker retain their existing
+> workspace-scoped access. The local storage namespace uses the serving desktop's legacy
 > persisted active backend identifier, not the request's backend context; this
 > addition does not guarantee isolation by request backend. Persisted ownership
 > permits reads after a session ends or its tab
