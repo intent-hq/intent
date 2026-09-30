@@ -1,0 +1,1403 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-not-executed",
+  "description": "Private nodeProtocol 2 lifecycle data/scenarios. No runtime adapter is installed or exercised by this documentation fixture. Each scenario has fresh seeded state. fixtureEvent names are deterministic controls for future authenticated component harnesses, not wire operations. Replacements are JSON pointers; header idempotencyKey follows the replaced preparationId/turnId/stopId. correlation:fresh changes requestId/streamId without changing operation identity. Expectations are future assertions, not measured results.",
+  "versions": {
+    "nodeProtocol": 2,
+    "checkpointFormat": 1,
+    "journalFormat": 1
+  },
+  "limits": {
+    "configurationCanonicalBytes": 32768,
+    "historyUtf8Bytes": 1048576,
+    "promptBodyBytes": 8388608,
+    "messageBlocks": 256,
+    "stopBodyBytes": 1024
+  },
+  "seed": {
+    "agentId": "agent-fixture",
+    "workspaceId": "workspace-fixture",
+    "binding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3"
+    },
+    "assignment": {
+      "preparationId": "00000000-0000-4000-8000-000000000001",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7"
+    },
+    "checkpoint": "synthetic source fixture with matching manifest hash, repo/source grants and verified attachments; no live resource",
+    "provider": "fixture-static-provider with contained-v1 policy; no production adapter claim",
+    "history": "head-authorized durable source cut matching the example descriptor"
+  },
+  "examples": [
+    {
+      "id": "prepare-fresh",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000100",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000100",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000003",
+            "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000100",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000100",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "1",
+            "state": "preparing",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "status-ready",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000101",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.status",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000101",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "2",
+            "state": "ready",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "prompt-first",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000102",
+          "kind": "prompt",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000102",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.prompt",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000006"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "turnId": "00000000-0000-4000-8000-000000000006",
+          "message": {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Review the hydrated changes."
+              },
+              {
+                "type": "attachment",
+                "attachmentId": "attachment-fixture"
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000102",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000102",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "queued"
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-resume",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000103",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000003",
+            "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          },
+          "resume": {
+            "resumeAttemptId": "00000000-0000-4000-8000-000000000007",
+            "previousRunId": "00000000-0000-4000-8000-000000000008",
+            "mode": "history",
+            "history": {
+              "sourceLeaseId": "lease-source",
+              "sourceIncarnation": "00000000-0000-4000-8000-000000000011",
+              "throughJournalSeq": "42",
+              "sha256": "d1a672a1cd3febd3f766ed8bcc7c4ce37fc6f13f61d813f341298914ae4dca0e",
+              "bytes": 72
+            }
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000103",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "1",
+            "state": "preparing",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "prompt-resume",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000104",
+          "kind": "prompt",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000104",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.prompt",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000006"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "turnId": "00000000-0000-4000-8000-000000000006",
+          "message": {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Review the hydrated changes."
+              },
+              {
+                "type": "attachment",
+                "attachmentId": "attachment-fixture"
+              }
+            ]
+          },
+          "resumeAttemptId": "00000000-0000-4000-8000-000000000007",
+          "history": {
+            "text": "Prior acknowledged discussion; historical tool effects are context only."
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000104",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000104",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "delivered"
+          }
+        }
+      }
+    },
+    {
+      "id": "stop-owned",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000105",
+          "kind": "stop",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000105",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.stop",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000009"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "stopId": "00000000-0000-4000-8000-000000000009",
+          "reason": "user"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000105",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000105",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closing",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "status-retained",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000106",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000106",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.status",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000106",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000106",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "4",
+            "state": "failed_retained",
+            "ownership": "retained",
+            "failure": {
+              "code": "preparation-cleanup-pending",
+              "retryable": false
+            },
+            "stop": {
+              "stopId": "00000000-0000-4000-8000-000000000009",
+              "reason": "user"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-stale",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000107",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "6",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000003",
+            "manifestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000107",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "error": {
+            "code": -32003,
+            "message": "Stale assignment",
+            "data": {
+              "code": "stale-assignment",
+              "retryable": false
+            }
+          }
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "identical-intent-joins",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/preparationId": "00000000-0000-4000-8000-000000000005"
+          },
+          "correlation": "fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "ownedRecords": 1,
+        "providerSpawns": 1,
+        "promptDeliveries": 0,
+        "returnedPreparationId": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "id": "same-id-changed-intent",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/checkpoint/checkpointId": "00000000-0000-4000-8000-000000000013"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "request-id-reused",
+        "ownedRecords": 1
+      }
+    },
+    {
+      "id": "different-intent-conflicts",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/preparationId": "00000000-0000-4000-8000-000000000005",
+            "/checkpoint/checkpointId": "00000000-0000-4000-8000-000000000013"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "preparation-conflict",
+        "ownedRecords": 1
+      }
+    },
+    {
+      "id": "stale-identity",
+      "steps": [
+        {
+          "requestExample": "prepare-stale"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "ownedRecords": 0,
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "config-inline-no-registry",
+      "steps": [
+        {
+          "fixtureEvent": "no-prestaged-config-registry"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "providerSpawns": 1,
+        "configFetchRpcs": 0,
+        "validatedConfigSha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+      }
+    },
+    {
+      "id": "config-digest-tamper",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "untrusted-head-config-choice",
+      "steps": [
+        {
+          "fixtureEvent": "persisted-permission-policy-differs"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "untrusted-path-field",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/snapshot/cwd": "/untrusted/path"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "invalid-params",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "oversized-config",
+      "steps": [
+        {
+          "fixtureEvent": "configuration-exceeds-32768-canonical-bytes"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "unsupported-tools",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/snapshot/terminal": true
+          },
+          "recomputeConfigHash": true
+        }
+      ],
+      "expect": {
+        "lastError": "unsupported-node-operation",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "wrong-direction",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "direction": "node-to-head"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "ownedRecords": 0
+      }
+    },
+    {
+      "id": "version-one-rejects-lifecycle",
+      "steps": [
+        {
+          "fixtureEvent": "negotiated-nodeProtocol",
+          "value": 1
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "providerSpawns": 0,
+        "silentDowngrade": false
+      }
+    },
+    {
+      "id": "stop-exact-control-payload",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "stop-owned"
+        }
+      ],
+      "expect": {
+        "stopPayloadAcceptedOnlyInVersion": 2,
+        "state": "closing",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "retired-response-does-not-cancel",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "normal-RunningOwner-response-retirement"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "requestContextCancelled": true,
+        "executionLifetimeStillAdmitted": true
+      }
+    },
+    {
+      "id": "cancel-before-response-retirement",
+      "steps": [
+        {
+          "fixtureEvent": "hold-prepare-response"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "cancel-attached-request"
+        },
+        {
+          "fixtureEvent": "complete-cleanup"
+        }
+      ],
+      "expect": {
+        "state": "closed",
+        "ownership": "released",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "cancel-after-response-is-not-stop",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "normal-RunningOwner-response-retirement"
+        },
+        {
+          "fixtureEvent": "cancel-completed-request"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "status-ready"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "ownedRecords": 1,
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "first-message-waits-for-real-preparation",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "observe-before-ready"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "deliveriesBeforeReady": 0,
+        "promptDeliveries": 1,
+        "liveAdmissionCheckedAtDelivery": true
+      }
+    },
+    {
+      "id": "stale-ready-is-not-capability",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "status-ready"
+        },
+        {
+          "fixtureEvent": "revoke-exact-execution"
+        },
+        {
+          "requestExample": "prompt-first"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "stop-before-ready",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "late-hydration-completion"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 0,
+        "readyAfterStop": false
+      }
+    },
+    {
+      "id": "delivered-first-turn-dedup",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "provider-accepts"
+        },
+        {
+          "requestExample": "prompt-first",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 1,
+        "firstDeliveryState": "delivered"
+      }
+    },
+    {
+      "id": "unknown-first-turn-never-replayed",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "lose-provider-acceptance-proof"
+        },
+        {
+          "requestExample": "prompt-first",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "providerSubmissionAttempts": 1,
+        "firstDeliveryState": "outcome_unknown",
+        "automaticReplay": false
+      }
+    },
+    {
+      "id": "changed-turn-payload",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "requestExample": "prompt-first",
+          "replace": {
+            "/message/blocks/0/text": "Different text"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "request-id-reused",
+        "providerSubmissionAttempts": 1
+      }
+    },
+    {
+      "id": "resume-inline-history",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 1,
+        "historyFetchRpcs": 0,
+        "historySha256": "d1a672a1cd3febd3f766ed8bcc7c4ce37fc6f13f61d813f341298914ae4dca0e",
+        "historicalToolEffectsExecuted": 0
+      }
+    },
+    {
+      "id": "history-cut-unacknowledged",
+      "steps": [
+        {
+          "fixtureEvent": "source-cut-not-durably-acknowledged"
+        },
+        {
+          "requestExample": "prepare-resume"
+        }
+      ],
+      "expect": {
+        "lastError": "history-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "history-bytes-tampered",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume",
+          "replace": {
+            "/history/text": "Different history"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "history-unavailable",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "resume-attempt-mismatch",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume",
+          "replace": {
+            "/resumeAttemptId": "00000000-0000-4000-8000-000000000014"
+          }
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "surviving-reconnect",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "provider-accepts"
+        },
+        {
+          "fixtureEvent": "reconnect-same-run-new-generation"
+        },
+        {
+          "requestExample": "status-ready"
+        }
+      ],
+      "expect": {
+        "providerSpawns": 1,
+        "promptDeliveries": 1,
+        "newResumeAttempt": false
+      }
+    },
+    {
+      "id": "old-generation-rejected",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "reconnect-same-run-new-generation"
+        },
+        {
+          "requestExample": "prompt-first",
+          "linkGeneration": "3"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "cleanup-only-read-not-execution",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "inject-native-cleanup-failure"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "requestExample": "status-retained"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "state": "failed_retained",
+        "ownership": "retained",
+        "lastError": "stale-assignment",
+        "nativePrivateCaptureOwnersRetained": true
+      }
+    },
+    {
+      "id": "released-token-no-cleanup-bypass",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "release-and-revoke-lease"
+        },
+        {
+          "requestExample": "status-retained"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "ownerBypass": false
+      }
+    },
+    {
+      "id": "local-root-reuse-blocked",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "inject-native-cleanup-failure"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "attempt-new-run-same-root-slot"
+        }
+      ],
+      "expect": {
+        "localReuse": "denied",
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "fenced-recovery-elsewhere",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "lose-old-node-with-retained-cleanup"
+        },
+        {
+          "fixtureEvent": "head-confirms-canonical-enforceable-loss-fence"
+        },
+        {
+          "fixtureEvent": "prepare-new-epoch-other-node-from-last-durable-checkpoint"
+        }
+      ],
+      "expect": {
+        "remoteRecoveryAllowed": true,
+        "waitForOldCleanupAck": false,
+        "oldLocalOwnership": "retained",
+        "oldLateWrites": "denied"
+      }
+    },
+    {
+      "id": "unfenced-recovery-refused",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "lose-old-node-with-retained-cleanup"
+        },
+        {
+          "fixtureEvent": "attempt-remote-recovery-without-fence"
+        }
+      ],
+      "expect": {
+        "remoteRecoveryAllowed": false
+      }
+    },
+    {
+      "id": "restart-does-not-restore-ready",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "restart-with-uncertain-orphan-cleanup"
+        },
+        {
+          "requestExample": "status-retained"
+        }
+      ],
+      "expect": {
+        "stateOneOf": [
+          "closing",
+          "failed_retained"
+        ],
+        "providerSpawns": 1,
+        "cachedReadyAdmission": false
+      }
+    },
+    {
+      "id": "retired-id-cannot-reopen",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "complete-cleanup"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "providerSpawnsAtMost": 1
+      }
+    },
+    {
+      "id": "missing-inherited-attachment",
+      "steps": [
+        {
+          "fixtureEvent": "source-parent-differs-from-target-child"
+        },
+        {
+          "fixtureEvent": "checkpoint-attachment-missing"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "preparationSucceeded": false,
+        "ready": false,
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "source-target-separate-validation",
+      "steps": [
+        {
+          "fixtureEvent": "authorized-parent-source-target-child"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "sourceAndTargetChecksPerformed": true,
+        "parentIdentityRewritten": false,
+        "parentHeadIndexWorktreeUnchanged": true
+      }
+    },
+    {
+      "id": "serialized-data-is-not-authority",
+      "steps": [
+        {
+          "fixtureEvent": "inject-deserialized-PreparedCheckpoint-without-source-authority"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "checkpoint-invalid",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "capture-ack-independent",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "provider-idle-with-live-capture-owner"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "captureOwnerRetained": true,
+        "durableCheckpointAckInvented": false
+      }
+    },
+    {
+      "id": "fixture-failed-teardown-retained",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "inject-cleanup-failure"
+        },
+        {
+          "fixtureEvent": "fixture-teardown-deadline"
+        }
+      ],
+      "expect": {
+        "testResult": "fail",
+        "fixtureSupervisorRetained": true,
+        "rootsDeleted": false,
+        "ownersForcedClosed": false
+      }
+    }
+  ],
+  "fixtureOwnership": {
+    "registration": "unique disposable root plus owning supervisor before effects",
+    "teardown": "reset injected test faults only, then authentic stop/native/private/capture settlement",
+    "onUnsettled": "fail and retain supervisor, charge and roots for explicit disposition",
+    "prohibited": [
+      "forced closed status",
+      "invented ACK",
+      "root deletion before settlement",
+      "drop retained owners",
+      "worker disposal counted as cleanup pass"
+    ]
+  }
+}

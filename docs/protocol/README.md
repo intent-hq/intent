@@ -26,6 +26,12 @@ The [phase 1 node contract](./methods/nodes.md) is a prepared, unimplemented
 extension with capability-gated additions and a separately staged CoW removal.
 Its [private link](./node-link.md) and [checkpoint format](./node-checkpoints.md)
 are distinct from client WSS and do not change the currently advertised version.
+The [private preparation lifecycle](./node-link.md#private-preparation-lifecycle)
+prepares nodeProtocol 2 without changing checkpoint/journal formats or public
+capabilities. Its [JSON lifecycle scenarios](./fixtures/nodes/lifecycle.json) are
+prepared request/result/error and state assertions, not an executed adapter,
+native test result or listener qualification. Runtime acceptance requires separate
+component implementation and verification.
 
 ### §5.x subsections (`methods/`)
 
