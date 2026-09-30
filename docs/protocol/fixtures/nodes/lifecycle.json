@@ -3797,5 +3797,731 @@
       "overLimit": 513,
       "expectOver": "reject-before-new-effects"
     }
-  ]
+  ],
+  "checkpointReconnectObservation": {
+    "status": "prepared-not-executed",
+    "description": "Internal fixture identities and native-drain conditions are setup assertions for a future authenticated harness, not wire fields, measured admission or authority. Current frame binding differs only in generation; the body retains original attempt identity. Existing same-generation corpus is unchanged.",
+    "retainedAttempt": {
+      "preparationId": "00000000-0000-4000-8000-000000000060",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7",
+      "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attemptId": "00000000-0000-4000-8000-000000000051",
+      "transferId": "00000000-0000-4000-8000-000000000052",
+      "linkGeneration": "3",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000070",
+        "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+      },
+      "state": "issued",
+      "ownership": "retained",
+      "revision": "1",
+      "expiresAt": "2026-09-30T00:02:00Z"
+    },
+    "originalBinding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3",
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture"
+    },
+    "acceptedObserverBinding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "4",
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture"
+    },
+    "trustedProvenance": "live retained installer owner; not caller data or recovered bytes alone",
+    "examples": [
+      {
+        "id": "observe-old-closing",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000160",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000160",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000160",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000160",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "closing",
+              "ownership": "retained",
+              "revision": "2",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "unknown"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      },
+      {
+        "id": "observe-old-failed_retained",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000161",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000161",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000161",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000161",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "failed_retained",
+              "ownership": "retained",
+              "revision": "3",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "failed"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      },
+      {
+        "id": "observe-old-closed",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000162",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000162",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000162",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000162",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "closed",
+              "ownership": "released",
+              "revision": "4",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "failed"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "failed-stream-accepted-reconnect",
+        "steps": [
+          {
+            "fixtureEvent": "fail-selected-stream"
+          },
+          {
+            "fixtureEvent": "close-shared-link"
+          },
+          {
+            "fixtureEvent": "settle-native-permissions"
+          },
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "observe-original-generation-3"
+          }
+        ],
+        "expect": {
+          "outerGeneration": "4",
+          "bodyGeneration": "3",
+          "delivery": "observation-only",
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "held-native-permission",
+        "steps": [
+          {
+            "fixtureEvent": "fail-selected-stream"
+          },
+          {
+            "fixtureEvent": "retain-native-read-permission"
+          },
+          {
+            "fixtureEvent": "request-generation-4"
+          }
+        ],
+        "expect": {
+          "generationAdmission": "pending-or-denied",
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "permissionForceDropped": false
+        }
+      },
+      {
+        "id": "later-admitted-retained-ledger",
+        "steps": [
+          {
+            "fixtureEvent": "release-native-permission-after-actual-settlement"
+          },
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "retain-failed-ledger-and-pins"
+          },
+          {
+            "fixtureEvent": "observe-original-attempt"
+          }
+        ],
+        "expect": {
+          "generationAdmitted": true,
+          "bodyGeneration": "3",
+          "ownership": "retained",
+          "nodeCleanupClaimed": false
+        }
+      },
+      {
+        "id": "old-issued-not-cleanup-state",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "find-old-issued-record-not-reconciled"
+          },
+          {
+            "fixtureEvent": "request-observation"
+          }
+        ],
+        "expect": {
+          "observationAvailable": false,
+          "recordRewritten": false,
+          "ownership": "retained"
+        }
+      },
+      {
+        "id": "old-streaming-not-cleanup-state",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "find-old-streaming-record-not-reconciled"
+          },
+          {
+            "fixtureEvent": "request-observation"
+          }
+        ],
+        "expect": {
+          "observationAvailable": false,
+          "recordRewritten": false,
+          "ownership": "retained"
+        }
+      },
+      {
+        "id": "old-outer-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "send-outer-generation-3"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "rewritten-body-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "rewrite-receipt-generation-to-4"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "caller-expected-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "generic-caller-supplies-generation-override"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-lease",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-lease"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-incarnation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-incarnation"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-owner-node",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-owner-or-node"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-run",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-run"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-preparation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-preparation"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-transfer",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-transfer-id"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-checkpoint",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-source-checkpoint-hash"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "unknown-attempt",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "lookup-unknown-attempt"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "initial-reply-lost",
+        "steps": [
+          {
+            "fixtureEvent": "lose-first-registration-reply"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "local-correlation-lost",
+        "steps": [
+          {
+            "fixtureEvent": "lose-retained-node-descriptor"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "restart-quarantine",
+        "steps": [
+          {
+            "fixtureEvent": "restart-with-unproved-record-bytes"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "released-credential",
+        "steps": [
+          {
+            "fixtureEvent": "release-lease-credential"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "denied": true
+        }
+      },
+      {
+        "id": "queued-response-revoked",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "queue-observation-response"
+          },
+          {
+            "fixtureEvent": "revoke-current-observer-link"
+          }
+        ],
+        "expect": {
+          "bytesAfterFence": 0,
+          "oldReadAuthorityRestored": false
+        }
+      },
+      {
+        "id": "observation-not-installer",
+        "steps": [
+          {
+            "fixtureEvent": "observe-old-closed"
+          },
+          {
+            "fixtureEvent": "attempt-install-consume-open-or-read"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "oldTransferRebound": false
+        }
+      },
+      {
+        "id": "head-closed-node-uncertain",
+        "steps": [
+          {
+            "fixtureEvent": "observe-head-closed"
+          },
+          {
+            "fixtureEvent": "retain-node-helper-or-restore-owner"
+          },
+          {
+            "fixtureEvent": "attempt-new-read"
+          }
+        ],
+        "expect": {
+          "newReadDenied": true,
+          "localRootReused": false
+        }
+      },
+      {
+        "id": "settled-new-attempt",
+        "steps": [
+          {
+            "fixtureEvent": "settle-head-and-node-owners"
+          },
+          {
+            "fixtureEvent": "fresh-source-target-admission"
+          },
+          {
+            "fixtureEvent": "register-new-nonce-transfer-on-generation-4"
+          }
+        ],
+        "expect": {
+          "newIdentityRequired": true,
+          "originalQuotaWindowPreserved": true
+        }
+      },
+      {
+        "id": "fenced-recovery-elsewhere",
+        "steps": [
+          {
+            "fixtureEvent": "retain-old-local-cleanup"
+          },
+          {
+            "fixtureEvent": "independently-fence-and-recover-elsewhere"
+          }
+        ],
+        "expect": {
+          "oldOwnershipReleased": false,
+          "independentRecoveryAllowed": true
+        }
+      },
+      {
+        "id": "duplicate-response-key",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "receive-duplicate-or-escaped-duplicate-response-field"
+          }
+        ],
+        "expect": {
+          "decodeRejected": true
+        }
+      },
+      {
+        "id": "delayed-original-receipt",
+        "steps": [
+          {
+            "fixtureEvent": "observe-revision-4-closed"
+          },
+          {
+            "fixtureEvent": "receive-delayed-revision-2-closing"
+          }
+        ],
+        "expect": {
+          "retainedRevision": "4",
+          "state": "closed",
+          "ownership": "released",
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "equal-revision-disagrees",
+        "steps": [
+          {
+            "fixtureEvent": "observe-revision-4-closed"
+          },
+          {
+            "fixtureEvent": "receive-revision-4-failed-retained"
+          }
+        ],
+        "expect": {
+          "conflictRejected": true,
+          "retainedRevision": "4"
+        }
+      }
+    ],
+    "fixtureOwnership": "Keep actual native permission/owner through teardown. Admit newer generation only after existing fencing/native-drain rules permit it. Release and settle real work before assertions; retained failure is not disposed or counted as cleanup. No fixture may force-drop guards or reset counters to obtain a new link."
+  }
 }

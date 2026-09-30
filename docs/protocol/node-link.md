@@ -432,8 +432,12 @@ hashes; the schema illustration's digest is a placeholder.
 ```
 
 transferId is a head-generated globally unique UUID, used as Git streamId and
-Open.request.requestId, not a bearer capability. Node checks the complete receipt
-against its owned preparation, selected checkpoint/hash, repo and current binding.
+Open.request.requestId, not a bearer capability. Normal registration and installer
+validation compare the complete receipt to the owned preparation, selected
+checkpoint/hash, repo and current binding. For the narrow cleanup-only observation
+below, the outer frame instead uses the current observer binding while the receipt
+retains the original attempt generation; trusted retained correlation supplies
+that expected identity. This exception grants no read or installer authority.
 States are issued, streaming, closing, closed and failed_retained. Ownership is
 retained except when closed. State/outcome/ownership updates atomically advance a
 durable per-attempt decimal u64 revision; receivers discard older observations
@@ -536,9 +540,11 @@ ready; existing Prompt history and unsupported portable import remain unchanged.
 
 Dedup identity is owner/agent/workspace/preparationId plus attemptId. Repo, run,
 epoch, generation and source selection are immutable values, not alternate keys.
-Changed values with that nonce fail request-id-reused. A repeated registration
-may use fresh transport correlation but returns the same transfer ID and current
-versioned receipt, never another native transfer.
+Changed attempt values with that nonce fail request-id-reused. A repeated
+registration may use fresh transport correlation but returns the same transfer ID
+and current versioned receipt, never another native transfer. A cleanup-only
+observation on a newer admitted link does not change the attempt generation or
+re-register it: the exact old identity must already be retained at both ends.
 
 Allow one unsettled attempt per preparation/repo. A different nonce while issued,
 streaming, closing or failed_retained fails source-read-in-use. Duplicate Open
@@ -561,8 +567,10 @@ attempt expires no later than 120000ms after issuance or the original source/
 lease deadline, whichever is earlier; earlier preparation stop/delivery deadlines
 still win. Head admission/time is authoritative; node may shorten, never extend.
 Clock/restart uncertainty cannot extend deadlines. Reconnect fences old generation
-IDs, helper grants and queued writes; a new generation requires actual old-owner
-settlement, new nonce/ID and fresh admission within the original budgets. Disk
+IDs, helper grants and queued writes. A new read attempt on a newer admitted
+generation requires actual prior ownership settlement, a new nonce/ID and fresh
+source/target admission within the original budgets. A cleanup-only observation
+may report retained old ownership without permitting that new attempt. Disk
 records do not restore a grant, authority or cancellation token after restart.
 
 Registration cancellation before publication leaves no usable ID; uncertain
@@ -574,6 +582,65 @@ preparation tombstoning under a valid current lease/link and exact retained
 owner/run/epoch. It cannot allocate, reopen, read source or change selection;
 expired/released credentials are rejected. Head-local operator reconciliation is
 separate.
+
+For observation across generations, reuse node.checkpoint.read.prepare with the
+same preparation/run/epoch/repo/attemptId and idempotency key, plus a fresh transport
+requestId. Add no selector, generation override or capability field. Head must
+resolve an existing exact bounded record, never infer the current preparation or
+allocate on a miss. A retired unknown identity stays denied by its durable fence.
+
+Authenticate the current outer request/response against the genuinely accepted
+new link. The lease/incarnation/head/node/owner must equal the original attempt's
+owner; only linkGeneration may differ, and must be strictly greater. Check exact
+retained agent/workspace/run/epoch cleanup rights and installed method authority;
+an active assignment alone is not proof. Different/released leases, re-enrollment,
+foreign runs and stale outer frames remain denied. The durable attempt generation,
+transferId, checkpoint/hash, expiry and other immutable fields are never rewritten.
+
+The old attempt must already be fenced and its actual persisted state must be
+closing, closed or failed_retained. Return that state's original-generation
+receipt with its real ownership/revision; no artificial closed transition or new
+transfer makes observation possible. Unreconciled old issued/streaming state is
+unavailable/unknown and remains owned. Ordinary registration/Open/read decoding
+continues to require the current generation.
+
+A fresh typed observation-only permission binds the current observer link to the
+exact retained original owner and remains held through queued/actual response
+writes. Current-link revocation fences those bytes. Never copy old RequestContext,
+revive old cancellation or weaken a read/installer permission to send status.
+Original source/native owners retain their actual settlement obligations.
+
+Before sending, the trusted live retained node owner binds a bounded pending
+observation descriptor to the original generation and complete known attempt
+identity, including transferId and checkpoint/hash. The RPC layer validates current
+outer-frame identity and strict original response bytes, then compares the body
+to that trusted descriptor. It cannot take expected generation from a generic
+caller, wire payload or the returned value itself. Deliver an internal typed
+observation-only result that cannot enter install/consume/Open/read/execution.
+Monotonic receipt ordering remains unchanged: ignore older revisions, require
+equal revisions to agree, and never reinstall from a repeated or late observation.
+
+A lost initial registration reply, missing issued ID, lost local correlation or
+unproved restart record cannot be repaired by trusting returned history, scanning
+the current preparation or inventing an alias. Retain uncertainty and reconcile
+head-locally. Persisted bytes alone cannot recreate observation authority; without
+proven retained ownership/correlation and current live cleanup authorization, the
+wire route remains unavailable.
+
+This observation route requires a newer link admitted through the existing
+generation-fencing and native-drain rules. If retained native read/write permission
+prevents that admission, cleanup remains head-local; closing the old socket,
+expiring a deadline or requesting cancellation does not justify dropping permission,
+accepting a newer generation early or treating old ownership as settled. Retained
+pins/ledger records differ from outstanding native permission: they may remain
+after the existing generation-admission requirements genuinely complete.
+
+A closed head receipt does not prove node helper/restore cleanup or permit reuse
+of its local root/slot. New reads still require actual head and node ownership
+settlement with fresh identity/admission; independently fenced recovery elsewhere
+retains its existing rule. Prepared reconnect examples are specifications until
+an actual failed stream, shared-link closure, admitted reconnect and typed
+observation path are qualified; same-generation controls do not establish this.
 
 On recovery, expiry or stop, head reconciles even records with **zero attempts**.
 Durably fence registration/Open first, settle all claimed readers, native work,
