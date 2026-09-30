@@ -101,7 +101,7 @@ make -C packages/intentd test COMPACT=1
 
 Compact mode requires **Python 3.11+** for `tomllib`; ordinary gates retain their
 existing Python support. It applies to the compiler steps in `check`, `test`,
-`test-changed` and `gate`, and to `clippy`, `lint-sources` and `build-intentd`.
+`test-changed` and `gate`, and to `clippy` and `lint-sources`.
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS
 proc-macro workaround. Test selection, changed-test fallback and failure handling
