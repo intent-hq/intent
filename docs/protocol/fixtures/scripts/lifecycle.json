@@ -1,0 +1,1448 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-not-executed",
+  "description": "Each case starts from a fresh isolated seed. fixtureControl and barriers are future harness controls, not RPCs. Subsets and postconditions are required assertions for component tests, not measured outcomes. The static test validates fixture consistency only; no daemon, PTY, database or race is exercised. No live workspace IDs or commands are used. A scenario initialScript replaces the same-ID seed definition before its operation; archive transition examples start active.",
+  "capability": {
+    "scriptLifecycle": 1
+  },
+  "seed": [
+    {
+      "id": "legacy",
+      "workspaceId": "ws-a",
+      "name": "legacy",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "saved",
+      "runtime": {
+        "status": "idle",
+        "restartCount": 0
+      }
+    },
+    {
+      "id": "successful",
+      "workspaceId": "ws-a",
+      "name": "successful",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "oneOff",
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 0,
+        "stoppedAt": "2026-09-30T12:00:00Z"
+      },
+      "archivedAt": "2026-09-30T12:00:00Z",
+      "lastRun": {
+        "outcome": "succeeded",
+        "exitCode": 0,
+        "stoppedAt": "2026-09-30T12:00:00Z"
+      }
+    },
+    {
+      "id": "failed",
+      "workspaceId": "ws-a",
+      "name": "failed",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "oneOff",
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 2,
+        "stoppedAt": "2026-09-30T12:00:00Z"
+      },
+      "lastRun": {
+        "outcome": "failed",
+        "exitCode": 2,
+        "stoppedAt": "2026-09-30T12:00:00Z"
+      },
+      "archivedAt": "2026-09-30T12:00:00Z"
+    },
+    {
+      "id": "running",
+      "workspaceId": "ws-a",
+      "name": "running",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "oneOff",
+      "runtime": {
+        "status": "running",
+        "restartCount": 0
+      }
+    },
+    {
+      "id": "starting",
+      "workspaceId": "ws-a",
+      "name": "starting",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "oneOff",
+      "runtime": {
+        "status": "starting",
+        "restartCount": 0
+      }
+    },
+    {
+      "id": "restarting",
+      "workspaceId": "ws-a",
+      "name": "restarting",
+      "command": "fixture-command",
+      "mode": "command",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "oneOff",
+      "runtime": {
+        "status": "restarting",
+        "restartCount": 0
+      }
+    },
+    {
+      "id": "service",
+      "workspaceId": "ws-a",
+      "name": "service",
+      "command": "fixture-command",
+      "mode": "service",
+      "source": "user",
+      "createdAt": "2026-09-30T12:00:00Z",
+      "purpose": "saved",
+      "runtime": {
+        "status": "idle",
+        "restartCount": 0
+      }
+    }
+  ],
+  "cases": [
+    {
+      "id": "list-default",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a"
+        }
+      },
+      "expect": {
+        "scriptIds": [
+          "failed",
+          "legacy",
+          "restarting",
+          "running",
+          "service",
+          "starting",
+          "successful"
+        ],
+        "order": "createdAt-then-id"
+      }
+    },
+    {
+      "id": "list-active",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": "active"
+        }
+      },
+      "expect": {
+        "scriptIds": [
+          "legacy",
+          "restarting",
+          "running",
+          "service",
+          "starting"
+        ],
+        "order": "createdAt-then-id"
+      }
+    },
+    {
+      "id": "list-archived",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": "archived"
+        }
+      },
+      "expect": {
+        "scriptIds": [
+          "failed",
+          "successful"
+        ],
+        "order": "createdAt-then-id"
+      }
+    },
+    {
+      "id": "list-all",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": "all"
+        }
+      },
+      "expect": {
+        "scriptIds": [
+          "failed",
+          "legacy",
+          "restarting",
+          "running",
+          "service",
+          "starting",
+          "successful"
+        ],
+        "order": "createdAt-then-id"
+      }
+    },
+    {
+      "id": "reviewed-bulk-selection",
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            "legacy",
+            "running",
+            "starting",
+            "restarting",
+            "service",
+            "missing",
+            "successful",
+            "legacy"
+          ]
+        }
+      },
+      "expect": {
+        "result": {
+          "archived": [
+            "legacy",
+            "successful"
+          ],
+          "skipped": [
+            {
+              "scriptId": "running",
+              "reason": "live"
+            },
+            {
+              "scriptId": "starting",
+              "reason": "live"
+            },
+            {
+              "scriptId": "restarting",
+              "reason": "live"
+            },
+            {
+              "scriptId": "service",
+              "reason": "service"
+            },
+            {
+              "scriptId": "missing",
+              "reason": "notFound"
+            }
+          ]
+        },
+        "preserveRuntimeAndOutput": [
+          "legacy",
+          "successful"
+        ],
+        "noProcessStops": true,
+        "changedIds": [
+          "legacy"
+        ]
+      }
+    },
+    {
+      "id": "restore-preserves-one-off",
+      "request": {
+        "method": "script.restore",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            "successful",
+            "legacy",
+            "missing"
+          ]
+        }
+      },
+      "expect": {
+        "result": {
+          "restored": [
+            "successful",
+            "legacy"
+          ],
+          "skipped": [
+            {
+              "scriptId": "missing",
+              "reason": "notFound"
+            }
+          ]
+        },
+        "purposeById": {
+          "successful": "oneOff"
+        },
+        "preserveRuntimeAndOutput": [
+          "successful",
+          "legacy"
+        ],
+        "changedIds": [
+          "successful"
+        ],
+        "noLaunch": true
+      }
+    },
+    {
+      "id": "archive-failure-idempotent",
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            "failed"
+          ]
+        }
+      },
+      "expect": {
+        "result": {
+          "archived": [
+            "failed"
+          ],
+          "skipped": []
+        },
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "preserveRuntimeAndOutput": [
+          "failed"
+        ],
+        "changedIds": []
+      }
+    },
+    {
+      "id": "foreign-id-hidden",
+      "extraSeed": [
+        {
+          "id": "foreign",
+          "workspaceId": "ws-b",
+          "name": "foreign",
+          "command": "fixture-command",
+          "mode": "command",
+          "source": "user",
+          "createdAt": "2026-09-30T12:00:00Z",
+          "purpose": "saved",
+          "runtime": {
+            "status": "idle",
+            "restartCount": 0
+          }
+        }
+      ],
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            "foreign"
+          ]
+        }
+      },
+      "expect": {
+        "result": {
+          "archived": [],
+          "skipped": [
+            {
+              "scriptId": "foreign",
+              "reason": "notFound"
+            }
+          ]
+        },
+        "changedIds": []
+      }
+    },
+    {
+      "id": "nonmember-workspace-hidden",
+      "caller": "nonmember",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": "all"
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "errorDataCode": "not-found",
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-one-off-purpose-disposable",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "bad",
+          "command": "true",
+          "mode": "command",
+          "purpose": "disposable"
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-one-off-purpose-None",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "bad",
+          "command": "true",
+          "mode": "command",
+          "purpose": null
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-one-off-mode-service",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "bad",
+          "command": "true",
+          "mode": "service",
+          "purpose": "oneOff"
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-one-off-autoStart-True",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "bad",
+          "command": "true",
+          "mode": "command",
+          "purpose": "oneOff",
+          "autoStart": true
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-filter-history",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": "history"
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-filter-None",
+      "request": {
+        "method": "script.list",
+        "params": {
+          "workspaceId": "ws-a",
+          "archive": null
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-selection-15",
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": []
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-selection-16",
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            ""
+          ]
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "reject-selection-17",
+      "request": {
+        "method": "script.archive",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptIds": [
+            null
+          ]
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "new-default-is-saved",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "test old 2020",
+          "command": "test",
+          "mode": "command",
+          "category": "test"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "purpose": "saved"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "upsert-retains-explicit-purpose",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful",
+          "name": "next",
+          "command": "true",
+          "mode": "command"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "id": "successful",
+          "purpose": "oneOff"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ],
+        "staleCompletionIgnored": true
+      }
+    },
+    {
+      "id": "upsert-explicitly-save",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful",
+          "name": "keep",
+          "command": "true",
+          "mode": "command",
+          "purpose": "saved"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "id": "successful",
+          "purpose": "saved"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "rerun-start",
+      "request": {
+        "method": "script.start",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful"
+        }
+      },
+      "expect": {
+        "restoredBeforeAdmission": true,
+        "purpose": "oneOff",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "runtimeTerminalFieldsCleared": true,
+        "noHiddenLiveProcess": true
+      }
+    },
+    {
+      "id": "rerun-run",
+      "request": {
+        "method": "script.run",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful"
+        }
+      },
+      "expect": {
+        "restoredBeforeAdmission": true,
+        "purpose": "oneOff",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "runtimeTerminalFieldsCleared": true,
+        "noHiddenLiveProcess": true
+      }
+    },
+    {
+      "id": "rerun-restart",
+      "request": {
+        "method": "script.restart",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful"
+        }
+      },
+      "expect": {
+        "restoredBeforeAdmission": true,
+        "purpose": "oneOff",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "runtimeTerminalFieldsCleared": true,
+        "noHiddenLiveProcess": true
+      }
+    },
+    {
+      "id": "archived-status-hook",
+      "request": {
+        "method": "script.status",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful"
+        }
+      },
+      "expect": {
+        "resultSubset": {
+          "status": "exited",
+          "exitCode": 0
+        },
+        "hookDispatch": true
+      }
+    },
+    {
+      "id": "archived-output",
+      "request": {
+        "method": "script.output",
+        "params": {
+          "workspaceId": "ws-a",
+          "scriptId": "successful"
+        }
+      },
+      "expect": {
+        "sameBufferAsBeforeArchive": true,
+        "noNotFound": true
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "one-off-success",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "succeeded",
+        "observedExitCode": 0
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true
+      }
+    },
+    {
+      "id": "one-off-failure",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "failed",
+        "observedExitCode": 2
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "one-off-spawn-failure",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "failed",
+        "observedExitCode": null
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "spawn failed"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "one-off-unobservable",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "interrupted",
+        "observedExitCode": null
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "interrupted",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "exit status unobservable"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "one-off-cancel-before-spawn",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "cancelled",
+        "observedExitCode": null
+      },
+      "expect": {
+        "status": "idle",
+        "lastRun": {
+          "outcome": "cancelled",
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "cancelled before process start"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true,
+        "stopAwareHookRequired": true
+      }
+    },
+    {
+      "id": "one-off-cancel-zero-exit",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "cancelled",
+        "observedExitCode": 0
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "cancelled",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "cancelled by user"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "one-off-run-timeout",
+      "fixtureControl": {
+        "purpose": "oneOff",
+        "terminalOutcome": "cancelled",
+        "observedExitCode": 143
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "cancelled",
+          "exitCode": 143,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "script.run timed out"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "eventOrder": [
+          "script:state",
+          "script:changed"
+        ],
+        "outputAddressable": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "saved-success",
+      "fixtureControl": {
+        "purpose": "saved",
+        "terminalOutcome": "succeeded",
+        "observedExitCode": 0
+      },
+      "expect": {
+        "status": "exited",
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "archived": false,
+        "hookDispatch": true,
+        "outputAddressable": true
+      }
+    },
+    {
+      "id": "stop-settled-one-off",
+      "fixtureControl": {
+        "scriptId": "successful",
+        "operation": "stop"
+      },
+      "expect": {
+        "status": "idle",
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "archived": true,
+        "hookDispatch": true,
+        "noNewResult": true,
+        "stopAwareHookRequired": true
+      }
+    },
+    {
+      "id": "never-started-stop",
+      "fixtureControl": {
+        "scriptId": "legacy",
+        "purpose": "oneOff",
+        "operation": "stop"
+      },
+      "expect": {
+        "status": "idle",
+        "archived": false,
+        "noNewResult": true
+      }
+    },
+    {
+      "id": "restart-predecessor-success",
+      "fixtureControl": {
+        "operation": "restart",
+        "predecessorExitCode": 0
+      },
+      "expect": {
+        "protectedUntilNewRunSettles": true,
+        "archived": false,
+        "noFinalHookDispatchDuringGap": true
+      }
+    },
+    {
+      "id": "archive-start-order-start-first",
+      "fixtureControl": {
+        "race": [
+          "start",
+          "archive"
+        ],
+        "firstAdmission": "start"
+      },
+      "expect": {
+        "archiveReason": "live",
+        "archived": false,
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "archive-start-order-archive-first",
+      "fixtureControl": {
+        "race": [
+          "start",
+          "archive"
+        ],
+        "firstAdmission": "archive"
+      },
+      "expect": {
+        "archiveSucceeded": true,
+        "restoredBeforeAdmission": true,
+        "archived": false,
+        "noHiddenLiveProcess": true
+      }
+    },
+    {
+      "id": "archive-run-reservation",
+      "fixtureControl": {
+        "race": [
+          "run",
+          "archive"
+        ],
+        "barrier": "before-spawn"
+      },
+      "expect": {
+        "archiveReason": "live",
+        "archived": false,
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "archive-supervisor-teardown",
+      "fixtureControl": {
+        "status": "exited",
+        "barrier": "teardown-not-settled"
+      },
+      "expect": {
+        "archiveReason": "live",
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "archive-unknown-future-state",
+      "fixtureControl": {
+        "status": "future-live-state"
+      },
+      "expect": {
+        "archiveReason": "live",
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "late-exit-after-upsert",
+      "fixtureControl": {
+        "barrier": "old-completion-after-replacement"
+      },
+      "expect": {
+        "staleCompletionIgnored": true,
+        "archived": false
+      }
+    },
+    {
+      "id": "late-exit-after-rerun",
+      "fixtureControl": {
+        "barrier": "old-completion-after-new-run-admission"
+      },
+      "expect": {
+        "staleCompletionIgnored": true,
+        "archived": false
+      }
+    },
+    {
+      "id": "cancel-run-waiter-before-spawn",
+      "fixtureControl": {
+        "operation": "drop-rpc-waiter",
+        "barrier": "run-reservation-before-spawn",
+        "scriptId": "successful"
+      },
+      "expect": {
+        "archived": false,
+        "reservationReleased": true,
+        "noNewResult": true,
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      }
+    },
+    {
+      "id": "cancel-run-waiter-after-spawn",
+      "fixtureControl": {
+        "operation": "drop-rpc-waiter",
+        "barrier": "owned-completion-task"
+      },
+      "expect": {
+        "supervisionContinues": true,
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "archive-write-failure",
+      "fixtureControl": {
+        "operation": "automatic-archive",
+        "fault": "database-write"
+      },
+      "expect": {
+        "archived": false,
+        "status": "exited",
+        "exitCode": 0,
+        "errorLogged": true,
+        "outputAddressable": true
+      }
+    },
+    {
+      "id": "restore-write-failure-before-start",
+      "fixtureControl": {
+        "operation": "start-archived",
+        "fault": "database-write"
+      },
+      "expect": {
+        "errorCode": -32603,
+        "noLaunch": true,
+        "archived": true
+      }
+    },
+    {
+      "id": "partial-batch-write-failure",
+      "fixtureControl": {
+        "operation": "archive-batch",
+        "fault": "database-write-on-second-id"
+      },
+      "expect": {
+        "errorCode": -32603,
+        "firstIdMayHaveCommitted": true,
+        "retrySameSelectionSafe": true
+      }
+    },
+    {
+      "id": "restart-archived-success",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "scriptId": "successful"
+      },
+      "expect": {
+        "archived": true,
+        "status": "idle",
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "noLaunch": true,
+        "stopAwareHookRequired": true
+      }
+    },
+    {
+      "id": "restart-failed-one-off",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "scriptId": "failed"
+      },
+      "expect": {
+        "archived": true,
+        "status": "idle",
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "stopAwareHookRequired": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "daemon-loss-starting",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "phase": "starting",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "expect": {
+        "archived": true,
+        "status": "exited",
+        "lastRun": {
+          "outcome": "interrupted",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "lost: the daemon stopped while the script was running"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "daemon-loss-running",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "phase": "running",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "expect": {
+        "archived": true,
+        "status": "exited",
+        "lastRun": {
+          "outcome": "interrupted",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "lost: the daemon stopped while the script was running"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "daemon-loss-run-reservation",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "phase": "run-reservation",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "expect": {
+        "archived": true,
+        "status": "exited",
+        "lastRun": {
+          "outcome": "interrupted",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "lost: the daemon stopped while the script was running"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "daemon-loss-restarting",
+      "fixtureControl": {
+        "operation": "daemon-restart",
+        "phase": "restarting",
+        "previousLastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "expect": {
+        "archived": true,
+        "status": "exited",
+        "lastRun": {
+          "outcome": "interrupted",
+          "exitCode": -1,
+          "stoppedAt": "2026-09-30T12:00:00Z",
+          "error": "lost: the daemon stopped while the script was running"
+        },
+        "hookDispatch": true,
+        "outputMayBeEmpty": true,
+        "historyFailureVisible": true
+      }
+    },
+    {
+      "id": "all-archived-no-bootstrap",
+      "fixtureControl": {
+        "operation": "list-active",
+        "allDefinitionsArchived": true,
+        "repositoryConfigHasScripts": true
+      },
+      "expect": {
+        "scriptIds": [],
+        "noDefinitionsCreated": true
+      }
+    },
+    {
+      "id": "old-daemon-no-capability",
+      "fixtureControl": {
+        "operation": "client-connect",
+        "capabilities": {}
+      },
+      "expect": {
+        "lifecycleControls": false,
+        "sendLifecycleFields": false,
+        "defaultPurpose": "saved",
+        "noRemoveFallback": true
+      }
+    },
+    {
+      "id": "old-client-new-daemon",
+      "fixtureControl": {
+        "operation": "legacy-create-and-list",
+        "capabilities": {
+          "scriptLifecycle": 1
+        }
+      },
+      "expect": {
+        "defaultPurpose": "saved",
+        "defaultListArchive": "all",
+        "unknownResponseFieldsIgnored": true
+      }
+    },
+    {
+      "id": "archive-selected-output-tab",
+      "fixtureControl": {
+        "operation": "archive",
+        "scriptId": "successful",
+        "tabOpen": true,
+        "tabSelected": true,
+        "client": "lifecycle-aware",
+        "refetch": {
+          "method": "script.list",
+          "params": {
+            "workspaceId": "ws-a",
+            "archive": "active"
+          }
+        }
+      },
+      "expect": {
+        "tabOpen": true,
+        "selectionPreserved": true,
+        "subscriptionPreserved": true,
+        "sameOutputHandle": true,
+        "absentFromActiveList": true,
+        "changedIds": [
+          "successful"
+        ]
+      },
+      "initialScript": {
+        "id": "successful",
+        "workspaceId": "ws-a",
+        "name": "successful",
+        "command": "fixture-command",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-09-30T12:00:00Z",
+        "purpose": "oneOff",
+        "runtime": {
+          "status": "exited",
+          "restartCount": 0,
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      }
+    },
+    {
+      "id": "reconnect-archived-open-tab",
+      "fixtureControl": {
+        "operation": "reconnect",
+        "scriptId": "successful",
+        "tabOpen": true
+      },
+      "expect": {
+        "resolveWithArchiveFilter": "all",
+        "tabOpen": true,
+        "outputMayBeEmpty": true
+      }
+    },
+    {
+      "id": "manual-archive-legacy-unknown-result",
+      "fixtureControl": {
+        "operation": "archive",
+        "scriptId": "legacy"
+      },
+      "expect": {
+        "archived": true,
+        "noNewResult": true,
+        "displayOutcome": "unknown"
+      }
+    },
+    {
+      "id": "reject-selection-limit",
+      "fixtureControl": {
+        "operation": "archive",
+        "generatedScriptIdsCount": 1001
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "accept-selection-limit",
+      "fixtureControl": {
+        "operation": "archive",
+        "generatedInactiveCommandIdsCount": 1000
+      },
+      "expect": {
+        "archivedCount": 1000,
+        "noProcessStops": true
+      }
+    },
+    {
+      "id": "old-client-refetch-after-archive",
+      "initialScript": {
+        "id": "failed",
+        "workspaceId": "ws-a",
+        "name": "failed",
+        "command": "fixture-command",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-09-30T12:00:00Z",
+        "purpose": "oneOff",
+        "runtime": {
+          "status": "exited",
+          "restartCount": 0,
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "fixtureControl": {
+        "operation": "archive-then-changed-refetch",
+        "scriptId": "failed",
+        "client": "legacy",
+        "tabOpen": true,
+        "tabSelected": true,
+        "refetch": {
+          "method": "script.list",
+          "params": {
+            "workspaceId": "ws-a"
+          }
+        }
+      },
+      "expect": {
+        "changedIds": [
+          "failed"
+        ],
+        "tabOpen": true,
+        "selectionPreserved": true,
+        "archivedRowInResponse": true,
+        "definitionAndRuntimeRetained": true,
+        "responseScriptIds": [
+          "failed",
+          "legacy",
+          "restarting",
+          "running",
+          "service",
+          "starting",
+          "successful"
+        ]
+      }
+    },
+    {
+      "id": "lifecycle-aware-ui-list-default",
+      "fixtureControl": {
+        "operation": "normal-list-without-options",
+        "client": "ui",
+        "capabilities": {
+          "scriptLifecycle": 1
+        }
+      },
+      "expect": {
+        "wireParams": {
+          "workspaceId": "ws-a",
+          "archive": "active"
+        },
+        "archivedRowInResponse": false
+      }
+    },
+    {
+      "id": "lifecycle-aware-mcp-list-default",
+      "fixtureControl": {
+        "operation": "normal-list-without-options",
+        "client": "mcp",
+        "capabilities": {
+          "scriptLifecycle": 1
+        }
+      },
+      "expect": {
+        "wireParams": {
+          "workspaceId": "ws-a",
+          "archive": "active"
+        },
+        "archivedRowInResponse": false
+      }
+    }
+  ]
+}

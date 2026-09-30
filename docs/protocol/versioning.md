@@ -21,6 +21,15 @@ default-deny allowlist). Clients must surface failures without claiming retireme
 succeeded or falling back to a model message.
 
 
+The prepared [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-prepared-additive-extension)
+adds two router methods (`script.archive`, `script.restore`) and additive
+purpose/archive/latest-result fields, taking the combined documented surface to
+**419 / 359 / 58** (dispatchable / router / fast path), with no new event names.
+It reserves no shipped version: allocate the next minor against main when
+implementing. Advertise `scriptLifecycle: 1` only for the complete extension;
+legacy definitions/callers remain saved, and old daemons must not be assumed to
+honor unknown purpose or list-filter fields.
+
 The separately prepared [phase 1 node contract (§5.50)](./methods/nodes.md)
 reserves additive methods/events without claiming a shipped version. Implementors
 allocate the next minor against main and advertise `agentNodes: 1` only after the

@@ -13,22 +13,26 @@ The prepared [node execution contract (§5.50)](./methods/nodes.md) reserves nin
 additional router methods ahead of implementation. Its capability flags, not
 catalog presence, establish support; per-agent CoW entries remain during rollout.
 
-The documented surface reserves **417 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-prepared-additive-extension)
+reserves archive/restore ahead of implementation; `scriptLifecycle: 1` advertises
+complete support, not catalog presence or a numeric version alone.
 
-- **Router methods:** 357 methods dispatched via the main router (`router::dispatch`)
+The documented surface reserves **419 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 359 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 417 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 419 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 417 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 419 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.50) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (357 total)
+### Router methods by namespace (359 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -65,7 +69,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
-| script | 9 | create, list, output, remove, restart, run, start, status, stop |
+| script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
