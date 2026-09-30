@@ -1,17 +1,40 @@
 """Compact gate contracts, with an optional offline tiny-crate Cargo smoke test."""
+import ast
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
-import tomllib
 import unittest
 from unittest import mock
 
 from scripts import resumable_nextest as gate
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class VendoredTomlTests(unittest.TestCase):
+    def test_pinned_runtime_and_license_match_upstream_integrity_records(self):
+        vendor = ROOT / "scripts/_vendor"
+        provenance = json.loads((vendor / "tomli.provenance.json").read_text())
+        self.assertEqual(provenance["repository"], "https://github.com/hukkin/tomli")
+        self.assertEqual(provenance["version"], gate.cargo_toml.__version__)
+        self.assertEqual(provenance["license"], "MIT")
+        self.assertRegex(provenance["revision"], r"^[0-9a-f]{40}$")
+        expected = {"__init__.py", "_parser.py", "_re.py", "_types.py", "LICENSE"}
+        self.assertEqual(set(provenance["files"]), expected)
+        self.assertEqual({path.name for path in (vendor / "tomli").iterdir() if path.is_file()}, expected)
+        for name, record in provenance["files"].items():
+            data = (vendor / "tomli" / name).read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), record["sha256"], name)
+            blob = b"blob " + str(len(data)).encode() + b"\0" + data
+            self.assertEqual(hashlib.sha1(blob).hexdigest(), record["git_blob_sha1"], name)
+            self.assertEqual(record["source"], name if name == "LICENSE" else f"src/tomli/{name}")
+            if name.endswith(".py"):
+                ast.parse(data.decode(), filename=name, feature_version=(3, 10))
 
 
 class CompactSettingsTests(unittest.TestCase):
@@ -98,8 +121,54 @@ debug = 1
     def test_invalid_compact_config_fails_before_cargo(self):
         os.environ["COMPACT"] = "1"
         (self.repo / "Cargo.toml").write_text('invalid = [')
-        with self.assertRaises(tomllib.TOMLDecodeError):
+        with self.assertRaises(gate.cargo_toml.TOMLDecodeError):
             gate.compact_config(self.repo)
+
+    def test_bom_prefixed_manifest_is_accepted(self):
+        os.environ["COMPACT"] = "1"
+        manifest = self.repo / "Cargo.toml"
+        manifest.write_bytes(b"\xef\xbb\xbf" + manifest.read_bytes())
+        self.assertEqual(self.config_values()['profile.dev.package."alpha".debug'], "0")
+
+    def test_bom_configs_and_includes_keep_raw_hashes_in_all_modes(self):
+        config_dir = self.repo / ".cargo"
+        config_dir.mkdir()
+        config = config_dir / "config.toml"
+        included = config_dir / "included.toml"
+        config.write_text('\ufeffinclude=["included.toml"]\n')
+        for mode in (None, "0", "1"):
+            with self.subTest(mode=mode):
+                if mode is not None:
+                    os.environ["COMPACT"] = mode
+                included.write_text('\ufeff[profile.dev.package.bom]\ndebug=2\n')
+                settings = gate.build_settings(self.repo)
+                for path in (config, included):
+                    self.assertEqual(settings["cargo-configs"][str(path)],
+                                     hashlib.sha256(path.read_bytes()).hexdigest())
+                    self.assertTrue(gate.cargo_configs(self.repo)[path].startswith(b"\xef\xbb\xbf"))
+                included.write_bytes(included.read_bytes()[3:])
+                # Parsing is equivalent, but resume identity hashes raw bytes.
+                self.assertNotEqual(settings, gate.build_settings(self.repo))
+
+    def test_toml_11_inline_tables_in_manifest_config_and_include(self):
+        config_dir = self.repo / ".cargo"
+        config_dir.mkdir()
+        manifest = self.repo / "Cargo.toml"
+        original_manifest = manifest.read_bytes()
+        config = config_dir / "config.toml"
+        included = config_dir / "included.toml"
+        for inline in ("debug = 2,\n incremental = true", "debug = 2, incremental = true,"):
+            for location in (manifest, config, included):
+                for mode in ("0", "1"):
+                    with self.subTest(inline=inline, location=location.name, mode=mode):
+                        os.environ["COMPACT"] = mode
+                        manifest.write_bytes(original_manifest)
+                        config.write_text('include=["included.toml"]\n')
+                        included.write_text("")
+                        location.write_text(f'[profile]\ndev = {{ package = {{ toml11 = {{debug=2}} }}, {inline} }}\n')
+                        if mode == "1":
+                            self.assertIn('profile.dev.package."toml11".debug', self.config_values())
+                        gate.build_settings(self.repo)
 
     def test_relative_cargo_home_uses_cargo_cwd_for_profiles_and_resume_key(self):
         self.assertNotEqual(Path.cwd(), self.repo)
@@ -153,13 +222,27 @@ debug = 1
         with self.assertRaisesRegex(RuntimeError, "cyclic Cargo config include"):
             gate.cargo_configs(self.repo)
 
-    def test_python_without_tomllib_keeps_default_gates_and_rejects_compact(self):
-        with mock.patch.object(gate, "tomllib", None):
-            self.assertEqual(gate.compact_config(self.repo), [])
-            self.assertEqual(gate.build_settings(self.repo)["compact-config"], [])
-            os.environ["COMPACT"] = "1"
-            with self.assertRaisesRegex(RuntimeError, "requires Python 3.11"):
-                gate.compact_config(self.repo)
+    def test_offline_script_and_package_imports_need_no_stdlib_or_installed_toml(self):
+        code = f'''
+import builtins, os, pathlib, runpy, sys
+original_import = builtins.__import__
+def without_external_toml(name, *args, **kwargs):
+    if name in ("tomllib", "tomli"):
+        raise ModuleNotFoundError(name)
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_external_toml
+sys.path.insert(0, {str(ROOT)!r})
+from scripts import resumable_nextest
+modules = [vars(resumable_nextest), runpy.run_path({str(ROOT / 'scripts/resumable_nextest.py')!r})]
+for mode in ("0", "1"):
+    os.environ["COMPACT"] = mode
+    for module in modules:
+        config = module["compact_config"](pathlib.Path({str(self.repo)!r}))
+        assert bool(config) == (mode == "1"), (mode, config)
+'''
+        result = subprocess.run([sys.executable, "-S", "-B", "-c", code],
+                                cwd=self.root, capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_resume_identity_separates_modes_flags_and_external_config(self):
         with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
@@ -200,6 +283,8 @@ class CompactMakeTests(unittest.TestCase):
         (self.root / "scripts").mkdir()
         shutil.copy(ROOT / "Makefile", self.root)
         shutil.copy(ROOT / "scripts/resumable_nextest.py", self.root / "scripts")
+        shutil.copytree(ROOT / "scripts/_vendor", self.root / "scripts/_vendor",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.log = self.root / "commands.jsonl"
         self.bin = self.root / "bin"
         self.bin.mkdir()
@@ -274,7 +359,18 @@ class CompactCargoTests(unittest.TestCase):
     def test_symlink_include_real_compiler_and_resume_identity(self):
         self.check_external_config(symlink=True)
 
-    def check_external_config(self, *, symlink):
+    def test_bom_manifest_config_and_include_real_cargo_in_all_modes(self):
+        for mode in (None, "0", "1"):
+            with self.subTest(mode=mode):
+                self.check_external_config(symlink=True, bom=True, mode=mode)
+
+    def test_toml_11_real_cargo_in_default_and_compact_modes(self):
+        for inline in ("debug = 2,\n incremental = true", "debug = 2, incremental = true,"):
+            for mode in ("0", "1"):
+                with self.subTest(inline=inline, mode=mode):
+                    self.check_external_config(symlink=True, toml11=inline, mode=mode)
+
+    def check_external_config(self, *, symlink, bom=False, toml11=None, mode="1"):
         with tempfile.TemporaryDirectory(prefix="compact-relative-home-") as temporary:
             root = Path(temporary)
             component = root / "mono/packages/intentd"
@@ -285,6 +381,12 @@ name = "compact-relative-home"
 version = "0.0.0"
 edition = "2021"
 ''')
+            if bom:
+                manifest = component / "Cargo.toml"
+                manifest.write_bytes(b"\xef\xbb\xbf" + manifest.read_bytes())
+            if toml11:
+                with (component / "Cargo.toml").open("a") as manifest:
+                    manifest.write(f'[package.metadata]\nprobe = {{ {toml11} }}\n')
             (component / "src/lib.rs").write_text('pub fn answer() -> u8 { 42 }\n')
             (component / "build.rs").write_text('fn main() {}\n')
             home = root / "cargo-home"
@@ -293,12 +395,14 @@ edition = "2021"
             env = {k: v for k, v in os.environ.items() if not (
                 k.startswith("CARGO_") or k.startswith("RUST") or k == "COMPACT"
             )}
-            env.update(COMPACT="1", CARGO_HOME="../../../cargo-home",
+            env.update(CARGO_HOME="../../../cargo-home",
                        CARGO_TARGET_DIR=str(root / "target"), RUSTUP_AUTO_INSTALL="0")
+            if mode is not None:
+                env["COMPACT"] = mode
             if symlink:
                 logical = component / ".cargo"
                 logical.mkdir()
-                config_file.write_text('include=["overrides.toml"]\n')
+                config_file.write_text(('\ufeff' if bom else '') + 'include=["overrides.toml"]\n')
                 (logical / "config.toml").symlink_to(config_file)
                 (home / "overrides.toml").write_text('[profile.dev.package.wrong]\ndebug=2\n')
                 config_file = logical / "overrides.toml"
@@ -310,10 +414,13 @@ edition = "2021"
             keys = []
             self.assertNotEqual(Path.cwd(), component)
             for flag in ("external_first", "external_second"):
+                profile = ('[profile.dev.package.compact-relative-home]\ndebug=2\n'
+                           '[profile.dev.build-override]\ndebug=2\n')
+                if toml11:
+                    profile = ('[profile]\ndev = { package = { compact-relative-home = { debug=2 } }, '
+                               f'build-override = {{debug=2}}, {toml11} }}\n')
                 config_file.write_text(
-                    '[profile.dev.package.compact-relative-home]\ndebug=2\n'
-                    '[profile.dev.build-override]\ndebug=2\n'
-                    f'[build]\nrustflags=["--cfg", "{flag}"]\n'
+                    ('\ufeff' if bom else '') + profile + f'[build]\nrustflags=["--cfg", "{flag}"]\n'
                 )
                 with mock.patch.dict(os.environ, env, clear=True):
                     config = gate.compact_config(component)
@@ -332,8 +439,11 @@ edition = "2021"
                     invocation = next(line for line in result.stderr.splitlines()
                                       if f"--crate-name {crate}" in line)
                     self.assertIn(f"--cfg {flag}", invocation)
-                    self.assertNotIn("debuginfo=2", invocation)
-                    self.assertNotIn("incremental=", invocation)
+                    if mode == "1":
+                        self.assertNotIn("debuginfo=2", invocation)
+                        self.assertNotIn("incremental=", invocation)
+                    else:
+                        self.assertIn("debuginfo=2", invocation)
             self.assertNotEqual(*keys)
 
     def test_actual_cargo_preserves_config_environment_and_encoded_precedence(self):

@@ -245,6 +245,7 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
+  cp -R "$repo_root/scripts/_vendor" "$mono/scripts/_vendor"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q
   git -c advice.addEmbeddedRepo=false -C "$mono" add -A

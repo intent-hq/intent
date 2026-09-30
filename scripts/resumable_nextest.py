@@ -24,12 +24,13 @@ import sys
 import tempfile
 import threading
 import time
-try:
-    import tomllib
-except ModuleNotFoundError:
-    # Ordinary gates previously worked on Python 3.10. Only the opt-in
-    # profile override path needs the 3.11 standard-library TOML parser.
-    tomllib = None
+# Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
+# Use the pinned parser offline, including direct-script/importlib invocation.
+if __package__:
+    from ._vendor import tomli as cargo_toml
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _vendor import tomli as cargo_toml
 
 SCHEMA_VERSION = 1
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -109,9 +110,8 @@ def cargo_configs(cwd: Path) -> dict[Path, bytes]:
         if path in configs or not path.is_file():
             return
         configs[path] = path.read_bytes()
-        if tomllib is None:
-            return
-        data = tomllib.loads(configs[path].decode())
+        # Cargo accepts a leading UTF-8 BOM; keep raw bytes above for hashing.
+        data = cargo_toml.loads(configs[path].decode("utf-8-sig"))
         for include in data.get("include", []):
             name = include if isinstance(include, str) else include["path"]
             read(path.parent / name, ancestors | {canonical})
@@ -136,13 +136,10 @@ def compact_config(cwd: Path) -> list[str]:
     """
     if os.environ.get("COMPACT") != "1":
         return []
-    if tomllib is None:
-        raise RuntimeError("COMPACT=1 requires Python 3.11+ (the tomllib module); "
-                           "upgrade python3 or rerun with COMPACT=0")
     documents = [(cwd / "Cargo.toml").read_bytes(), *cargo_configs(cwd).values()]
     packages = {"*"}
     for document in documents:
-        profiles = tomllib.loads(document.decode()).get("profile", {})
+        profiles = cargo_toml.loads(document.decode("utf-8-sig")).get("profile", {})
         # test inherits dev; set both sides of every package override.
         for profile in ("dev", "test"):
             packages.update(profiles.get(profile, {}).get("package", {}))
