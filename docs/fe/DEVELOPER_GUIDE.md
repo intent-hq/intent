@@ -142,8 +142,26 @@ ahead/behind state, the recorded gitlink `pin` with `gitlinkDirty` when the chec
 submodule HEAD has moved off it, `behindOriginMain` (commits the checked-out submodule
 HEAD lags the already-fetched local `refs/remotes/origin/main`; `null` when the submodule
 is uninitialized or the ref is missing — no fetch is performed), and optional PR/check
-summaries when GitHub authentication is available. The report is read-only, including
-stale sandbox state.
+summaries when GitHub authentication is available. Each component includes `gitState`
+(`absent`, `readable`, or `error`) and `gitErrors` (an array of `{probe, detail}` records,
+empty unless a required probe fails). `absent` means its `.git` marker is missing;
+`readable` means initialization, branch, HEAD, status, and parent pin probes succeeded.
+A broken marker, dangling marker symlink, unreadable metadata, or failed/timed-out
+required probe produces `error`, not a claim that the component is clean or absent.
+`initialized` is `false` for a missing marker, `true` once Git confirms a worktree,
+and `null` when initialization cannot be verified. A later failure preserves that
+successful initialization and any other known observations. `dirty` and `gitlinkDirty`
+are `null` when their required observations are unavailable; a failed parent pin lookup
+also leaves `pin` null. Genuinely absent components retain `dirty: false` and
+`gitlinkDirty: false` when the pin lookup succeeds. A successful lookup with no gitlink
+(an independent clone) leaves `pin` null and `gitlinkDirty: false` once HEAD is readable.
+Missing optional upstream/origin-main refs leave their counts null without making
+`gitState` an error. Human output labels errors as `Git state unavailable`, names the
+failed probes, and shows available worktree/pin comparisons explicitly. Diagnostic
+`detail` strings have terminal escapes/control characters removed, whitespace collapsed,
+and are limited to 240 characters each. Component probe errors keep the report's
+best-effort exit code zero. The report is read-only, including stale sandbox state
+and Git's optional index refresh (`GIT_OPTIONAL_LOCKS=0` for every Git probe).
 The `ports` probe runs `scripts/dev-ports.sh` under `DEV_STATUS_PORT_TIMEOUT` seconds
 (default 10, fractional allowed) and reports `{}` when that budget is exceeded. Every
 other probe (doctor, sandbox status and health, git, gh) runs under
