@@ -101,6 +101,58 @@ debug = 1
         with self.assertRaises(tomllib.TOMLDecodeError):
             gate.compact_config(self.repo)
 
+    def test_relative_cargo_home_uses_cargo_cwd_for_profiles_and_resume_key(self):
+        self.assertNotEqual(Path.cwd(), self.repo)
+        home = self.root / "external cargo home"
+        home.mkdir()
+        config = home / "config.toml"
+        os.environ["CARGO_HOME"] = "../external cargo home"
+        with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+            gate, "submodule_heads", return_value=[]
+        ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+            gate, "run", return_value="version"
+        ):
+            for mode in ("0", "1"):
+                os.environ["COMPACT"] = mode
+                source = '[profile.dev.package.external]\ndebug=2\n[build]\nrustflags=["--cfg", "first"]\n'
+                config.write_text(source)
+                self.assertIn(self.repo / os.environ["CARGO_HOME"] / "config.toml",
+                              gate.cargo_configs(self.repo))
+                if mode == "1":
+                    self.assertIn('profile.dev.package."external".debug', self.config_values())
+                before = gate.tree_key(self.root, self.repo)
+                config.write_text(source.replace('"first"', '"second"'))
+                self.assertNotEqual(before, gate.tree_key(self.root, self.repo))
+
+    def test_symlink_config_includes_use_logical_parent_and_change_identity(self):
+        os.environ["COMPACT"] = "1"
+        logical = self.repo / ".cargo"
+        logical.mkdir()
+        dotfiles = self.root / "dotfiles"
+        dotfiles.mkdir()
+        source = dotfiles / "cargo.toml"
+        source.write_text('include=["overrides.toml"]\n')
+        (logical / "config.toml").symlink_to(source)
+        (dotfiles / "overrides.toml").write_text('[profile.dev.package.wrong]\ndebug=2\n')
+        included = logical / "overrides.toml"
+        included.write_text('[profile.dev.package.local]\ndebug=2\n')
+        values = self.config_values()
+        self.assertIn('profile.dev.package."local".debug', values)
+        self.assertNotIn('profile.dev.package."wrong".debug', values)
+        self.assertIn(included, gate.cargo_configs(self.repo))
+        before = gate.build_settings(self.repo)
+        included.write_text('[profile.dev.package.local]\ndebug=1\n')
+        self.assertNotEqual(before, gate.build_settings(self.repo))
+
+    def test_symlink_include_cycle_reports_error_without_unbounded_recursion(self):
+        logical = self.repo / ".cargo"
+        logical.mkdir()
+        config = logical / "config.toml"
+        config.write_text('include=["nested/config.toml"]\n')
+        (logical / "nested").symlink_to(logical, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "cyclic Cargo config include"):
+            gate.cargo_configs(self.repo)
+
     def test_python_without_tomllib_keeps_default_gates_and_rejects_compact(self):
         with mock.patch.object(gate, "tomllib", None):
             self.assertEqual(gate.compact_config(self.repo), [])
@@ -215,6 +267,74 @@ sys.exit(int(os.environ.get("STUB_EXIT", "0")))
 @unittest.skipUnless(shutil.which("cargo") and shutil.which("rustc"), "optional real Cargo smoke test")
 class CompactCargoTests(unittest.TestCase):
     """Offline tiny crate: prove actual Cargo precedence, not a flag-merging mock."""
+
+    def test_relative_cargo_home_real_compiler_and_resume_identity(self):
+        self.check_external_config(symlink=False)
+
+    def test_symlink_include_real_compiler_and_resume_identity(self):
+        self.check_external_config(symlink=True)
+
+    def check_external_config(self, *, symlink):
+        with tempfile.TemporaryDirectory(prefix="compact-relative-home-") as temporary:
+            root = Path(temporary)
+            component = root / "mono/packages/intentd"
+            (component / "src").mkdir(parents=True)
+            (component / "Cargo.toml").write_text('''
+[package]
+name = "compact-relative-home"
+version = "0.0.0"
+edition = "2021"
+''')
+            (component / "src/lib.rs").write_text('pub fn answer() -> u8 { 42 }\n')
+            (component / "build.rs").write_text('fn main() {}\n')
+            home = root / "cargo-home"
+            home.mkdir()
+            config_file = home / "config.toml"
+            env = {k: v for k, v in os.environ.items() if not (
+                k.startswith("CARGO_") or k.startswith("RUST") or k == "COMPACT"
+            )}
+            env.update(COMPACT="1", CARGO_HOME="../../../cargo-home",
+                       CARGO_TARGET_DIR=str(root / "target"), RUSTUP_AUTO_INSTALL="0")
+            if symlink:
+                logical = component / ".cargo"
+                logical.mkdir()
+                config_file.write_text('include=["overrides.toml"]\n')
+                (logical / "config.toml").symlink_to(config_file)
+                (home / "overrides.toml").write_text('[profile.dev.package.wrong]\ndebug=2\n')
+                config_file = logical / "overrides.toml"
+                env["CARGO_HOME"] = str(root / "empty-home")
+            available = subprocess.run(["rustc", "--version"], cwd=component, env=env,
+                                       capture_output=True, timeout=10)
+            if available.returncode:
+                self.skipTest("optional Cargo smoke test needs an installed default Rust toolchain")
+            keys = []
+            self.assertNotEqual(Path.cwd(), component)
+            for flag in ("external_first", "external_second"):
+                config_file.write_text(
+                    '[profile.dev.package.compact-relative-home]\ndebug=2\n'
+                    '[profile.dev.build-override]\ndebug=2\n'
+                    f'[build]\nrustflags=["--cfg", "{flag}"]\n'
+                )
+                with mock.patch.dict(os.environ, env, clear=True):
+                    config = gate.compact_config(component)
+                    child_env = gate.compact_env()
+                    with mock.patch.object(gate, "worktree_tree", return_value="tree"), mock.patch.object(
+                        gate, "submodule_heads", return_value=[]
+                    ), mock.patch.object(gate, "required_hash", return_value="hash"), mock.patch.object(
+                        gate, "run", return_value="version"
+                    ):
+                        keys.append(gate.tree_key(root / "mono", component))
+                result = subprocess.run(["cargo", "check", "--offline", "-v", *config],
+                                        cwd=component, env=child_env, capture_output=True,
+                                        text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for crate in ("compact_relative_home", "build_script_build"):
+                    invocation = next(line for line in result.stderr.splitlines()
+                                      if f"--crate-name {crate}" in line)
+                    self.assertIn(f"--cfg {flag}", invocation)
+                    self.assertNotIn("debuginfo=2", invocation)
+                    self.assertNotIn("incremental=", invocation)
+            self.assertNotEqual(*keys)
 
     def test_actual_cargo_preserves_config_environment_and_encoded_precedence(self):
         with tempfile.TemporaryDirectory(prefix="compact-cargo-") as temporary:

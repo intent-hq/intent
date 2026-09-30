@@ -99,8 +99,13 @@ def cargo_configs(cwd: Path) -> dict[Path, bytes]:
     """
     configs: dict[Path, bytes] = {}
 
-    def read(path: Path) -> None:
-        path = path.resolve()
+    def read(path: Path, ancestors: frozenset[Path] = frozenset()) -> None:
+        # Includes are relative to the logical config path Cargo opened, not
+        # a symlink's destination. Canonical paths are only for cycle checks.
+        path = path.absolute()
+        canonical = path.resolve()
+        if canonical in ancestors:
+            raise RuntimeError(f"cyclic Cargo config include: {path}")
         if path in configs or not path.is_file():
             return
         configs[path] = path.read_bytes()
@@ -109,10 +114,13 @@ def cargo_configs(cwd: Path) -> dict[Path, bytes]:
         data = tomllib.loads(configs[path].decode())
         for include in data.get("include", []):
             name = include if isinstance(include, str) else include["path"]
-            read(path.parent / name)
+            read(path.parent / name, ancestors | {canonical})
 
     directories = [cwd / ".cargo", *(parent / ".cargo" for parent in cwd.parents)]
-    directories.append(Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo"))))
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    # Cargo interprets relative CARGO_HOME from its invocation directory, which
+    # differs from the runner's monorepo cwd for nextest list/run commands.
+    directories.append(cwd / cargo_home)
     for directory in directories:
         legacy = directory / "config"
         read(legacy if legacy.is_file() else directory / "config.toml")
