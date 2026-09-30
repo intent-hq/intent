@@ -328,6 +328,61 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 > top-level `navigate` / `openTab` URLs are interpreted — never URLs inside pages
 > (redirects, fetches, links).
 >
+> **Planned addition — bounded browser failure capture (intent#4328).** This
+> frontend-served addition is documented ahead of implementation landing; older
+> frontends reject `readCapture`. The daemon remains a thin `browser.exec` proxy.
+> This supplies diagnostic evidence, not a fix for the intermittent route failure.
+>
+> Start a capture session with `startSession`, then await `startCapture` **before**
+> navigating or reloading. Capture installs document-start `error` and
+> `unhandledrejection` listeners and records CDP exceptions, console messages and
+> network requests with timestamps, status, failure reason and bounded initiator
+> stacks. `endCapture` removes listeners and the document-start script;
+> `endSession` also flushes diagnostics to the session's artifacts. Cleanup targets
+> the original guest even if its tab disappeared or was remounted. Only one capture
+> may record a guest at a time.
+>
+> Failed HTTP responses may include a textual `body` and `bodyTruncated` flag when
+> CDP retains the response. Capture never repeats a request to obtain its body.
+> Transport failures, unavailable bodies and capture limits use `bodyUnavailable`.
+> Request headers, cookies and POST data are not collected; URL credentials, query
+> strings and fragments are removed, and recognizable credential assignments and
+> authorization values are redacted from text. Arbitrary page text can still contain
+> sensitive information; redaction is not a guarantee that every secret is detected.
+> Text fields are capped at 16,384 characters plus a truncation marker; CDP stacks have
+> at most 20 frames. Across start/stop intervals a session retains at most 4,096
+> diagnostic events and 4 MiB of serialized event payload, with dropped-event counts
+> in `session.json`'s `diagnostics`. Pending requests are capped at 512. Body retrieval
+> admits textual responses up to 65,536 encoded bytes, at most 32 bodies per capture
+> interval and four concurrent reads, each with a one-second timeout; retained body
+> text uses the same text limit. These bounds cover diagnostics, not screenshots or
+> explicitly requested traces.
+>
+> **`readCapture { captureId, artifact, offset?, maxBytes? }`** retrieves completed
+> session diagnostics from the frontend that serves the call. `captureId` is the
+> opaque identifier returned by capture, not an arbitrary filesystem path.
+> `artifact` is exactly `console.jsonl`, `network.jsonl`, `summary.json` or
+> `session.json`. `offset` defaults to zero and must be a nonnegative safe integer;
+> `maxBytes` defaults to 65,536 and must be an integer from 1 through 65,536.
+> Success uses the existing `{ action: "readCapture", success: true, result }`
+> envelope, with result fields `{ captureId, artifact, encoding: "base64", data,
+> offset, nextOffset, eof, totalBytes }`. Offsets and `totalBytes` count bytes, not
+> characters. Decode each chunk to bytes, concatenate them, and decode UTF-8 after
+> assembly; continue at `nextOffset` until `eof`. Reading at or beyond the end
+> returns empty data with `eof: true`.
+>
+> Session ownership comes from the trusted caller envelope, never action arguments.
+> Agent callers may operate on and read only their own captures in the requested
+> workspace/backend; user calls without `agentId` retain existing unrestricted user
+> authority. Persisted ownership permits reads after a session ends or its tab
+> closes. Unique capture directories prevent equal display names from colliding.
+> Absolute paths, escaping identifiers, symlink directories/artifacts, foreign
+> ownership, invalid byte ranges, missing artifacts and legacy captures without an
+> ownership marker fail through the existing `success: false` action-result envelope.
+> There is no arbitrary file-read fallback. Captures remain on the serving desktop;
+> changing the driving client does not transfer them. This addition defines no
+> automatic retention period and does not make snapshot-only artifacts readable.
+>
 > **Agent-scoped tab ownership — FE-enforced (monorepo#2857).** Every embedded browser
 > tab carries a **nullable `ownerAgentId`**. User-opened tabs start **unowned**
 > (`ownerAgentId: null`); agent-opened tabs are owned by the opening agent from
@@ -757,4 +812,3 @@ nothing emits nothing.
 { "jsonrpc":"2.0","id":82,"method":"browser.syncTabs","params":{ "tabs":[ { "tabId":"tab-3", ... } ] } }
 // ← { "jsonrpc":"2.0","id":82,"result":{ "drop":[] } }
 ```
-
