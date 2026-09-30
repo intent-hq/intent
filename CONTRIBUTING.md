@@ -85,6 +85,59 @@ Keep the relevant checks green before opening a PR:
 - **cloudlands-fe**: `pnpm run check` and `pnpm vitest run`.
 - **ios**: build + test targets passing.
 
+### Local Rust gates
+
+`make gate` runs `make check` followed by the full nextest suite. `make test`
+runs tests only; `make test-changed` selects tests changed against `BASE`
+(default `origin/main`) and falls back to the full suite for build-wide changes.
+
+Opt in to smaller local build artifacts with:
+
+```bash
+COMPACT=1 make gate
+COMPACT=1 make test-changed
+make -C packages/intentd test COMPACT=1
+```
+
+Compact mode requires **Python 3.11+** for `tomllib`; ordinary gates retain their
+existing Python support. It applies to the compiler steps in `check`, `test`,
+`test-changed` and `gate`, and to `clippy`, `lint-sources` and `build-intentd`.
+It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
+package and build overrides. `strip=none` preserves the existing macOS
+proc-macro workaround. Test selection, changed-test fallback and failure handling
+are unchanged. Leaving `COMPACT` unset or setting `COMPACT=0` keeps ordinary
+gate behavior; release profiles are unaffected.
+
+These are Cargo profile/environment settings. Caller Rust flags are preserved
+with Cargo's normal precedence, including `RUSTFLAGS`,
+`CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` and target/build flags in Cargo
+configuration. An effective explicit `-C debuginfo=2` can therefore retain debug
+information, and `-C incremental=/path` can re-enable incremental artifacts even
+though compact sets `CARGO_INCREMENTAL=0`. Conflicting flags reduce or remove the
+storage benefit. Without those overrides, compact trades source-line backtraces
+and debugger detail for smaller artifacts; disabling incremental compilation can
+make rebuilds slower. It neither guarantees a disk bound nor deletes existing
+targets or caches. Switching modes in one target directory may retain artifacts
+from both; use a task-owned `CARGO_TARGET_DIR` when measuring or isolating builds.
+
+`RESUME=1 make test` (or `make test-changed`) skips tests recorded as passed for
+the same worktree and effective build settings; `GATE_FORCE=1` runs them again.
+Use `COMPACT=1 RESUME=1 make test` to resume a compact run. Compact/default runs
+have separate resume identities, including profile/incremental settings and
+effective Cargo config contents, so switching modes cannot reuse the other
+mode's passes. Records live under `GATE_CACHE_DIR` (default
+`$HOME/.cache/intent/gate-runs`) and expire after seven days. `NO_FAIL_FAST=1`
+continues past failures while preserving the nonzero exit status. `make gate`
+always reruns its checks before the resumable test phase.
+
+Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) reject
+`COMPACT=1` before instrumentation; run them with `COMPACT=0`. At the monorepo
+root, even mixed goals such as `make test coverage-all COMPACT=1` reject before
+any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
+root makes per goal: `make -C packages/intentd test coverage-all COMPACT=1` may
+run the noncoverage goal before rejecting coverage. It still never starts compact
+coverage. Use separate invocations with the appropriate mode for each goal.
+
 ## Filing issues
 
 - Use the [issue forms](https://github.com/intent-hq/intent/issues/new/choose)
