@@ -2,7 +2,41 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `10.10` — additive contract; docs lead component implementation.
+**Documented version:** `10.11` — implemented script lifecycle candidate; not a shipped-version claim.
+
+**Version 10.11 — script lifecycle (additive, implemented candidate).** The
+[script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+adds two router methods (`script.archive`, `script.restore`) and additive
+purpose/archive/latest-result fields, taking the combined documented surface to
+**419 / 359 / 58** (dispatchable / router / fast path), with no new event names.
+The independently verified intentd candidate
+[`7a80f18905377545ec1e8a88a8331772557e772e`](https://github.com/intent-hq/intentd/commit/7a80f18905377545ec1e8a88a8331772557e772e)
+([PR #2195](https://github.com/intent-hq/intentd/pull/2195)) allocates `10.11`
+after main's `10.10` and advertises `scriptLifecycle: 1` for complete support:
+manual archive/restore, atomic last-result/one-off retirement, durable admission
+recovery, concurrency protection and MCP helpers. Omitted wire `archive` still
+means `all`; lifecycle-aware frontend lists and candidate MCP defaults explicitly
+select `active`. Legacy definitions/new callers without purpose remain saved;
+omitting purpose on an upsert preserves the existing purpose. Unknown fields on
+an older daemon are not proof of support.
+
+**Rollout baseline (2026-09-30).** Monorepo `76c6c4dd172dc71e845eb76072718e9f57d01a31`
+pins intentd `5a199b47ae124e1aebb7ca0ebf789b13ce22dadf` (protocol `10.10`, no
+`scriptLifecycle`) and cloudlands-fe `d260306576c79b65cd36b0575d49a9b55703e002`.
+Those pins do not include the lifecycle candidates. The frontend candidate is
+[`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). Candidate
+verification does not establish combined runtime acceptance, a carrying release,
+installed bindings or upgraded clients. Detect support on the connected daemon
+and use the installed helper signatures; the generated binding index follows the
+monorepo pin and is updated by automatic pin advancement.
+
+The additive contract landed first in
+[PR #6391](https://github.com/intent-hq/intent/pull/6391)
+(`4eab94deb813559496c97e8617addb89d597be2c`). Component merge order remains
+intentd before cloudlands-fe, with human authorization for each merge. Automation
+then advances pins and the generated binding index. Deployment and reversible
+cleanup of existing workspaces remain separate from this documentation change.
 
 **Version 10.10 — direct user retirement (additive, docs lead implementation).** `agent.retire` (§5.5)
 adds a router method for user/FE retirement by `agentId`, with optional `workspaceId`
@@ -21,15 +55,6 @@ default-deny allowlist). Clients must surface failures without claiming retireme
 succeeded or falling back to a model message.
 
 
-The prepared [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-prepared-additive-extension)
-adds two router methods (`script.archive`, `script.restore`) and additive
-purpose/archive/latest-result fields, taking the combined documented surface to
-**419 / 359 / 58** (dispatchable / router / fast path), with no new event names.
-It reserves no shipped version: allocate the next minor against main when
-implementing. Advertise `scriptLifecycle: 1` only for the complete extension;
-legacy definitions/callers remain saved, and old daemons must not be assumed to
-honor unknown purpose or list-filter fields.
-
 The prepared [service readiness extension (§5.8)](./methods/scripts.md#service-readiness-prepared-additive-extension)
 adds optional service configuration and runtime readiness fields without new
 methods/events or a shipped version claim. Allocate the next minor at
@@ -46,9 +71,9 @@ removes canonical entries only after component deletion and automatic pin advanc
 Workspace `checkoutMode: "cow"` is retained.
 
 Version 10.9 reserves the [shared-host membership contract (§5.49)](./methods/shared-host-membership.md).
-The current pinned intentd reports **10.8**, including the provider-neutral identity and
-pin metadata additions already described below. The previous 10.7 heading lagged that
-implementation; it is not the baseline for this extension. Allocate the component bump
+The reviewed pin baseline above reports **10.10**. Earlier pins reported **10.8**,
+including the provider-neutral identity and pin metadata additions described below;
+the previous 10.7 heading lagged that implementation. Allocate the component bump
 against current main when implementing; a numeric version alone is never proof of support.
 
 - `principal.me` adds `hostRole` and `hostMembershipRevision`; caller-relative Workspace
@@ -267,10 +292,10 @@ Also within 10.3 (additive; [intent-hq/intentd#1887](https://github.com/intent-h
 
 Also within 10.3 (additive; the intentd multiplayer stack — principals and caller binding [intent-hq/intentd#1868](https://github.com/intent-hq/intentd/pull/1868), message attribution [#1869](https://github.com/intent-hq/intentd/pull/1869), membership and the default-deny collaborator allowlists [#1870](https://github.com/intent-hq/intentd/pull/1870) / [#1877](https://github.com/intent-hq/intentd/pull/1877) / [#1871](https://github.com/intent-hq/intentd/pull/1871), invite links and the `/invite` join flow [#1872](https://github.com/intent-hq/intentd/pull/1872); §2.4 / §5.48 / §6.5 / §9): **multiplayer** — `principal.revokeSelf` (daemon-global, beside `principal.me` above), `workspace.invite.list` / `workspace.invite.revoke`, `workspace.members.list` / `workspace.members.remove` / `workspace.members.leave` as router methods, plus two fast paths: `workspace.invite.create` (builds the `intent://invite` link from the listener's pairing snapshot) and `invite.redeem`, the only method served on the new unauthenticated `/invite` WebSocket endpoint — a two-phase join in which the invitee proves a GitHub identity through an identity-only device flow run by the host and receives a per-principal bearer token exactly once. Every connection is now **bound to a principal at admission** (the legacy token → the primary principal; a per-principal token minted by redemption → its owner); `Workspace` rows gain `myRole`, `memberCount`, `openInviteCount` and `workspace.list` narrows to the caller's memberships; every `user` transcript row served on the wire gains `author: { principalId, login, displayName, avatarUrl }`; a non-administrator connection is subject to the frozen method allowlist (190 names, `-32003 Forbidden` otherwise) and event allowlist (94 types), and `client.hello` namespaces its `clientId` as `{principalId}:{presented}`; membership and invite changes ride `workspace:updated` (`changes.members` / `changes.invites` / `addedPrincipalId` / `removedPrincipalId` / `memberCount`); `-32003` joins the custom numeric codes. Backed by intent-store migrations `0125`–`0127`. Method catalog delta: **+6 router, +2 fast-path**; with presence and `principal.me` the catalog stands at 323 router / 53 fast-path / 2 aliases: **378 dispatchable names** (§5). This additive multiplayer surface is what bumps 10.2 to 10.3; a client nevertheless detects the surface by a well-shaped `principal.me` reply (§5.48 capability probe), not by version.
 
-The protocol version is advertised in two places:
+The protocol version is advertised in two places (10.11 candidate examples):
 
-- `client.hello` response: `{ protocolVersion: "10.7", server: { protocolVersion: "10.7", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
-- `system.status` response: `{ protocolVersion: "10.7", ... }`
+- `client.hello` response: `{ protocolVersion: "10.11", server: { protocolVersion: "10.11", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
+- `system.status` response: `{ protocolVersion: "10.11", ... }`
 
 ### Compatibility Policy
 

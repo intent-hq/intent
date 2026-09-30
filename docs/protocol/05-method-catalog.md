@@ -13,9 +13,9 @@ The prepared [node execution contract (§5.50)](./methods/nodes.md) reserves nin
 additional router methods ahead of implementation. Its capability flags, not
 catalog presence, establish support; per-agent CoW entries remain during rollout.
 
-The prepared [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-prepared-additive-extension)
-reserves archive/restore ahead of implementation; `scriptLifecycle: 1` advertises
-complete support, not catalog presence or a numeric version alone.
+The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
+advertises complete support, not catalog presence or a numeric version alone.
 
 The documented surface reserves **419 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 

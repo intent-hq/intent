@@ -8,10 +8,10 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`) | { scripts: [...] } — definition plus `runtime`; see the prepared lifecycle extension below |
+| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`) | { scripts: [...] } — definition plus `runtime`; see the 10.11 lifecycle candidate below |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
-| script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; inactive commands only |
-| script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; restores visibility without starting |
+| script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
+| script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
@@ -20,7 +20,7 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
 
-> **Prepared lifecycle extension.** The additive purpose/archive fields, filters and
+> **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
 > archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
 > below. Archive preserves the existing runtime and manual-stop semantics;
 > the extension adds retention and compact result metadata, not new statuses.
@@ -269,13 +269,20 @@ WSS tests must cover create/status/list/state-event envelopes, authorization,
 validation errors and capability negotiation. Persistence tests use isolated DBs.
 Run the daemon gates and consumer checks before advertising support.
 
-#### Saved scripts and one-off history (prepared additive extension)
+#### Saved scripts and one-off history (10.11 implemented candidate)
 
-This contract leads implementation; it does not claim a shipped daemon version.
-Advertise `client.hello.server.capabilities.scriptLifecycle: 1` only when the
-complete extension below is implemented, including persistence, completion,
-concurrency protection and the agent bindings. Allocate the next protocol minor
-against main at implementation time. The existing methods and status enum remain;
+The complete extension is implemented and independently verified in intentd
+[`7a80f18905377545ec1e8a88a8331772557e772e`](https://github.com/intent-hq/intentd/commit/7a80f18905377545ec1e8a88a8331772557e772e)
+([PR #2195](https://github.com/intent-hq/intentd/pull/2195)), which advertises
+protocol `10.11` and `client.hello.server.capabilities.scriptLifecycle: 1`.
+This covers persistence, all settled command outcomes, durable admission recovery,
+concurrency protection and the agent bindings. The lifecycle-aware frontend is
+[`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). These are
+component candidates, not a claim of merged, pinned, released or installed support;
+combined client/runtime acceptance and deployment remain separate gates. See
+[versioning](../versioning.md) for the reviewed pin baseline and merge order.
+Only advertise the capability for the complete extension. Existing methods and status enum remain;
 `script.archive` and `script.restore` are the only new RPC names. History is a view
 of retained definitions and their latest result, **not a per-run log archive**.
 
@@ -449,6 +456,12 @@ same interrupted run is idempotent: retain its first archive timestamp and
 recorded result rather than creating another completion. Service recovery and
 existing was-running dismiss semantics remain unchanged.
 
+An already observed terminal result takes precedence over interruption recovery:
+shutdown preserves its outcome, exit code and timestamps even if persistence is
+still pending. Only unfinished admissions recover as interrupted. Restart admission
+cannot inherit the predecessor's observed result; completion remains scoped to
+the admitted run.
+
 **Rerun and replacement.** `start`, `run`, and `restart` of an archived ID
 restore it durably before accepting a launch. They preserve its purpose and ID,
 clear the runtime terminal fields for the new run and publish the restoration
@@ -494,9 +507,9 @@ existing output lifetime limits. Hooks track the current run of an ID, not an
 immutable run ledger: callers needing independent completion watches must use
 distinct IDs or finish observing the preceding run before reusing its ID.
 
-**Agent API (prepared signatures, not installed bindings).** Implement these
-helpers together with the capability; the generated binding index continues to
-represent only the pinned implementation:
+**Agent API (implemented candidate signatures, not installed bindings).** The
+verified daemon candidate implements these helpers with the capability. The
+generated binding index continues to represent only the pinned implementation:
 
 ```text
 ws.script.list({ archive? }?) → [scripts]
@@ -515,12 +528,15 @@ caller-supplied cross-workspace escape is added. Existing no-argument `list()`
 and create/start/status/output signatures remain valid. Teach callers to opt into `purpose: "oneOff"` for
 throwaway checks, retain `saved` for reusable commands/services, and never use
 remove as automatic cleanup. The generated MCP binding index reflects the
-installed implementation and is regenerated when that implementation lands.
+monorepo pin, not necessarily the installed daemon. Automatic pin advancement
+regenerates it; this candidate documentation does not manually advance it. Use
+the connected daemon's capability and installed helper help to establish support.
 
 Prepared examples and race expectations are in
 [`fixtures/scripts/lifecycle.json`](../fixtures/scripts/lifecycle.json).
 They are synthetic contract inputs, not evidence of implemented runtime behavior.
 Run their static consistency checks with
 `node --test docs/protocol/fixtures/scripts/contract.test.mjs`; component tests
-must later exercise these scenarios with isolated databases and controlled
-launch/completion race barriers before advertising support.
+exercise the implemented lifecycle with isolated databases and controlled
+launch/completion race barriers. The JSON remains a prepared scenario catalog;
+its static checker does not execute those component tests.
