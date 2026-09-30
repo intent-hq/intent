@@ -279,8 +279,18 @@ Both return this shape:
 }
 ```
 
-revision is a durable per-preparation monotonically increasing decimal u64;
-older receipt snapshots cannot overwrite newer ones. States are preparing, ready,
+revision is a durable per-preparation monotonically increasing decimal u64 shared
+by prepare, status, Prompt and Stop result snapshots. Persist each lifecycle state,
+ownership, failure, firstDelivery or stop change atomically with an increment of
+that revision, before exposing the changed snapshot. Reads and identical retries
+that cause no change do not increment it. Never wrap the counter; fail closed
+before mutation if exhausted. Results observe a consistent persisted snapshot.
+
+Consumers compare revisions numerically for the same preparation/run/assignment
+identity across all four response kinds. Ignore observations with a lower revision;
+older replies must never overwrite newer status or result observations. Equal
+revisions agree on overlapping fields; a partial Prompt or Stop result does not
+clear fields it omits. States are preparing, ready,
 failed_retained, closing and closed. ownership is retained except when closed,
 when it is released. Optional failure is `{ code, retryable: false }`, with no
 path/secret/stderr. Closed may retain failure metadata and does not imply a
@@ -375,7 +385,7 @@ redispatch. Same turnId/hash returns the existing record; changed bytes under
 that ID fail. Expiry before dispatch fails the queued delivery and closes the
 owned preparation. Restart reconciles an uncertain deadline conservatively.
 
-Prompt result is `{ preparationId, runId, assignmentEpoch, turnId,
+Prompt result is `{ preparationId, runId, assignmentEpoch, revision, turnId,
 deliveryState }`; it may be queued. Only delivered settles the first-message
 gate successfully. Cancelling a completed prompt request cannot recall delivery:
 use exact stop to prevent future dispatch. A timeout after dispatch has begun
@@ -440,7 +450,7 @@ reason is user, deleted, preparation_cancelled or lease_released.
 RequestScope.idempotencyKey equals stopId. Head persists its tombstone before
 sending. Node durably binds the exact stop intent, closes admission before cleanup,
 and prevents queued first delivery. Return `{ preparationId, runId,
-assignmentEpoch, stopId, state, ownership }`, never optimistic stopped:true.
+assignmentEpoch, revision, stopId, state, ownership }`, never optimistic stopped:true.
 Status may include `stop: { stopId, reason }`. Same stop joins; changed intent
 under the same ID fails; no new ID reopens work. Late stop for an old run cannot
 stop a replacement. A closed/released receipt alone acknowledges local settlement.

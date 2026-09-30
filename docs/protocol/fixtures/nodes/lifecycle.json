@@ -226,7 +226,8 @@
             "runId": "00000000-0000-4000-8000-000000000002",
             "assignmentEpoch": "7",
             "turnId": "00000000-0000-4000-8000-000000000006",
-            "deliveryState": "queued"
+            "deliveryState": "queued",
+            "revision": "3"
           }
         }
       }
@@ -382,7 +383,8 @@
             "runId": "00000000-0000-4000-8000-000000000002",
             "assignmentEpoch": "7",
             "turnId": "00000000-0000-4000-8000-000000000006",
-            "deliveryState": "delivered"
+            "deliveryState": "delivered",
+            "revision": "5"
           }
         }
       }
@@ -436,7 +438,8 @@
             "assignmentEpoch": "7",
             "stopId": "00000000-0000-4000-8000-000000000009",
             "state": "closing",
-            "ownership": "retained"
+            "ownership": "retained",
+            "revision": "3"
           }
         }
       }
@@ -1385,6 +1388,75 @@
         "fixtureSupervisorRetained": true,
         "rootsDeleted": false,
         "ownersForcedClosed": false
+      }
+    },
+    {
+      "id": "delayed-stop-reply",
+      "steps": [
+        {
+          "fixtureEvent": "observe-status-snapshot",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closed",
+            "ownership": "released",
+            "revision": "4"
+          }
+        },
+        {
+          "fixtureEvent": "observe-delayed-stop-result",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closing",
+            "ownership": "retained",
+            "revision": "3"
+          }
+        }
+      ],
+      "expect": {
+        "retainedRevision": "4",
+        "ignoredRevision": "3",
+        "state": "closed",
+        "ownership": "released",
+        "reopenOwnership": false
+      }
+    },
+    {
+      "id": "delayed-prompt-reply",
+      "steps": [
+        {
+          "fixtureEvent": "observe-status-firstDelivery-projection",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "delivered",
+            "revision": "5"
+          }
+        },
+        {
+          "fixtureEvent": "observe-delayed-prompt-result",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "queued",
+            "revision": "3"
+          }
+        }
+      ],
+      "expect": {
+        "retainedRevision": "5",
+        "ignoredRevision": "3",
+        "deliveryState": "delivered",
+        "redispatch": false
       }
     }
   ],
