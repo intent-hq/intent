@@ -106,6 +106,235 @@ for literal in literals:
 sys.exit(1 if literals else 0)
 PY
 
+# Exercise the component contract in disposable repos, with injected failures
+# restricted to the git executable used by the copied reporter.
+python3 - "$script" <<'PYTEST' || fail "component Git reporting regressions"
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+
+SCRIPT = Path(sys.argv[1])
+REAL_GIT = shutil.which("git")
+
+
+class ComponentGitStatus(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.component = self.root / "packages/intentd"
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy(SCRIPT, scripts / SCRIPT.name)
+        shutil.copy(SCRIPT.parent / "github_readiness.py", scripts)
+        for name, output in [("bootstrap-dev-host.sh", ""), ("dev-ports.sh", "DEV_PORT=1234"),
+                             ("dev-sandbox.sh", "[]")]:
+            stub = scripts / name
+            stub.write_text("#!/bin/sh\nprintf '%s\\n' '" + output + "'\n")
+            stub.chmod(0o755)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        gh = self.bin / "gh"
+        gh.write_text("#!/bin/sh\nexit 1\n")
+        gh.chmod(0o755)
+        wrapper = self.bin / "git"
+        wrapper.write_text("#!" + sys.executable + r"""
+import json, os, sys, time
+args = sys.argv[1:]
+with open(os.environ["PROBE_LOG"], "a") as log:
+    log.write(json.dumps([args, os.environ.get("GIT_OPTIONAL_LOCKS")]) + "\n")
+command = args[2] if args[:1] == ["-C"] else args[0]
+mode = os.environ.get("FAIL_PROBE")
+if mode == command or mode == "timeout:" + command:
+    if mode.startswith("timeout:"):
+        # timing-guard: deliberately exceed the reporter's configured probe deadline.
+        time.sleep(30)
+    os.write(2, b"\x1b[31mfatal:\x1b[0m injected\r\n\t" + b"x" * 1000 + b"\x00\x7f" + (b"\xff" if os.environ.get("INVALID_DIAGNOSTIC") else b""))
+    sys.exit(128)
+os.execv(os.environ["REAL_GIT"], [os.environ["REAL_GIT"], *args])
+""")
+        wrapper.chmod(0o755)
+        self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
+                        REAL_GIT=REAL_GIT, PROBE_LOG=str(self.root / "probes.jsonl"),
+                        DEV_STATUS_PROBE_TIMEOUT="5", GIT_OPTIONAL_LOCKS="1")
+        self.env.pop("STATUS_JSON", None)
+        self.git(self.root, "init", "-q", "-b", "main")
+        self.component.mkdir(parents=True)
+        self.git(self.component, "init", "-q", "-b", "main")
+        (self.component / "tracked").write_text("base\n")
+        self.git(self.component, "add", "tracked")
+        self.git(self.component, "commit", "-qm", "component base")
+        self.head = self.git(self.component, "rev-parse", "HEAD")
+        self.git(self.root, "update-index", "--add", "--cacheinfo",
+                 "160000," + self.head + ",packages/intentd")
+        self.git(self.root, "commit", "-qm", "parent base")
+
+    def git(self, path, *args):
+        return subprocess.check_output([REAL_GIT, "-C", str(path), "-c", "user.name=Fixture",
+                                        "-c", "user.email=fixture@example.invalid", *args],
+                                       text=True, stderr=subprocess.PIPE).strip()
+
+    def report(self, human=False, failure=None):
+        env = dict(self.env)
+        if failure:
+            env["FAIL_PROBE"] = failure
+        result = subprocess.run(["bash", str(self.root / "scripts/dev-status.sh"),
+                                 *([] if human else ["--json"])], env=env,
+                                capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        return result.stdout if human else json.loads(result.stdout)["repos"]["intentd"]
+
+    def assert_error(self, repo, probe):
+        self.assertEqual(repo["gitState"], "error", repo)
+        errors = {error["probe"]: error["detail"] for error in repo["gitErrors"]}
+        self.assertIn(probe, errors)
+        for detail in errors.values():
+            self.assertTrue(0 < len(detail) <= 240, detail)
+            self.assertTrue(all(c.isprintable() for c in detail), repr(detail))
+            self.assertNotIn("[31m", detail)
+
+    def assert_human_error(self, failure=None):
+        text = self.report(human=True, failure=failure)
+        line = next(line for line in text.splitlines() if line.startswith("Repo       intentd:"))
+        self.assertIn("Git state unavailable", line)
+        self.assertNotIn("uninitialized", line)
+        self.assertNotIn(" detached@", line)
+
+    def test_broken_markers_and_stale_worktree(self):
+        metadata = self.component / ".git"
+        saved = self.root / "component-git"
+        metadata.rename(saved)
+        for case in ("broken-gitdir", "dangling-marker", "empty-gitdir", "stale-worktree"):
+            with self.subTest(case=case):
+                if case == "broken-gitdir":
+                    metadata.write_text("gitdir: /nonexistent/dev-status-fixture\n")
+                elif case == "dangling-marker":
+                    metadata.symlink_to(self.root / "missing")
+                elif case == "empty-gitdir":
+                    metadata.mkdir()
+                else:
+                    metadata.write_text("gitdir: " + str(saved) + "\n")
+                    self.git(self.root, "--git-dir=" + str(saved), "config", "core.worktree",
+                             str(self.root / "missing-worktree"))
+                try:
+                    repo = self.report()
+                    self.assertIsNone(repo["initialized"], repo)
+                    self.assertIsNone(repo["dirty"], repo)
+                    self.assertIsNone(repo["gitlinkDirty"], repo)
+                    self.assertEqual(repo["pin"], self.head[:7])
+                    self.assert_error(repo, "initialization")
+                    self.assert_human_error()
+                finally:
+                    if metadata.is_dir():
+                        metadata.rmdir()
+                    else:
+                        metadata.unlink()
+
+    def test_required_probe_failures_preserve_known_fields(self):
+        for command, probe in [("status", "status"), ("rev-parse", "head"),
+                               ("ls-tree", "pin"), ("branch", "branch")]:
+            with self.subTest(probe=probe):
+                # Fail HEAD alone, leaving initialization readable.
+                wrapper = self.bin / "git"
+                original = wrapper.read_text()
+                if probe == "head":
+                    wrapper.write_text(original.replace('if mode == command or mode == "timeout:" + command:',
+                        'if command == "rev-parse" and args[-1] == "HEAD":'))
+                try:
+                    repo = self.report(failure=command)
+                    self.assertIs(repo["initialized"], True, repo)
+                    self.assertIs(repo["dirty"], None if probe == "status" else False, repo)
+                    self.assertIs(repo["gitlinkDirty"], None if probe in ("head", "pin") else False, repo)
+                    self.assertEqual(repo["pin"], None if probe == "pin" else self.head[:7])
+                    self.assert_error(repo, probe)
+                    self.assert_human_error(failure=command)
+                finally:
+                    wrapper.write_text(original)
+
+    def test_invalid_diagnostic_bytes(self):
+        self.env["INVALID_DIAGNOSTIC"] = "1"
+        self.assert_error(self.report(failure="status"), "status")
+
+    def test_status_timeout(self):
+        self.env["DEV_STATUS_PROBE_TIMEOUT"] = "0.2"
+        start = time.monotonic()
+        repo = self.report(failure="timeout:status")
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertIsNone(repo["dirty"], repo)
+        self.assertIs(repo["initialized"], True, repo)
+        self.assertIs(repo["gitlinkDirty"], False, repo)
+        self.assert_error(repo, "status")
+        self.assertIn("timed out", repo["gitErrors"][0]["detail"])
+        self.assert_human_error(failure="timeout:status")
+
+    def test_absent_and_failed_parent_pin(self):
+        shutil.rmtree(self.component)
+        repo = self.report()
+        self.assertEqual(repo["gitState"], "absent", repo)
+        self.assertEqual(repo["gitErrors"], [])
+        self.assertIs(repo["initialized"], False)
+        self.assertIs(repo["dirty"], False)
+        self.assertIs(repo["gitlinkDirty"], False)
+        self.assertIn("Repo       intentd: uninitialized", self.report(human=True))
+        failed = self.report(failure="ls-tree")
+        self.assert_error(failed, "pin")
+        self.assertIs(failed["initialized"], False)
+        self.assertIsNone(failed["gitlinkDirty"])
+        self.assert_human_error(failure="ls-tree")
+
+    def test_readable_states_and_no_optional_index_writes(self):
+        def snapshot():
+            return {str(p): (p.read_bytes(), p.stat().st_mtime_ns)
+                    for metadata in (self.root / ".git", self.component / ".git")
+                    for p in metadata.rglob("*") if p.is_file()}
+        # Touch a tracked file without changing its content to tempt index refresh.
+        tracked = self.component / "tracked"
+        os.utime(tracked, ns=(1_000_000_000, 1_000_000_000))
+        before = snapshot()
+        repo = self.report()
+        self.assertEqual(snapshot(), before, "report modified repository metadata/index")
+        self.assertEqual(repo["gitState"], "readable", repo)
+        self.assertEqual(repo["gitErrors"], [])
+        self.assertIs(repo["dirty"], False)
+        self.assertIs(repo["gitlinkDirty"], False)
+        self.assertEqual(repo["branch"], "main")
+        self.assertIsNone(repo["behindOriginMain"])
+        self.assertIsNone(repo["ahead"])
+        self.assertIn("main clean", self.report(human=True))
+        for args, locks in map(json.loads, (self.root / "probes.jsonl").read_text().splitlines()):
+            self.assertEqual(locks, "0", args)
+            self.assertIn(args[2], {"ls-tree", "rev-parse", "branch", "status", "rev-list"})
+        tracked.write_text("changed\n")
+        self.assertIs(self.report()["dirty"], True)
+        self.assertIs(self.report(failure="ls-tree")["dirty"], True)
+        self.git(self.component, "add", "tracked")
+        self.git(self.component, "commit", "-qm", "advance")
+        self.git(self.component, "checkout", "--detach", "-q")
+        repo = self.report()
+        self.assertIs(repo["gitlinkDirty"], True)
+        self.assertIs(self.report(failure="status")["gitlinkDirty"], True)
+        self.assertIsNone(repo["branch"])
+        self.assertTrue(repo["head"])
+        self.assertIn("detached@", self.report(human=True))
+        # A successful parent lookup with no gitlink is an independent clone.
+        self.git(self.root, "update-index", "--force-remove", "packages/intentd")
+        self.git(self.root, "commit", "-qm", "remove gitlink")
+        repo = self.report()
+        self.assertEqual(repo["gitState"], "readable")
+        self.assertIsNone(repo["pin"])
+        self.assertIs(repo["gitlinkDirty"], False)
+
+
+unittest.main(argv=[sys.argv[0]], verbosity=2)
+PYTEST
+
 # The port probe budget is generous here so a loaded host never empties
 # `ports`, and the probe budget (doctor, sandbox, git, gh) likewise never
 # empties `sandboxes`. The knobs bound each call, not the report: with `gh`
@@ -147,7 +376,10 @@ assert set(report["repos"]) == {"intentd", "cloudlands-fe"}
 for repo in report["repos"].values():
     assert {"branch", "dirty", "ahead", "behind", "pin", "gitlinkDirty", "behindOriginMain"} <= set(repo)
     assert repo["pin"] is None or isinstance(repo["pin"], str)
-    assert isinstance(repo["gitlinkDirty"], bool)
+    assert repo["gitState"] in {"absent", "readable", "error"}
+    assert isinstance(repo["gitErrors"], list)
+    for field in ("initialized", "dirty", "gitlinkDirty"):
+        assert repo[field] is None or isinstance(repo[field], bool)
     assert repo["behindOriginMain"] is None or isinstance(repo["behindOriginMain"], int)
     assert "pr" not in repo
 assert report["docs"]["remoteHost"] == "AGENTS.md#developing-on-a-remote-host"
