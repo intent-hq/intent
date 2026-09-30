@@ -649,10 +649,14 @@ suffix. For **both** queued and subsequently arriving events:
 2. Discard a range with `endOffset <= next`. If `startOffset <= next < endOffset`,
    append bytes beginning at `next - startOffset` and advance `next = endOffset`.
    Identical byte sequences at different positions are distinct output.
-3. A range with `startOffset > next` reveals a gap. Resnapshot before continuing;
-   when the snapshot also starts beyond `next`, that prefix is no longer retained.
-   Indicate truncation and reset the displayed history to the returned snapshot
-   (or insert an explicit missing-output marker before the retained suffix).
+3. A range with `startOffset > next` reveals a gap. Before continuing, request
+   `terminal.getBuffer` **without `maxBytes`**, so recovery includes all retained
+   output. A capped snapshot alone cannot prove eviction: its requested window
+   may exclude bytes still available in the ring. Apply the uncapped snapshot's
+   unseen suffix using step 2. Only when this uncapped snapshot also starts beyond
+   `next` is that prefix no longer retained. Indicate truncation and reset the
+   displayed history to the returned snapshot (or insert an explicit missing-output
+   marker before the retained suffix), then set `next = endOffset` of that snapshot.
    Do not silently concatenate across the gap or claim lost bytes were recovered.
 
 Events remain transient and subscribers can lag or disconnect. Cursors identify
