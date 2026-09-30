@@ -148,9 +148,15 @@ export class WorkerSubscriptions {
 
 export class WorkerClient {
   constructor(scope) { this.scope = scope; this.now = 0; this.snapshot = null; this.subscriptionId = null; this.seq = -1; this.connected = false; }
-  subscribe(id) { this.subscriptionId = id; this.seq = -1; this.connected = false; }
+  // Called only when the subscribe acknowledgement arrives. Validate before replacing a binding.
+  subscribe(id) {
+    if (!validId(id)) return false;
+    this.subscriptionId = id; this.seq = -1; this.connected = false;
+    return true;
+  }
   disconnect() { this.connected = false; this.subscriptionId = null; }
   push(frame) {
+    if (!validId(this.subscriptionId)) return false;
     const p = frame?.params;
     if (frame?.method !== 'subscription.push' || p?.subscriptionId !== this.subscriptionId || p.kind !== 'snapshot') return false;
     if (!Number.isSafeInteger(p.seq) || p.seq < 0 || p.seq <= this.seq || (this.seq === -1 && p.seq !== 0)) return false;

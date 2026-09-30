@@ -16,6 +16,8 @@ const mutations = [
   ['mixed marker drops data', 'if (backgrounded && supplied.length === 0)', 'if (backgrounded)'],
   ['synthetic failure claims exit', "row.exitEvidence = { kind: 'unknown' };", "row.exitEvidence = { kind: 'observed', exitCode: 1 };"],
   ['recreation loses tombstones', 'seen: new Set(c.seen)', 'seen: new Set()'],
+  ['unacknowledged subscription accepts push', 'if (!validId(this.subscriptionId)) return false;', '// broken active subscription guard'],
+  ['malformed acknowledgement replaces binding', 'if (!validId(id)) return false;', '// broken acknowledgement guard'],
   ['freshness boundary', 'now >= row.freshUntil', 'now > row.freshUntil'],
 ];
 for (const [name, before, after] of mutations) test(`regressions reject ${name}`, (t) => {

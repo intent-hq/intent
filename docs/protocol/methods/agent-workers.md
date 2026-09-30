@@ -75,8 +75,12 @@ connection; overflow returns `-32602` with `data.code: "capacity"` and creates n
 subscription. Teardown releases the slot; this is not a limit on worker processes.
 
 On reconnect, subscribe anew: seq starts at zero under a new subscription ID.
-Only the currently acknowledged subscription may update the view; discard frames
-with an old ID, duplicate or decreasing seq. The initial accepted seq must be zero.
+Only the currently acknowledged subscription may update the view. Its ID must be
+a nonempty string of at most 256 UTF-8 bytes without ASCII control characters; a
+malformed acknowledgement leaves the existing binding and sequence untouched.
+Before acknowledgement or after disconnect, reject every push, including one
+with a null/missing ID. Discard frames with an old ID, duplicate or decreasing seq.
+The initial accepted seq must be zero.
 A later seq gap is safe because the frame is a complete replacement. A list read
 must not overwrite a newer subscribed view; use it only before subscription or
 discard it once a subscription is accepted. No event replay cursor is promised.

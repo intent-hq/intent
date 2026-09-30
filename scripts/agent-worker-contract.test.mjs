@@ -250,3 +250,45 @@ test('recreated projection requires the complete same-generation ledger, not a c
   assert.equal(row(restored, 71000).observedAt, 2000);
   assert.equal(row(restored, 71000).status, 'unknown');
 });
+test('fresh and disconnected clients reject pushes without an acknowledged subscription', () => {
+  const p = configured(); ingest(p, spawn()); const c = new WorkerClient(scope);
+  for (const id of [null, undefined, '', 17, false, {}, []]) {
+    assert.equal(c.push(p.push(id, 0, 1000)), false);
+    assert.equal(c.view(1000), null);
+  }
+  c.subscribe('first'); c.push(p.push('first', 0, 1000)); c.disconnect();
+  const disconnected = c.view(2000);
+  for (const id of [null, undefined, '', 'first']) {
+    assert.equal(c.push(p.push(id, 1, 2000)), false);
+    assert.deepEqual(c.view(2000), disconnected);
+  }
+  assert.equal(c.connected, false);
+  assert.equal(c.view(2000).workers[0].unknownReason, 'disconnected');
+  assert.equal(c.view(2000).workers[0].observedAt, 1000);
+});
+test('malformed subscription acknowledgements cannot erase a valid binding or reset its sequence', () => {
+  const p = configured(); ingest(p, spawn()); const c = new WorkerClient(scope);
+  c.subscribe('active'); c.push(p.push('active', 0, 1000));
+  const before = c.view(2000);
+  for (const id of [null, undefined, '', 17, false, {}, [], 'bad\n', 'x'.repeat(257)]) {
+    assert.equal(c.subscribe(id), false);
+    assert.equal(c.subscriptionId, 'active');
+    assert.equal(c.seq, 0);
+    assert.equal(c.connected, true);
+    assert.deepEqual(c.view(2000), before);
+    assert.equal(c.push(p.push(id, 1, 2000)), false);
+  }
+  assert.equal(c.push(p.push('active', 0, 2000)), false);
+  assert.equal(c.push(p.push('active', 1, 2000)), true);
+});
+test('valid re-subscribe requires seq zero and keeps rejecting the previous acknowledged ID', () => {
+  const p = configured(); ingest(p, spawn()); const c = new WorkerClient(scope);
+  c.subscribe('old'); c.push(p.push('old', 0, 1000)); c.disconnect();
+  c.subscribe('new');
+  assert.equal(c.push(p.push('old', 1, 2000)), false);
+  assert.equal(c.push(p.push('new', 1, 2000)), false);
+  assert.equal(c.view(2000).workers[0].unknownReason, 'disconnected');
+  assert.equal(c.push(p.push('new', 0, 2000)), true);
+  assert.equal(c.view(2000).workers[0].observedAt, 1000);
+  assert.equal(c.view(61000).workers[0].unknownReason, 'stale');
+});
