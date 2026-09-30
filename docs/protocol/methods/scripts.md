@@ -4,7 +4,7 @@
 
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `active`) | { scripts: [...] } — definition plus `runtime`; see the prepared lifecycle extension below |
+| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`) | { scripts: [...] } — definition plus `runtime`; see the prepared lifecycle extension below |
 | script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun? } — the persisted `WorkspaceScript` record |
 | script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; inactive commands only |
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — prepared extension; restores visibility without starting |
@@ -144,19 +144,30 @@ These fields belong to the definition, not `ScriptRuntimeState`.
   can silently ignore unknown fields: a successful create is **not** proof that
   one-off retirement is supported. Never fall back to `script.remove`.
 - Old clients on a supporting daemon keep creating saved definitions and can
-  start/status/output known IDs as before. They ignore additive fields. Default
-  lists exclude archived entries; they cannot show the new History view. A stale
-  new-method request to an older daemon can return method-not-found or Forbidden
-  at its collaborator allowlist; surface it without claiming success.
+  start/status/output known IDs as before. They ignore additive fields and
+  continue receiving **all definitions when the wire filter is omitted**, even
+  after `script:changed` triggers a refetch. This preserves their existing row
+  maps, selected output and runtime failure state. They cannot show the new
+  History view or remove archived rows from their ordinary list; upgrading the
+  client enables those affordances. Server capability advertisement alone does
+  not change legacy client behavior. A stale new-method request to an older
+  daemon can return method-not-found or Forbidden at its collaborator allowlist;
+  surface it without claiming success.
 
-**Lists and history.** `script.list` defaults to `archive: "active"` (no
-`archivedAt`); `"archived"` selects history and `"all"` selects both. Every
-selection returns the same `{ scripts: [...] }` envelope and full definitions
-with `runtime`. Preserve the existing oldest-created-first order, breaking equal
-`createdAt` ties by `id`. Clients may sort History by `archivedAt` locally. There
-is no implicit age cutoff, deletion or pagination in this extension. Bootstrap
-from repository config only if the workspace has **no definitions at all**;
-an empty filtered view must not recreate archived definitions.
+**Lists and history.** On the wire, omitted `archive` is equivalent to
+`archive: "all"`, preserving the existing unfiltered result for legacy clients.
+`"active"` selects definitions without `archivedAt`, `"archived"` selects history,
+and `"all"` selects both. Lifecycle-aware frontend normal lists and the updated
+MCP helper's default list **explicitly send `archive: "active"`**; that is how
+finished one-offs leave the normal view without changing older clients' lists.
+History sends `"archived"`; retained/open-ID recovery can send `"all"`. When the
+capability is absent, the frontend omits the filter and retains legacy behavior.
+Every selection returns the same `{ scripts: [...] }` envelope and full
+definitions with `runtime`. Preserve the existing oldest-created-first order,
+breaking equal `createdAt` ties by `id`. Clients may sort History by `archivedAt`
+locally. There is no implicit age cutoff, deletion or pagination in this extension.
+Bootstrap from repository config only if the workspace has **no definitions at
+all**; an empty filtered view must not recreate archived definitions.
 
 **Explicit archive and restore.** Both RPCs take only the named workspace and
 an explicit selection of 1–1,000 nonempty `scriptIds` (limit checked before
@@ -307,7 +318,7 @@ state from `script.list`; invalidation events alone are not a row snapshot.
 
 Archive does **not** cancel completion hooks or subscriptions. After `start`
 returns, hooks keep using direct `status`/`output` by ID even after the row leaves
-the default list. Natural exit and failure still satisfy
+the lifecycle-aware active list. Natural exit and failure still satisfy
 `state.status === "exited" && state.exitCode !== undefined`; a hook that also
 handles manual stop must accept `idle` after launch acceptance, as with the
 existing manual-stop contract. Never gate on `exitCode` alone, and keep waiting
@@ -337,7 +348,11 @@ ws.script.archive(scriptIds) → { archived, skipped }
 ws.script.restore(scriptIds) → { restored, skipped }
 ```
 
-List remains an unwrapped array and archive/restore return the RPC batch result.
+List remains an unwrapped array. The updated helper defaults an omitted options
+bag or omitted `archive` option to an explicit wire `archive: "active"`; passing
+`"archived"` or `"all"` forwards that choice. Older helper implementations that
+omit the wire filter continue receiving all definitions. Archive/restore return
+the RPC batch result.
 Workspace scope is injected by the host as for existing helpers; no
 caller-supplied cross-workspace escape is added. Existing no-argument `list()`
 and create/start/status/output signatures remain valid. Teach callers to opt into `purpose: "oneOff"` for

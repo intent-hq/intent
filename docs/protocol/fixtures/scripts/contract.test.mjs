@@ -28,7 +28,7 @@ test('list examples partition definitions without losing failures from history',
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .map(row => row.id);
   for (const c of fixture.cases.filter(c => c.id.startsWith('list-'))) {
-    assert.deepEqual(c.expect.scriptIds, select(c.request.params.archive ?? 'active'), c.id);
+    assert.deepEqual(c.expect.scriptIds, select(c.request.params.archive ?? 'all'), c.id);
   }
   assert.ok(select('archived').includes('failed'));
   assert.ok(!select('active').includes('failed'));
@@ -98,4 +98,35 @@ test('required concurrency, persistence, cancellation and compatibility examples
     assert.equal(c.expect.hookDispatch, true, c.id);
   }
   assert.equal(fixture.scenarios.find(c => c.id === 'restart-archived-success').expect.outputMayBeEmpty, true);
+});
+
+test('omitted wire filters retain archived definitions for legacy refetches', () => {
+  const defaultList = fixture.cases.find(c => c.id === 'list-default');
+  const allList = fixture.cases.find(c => c.id === 'list-all');
+  assert.equal(defaultList.request.params.archive, undefined);
+  assert.deepEqual(defaultList.expect.scriptIds, allList.expect.scriptIds);
+  assert.match(scriptsDoc, /default `all`/);
+  const legacy = fixture.scenarios.find(c => c.id === 'old-client-new-daemon');
+  assert.equal(legacy.expect.defaultListArchive, 'all');
+});
+
+test('selected-output examples exercise an archive transition and both client generations', () => {
+  for (const id of ['archive-selected-output-tab', 'old-client-refetch-after-archive']) {
+    const c = fixture.scenarios.find(c => c.id === id);
+    assert.ok(c?.initialScript, id);
+    assert.equal(c.initialScript.archivedAt, undefined, id);
+    assert.equal(c.initialScript.runtime.status, 'exited', id);
+    assert.equal(c.fixtureControl.scriptId, c.initialScript.id, id);
+    assert.deepEqual(c.expect.changedIds, [c.initialScript.id], id);
+    assert.equal(c.expect.tabOpen, true, id);
+    assert.equal(c.expect.selectionPreserved, true, id);
+  }
+  const legacy = fixture.scenarios.find(c => c.id === 'old-client-refetch-after-archive');
+  assert.equal(legacy.fixtureControl.refetch.params.archive, undefined);
+  assert.equal(legacy.expect.archivedRowInResponse, true);
+  assert.equal(legacy.expect.definitionAndRuntimeRetained, true);
+  for (const id of ['lifecycle-aware-ui-list-default', 'lifecycle-aware-mcp-list-default']) {
+    const c = fixture.scenarios.find(c => c.id === id);
+    assert.equal(c?.expect.wireParams.archive, 'active', id);
+  }
 });

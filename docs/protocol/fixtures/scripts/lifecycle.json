@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "prepared-not-executed",
-  "description": "Each case starts from a fresh isolated seed. fixtureControl and barriers are future harness controls, not RPCs. Subsets and postconditions are required assertions for component tests, not measured outcomes. The static test validates fixture consistency only; no daemon, PTY, database or race is exercised. No live workspace IDs or commands are used.",
+  "description": "Each case starts from a fresh isolated seed. fixtureControl and barriers are future harness controls, not RPCs. Subsets and postconditions are required assertions for component tests, not measured outcomes. The static test validates fixture consistency only; no daemon, PTY, database or race is exercised. No live workspace IDs or commands are used. A scenario initialScript replaces the same-ID seed definition before its operation; archive transition examples start active.",
   "capability": {
     "scriptLifecycle": 1
   },
@@ -132,11 +132,13 @@
       },
       "expect": {
         "scriptIds": [
+          "failed",
           "legacy",
           "restarting",
           "running",
           "service",
-          "starting"
+          "starting",
+          "successful"
         ],
         "order": "createdAt-then-id"
       }
@@ -1254,7 +1256,7 @@
       },
       "expect": {
         "defaultPurpose": "saved",
-        "defaultListArchive": "active",
+        "defaultListArchive": "all",
         "unknownResponseFieldsIgnored": true
       }
     },
@@ -1264,14 +1266,46 @@
         "operation": "archive",
         "scriptId": "successful",
         "tabOpen": true,
-        "tabSelected": true
+        "tabSelected": true,
+        "client": "lifecycle-aware",
+        "refetch": {
+          "method": "script.list",
+          "params": {
+            "workspaceId": "ws-a",
+            "archive": "active"
+          }
+        }
       },
       "expect": {
         "tabOpen": true,
         "selectionPreserved": true,
         "subscriptionPreserved": true,
         "sameOutputHandle": true,
-        "absentFromActiveList": true
+        "absentFromActiveList": true,
+        "changedIds": [
+          "successful"
+        ]
+      },
+      "initialScript": {
+        "id": "successful",
+        "workspaceId": "ws-a",
+        "name": "successful",
+        "command": "fixture-command",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-09-30T12:00:00Z",
+        "purpose": "oneOff",
+        "runtime": {
+          "status": "exited",
+          "restartCount": 0,
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "lastRun": {
+          "outcome": "succeeded",
+          "exitCode": 0,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
       }
     },
     {
@@ -1319,6 +1353,95 @@
       "expect": {
         "archivedCount": 1000,
         "noProcessStops": true
+      }
+    },
+    {
+      "id": "old-client-refetch-after-archive",
+      "initialScript": {
+        "id": "failed",
+        "workspaceId": "ws-a",
+        "name": "failed",
+        "command": "fixture-command",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-09-30T12:00:00Z",
+        "purpose": "oneOff",
+        "runtime": {
+          "status": "exited",
+          "restartCount": 0,
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        },
+        "lastRun": {
+          "outcome": "failed",
+          "exitCode": 2,
+          "stoppedAt": "2026-09-30T12:00:00Z"
+        }
+      },
+      "fixtureControl": {
+        "operation": "archive-then-changed-refetch",
+        "scriptId": "failed",
+        "client": "legacy",
+        "tabOpen": true,
+        "tabSelected": true,
+        "refetch": {
+          "method": "script.list",
+          "params": {
+            "workspaceId": "ws-a"
+          }
+        }
+      },
+      "expect": {
+        "changedIds": [
+          "failed"
+        ],
+        "tabOpen": true,
+        "selectionPreserved": true,
+        "archivedRowInResponse": true,
+        "definitionAndRuntimeRetained": true,
+        "responseScriptIds": [
+          "failed",
+          "legacy",
+          "restarting",
+          "running",
+          "service",
+          "starting",
+          "successful"
+        ]
+      }
+    },
+    {
+      "id": "lifecycle-aware-ui-list-default",
+      "fixtureControl": {
+        "operation": "normal-list-without-options",
+        "client": "ui",
+        "capabilities": {
+          "scriptLifecycle": 1
+        }
+      },
+      "expect": {
+        "wireParams": {
+          "workspaceId": "ws-a",
+          "archive": "active"
+        },
+        "archivedRowInResponse": false
+      }
+    },
+    {
+      "id": "lifecycle-aware-mcp-list-default",
+      "fixtureControl": {
+        "operation": "normal-list-without-options",
+        "client": "mcp",
+        "capabilities": {
+          "scriptLifecycle": 1
+        }
+      },
+      "expect": {
+        "wireParams": {
+          "workspaceId": "ws-a",
+          "archive": "active"
+        },
+        "archivedRowInResponse": false
       }
     }
   ]
