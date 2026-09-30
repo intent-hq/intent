@@ -600,13 +600,73 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | terminal.write | terminalId (req), data (req, base64), workspaceId? | { ok: true } — `data` is base64-encoded input bytes |
 | terminal.resize | terminalId (req), cols (req,int), rows (req,int), workspaceId? | { ok: true } |
 | terminal.kill | terminalId (req), workspaceId? | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
-| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data } — base64 scrollback for replay |
+| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay |
 
 **Base64 framing.** Terminal payloads are **binary-safe**: input (`terminal.write` `data`),
 scrollback (`terminal.getBuffer` `data`), and streamed output (`terminal:data` `chunk`, §6.5)
 are **base64-encoded** so arbitrary bytes (control sequences, UTF-8, non-text) survive the
 JSON-RPC text channel. Clients decode on receipt and encode on send.
 `terminal.readOutput` (§5.9) stays a plaintext convenience read.
+
+**Exact output replay cursors (additive extension).** `terminal.getBuffer` and every
+`terminal:data` event include `daemonBootId`, `startOffset` and `endOffset` alongside
+unchanged `terminalId` and base64 `data` / `chunk`. Older clients may ignore these
+fields. Clients talking to an older daemon must feature-detect the complete extension;
+missing cursor fields do not permit exact replay through byte-equality heuristics.
+This contract does not imply that existing clients already use cursors.
+
+- The stream identity is **(`daemonBootId`, `terminalId`)**. The boot ID is the same
+  non-persisted UUID returned by `terminal.list`; it changes when the daemon restarts.
+  A terminal ID is never reused within a boot, but may repeat after restart. A new
+  terminal starts a new stream at zero even if it runs the same command in the same
+  workspace. Offsets from different stream identities must never be compared.
+- Positions are **unsigned decimal strings** (`"0"` through `"18446744073709551615"`),
+  avoiding JSON/JavaScript integer rounding. They count raw decoded PTY **output
+  bytes**, not Unicode characters, base64 characters, event sequence numbers, input
+  writes, or terminal screen cells. Ranges are half-open: `[startOffset, endOffset)`;
+  decoded payload length equals `endOffset - startOffset`.
+- The reader assigns each event range when it appends the output to scrollback,
+  under the same lock. A snapshot's bytes and both boundaries are captured under
+  that lock too. Delivery may lag this capture: a covered event can arrive before
+  **or after** the snapshot response. The initial streamer backlog has the retained
+  bytes' actual range, which need not start at zero.
+- Scrollback is bounded. Eviction never resets the counter; snapshot `startOffset`
+  identifies the oldest returned byte. `maxBytes` selects a trailing byte window
+  without changing `endOffset`; omitted or legacy negative bounds return all
+  retained bytes. Zero returns an empty range at the current end. An empty stream
+  returns `startOffset = endOffset = "0"`. Snapshot boundaries may split UTF-8 or
+  escape sequences, so clients must preserve binary framing.
+
+A cursor-aware client subscribes before requesting a snapshot and buffers live
+output while the request is in flight. For an initial attach it renders the snapshot
+and sets `next = endOffset`. For a same-stream reconnect it keeps its prior `next`
+and treats the snapshot as another positioned range, appending only the unseen
+suffix. For **both** queued and subsequently arriving events:
+
+1. Validate the stream identity and decoded length. Ignore stale events from a
+   different boot/session; a newly confirmed boot requires a fresh snapshot and
+   discarding the old cursor and pending output.
+2. Discard a range with `endOffset <= next`. If `startOffset <= next < endOffset`,
+   append bytes beginning at `next - startOffset` and advance `next = endOffset`.
+   Identical byte sequences at different positions are distinct output.
+3. A range with `startOffset > next` reveals a gap. Before continuing, request
+   `terminal.getBuffer` **without `maxBytes`**, so recovery includes all retained
+   output. A capped snapshot alone cannot prove eviction: its requested window
+   may exclude bytes still available in the ring. Apply the uncapped snapshot's
+   unseen suffix using step 2. Only when this uncapped snapshot also starts beyond
+   `next` is that prefix no longer retained. Indicate truncation and reset the
+   displayed history to the returned snapshot (or insert an explicit missing-output
+   marker before the retained suffix), then set `next = endOffset` of that snapshot.
+   Do not silently concatenate across the gap or claim lost bytes were recovered.
+
+Events remain transient and subscribers can lag or disconnect. Cursors identify
+overlap and gaps; they do not provide unlimited retention or guaranteed delivery.
+On reconnect or stream exit, a final snapshot can reconcile output whose event was
+missed, subject to retention. If the session was released, `terminal.getBuffer`
+returns the usual not-found error; it never resurrects the process. Replaying output
+must never call `terminal.write`: reads, reconnects and snapshots do not replay input.
+Only explicit user input invokes writes; kernel-echoed input counts as output once
+it is read from the PTY.
 
 ```json
 // → create an 80×24 PTY running the default shell
@@ -621,7 +681,8 @@ JSON-RPC text channel. Clients decode on receipt and encode on send.
 { "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
   "event":{ "type":"terminal:data","workspaceId":"ws-abc","id":"evt-901",
     "timestamp":"2026-06-17T05:00:00.000Z","actor":{ "type":"system" },
-    "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK" } } } }
+    "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK",
+      "daemonBootId":"boot-uuid","startOffset":"0","endOffset":"12" } } } }
 ```
 
 ### 5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab`
