@@ -44,6 +44,7 @@
     "agent:updated",
     "agent:user-message:sent",
     "agent:woken-by-subscription",
+    "agent:workers-changed",
     "app:ui-highlight",
     "app:ui-navigate",
     "app:workspace-open",

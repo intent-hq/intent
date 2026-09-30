@@ -140,6 +140,7 @@ into wire methods.
 | `browser.exec`, `browser.listTabs`, `browser.upsertTab` | Propagate | `workspaceId` | Workspace client-to-daemon calls; preserve optional exec context and host-only upsert. Reverse routing is not implemented here. |
 | `presence.snapshot`, `note.presence.update`, `drafts.get`, `drafts.set`, `drafts.clear` | Propagate | `workspaceId` | Workspace presence/caret/draft operations; connection and lease ownership still apply. |
 | `note.subscribe`, `task.subscribe`, `comment.subscribe`, `note.presence.subscribe` | Propagate | `workspaceId` | Snapshot/delta workspace channels; retain resource selectors, projections and replacement groups. |
+| `agent.workers.list`, `agent.workers.subscribe` | Propagate | `workspaceId` | Prepared worker observations (§5.5b); retain agent selector, scoped authority and evidence age. Cleanup uses `events.unsubscribe`. |
 | `agent.subscribe` | Propagate | `workspaceId` | Collection-channel variant only when `eventTypes` is absent; canonical cleanup is `events.unsubscribe`. |
 | `accept-changes.getStatus`, `accept-changes.prepare`, `accept-changes.execute`, `accept-changes.addRemote`, `accept-changes.mergePR`, `file-tracking.getChanges`, `file-tracking.getAgentLocks`, `file-tracking.getLineStats`, `file-tracking.loadCommits`, `file-tracking.stage`, `file-tracking.unstage` | Propagate | `workspaceId` | Existing workspace change-tracking operations. |
 
