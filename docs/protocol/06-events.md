@@ -156,6 +156,17 @@ All filters on a subscription are combined with **AND**. Delivery is gated *only
 | collaboration identity (10.9, docs ahead) | identity:auth-changed | `{ provider, host, purpose: "collaboration", status, flowId? }`; existing forge terminal status enum, signing-in daemon's owner only; never a repository auth event (§5.49) |
 | authenticated clients (10.9, docs ahead) | client:updated | Complete `client.list` row after hello metadata or effective profile/role changes; transient, owner/member host-wide, guests self-only (§5.49) |
 
+#### Prepared service readiness snapshots (not implemented)
+
+The [service readiness contract](./methods/scripts.md#service-readiness-prepared-additive-extension)
+reuses `script:state`, adding `ready` and `readiness` only to configured services'
+runtime snapshots. Readiness transitions carry a complete snapshot; cleared
+check metadata is omitted, not null. Reset publication precedes successor
+success, and stale process-attempt results must never publish. Repeated failed
+HTTP polls update status/list metadata without emitting durable polling events.
+Existing process-state events still fire. Services without contracts keep their
+existing payload shape; `script:changed` remains definition invalidation.
+
 #### Prepared node events (not implemented)
 
 The [phase 1 node contract (§5.50)](./methods/nodes.md#lifecycle-and-events)

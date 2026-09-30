@@ -30,6 +30,15 @@ Older daemons omit it; clients must not assume an unknown create option was
 honored just because creation succeeded. Gate lifecycle controls/options on this
 capability, independently of numeric version.
 
+**Service readiness (prepared additive extension).**
+`server.capabilities.scriptReadiness: 1` advertises the complete persisted
+health/pattern readiness contract in
+[§5.8](./scripts.md#service-readiness-prepared-additive-extension), including
+per-process resets, bounded local checks and agent bindings. It is independent
+of `scriptLifecycle`. Without it, clients must not send readiness options or
+interpret successful creation/URL detection as proof of readiness. Scripts
+without a contract omit `ready` and `readiness` even when support is advertised.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
