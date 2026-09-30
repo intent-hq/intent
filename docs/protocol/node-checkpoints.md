@@ -157,11 +157,30 @@ preparation intent, held in separately bounded owned storage rather than expandi
 the compact preparation ledger. An object or successful decode grants no authority.
 
 Head validates current/inherited source selection independently from target-stage
-ownership. Remote restore also requires an admitted selected-checkpoint Git
-read-ref adapter for exact immutable HEAD/index/WIP/inherited closure; Upload
-rejects StageBinding and cannot fetch arbitrary manifest OIDs. Never substitute
-moving aliases or local stage paths. Existing Prompt carries bounded history;
-manifest session metadata introduces no portable-file import or readiness proof.
+ownership. The [private selected-read agreement](./node-link.md#selected-checkpoint-git-reads)
+reserves bounded head source ownership **before** prepare dispatch, even if no
+transfer is registered. Record/reference quotas and backing retained-data capacity
+are separate from the attempt quota; lost dispatch and uncertain cleanup stay
+charged. Each source-read attempt registers through node.checkpoint.read.prepare
+before Open and binds its head-issued ID to the exact preparation, checkpoint/hash,
+source-reader relation, target run/epoch, repository and current generation.
+
+Only the typed local installer selects git.checkpointUploadPack and the issued
+ID. Unknown/consumed/foreign source IDs never fall back to ordinary Upload or the
+current preparation. Upload rejects StageBinding and cannot fetch arbitrary
+manifest OIDs. The selected-source adapter must advertise only exact immutable
+HEAD/index/WIP anchors with expected OIDs, prove inherited bases in their closure,
+and fail if a required root is missing; each submodule needs its own granted read.
+Never substitute moving aliases or local stage paths. Retain fresh source/target
+admission through native reads and queued/actual writes, then prove cleanup before
+releasing pins. Expiry is not settlement; tombstone compaction must preserve replay
+fences until durable target-epoch retirement makes old requests reject before
+lookup. Fenced recovery elsewhere does not release the original owner's resources.
+
+The producer, registry, installer, source adapter and guarded Upload are required
+implementation work, not qualified behavior. Existing Prompt carries bounded
+history; manifest metadata, registration or transfer completion introduces no
+portable-file import, readiness or checkpoint ACK proof.
 
 Required fields are those shown except `branch` (omitted for detached HEAD) and
 `wip` (omitted when clean). A delegated isolated child additionally carries the

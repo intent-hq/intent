@@ -128,7 +128,9 @@ Head dispatches two private RPCs: `node.execution.prepare` and
 `node.execution.status`. Prepare owns hydration and contained provider/ACP
 startup, but delivers no prompt; there is no separate start mutation.
 Node-originated RPC, agent workspace scripts, public WSS and generic namespace
-forwarding cannot invoke this lifecycle. Trusted composition explicitly grants
+forwarding cannot invoke these head-to-node operations. The separate
+node-to-head checkpoint-read registration below has its own restricted grant.
+Trusted composition explicitly grants
 each operation to the exact persisted owner/agent/workspace/run/assignment epoch.
 A serialized assignment, `active` flag, config hash or ready receipt grants no
 authority. Resolve repo grants and safe roots from that assignment and trusted
@@ -359,27 +361,254 @@ execution lifetime and durable receipt revisions below remain unchanged.
 
 ### Selected checkpoint Git reads
 
-Existing Git Upload transports objects but **rejects StageBinding**; only Stage
-accepts that binding. Upload copies granted advertised ref closure and accepts
-wants only for those resolved root OIDs. A manifest OID/hash is not fetch authority
-and the existing lane alone is not selected-checkpoint delivery.
+Private version 2 adds node-to-head `rpc/request`
+`node.checkpoint.read.prepare` to register/reconcile one selected-checkpoint read
+attempt. Its result supplies an issued transfer ID before Git Open. Git Open uses
+Service::Upload (`git-upload-pack`) with RequestScope.method
+`git.checkpointUploadPack`; this is a private Git-lane discriminator, not a generic
+workspace RPC. Neither name belongs in public method/routing catalogs. Version 1
+rejects both. Ordinary Upload retains `git.uploadPack` and independent ordinary
+grants; Receive/Stage remain unchanged.
 
-Trusted composition must bind the owned preparation's exact checkpoint/hash and
-current-or-inherited source-reader relation to immutable HEAD/index/WIP/inherited
-read refs through a selected-source HubAccess adapter. Preserve the target-scoped
-HubUrl/request assignment and hold fresh source/target fencing admission through
-actual transfer. Explicit parent/child read-ref grants must not forge parent
-request identity. Required roots absent or mismatched in that exact grant fail
-checkpoint-invalid; never substitute current agent aliases/their current OIDs or
-broaden access to unrelated hub objects. Validate all repository/submodule and
-attachment closure before ready, without ambient stage or registry fallback.
+The existing Open/RequestScope/helper Hello field sets do not change. Upload
+still rejects StageBinding (`checkpoint`), operationCapability and idempotencyKey.
+Only Stage accepts StageBinding. A missing source registration cannot fall back
+to ordinary Upload, current-preparation lookup, today's aliases or arbitrary
+manifest OIDs. Identity alone grants no authority.
 
-The existing local DurableStages repository map is not this remote adapter, and
-no qualified production selected-source composition is implied by these docs.
-The exact adapter/ref representation and complete delivery qualification remain
-implementation work. If existing request correlation cannot safely bind the
-selected checkpoint, return that concrete contract gap for review before adding
-a wire selector, caller-chosen source path/ref or permissive Upload fallback.
+#### Registration schema and direction
+
+The closed request body is at most 2 KiB:
+
+```json
+{
+  "preparationId": "00000000-0000-4000-8000-000000000060",
+  "runId": "00000000-0000-4000-8000-000000000002",
+  "assignmentEpoch": "7",
+  "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "attemptId": "00000000-0000-4000-8000-000000000051"
+}
+```
+
+UUIDs are nonnil; epoch is a canonical decimal u64 string. repoKey is the exact
+granted canonical repository identifier, at most 512 UTF-8 bytes, not a path or
+URL; existing HubUrl canonical validation still applies. Reject unknown, missing,
+null, wrong-type and duplicate/escaped-duplicate members before effects.
+RequestScope supplies agent/workspace; requestId equals streamId and is transport
+correlation. idempotencyKey equals attemptId; operationCapability is absent.
+Registration's idempotencyKey is never copied to Git Open.
+
+Only the trusted assigned node preparation supervisor may call this operation,
+on its authenticated current link under an explicit installed method grant.
+Agent scripts, public WSS, generic namespace forwarding, other nodes and the
+opposite direction cannot invoke it. Head validates the exact issued preparation
+record plus current source-reader and target admission; a valid lease alone is
+insufficient. The source selector is derived from that record, never supplied or
+replaced by registration arguments.
+
+The closed result is at most 4 KiB; required fields are illustrated below. Only
+`outcome` is additionally optional (sent, failed, cancelled, expired or unknown).
+The [prepared corpus](./fixtures/nodes/lifecycle.json) supplies actual matching
+hashes; the schema illustration's digest is a placeholder.
+
+```json
+{
+  "preparationId": "00000000-0000-4000-8000-000000000060",
+  "runId": "00000000-0000-4000-8000-000000000002",
+  "assignmentEpoch": "7",
+  "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "attemptId": "00000000-0000-4000-8000-000000000051",
+  "transferId": "00000000-0000-4000-8000-000000000052",
+  "linkGeneration": "3",
+  "checkpoint": {
+    "checkpointId": "00000000-0000-4000-8000-000000000070",
+    "manifestSha256": "<64 lowercase hex digits>"
+  },
+  "state": "issued",
+  "ownership": "retained",
+  "revision": "1",
+  "expiresAt": "2026-09-30T00:02:00Z"
+}
+```
+
+transferId is a head-generated globally unique UUID, used as Git streamId and
+Open.request.requestId, not a bearer capability. Node checks the complete receipt
+against its owned preparation, selected checkpoint/hash, repo and current binding.
+States are issued, streaming, closing, closed and failed_retained. Ownership is
+retained except when closed. State/outcome/ownership updates atomically advance a
+durable per-attempt decimal u64 revision; receivers discard older observations
+and require equal revisions to agree. These revisions are independent of the
+preparation receipts below.
+
+#### Head reservation before dispatch
+
+Before sending lifecycle prepare, head durably reserves an issued preparation/
+source record under exact head/owner/agent/workspace/preparationId. Target node,
+lease/incarnation/run/epoch, source checkpoint/hash/identity and current-or-inherited
+reader relation, full metadata intent digest, inventory digest and original
+source-window deadline are immutable values. Changed intent under that identity
+fails; retries reconcile one owner. The existing node-local registry is not this
+head producer. Do not reconstruct it from an unknown Open or target singleton.
+
+Head source records have separate, cumulative limits from transfer attempts:
+
+| Resource | Limit |
+| --- | --- |
+| Head preparation/source records, including reservations and tombstones | 256 |
+| Encoded bytes per source record / aggregate | 32,768 / 8 MiB |
+| Repository retention grants per source record | 64, at most three selected anchors each |
+| Attachment retention grants per source record | 128 |
+| Explicit root/object retention references per source record | 320 |
+| Identity strings | At most 512 UTF-8 bytes; stricter UUID/epoch rules still apply |
+
+All encoded identity/reference bookkeeping counts toward the record cap. Store
+identity/hash-bound references and inventory digests to the existing authorized
+checkpoint objects, not another inline manifest or caller paths/credentials.
+Missing/mismatched referenced metadata fails closed. Reference counts do not
+bound Git object bytes: backing storage must reserve actual retained closure data
+under a finite configured capacity before admitting pins. Shared objects stay
+charged while any reference retains them. Missing/exhausted backing capacity
+rejects admission; configured limits may be lower.
+
+Atomically reserve the slot, maximum record allowance and required reference/data
+capacity **before pin acquisition or prepare dispatch**. The durable reservation
+owns partial pin acquisition. Persist the complete validated inventory before
+sending prepare. Lost dispatch, publication uncertainty, interrupted acquisition
+and a node that never registers any attempt remain charged. Registration cannot
+implicitly create a preparation record. No acquired or uncertain ownership is
+evicted to admit more work.
+
+#### Attempt producer, installer and Open
+
+Head registration selects only the exact immutable checkpoint HEAD/index and
+optional WIP anchor names AND expected OIDs for the granted repository. Source
+identity may belong to a parent/prior run; HubUrl/HubAssignment remains the target.
+Never forge the parent's assignment for a child. Required inherited execution
+bases must be proven in the selected closure; submodules each require their own
+granted repository/attempt and parent-before-child restore validation.
+
+Before returning a transfer ID, durably store full target/source/preparation/repo
+identity, current lease/incarnation/link generation, method/service, attempt and
+transfer IDs, deadlines/retry ordinal, expected immutable roots, source retention
+reference, state/revision and cleanup ownership. Source pins are not selection
+proof: orphan checkpoint anchors cannot substitute for an authorized successful
+checkpoint. Missing mandatory anchors or OID mismatch fail checkpoint-invalid,
+not partial advertisement; no union with moving aliases or unrelated hub objects.
+
+The authenticated receipt installs a one-shot **typed local Upload grant** binding
+an existing private helper capability and exact HubUrl to the issued ID, method,
+current binding and owned preparation. The capability is node-local, never an
+Open operationCapability. Hello, URL and CLI cannot choose the issued ID or
+method. Its namespace/path remains distinguishable after consumption/expiry:
+unknown, consumed or expired source grants cannot fall through to ordinary helper
+capability handling. Ordinary helpers retain ordinary IDs/grants. ReceiveIntent
+and ReceiveAttempt are ownership-pattern references, not Upload implementations.
+
+NodeGitService consumes the installed source grant instead of generating an ID.
+It sends the existing Git data frame with `gitOpen` metadata: service
+`git-upload-pack`, exact target HubUrl and RequestScope.method
+`git.checkpointUploadPack`, timeoutMs 120000, streamId equal to requestId, and no
+checkpoint, operationCapability or idempotencyKey. Head checks this closed
+service/method pair, current authenticated binding/generation and matching URL/
+scope agent/workspace before atomically claiming issued to streaming. Unknown,
+foreign, expired, already-consumed or stale IDs fail before advertisement. Issued
+source IDs also fail with ordinary git.uploadPack; never relax validation to
+arbitrary method strings.
+
+Retain a distinct typed Upload owner through selected-source HubAccess, native
+reads/copy/advertisement, scratch work and outgoing writes. Fresh source/target
+admission is required after waits, before native reads, before each chunk enqueue
+and at the actual write. Queued frames must retain an attempt-owned write guard;
+a pre-enqueue check or today's unguarded Upload send is insufficient. Stop,
+revocation and lease/generation closure fence admission first, then drain readers
+and queued/native writes before cleanup. Already delivered bytes cannot be
+recalled; no new bytes may pass after the fence.
+
+This requires new producer/registry, method grants, typed installer, selected-source
+adapter and guarded Upload composition. Existing local stage repository maps and
+ordinary Git transport are not qualified remote selected-checkpoint delivery.
+Registration, EOF and outcome sent prove neither node fsync nor complete local
+closure, hydration, readiness or checkpoint ACK. Validate all repositories,
+inherited index/worktree/submodules and attachments under live authority before
+ready; existing Prompt history and unsupported portable import remain unchanged.
+
+#### Retries, limits and reconciliation
+
+Dedup identity is owner/agent/workspace/preparationId plus attemptId. Repo, run,
+epoch, generation and source selection are immutable values, not alternate keys.
+Changed values with that nonce fail request-id-reused. A repeated registration
+may use fresh transport correlation but returns the same transfer ID and current
+versioned receipt, never another native transfer.
+
+Allow one unsettled attempt per preparation/repo. A different nonce while issued,
+streaming, closing or failed_retained fails source-read-in-use. Duplicate Open
+fails; it cannot join or restart a stream. Lost registration reply is reconciled
+with the same nonce. Repeated receipts cannot reinstall a consumed local grant
+or launch a second Open during active/uncertain ownership. Node retains consumed/
+uncertain installer state until settlement; loss of that state requires
+conservative reconciliation/retirement, not resurrection from an issued receipt.
+The lane's bounded retired-stream set is not durable replay evidence.
+
+After actual closure, allow a fresh nonce/ID only under fresh authority and the
+same source. Limits are three attempts per preparation/repo across generations,
+64 repository slots per preparation, 4096 total live/terminal-retained attempt
+rows and 16 MiB encoded attempt storage, at most 4 KiB per row. Lower configured
+caps are allowed. Reserve before returning an ID. Counters/tombstones needed for
+dedup stay charged until safely compacted; reconnect cannot reset them.
+
+The source window is at most 600000ms from initial durable head reservation. Each
+attempt expires no later than 120000ms after issuance or the original source/
+lease deadline, whichever is earlier; earlier preparation stop/delivery deadlines
+still win. Head admission/time is authoritative; node may shorten, never extend.
+Clock/restart uncertainty cannot extend deadlines. Reconnect fences old generation
+IDs, helper grants and queued writes; a new generation requires actual old-owner
+settlement, new nonce/ID and fresh admission within the original budgets. Disk
+records do not restore a grant, authority or cancellation token after restart.
+
+Registration cancellation before publication leaves no usable ID; uncertain
+publication retains reservation for same-identity reconciliation. Normal RPC
+reply retirement does not cancel an issued attempt: its lifetime is independent
+of the waiter. Explicit stop/cancellation/source revocation/expiry closes it.
+Known-attempt cleanup-only reconciliation may return sanitized status after
+preparation tombstoning under a valid current lease/link and exact retained
+owner/run/epoch. It cannot allocate, reopen, read source or change selection;
+expired/released credentials are rejected. Head-local operator reconciliation is
+separate.
+
+On recovery, expiry or stop, head reconciles even records with **zero attempts**.
+Durably fence registration/Open first, settle all claimed readers, native work,
+scratch and queued writes, then idempotently release each recorded retention grant
+by preparation/reference identity. Persist confirmed release before refunding
+capacity. Uncertain claim/publication/release remains charged and failed_retained.
+Expiry, waiter disappearance, disposal or deletion is not cleanup evidence. Zero
+attempts removes transfer settlement only when durable state proves none was
+claimed. Releasing head source pins does not declare a node checkout/process clean
+or permit reuse of its slot/root. Fenced recovery elsewhere remains allowed.
+
+After actual source/attempt settlement, compact to a charged tombstone retaining
+preparation identity, immutable target/source/metadata digests, deadline, terminal
+decision and nonce/retry fences (or their still-charged attempt rows). Reject
+renewed registration/stale Open; compaction cannot make the identity admissible
+again. Delete a tombstone only after durable retirement of its target assignment
+epoch/lease makes all old requests **and issuance paths** reject before lookup,
+across restart. The identity cannot be reused in a later epoch. Without that
+retirement proof retain the charge and fail closed on capacity exhaustion; it
+never substitutes for actual cleanup.
+
+Registration uses the existing sanitized error envelope:
+
+| errorCode | JSON-RPC code | Condition |
+| --- | --- | --- |
+| invalid-params / request-id-reused | -32602 | Invalid closed schema/identity or changed nonce intent |
+| stale-assignment | -32003 | Foreign, stopped, replaced target or generation |
+| checkpoint-invalid | -32602 | Invalid/ungranted source, repository or required roots |
+| source-read-in-use | -32005 | Another unsettled attempt owns the exact slot |
+| source-read-unavailable | -32603 | Capacity/deadline/retry budget unavailable before effects; retryable only when safe |
+| rpc-outcome-unknown | -32603 | Uncertain result; reconcile its retained identity, never assume absence |
+
+Git Open uses the existing sanitized Git-stream failure mechanism and settles
+its owned attempt without partial source advertisement. No public error/event
+or checkpoint/journal format is added.
 
 ### Owned states, identity and receipt
 

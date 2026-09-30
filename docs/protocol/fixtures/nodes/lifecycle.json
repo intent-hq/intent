@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "prepared-not-executed",
-  "description": "Private nodeProtocol 2 lifecycle data/scenarios. No runtime adapter is installed or exercised by this documentation fixture. Each scenario has fresh seeded state. fixtureEvent names are deterministic controls for future authenticated component harnesses, not wire operations. Replacements are JSON pointers; header idempotencyKey follows the replaced preparationId/turnId/stopId. correlation:fresh changes requestId/streamId without changing operation identity. Expectations are future assertions, not measured results. sourceMetadata manifest strings use checkpointFormat 1 typed field order; metadataValidationCases are prepared raw JSON inputs for strict static parsing. metadataBoundaryCases specify numeric limits, not successful runtime admission. Synthetic Git OIDs do not establish object existence.",
+  "description": "Private nodeProtocol 2 lifecycle data/scenarios. No runtime adapter is installed or exercised by this documentation fixture. Each scenario has fresh seeded state. fixtureEvent names are deterministic controls for future authenticated component harnesses, not wire operations. Replacements are JSON pointers; header idempotencyKey follows the replaced preparationId/turnId/stopId. correlation:fresh changes requestId/streamId without changing operation identity. Expectations are future assertions, not measured results. sourceMetadata manifest strings use checkpointFormat 1 typed field order; metadataValidationCases are prepared raw JSON inputs for strict static parsing. metadataBoundaryCases specify numeric limits, not successful runtime admission. Synthetic Git OIDs do not establish object existence. checkpointReadExamples and checkpointReadScenarios are separate prepared private registration/Git data, with no runtime harness execution. The registration receipt is not authority or proof of received objects.",
   "versions": {
     "nodeProtocol": 2,
     "checkpointFormat": 1,
@@ -23,7 +23,23 @@
     "metadataHeaderBytes": 4096,
     "metadataObjectBytes": 1183744,
     "metadataAggregateBytes": 67108864,
-    "metadataObjects": 256
+    "metadataObjects": 256,
+    "sourceRegistrationBodyBytes": 2048,
+    "sourceRegistrationResultBytes": 4096,
+    "headSourceRecords": 256,
+    "headSourceRecordBytes": 32768,
+    "headSourceAggregateBytes": 8388608,
+    "headSourceRepoGrants": 64,
+    "headSourceAttachmentGrants": 128,
+    "headSourceRetentionReferences": 320,
+    "sourceAttemptRows": 4096,
+    "sourceAttemptRowBytes": 4096,
+    "sourceAttemptAggregateBytes": 16777216,
+    "sourceRepoSlots": 64,
+    "sourceAttemptsPerRepo": 3,
+    "sourceWindowMs": 600000,
+    "sourceAttemptMs": 120000,
+    "sourceIdentityUtf8Bytes": 512
   },
   "seed": {
     "agentId": "agent-fixture",
@@ -1948,7 +1964,8 @@
       "root deletion before settlement",
       "drop retained owners",
       "worker disposal counted as cleanup pass"
-    ]
+    ],
+    "checkpointRead": "Future harness owns head reservation/attempt registries, local installer and retained refs/processes/writes. Teardown fences and joins actual owners before assertions; failed disposal remains charged for operator reconciliation. No fixture may force-delete retained evidence or claim native cleanup from expiry."
   },
   "metadataValidationCases": [
     {
@@ -2266,6 +2283,1519 @@
       "atLimit": "within-numeric-bound",
       "overLimit": "invalid-params",
       "note": "Static numeric bound only; other structure and authority constraints still apply."
+    }
+  ],
+  "checkpointReadSeed": {
+    "preparation": {
+      "preparationId": "00000000-0000-4000-8000-000000000060",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000070",
+        "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+      },
+      "configuration": {
+        "configId": "00000000-0000-4000-8000-000000000004",
+        "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+        "snapshot": {
+          "schemaVersion": 1,
+          "providerId": "fixture-static-provider",
+          "permissionPolicy": "denyAll",
+          "toolProfile": "contained-v1",
+          "terminal": false,
+          "externalAcpMcp": []
+        }
+      },
+      "sourceMetadata": {
+        "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+        "attachments": [
+          {
+            "id": "attachment-fixture",
+            "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+            "bytes": 30
+          }
+        ]
+      }
+    },
+    "headReservationAt": "2026-09-30T00:00:00Z",
+    "sourceDeadline": "2026-09-30T00:10:00Z",
+    "sourceRelation": "current",
+    "target": {
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture",
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3"
+    },
+    "repositoryRoots": [
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/head",
+        "oid": "2222222222222222222222222222222222222222"
+      },
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/index",
+        "oid": "3333333333333333333333333333333333333333"
+      },
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/wip",
+        "oid": "4444444444444444444444444444444444444444"
+      }
+    ],
+    "retainedDataBudget": "finite configured backing-store capacity required; this seed allocates no real objects"
+  },
+  "checkpointReadExamples": [
+    {
+      "id": "checkpoint-read-register",
+      "direction": "node-to-head",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000150",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000150",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.checkpoint.read.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000060",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attemptId": "00000000-0000-4000-8000-000000000051"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000150",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000150",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051",
+            "transferId": "00000000-0000-4000-8000-000000000052",
+            "linkGeneration": "3",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000070",
+              "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+            },
+            "state": "issued",
+            "ownership": "retained",
+            "revision": "1",
+            "expiresAt": "2026-09-30T00:02:00Z"
+          }
+        }
+      }
+    },
+    {
+      "id": "checkpoint-read-reconcile",
+      "direction": "node-to-head",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000151",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000151",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.checkpoint.read.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000060",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attemptId": "00000000-0000-4000-8000-000000000051"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000151",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000151",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051",
+            "transferId": "00000000-0000-4000-8000-000000000052",
+            "linkGeneration": "3",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000070",
+              "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+            },
+            "state": "closed",
+            "ownership": "released",
+            "revision": "3",
+            "expiresAt": "2026-09-30T00:02:00Z",
+            "outcome": "sent"
+          }
+        }
+      }
+    }
+  ],
+  "checkpointGitOpenExamples": [
+    {
+      "id": "checkpoint-read-open",
+      "direction": "node-to-head",
+      "frame": {
+        "header": {
+          "channel": "git",
+          "kind": "data",
+          "streamId": "00000000-0000-4000-8000-000000000052",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "gitOpen": {
+            "url": {
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "workspaceId": "workspace-fixture",
+              "agentId": "agent-fixture"
+            },
+            "service": "git-upload-pack",
+            "request": {
+              "requestId": "00000000-0000-4000-8000-000000000052",
+              "agentId": "agent-fixture",
+              "workspaceId": "workspace-fixture",
+              "method": "git.checkpointUploadPack",
+              "timeoutMs": 120000
+            }
+          }
+        },
+        "payloadUtf8": ""
+      },
+      "expect": {
+        "attemptState": "streaming",
+        "revision": "2",
+        "selectedRoots": "checkpointReadSeed.repositoryRoots",
+        "ready": false,
+        "checkpointAck": false
+      }
+    }
+  ],
+  "checkpointReadScenarios": [
+    {
+      "id": "issue-before-open",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "install-typed-local-grant"
+        },
+        {
+          "fixtureEvent": "open-exact-issued-transfer"
+        }
+      ],
+      "expect": {
+        "nativeTransfers": 1,
+        "attemptState": "streaming",
+        "sourceIdentity": "checkpointReadSeed.preparation.checkpoint"
+      }
+    },
+    {
+      "id": "lost-registration-response",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "drop-registration-response"
+        },
+        {
+          "fixtureEvent": "register-same-attempt-new-correlation"
+        }
+      ],
+      "expect": {
+        "sameTransferId": true,
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "duplicate-open",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "open-same-transfer-again"
+        }
+      ],
+      "expect": {
+        "secondOpen": "denied",
+        "nativeTransfers": 1
+      }
+    },
+    {
+      "id": "consumed-installer-receipt",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-consume-installer"
+        },
+        {
+          "fixtureEvent": "reconcile-issued-or-streaming-receipt"
+        },
+        {
+          "fixtureEvent": "attempt-reinstall"
+        }
+      ],
+      "expect": {
+        "reinstalled": false,
+        "nativeTransfersAtMost": 1
+      }
+    },
+    {
+      "id": "lost-installer-state",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-send-open"
+        },
+        {
+          "fixtureEvent": "lose-node-installer-state"
+        },
+        {
+          "fixtureEvent": "reconcile-issued-receipt"
+        }
+      ],
+      "expect": {
+        "oldGrantRestored": false,
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "unknown-id",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "unregistered-transfer-id"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "foreign-same-target-id",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "foreign-preparation-transfer-id"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-repo",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-repository"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-run",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-run"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-epoch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-epoch"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-preparation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-preparation"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-generation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-generation"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "source-id-ordinary-mode",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "source-id-with-git.uploadPack"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "ordinary-id-source-mode",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "ordinary-id-with-git.checkpointUploadPack"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-direction",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "head-to-node-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "public-routing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "public-wss-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "generic-routing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "workspace-forward-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "missing-local-capability",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "unknown-source-helper-capability"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "expired-local-capability",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "expired-source-helper-capability"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "open-stagebinding",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-checkpoint-binding"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-idempotency",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-idempotency-key"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-capability",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-operation-capability"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-stream-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-stream-id"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-url-scope-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-url-agent"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "changed-nonce-intent",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "same-attempt-id-other-repo-or-generation"
+        }
+      ],
+      "expect": {
+        "errorCode": "request-id-reused",
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "concurrent-nonces",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "different-nonce-same-active-slot"
+        }
+      ],
+      "expect": {
+        "errorCode": "source-read-in-use",
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "missing-head",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-required-head-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "missing-index",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-required-index-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "missing-wip",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-selected-wip-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "oid-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-anchor-oid"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "inherited-base-missing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-inherited-base-closure"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "submodule-not-granted",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "open-unregistered-child-repo"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "moving-alias",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "advance-current-alias"
+        },
+        {
+          "fixtureEvent": "open-exact-issued-transfer"
+        }
+      ],
+      "expect": {
+        "rootSelection": "immutable-expected-names-and-oids",
+        "aliasUnion": false
+      }
+    },
+    {
+      "id": "revoke-before-advertisement",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-source-before-advertisement"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-native-read",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-during-native-read"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-queued-write",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-with-queued-chunk"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-actual-write",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-before-actual-write"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "normal-reply-retirement",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "retire-registration-response-context"
+        }
+      ],
+      "expect": {
+        "attemptState": "issued",
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "explicit-stop",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "stop-preparation"
+        }
+      ],
+      "expect": {
+        "newReads": 0,
+        "cleanupRequired": true
+      }
+    },
+    {
+      "id": "retry-after-settlement",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "settle-attempt"
+        },
+        {
+          "fixtureEvent": "register-new-nonce"
+        }
+      ],
+      "expect": {
+        "newTransferId": true,
+        "sameCheckpoint": true,
+        "retryCount": 2
+      }
+    },
+    {
+      "id": "reconnect-uncertain",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "disconnect-generation"
+        },
+        {
+          "fixtureEvent": "register-new-generation-before-settlement"
+        }
+      ],
+      "expect": {
+        "newTransferDenied": true,
+        "oldGrantRevived": false
+      }
+    },
+    {
+      "id": "reconnect-settled",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "disconnect-and-settle"
+        },
+        {
+          "fixtureEvent": "register-new-generation-new-nonce"
+        }
+      ],
+      "expect": {
+        "newTransferId": true,
+        "originalWindowRetained": true,
+        "retryCount": 2
+      }
+    },
+    {
+      "id": "retry-exhausted",
+      "steps": [
+        {
+          "fixtureEvent": "settle-three-attempts"
+        },
+        {
+          "fixtureEvent": "register-fourth-attempt"
+        }
+      ],
+      "expect": {
+        "errorCode": "source-read-unavailable",
+        "sourceSubstitution": false
+      }
+    },
+    {
+      "id": "expiry-clock-restart",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "restart-with-uncertain-clock"
+        }
+      ],
+      "expect": {
+        "deadlineExtended": false,
+        "automaticGrantRestoration": false
+      }
+    },
+    {
+      "id": "failed-cleanup",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "fail-native-or-pin-cleanup"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "attemptState": "failed_retained",
+        "slotReused": false
+      }
+    },
+    {
+      "id": "stale-receipt",
+      "steps": [
+        {
+          "fixtureEvent": "observe-closed-revision-3"
+        },
+        {
+          "fixtureEvent": "observe-delayed-issued-revision-1"
+        }
+      ],
+      "expect": {
+        "retainedRevision": "3",
+        "attemptState": "closed",
+        "ownership": "released",
+        "reinstalled": false
+      }
+    },
+    {
+      "id": "ordinary-git",
+      "steps": [
+        {
+          "fixtureEvent": "ordinary-helper-grant"
+        },
+        {
+          "fixtureEvent": "ordinary-upload-with-git.uploadPack"
+        }
+      ],
+      "expect": {
+        "registeredSourceSelected": false,
+        "ordinaryBehavior": "unchanged"
+      }
+    },
+    {
+      "id": "eof-not-ready",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "observe-head-eof-sent"
+        }
+      ],
+      "expect": {
+        "ready": false,
+        "checkpointAck": false,
+        "nodeClosureValidationRequired": true
+      }
+    },
+    {
+      "id": "zero-attempt-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-256-head-records-without-registering"
+        },
+        {
+          "fixtureEvent": "reserve-257th-record"
+        }
+      ],
+      "expect": {
+        "records": 256,
+        "lastRejectedBeforePinsAndDispatch": true
+      }
+    },
+    {
+      "id": "head-byte-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-maximum-record-capacity"
+        },
+        {
+          "fixtureEvent": "attempt-over-record-or-aggregate-bound"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "head-reference-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-over-repo-or-attachment-or-reference-bound"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "backing-capacity",
+      "steps": [
+        {
+          "fixtureEvent": "backing-store-budget-missing-or-exhausted"
+        },
+        {
+          "fixtureEvent": "reserve-head-source"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "partial-pin-publication",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "acquire-some-pins"
+        },
+        {
+          "fixtureEvent": "interrupt-publication"
+        }
+      ],
+      "expect": {
+        "recordCharged": true,
+        "referencesCharged": true,
+        "freshIdentityBypass": false
+      }
+    },
+    {
+      "id": "lost-prepare-dispatch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "dispatch-prepare-response-lost"
+        },
+        {
+          "fixtureEvent": "register-no-attempt"
+        }
+      ],
+      "expect": {
+        "recordCharged": true,
+        "referencesCharged": true
+      }
+    },
+    {
+      "id": "identical-head-retry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "repeat-identical-prepare-issuance"
+        }
+      ],
+      "expect": {
+        "sourceRecords": 1,
+        "duplicatePins": 0
+      }
+    },
+    {
+      "id": "conflicting-head-retry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "reuse-preparation-id-with-other-source"
+        }
+      ],
+      "expect": {
+        "rejected": true,
+        "sourceRecords": 1
+      }
+    },
+    {
+      "id": "zero-attempt-expiry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "expire-with-zero-proven-attempts"
+        },
+        {
+          "fixtureEvent": "reconcile-release-pins"
+        }
+      ],
+      "expect": {
+        "newAdmission": false,
+        "releaseRequiresDurableConfirmation": true,
+        "nodeCleanupClaimed": false
+      }
+    },
+    {
+      "id": "uncertain-claim-expiry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "interrupt-open-claim"
+        },
+        {
+          "fixtureEvent": "expire-source-window"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "assumeNoAttempt": false
+      }
+    },
+    {
+      "id": "interrupted-pin-release",
+      "steps": [
+        {
+          "fixtureEvent": "close-admission-and-settle-attempts"
+        },
+        {
+          "fixtureEvent": "release-pin-ack-lost"
+        }
+      ],
+      "expect": {
+        "capacityRefunded": false,
+        "sameReleaseIdentityOnRetry": true
+      }
+    },
+    {
+      "id": "compaction-fences",
+      "steps": [
+        {
+          "fixtureEvent": "settle-head-references"
+        },
+        {
+          "fixtureEvent": "compact-source-record"
+        },
+        {
+          "fixtureEvent": "replay-old-prepare-nonce-and-open"
+        }
+      ],
+      "expect": {
+        "allReplaysDenied": true,
+        "retryCountersReset": false,
+        "tombstoneCharged": true
+      }
+    },
+    {
+      "id": "unsafe-tombstone-delete",
+      "steps": [
+        {
+          "fixtureEvent": "compact-source-record"
+        },
+        {
+          "fixtureEvent": "attempt-delete-without-durable-epoch-retirement"
+        }
+      ],
+      "expect": {
+        "deleted": false,
+        "tombstoneCharged": true
+      }
+    },
+    {
+      "id": "safe-tombstone-delete",
+      "steps": [
+        {
+          "fixtureEvent": "settle-all-owned-resources"
+        },
+        {
+          "fixtureEvent": "durably-retire-target-epoch"
+        },
+        {
+          "fixtureEvent": "delete-tombstone"
+        },
+        {
+          "fixtureEvent": "replay-old-identity"
+        }
+      ],
+      "expect": {
+        "deniedBeforeLookup": true,
+        "newEpochIdentityReuse": false
+      }
+    },
+    {
+      "id": "fenced-other-node-recovery",
+      "steps": [
+        {
+          "fixtureEvent": "old-node-cleanup-uncertain"
+        },
+        {
+          "fixtureEvent": "recover-last-durable-source-on-other-fenced-node"
+        }
+      ],
+      "expect": {
+        "oldOwnershipRetained": true,
+        "independentRecoveryAllowed": true
+      }
+    },
+    {
+      "id": "restart-reservation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "restart-head-before-dispatch"
+        },
+        {
+          "fixtureEvent": "reconcile-durable-reservation"
+        }
+      ],
+      "expect": {
+        "automaticDispatch": false,
+        "ownership": "retained",
+        "quotaReset": false
+      }
+    }
+  ],
+  "checkpointReadValidationCases": [
+    {
+      "id": "valid-registration",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": true
+    },
+    {
+      "id": "unknown",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"extra\":true}",
+      "valid": false
+    },
+    {
+      "id": "null",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":null}",
+      "valid": false
+    },
+    {
+      "id": "wrong-type",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":7,\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "noncanonical-epoch",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"07\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "nil-id",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-0000-0000-000000000000\"}",
+      "valid": false
+    },
+    {
+      "id": "duplicate",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "escaped-duplicate",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"attempt\\u0049d\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "valid-result",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": true
+    },
+    {
+      "id": "result-unknown",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\",\"extra\":true}",
+      "valid": false
+    },
+    {
+      "id": "result-invalid-revision",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"01\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    },
+    {
+      "id": "result-ownership-mismatch",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"released\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    },
+    {
+      "id": "nested-escaped-duplicate",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpoint\\u0049d\":\"00000000-0000-4000-8000-000000000070\",\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    }
+  ],
+  "checkpointReadBoundaryCases": [
+    {
+      "id": "sourceRegistrationBodyBytes",
+      "limit": 2048,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 2049,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceRegistrationResultBytes",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRecords",
+      "limit": 256,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 257,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRecordBytes",
+      "limit": 32768,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 32769,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceAggregateBytes",
+      "limit": 8388608,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 8388609,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRepoGrants",
+      "limit": 64,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 65,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceAttachmentGrants",
+      "limit": 128,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 129,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRetentionReferences",
+      "limit": 320,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 321,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptRows",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptRowBytes",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptAggregateBytes",
+      "limit": 16777216,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 16777217,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceRepoSlots",
+      "limit": 64,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 65,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptsPerRepo",
+      "limit": 3,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceWindowMs",
+      "limit": 600000,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 600001,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptMs",
+      "limit": 120000,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 120001,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceIdentityUtf8Bytes",
+      "limit": 512,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 513,
+      "expectOver": "reject-before-new-effects"
     }
   ]
 }
