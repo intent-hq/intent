@@ -44,6 +44,7 @@ component implementation and verification.
 | §5.4 `task.*` | [methods/notes-tasks.md](./methods/notes-tasks.md) |
 | §5.5 `agent.*` | [methods/agents.md](./methods/agents.md) |
 | §5.5a `sandbox.cow.*` (CoW agent sandboxes) | [methods/agents.md](./methods/agents.md) |
+| §5.5b Worker observations (prepared) | [methods/agent-workers.md](./methods/agent-workers.md) |
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
