@@ -147,11 +147,19 @@ Choose among eligible, connected, non-draining nodes with matching version,
 credential support, agent slots and memory reservation. Prefer greatest free
 agent slots, then an existing reusable checkout for this agent, then lexical node
 ID. Head serializes reservations and node independently admits them before spawn;
-failed admission unwinds the reservation. No match returns `-32602` with
+failed admission releases its reservation only after confirmed cleanup and capture
+settlement. No match returns `-32602` with
 `data: { code: "placement-unavailable", availableOs: [...], retryable: true }`
 without creating an agent. No queue and no local/shared fallback. A later hydrate
-failure leaves the created agent in `error` with `placementError`, releases its
-reservation and emits `agent:failed`; the first-message gate resolves to failure.
+failure leaves the created agent in `error` with `placementError` and emits
+`agent:failed`; the first-message gate resolves to failure. Release its reservation
+only after actual native/private/capture cleanup settles; uncertain cleanup retains
+ownership and charge. The [private preparation gate](../node-link.md#private-preparation-lifecycle)
+waits for verified recursive hydration/attachments and actual provider setup, then
+rechecks live authority before delivery. A ready receipt is not admission. Retained
+same-node resources cannot be reused, but separately fenced last-checkpoint recovery
+on another node follows the existing loss contract without waiting for unreachable
+old-node cleanup. This adds no public lifecycle method.
 Batch tasks retain normal dependency/conflict classification and expose placement
 failure per attempted entry; one failed entry never starts against another mode.
 

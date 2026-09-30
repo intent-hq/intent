@@ -51,6 +51,15 @@ from its own cache/forge and fetches any missing objects/agent delta from hub.
 Base objects are preferably fetched directly, but **may cross the node link** when
 unpublished or unavailable from the forge; correctness cannot assume otherwise.
 Recursively hydrate granted submodule repos before the first-message gate settles.
+The [private preparation lifecycle](./node-link.md#private-preparation-lifecycle)
+also requires verified checkpoint-bound attachment materialization before ready;
+missing or unauthorized attachments fail preparation, not a later provider turn.
+Validate inherited/prior-run source selection through its authorized provenance
+separately from the target's same-owner staged-assignment check. Serializable
+checkpoint metadata and a manifest hash are data, not source or execution
+capabilities; resolve them through owned staging/source validation. Never require
+the parent source identity to equal the child run, or widen the target check to
+accept arbitrary cross-agent input. Fresh children use a new provider session.
 Local isolated checkout uses clonefile/FICLONE from the repo cache where supported;
 otherwise use a standalone Git clone with local alternates. Reflink failure never
 changes requested isolation to shared. Shared local agents keep today's checkout.
@@ -138,6 +147,40 @@ strings in this illustrative schema stand for full validated values):
   "attachments": [{"attachmentId": "attachment-1", "sha256": "<hash>"}]
 }
 ```
+
+Private preparation transfers this complete metadata through
+[node-link sourceMetadata](./node-link.md#immutable-source-metadata), with exact
+typed manifest bytes and checkpoint-bound retained attachment ID/hash/length
+descriptors. Manifest attachments alone do not supply lengths. This preserves the
+checkpoint digest/format; metadata and its descriptor lengths are immutable
+preparation intent, held in separately bounded owned storage rather than expanding
+the compact preparation ledger. An object or successful decode grants no authority.
+
+Head validates current/inherited source selection independently from target-stage
+ownership. The [private selected-read agreement](./node-link.md#selected-checkpoint-git-reads)
+reserves bounded head source ownership **before** prepare dispatch, even if no
+transfer is registered. Record/reference quotas and backing retained-data capacity
+are separate from the attempt quota; lost dispatch and uncertain cleanup stay
+charged. Each source-read attempt registers through node.checkpoint.read.prepare
+before Open and binds its head-issued ID to the exact preparation, checkpoint/hash,
+source-reader relation, target run/epoch, repository and current generation.
+
+Only the typed local installer selects git.checkpointUploadPack and the issued
+ID. Unknown/consumed/foreign source IDs never fall back to ordinary Upload or the
+current preparation. Upload rejects StageBinding and cannot fetch arbitrary
+manifest OIDs. The selected-source adapter must advertise only exact immutable
+HEAD/index/WIP anchors with expected OIDs, prove inherited bases in their closure,
+and fail if a required root is missing; each submodule needs its own granted read.
+Never substitute moving aliases or local stage paths. Retain fresh source/target
+admission through native reads and queued/actual writes, then prove cleanup before
+releasing pins. Expiry is not settlement; tombstone compaction must preserve replay
+fences until durable target-epoch retirement makes old requests reject before
+lookup. Fenced recovery elsewhere does not release the original owner's resources.
+
+The producer, registry, installer, source adapter and guarded Upload are required
+implementation work, not qualified behavior. Existing Prompt carries bounded
+history; manifest metadata, registration or transfer completion introduces no
+portable-file import, readiness or checkpoint ACK proof.
 
 Required fields are those shown except `branch` (omitted for detached HEAD) and
 `wip` (omitted when clean). A delegated isolated child additionally carries the
@@ -241,8 +284,14 @@ until the current epoch produces a successful checkpoint.
    before the replacement success is durable.
 
 Journal ack and checkpoint success are independent: transcript may be newer than
-recoverable disk. Hub reads/diffs select a checkpoint and return its capture time;
-live reads go to the active node with its scope and fail explicitly when offline.
+recoverable disk. Preparation readiness is separate from both: it proves neither a durable head
+checkpoint receipt nor capture quiescence, and provider idleness releases no
+capture owner. Bounded resume history is selected on head from an authorized
+acknowledged source cut and transferred through the scoped first-message gate;
+portable-session import must fail when the adapter does not support it.
+
+Hub reads/diffs select a checkpoint and return its capture time; live reads go to
+the active node with its scope and fail explicitly when offline.
 Never label a cached WIP diff as live. On restore verify all data before exposing
 the checkout, rematerialize attachments, restore each repository/index and then
 provider state/history. Loss notice names capturedAt and possibly missing work

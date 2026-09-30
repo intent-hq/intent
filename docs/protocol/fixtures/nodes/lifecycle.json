@@ -1,0 +1,4527 @@
+{
+  "schemaVersion": 1,
+  "status": "prepared-not-executed",
+  "description": "Private nodeProtocol 2 lifecycle data/scenarios. No runtime adapter is installed or exercised by this documentation fixture. Each scenario has fresh seeded state. fixtureEvent names are deterministic controls for future authenticated component harnesses, not wire operations. Replacements are JSON pointers; header idempotencyKey follows the replaced preparationId/turnId/stopId. correlation:fresh changes requestId/streamId without changing operation identity. Expectations are future assertions, not measured results. sourceMetadata manifest strings use checkpointFormat 1 typed field order; metadataValidationCases are prepared raw JSON inputs for strict static parsing. metadataBoundaryCases specify numeric limits, not successful runtime admission. Synthetic Git OIDs do not establish object existence. checkpointReadExamples and checkpointReadScenarios are separate prepared private registration/Git data, with no runtime harness execution. The registration receipt is not authority or proof of received objects.",
+  "versions": {
+    "nodeProtocol": 2,
+    "checkpointFormat": 1,
+    "journalFormat": 1
+  },
+  "limits": {
+    "configurationCanonicalBytes": 32768,
+    "historyUtf8Bytes": 1048576,
+    "promptBodyBytes": 8388608,
+    "messageBlocks": 256,
+    "stopBodyBytes": 1024,
+    "manifestUtf8Bytes": 1048576,
+    "manifestRepositories": 64,
+    "checkpointAttachments": 128,
+    "attachmentIdUtf8Bytes": 128,
+    "attachmentTotalBytes": 1073741824,
+    "preparationRecordBytes": 36864,
+    "metadataDescriptorBytes": 131072,
+    "metadataHeaderBytes": 4096,
+    "metadataObjectBytes": 1183744,
+    "metadataAggregateBytes": 67108864,
+    "metadataObjects": 256,
+    "sourceRegistrationBodyBytes": 2048,
+    "sourceRegistrationResultBytes": 4096,
+    "headSourceRecords": 256,
+    "headSourceRecordBytes": 32768,
+    "headSourceAggregateBytes": 8388608,
+    "headSourceRepoGrants": 64,
+    "headSourceAttachmentGrants": 128,
+    "headSourceRetentionReferences": 320,
+    "sourceAttemptRows": 4096,
+    "sourceAttemptRowBytes": 4096,
+    "sourceAttemptAggregateBytes": 16777216,
+    "sourceRepoSlots": 64,
+    "sourceAttemptsPerRepo": 3,
+    "sourceWindowMs": 600000,
+    "sourceAttemptMs": 120000,
+    "sourceIdentityUtf8Bytes": 512
+  },
+  "seed": {
+    "agentId": "agent-fixture",
+    "workspaceId": "workspace-fixture",
+    "binding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3"
+    },
+    "assignment": {
+      "preparationId": "00000000-0000-4000-8000-000000000001",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7"
+    },
+    "checkpoint": "synthetic typed checkpoint metadata; full OIDs are shape-valid placeholders, not an executed Git closure",
+    "provider": "fixture-static-provider with contained-v1 policy; no production adapter claim",
+    "history": "head-authorized durable source cut matching the example descriptor",
+    "attachmentPayloads": [
+      {
+        "id": "attachment-fixture",
+        "utf8": "fixture checkpoint attachment\n",
+        "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+        "bytes": 30
+      }
+    ],
+    "sourceRelations": [
+      {
+        "requestExample": "prepare-fresh",
+        "relation": "current",
+        "sourceAgentId": "agent-fixture",
+        "sourceRunId": "00000000-0000-4000-8000-000000000002",
+        "targetAgentId": "agent-fixture",
+        "targetRunId": "00000000-0000-4000-8000-000000000002"
+      },
+      {
+        "requestExample": "prepare-resume",
+        "relation": "prior-run",
+        "sourceAgentId": "agent-fixture",
+        "sourceRunId": "00000000-0000-4000-8000-000000000008",
+        "targetAgentId": "agent-fixture",
+        "targetRunId": "00000000-0000-4000-8000-000000000002"
+      },
+      {
+        "requestExample": "prepare-inherited",
+        "relation": "inherited",
+        "sourceAgentId": "parent-fixture",
+        "sourceRunId": "00000000-0000-4000-8000-000000000032",
+        "targetAgentId": "agent-fixture",
+        "targetRunId": "00000000-0000-4000-8000-000000000002"
+      }
+    ]
+  },
+  "examples": [
+    {
+      "id": "prepare-fresh",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000100",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000100",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000003",
+            "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          },
+          "sourceMetadata": {
+            "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000003\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+            "attachments": [
+              {
+                "id": "attachment-fixture",
+                "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+                "bytes": 30
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000100",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000100",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "1",
+            "state": "preparing",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "status-ready",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000101",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.status",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000101",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000101",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "2",
+            "state": "ready",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "prompt-first",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000102",
+          "kind": "prompt",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000102",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.prompt",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000006"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "turnId": "00000000-0000-4000-8000-000000000006",
+          "message": {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Review the hydrated changes."
+              },
+              {
+                "type": "attachment",
+                "attachmentId": "attachment-fixture"
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000102",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000102",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "queued",
+            "revision": "3"
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-resume",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000103",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000023",
+            "manifestSha256": "44ebcad8168ab73f70995dae9d838edeabef3cad50860411242c42f824b484ed"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          },
+          "resume": {
+            "resumeAttemptId": "00000000-0000-4000-8000-000000000007",
+            "previousRunId": "00000000-0000-4000-8000-000000000008",
+            "mode": "history",
+            "history": {
+              "sourceLeaseId": "lease-source",
+              "sourceIncarnation": "00000000-0000-4000-8000-000000000011",
+              "throughJournalSeq": "42",
+              "sha256": "d1a672a1cd3febd3f766ed8bcc7c4ce37fc6f13f61d813f341298914ae4dca0e",
+              "bytes": 72
+            }
+          },
+          "sourceMetadata": {
+            "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000023\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-source\",\"incarnation\":\"00000000-0000-4000-8000-000000000011\",\"runId\":\"00000000-0000-4000-8000-000000000008\",\"assignmentEpoch\":\"6\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+            "attachments": [
+              {
+                "id": "attachment-fixture",
+                "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+                "bytes": 30
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000103",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000103",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000023",
+              "manifestSha256": "44ebcad8168ab73f70995dae9d838edeabef3cad50860411242c42f824b484ed"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "1",
+            "state": "preparing",
+            "ownership": "retained"
+          }
+        }
+      }
+    },
+    {
+      "id": "prompt-resume",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000104",
+          "kind": "prompt",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000104",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.prompt",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000006"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "turnId": "00000000-0000-4000-8000-000000000006",
+          "message": {
+            "blocks": [
+              {
+                "type": "text",
+                "text": "Review the hydrated changes."
+              },
+              {
+                "type": "attachment",
+                "attachmentId": "attachment-fixture"
+              }
+            ]
+          },
+          "resumeAttemptId": "00000000-0000-4000-8000-000000000007",
+          "history": {
+            "text": "Prior acknowledged discussion; historical tool effects are context only."
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000104",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000104",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "delivered",
+            "revision": "5"
+          }
+        }
+      }
+    },
+    {
+      "id": "stop-owned",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "control",
+          "streamId": "00000000-0000-4000-8000-000000000105",
+          "kind": "stop",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000105",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "agent.stop",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000009"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "stopId": "00000000-0000-4000-8000-000000000009",
+          "reason": "user"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000105",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000105",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closing",
+            "ownership": "retained",
+            "revision": "3"
+          }
+        }
+      }
+    },
+    {
+      "id": "status-retained",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000106",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000106",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.status",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000106",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000106",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000003",
+              "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "4",
+            "state": "failed_retained",
+            "ownership": "retained",
+            "failure": {
+              "code": "preparation-cleanup-pending",
+              "retryable": false
+            },
+            "stop": {
+              "stopId": "00000000-0000-4000-8000-000000000009",
+              "reason": "user"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-stale",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000107",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "6",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000003",
+            "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          },
+          "sourceMetadata": {
+            "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000003\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+            "attachments": [
+              {
+                "id": "attachment-fixture",
+                "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+                "bytes": 30
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000107",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000107",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "error": {
+            "code": -32003,
+            "message": "Stale assignment",
+            "data": {
+              "code": "stale-assignment",
+              "retryable": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "prepare-inherited",
+      "direction": "head-to-node",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000109",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000109",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.execution.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000001"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000001",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "checkpoint": {
+            "checkpointId": "00000000-0000-4000-8000-000000000033",
+            "manifestSha256": "d89c1cbd3ec57648ecd80174e4da4193ab2f5f1adefa6e333b8fe15fe3eb8b3d"
+          },
+          "configuration": {
+            "configId": "00000000-0000-4000-8000-000000000004",
+            "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+            "snapshot": {
+              "schemaVersion": 1,
+              "providerId": "fixture-static-provider",
+              "permissionPolicy": "denyAll",
+              "toolProfile": "contained-v1",
+              "terminal": false,
+              "externalAcpMcp": []
+            }
+          },
+          "sourceMetadata": {
+            "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000033\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"parent-fixture\",\"leaseId\":\"lease-parent\",\"incarnation\":\"00000000-0000-4000-8000-000000000031\",\"runId\":\"00000000-0000-4000-8000-000000000032\",\"assignmentEpoch\":\"4\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[{\"path\":\"packages/lib\",\"repoKey\":\"repo-lib\"}],\"inherited\":{\"sourceAgentId\":\"ancestor-fixture\",\"checkpointId\":\"00000000-0000-4000-8000-000000000040\",\"executionBase\":\"9999999999999999999999999999999999999999\"}},{\"repoKey\":\"repo-lib\",\"path\":\"packages/lib\",\"forkBase\":\"5555555555555555555555555555555555555555\",\"objectFormat\":\"sha1\",\"head\":\"6666666666666666666666666666666666666666\",\"index\":\"7777777777777777777777777777777777777777\",\"wip\":\"8888888888888888888888888888888888888888\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+            "attachments": [
+              {
+                "id": "attachment-fixture",
+                "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+                "bytes": 30
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000109",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000109",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000033",
+              "manifestSha256": "d89c1cbd3ec57648ecd80174e4da4193ab2f5f1adefa6e333b8fe15fe3eb8b3d"
+            },
+            "configuration": {
+              "configId": "00000000-0000-4000-8000-000000000004",
+              "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+            },
+            "revision": "1",
+            "state": "preparing",
+            "ownership": "retained"
+          }
+        }
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "identical-intent-joins",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/preparationId": "00000000-0000-4000-8000-000000000005"
+          },
+          "correlation": "fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "ownedRecords": 1,
+        "providerSpawns": 1,
+        "promptDeliveries": 0,
+        "returnedPreparationId": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    {
+      "id": "same-id-changed-intent",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/checkpoint/checkpointId": "00000000-0000-4000-8000-000000000013"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "request-id-reused",
+        "ownedRecords": 1
+      }
+    },
+    {
+      "id": "different-intent-conflicts",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/preparationId": "00000000-0000-4000-8000-000000000005",
+            "/checkpoint/checkpointId": "00000000-0000-4000-8000-000000000013"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "preparation-conflict",
+        "ownedRecords": 1
+      }
+    },
+    {
+      "id": "stale-identity",
+      "steps": [
+        {
+          "requestExample": "prepare-stale"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "ownedRecords": 0,
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "config-inline-no-registry",
+      "steps": [
+        {
+          "fixtureEvent": "no-prestaged-config-registry"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "providerSpawns": 1,
+        "configFetchRpcs": 0,
+        "validatedConfigSha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5"
+      }
+    },
+    {
+      "id": "config-digest-tamper",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "untrusted-head-config-choice",
+      "steps": [
+        {
+          "fixtureEvent": "persisted-permission-policy-differs"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "untrusted-path-field",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/snapshot/cwd": "/untrusted/path"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "invalid-params",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "oversized-config",
+      "steps": [
+        {
+          "fixtureEvent": "configuration-exceeds-32768-canonical-bytes"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "configuration-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "unsupported-tools",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "replace": {
+            "/configuration/snapshot/terminal": true
+          },
+          "recomputeConfigHash": true
+        }
+      ],
+      "expect": {
+        "lastError": "unsupported-node-operation",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "wrong-direction",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh",
+          "direction": "node-to-head"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "ownedRecords": 0
+      }
+    },
+    {
+      "id": "version-one-rejects-lifecycle",
+      "steps": [
+        {
+          "fixtureEvent": "negotiated-nodeProtocol",
+          "value": 1
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "providerSpawns": 0,
+        "silentDowngrade": false
+      }
+    },
+    {
+      "id": "stop-exact-control-payload",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "stop-owned"
+        }
+      ],
+      "expect": {
+        "stopPayloadAcceptedOnlyInVersion": 2,
+        "state": "closing",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "retired-response-does-not-cancel",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "normal-RunningOwner-response-retirement"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "requestContextCancelled": true,
+        "executionLifetimeStillAdmitted": true
+      }
+    },
+    {
+      "id": "cancel-before-response-retirement",
+      "steps": [
+        {
+          "fixtureEvent": "hold-prepare-response"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "cancel-attached-request"
+        },
+        {
+          "fixtureEvent": "complete-cleanup"
+        }
+      ],
+      "expect": {
+        "state": "closed",
+        "ownership": "released",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "cancel-after-response-is-not-stop",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "normal-RunningOwner-response-retirement"
+        },
+        {
+          "fixtureEvent": "cancel-completed-request"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "status-ready"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "ownedRecords": 1,
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "first-message-waits-for-real-preparation",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "observe-before-ready"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "deliveriesBeforeReady": 0,
+        "promptDeliveries": 1,
+        "liveAdmissionCheckedAtDelivery": true
+      }
+    },
+    {
+      "id": "stale-ready-is-not-capability",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "status-ready"
+        },
+        {
+          "fixtureEvent": "revoke-exact-execution"
+        },
+        {
+          "requestExample": "prompt-first"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "stop-before-ready",
+      "steps": [
+        {
+          "fixtureEvent": "pause-hydration"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "late-hydration-completion"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 0,
+        "readyAfterStop": false
+      }
+    },
+    {
+      "id": "delivered-first-turn-dedup",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "provider-accepts"
+        },
+        {
+          "requestExample": "prompt-first",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 1,
+        "firstDeliveryState": "delivered"
+      }
+    },
+    {
+      "id": "unknown-first-turn-never-replayed",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "lose-provider-acceptance-proof"
+        },
+        {
+          "requestExample": "prompt-first",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "providerSubmissionAttempts": 1,
+        "firstDeliveryState": "outcome_unknown",
+        "automaticReplay": false
+      }
+    },
+    {
+      "id": "changed-turn-payload",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "requestExample": "prompt-first",
+          "replace": {
+            "/message/blocks/0/text": "Different text"
+          },
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "request-id-reused",
+        "providerSubmissionAttempts": 1
+      }
+    },
+    {
+      "id": "resume-inline-history",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume"
+        }
+      ],
+      "expect": {
+        "promptDeliveries": 1,
+        "historyFetchRpcs": 0,
+        "historySha256": "d1a672a1cd3febd3f766ed8bcc7c4ce37fc6f13f61d813f341298914ae4dca0e",
+        "historicalToolEffectsExecuted": 0
+      }
+    },
+    {
+      "id": "history-cut-unacknowledged",
+      "steps": [
+        {
+          "fixtureEvent": "source-cut-not-durably-acknowledged"
+        },
+        {
+          "requestExample": "prepare-resume"
+        }
+      ],
+      "expect": {
+        "lastError": "history-unavailable",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "history-bytes-tampered",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume",
+          "replace": {
+            "/history/text": "Different history"
+          }
+        }
+      ],
+      "expect": {
+        "lastError": "history-unavailable",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "resume-attempt-mismatch",
+      "steps": [
+        {
+          "requestExample": "prepare-resume"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-resume",
+          "replace": {
+            "/resumeAttemptId": "00000000-0000-4000-8000-000000000014"
+          }
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "surviving-reconnect",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "requestExample": "prompt-first"
+        },
+        {
+          "fixtureEvent": "provider-accepts"
+        },
+        {
+          "fixtureEvent": "reconnect-same-run-new-generation"
+        },
+        {
+          "requestExample": "status-ready"
+        }
+      ],
+      "expect": {
+        "providerSpawns": 1,
+        "promptDeliveries": 1,
+        "newResumeAttempt": false
+      }
+    },
+    {
+      "id": "old-generation-rejected",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "reconnect-same-run-new-generation"
+        },
+        {
+          "requestExample": "prompt-first",
+          "linkGeneration": "3"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "cleanup-only-read-not-execution",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "inject-native-cleanup-failure"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "requestExample": "status-retained"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "state": "failed_retained",
+        "ownership": "retained",
+        "lastError": "stale-assignment",
+        "nativePrivateCaptureOwnersRetained": true
+      }
+    },
+    {
+      "id": "released-token-no-cleanup-bypass",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "release-and-revoke-lease"
+        },
+        {
+          "requestExample": "status-retained"
+        }
+      ],
+      "expect": {
+        "authorization": "denied",
+        "ownerBypass": false
+      }
+    },
+    {
+      "id": "local-root-reuse-blocked",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "inject-native-cleanup-failure"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "attempt-new-run-same-root-slot"
+        }
+      ],
+      "expect": {
+        "localReuse": "denied",
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "fenced-recovery-elsewhere",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "lose-old-node-with-retained-cleanup"
+        },
+        {
+          "fixtureEvent": "head-confirms-canonical-enforceable-loss-fence"
+        },
+        {
+          "fixtureEvent": "prepare-new-epoch-other-node-from-last-durable-checkpoint"
+        }
+      ],
+      "expect": {
+        "remoteRecoveryAllowed": true,
+        "waitForOldCleanupAck": false,
+        "oldLocalOwnership": "retained",
+        "oldLateWrites": "denied"
+      }
+    },
+    {
+      "id": "unfenced-recovery-refused",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "lose-old-node-with-retained-cleanup"
+        },
+        {
+          "fixtureEvent": "attempt-remote-recovery-without-fence"
+        }
+      ],
+      "expect": {
+        "remoteRecoveryAllowed": false
+      }
+    },
+    {
+      "id": "restart-does-not-restore-ready",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "restart-with-uncertain-orphan-cleanup"
+        },
+        {
+          "requestExample": "status-retained"
+        }
+      ],
+      "expect": {
+        "stateOneOf": [
+          "closing",
+          "failed_retained"
+        ],
+        "providerSpawns": 1,
+        "cachedReadyAdmission": false
+      }
+    },
+    {
+      "id": "retired-id-cannot-reopen",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "requestExample": "stop-owned"
+        },
+        {
+          "fixtureEvent": "complete-cleanup"
+        },
+        {
+          "requestExample": "prepare-fresh",
+          "correlation": "fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "stale-assignment",
+        "providerSpawnsAtMost": 1
+      }
+    },
+    {
+      "id": "missing-inherited-attachment",
+      "steps": [
+        {
+          "fixtureEvent": "source-parent-differs-from-target-child"
+        },
+        {
+          "fixtureEvent": "checkpoint-attachment-missing"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "preparationSucceeded": false,
+        "ready": false,
+        "promptDeliveries": 0
+      }
+    },
+    {
+      "id": "source-target-separate-validation",
+      "steps": [
+        {
+          "fixtureEvent": "authorized-parent-source-target-child"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "sourceAndTargetChecksPerformed": true,
+        "parentIdentityRewritten": false,
+        "parentHeadIndexWorktreeUnchanged": true
+      }
+    },
+    {
+      "id": "serialized-data-is-not-authority",
+      "steps": [
+        {
+          "fixtureEvent": "inject-deserialized-PreparedCheckpoint-without-source-authority"
+        },
+        {
+          "requestExample": "prepare-fresh"
+        }
+      ],
+      "expect": {
+        "lastError": "checkpoint-invalid",
+        "providerSpawns": 0
+      }
+    },
+    {
+      "id": "capture-ack-independent",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "complete-preparation"
+        },
+        {
+          "fixtureEvent": "provider-idle-with-live-capture-owner"
+        }
+      ],
+      "expect": {
+        "state": "ready",
+        "captureOwnerRetained": true,
+        "durableCheckpointAckInvented": false
+      }
+    },
+    {
+      "id": "fixture-failed-teardown-retained",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "inject-cleanup-failure"
+        },
+        {
+          "fixtureEvent": "fixture-teardown-deadline"
+        }
+      ],
+      "expect": {
+        "testResult": "fail",
+        "fixtureSupervisorRetained": true,
+        "rootsDeleted": false,
+        "ownersForcedClosed": false
+      }
+    },
+    {
+      "id": "delayed-stop-reply",
+      "steps": [
+        {
+          "fixtureEvent": "observe-status-snapshot",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closed",
+            "ownership": "released",
+            "revision": "4"
+          }
+        },
+        {
+          "fixtureEvent": "observe-delayed-stop-result",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "stopId": "00000000-0000-4000-8000-000000000009",
+            "state": "closing",
+            "ownership": "retained",
+            "revision": "3"
+          }
+        }
+      ],
+      "expect": {
+        "retainedRevision": "4",
+        "ignoredRevision": "3",
+        "state": "closed",
+        "ownership": "released",
+        "reopenOwnership": false
+      }
+    },
+    {
+      "id": "delayed-prompt-reply",
+      "steps": [
+        {
+          "fixtureEvent": "observe-status-firstDelivery-projection",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "delivered",
+            "revision": "5"
+          }
+        },
+        {
+          "fixtureEvent": "observe-delayed-prompt-result",
+          "snapshot": {
+            "preparationId": "00000000-0000-4000-8000-000000000001",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "turnId": "00000000-0000-4000-8000-000000000006",
+            "deliveryState": "queued",
+            "revision": "3"
+          }
+        }
+      ],
+      "expect": {
+        "retainedRevision": "5",
+        "ignoredRevision": "3",
+        "deliveryState": "delivered",
+        "redispatch": false
+      }
+    },
+    {
+      "id": "source-inherited-complete",
+      "steps": [
+        {
+          "requestExample": "prepare-inherited"
+        },
+        {
+          "fixtureEvent": "authorize-inherited-source-and-complete-root-index-wip-submodule-attachment-closure"
+        }
+      ],
+      "expect": {
+        "sourceIdentityEqualsTarget": false,
+        "readyOnlyAfterClosure": true
+      }
+    },
+    {
+      "id": "source-metadata-absent",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "omit-sourceMetadata"
+        }
+      ],
+      "expect": {
+        "error": "invalid-params",
+        "effects": 0
+      }
+    },
+    {
+      "id": "source-descriptor-length-mismatch",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "retained-inventory-length-differs-from-request"
+        }
+      ],
+      "expect": {
+        "error": "checkpoint-invalid",
+        "ready": false
+      }
+    },
+    {
+      "id": "source-unrelated-lineage",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "revoke-selected-source-reader-relation"
+        }
+      ],
+      "expect": {
+        "error": "checkpoint-invalid",
+        "ready": false
+      }
+    },
+    {
+      "id": "source-metadata-intent-reused",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "retry-same-preparation-with-changed-descriptor-bytes"
+        }
+      ],
+      "expect": {
+        "error": "request-id-reused",
+        "newExecution": false
+      }
+    },
+    {
+      "id": "source-mutable-registry-fallback",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "retained-bytes-missing-current-registry-present"
+        }
+      ],
+      "expect": {
+        "ready": false,
+        "fallback": false
+      }
+    },
+    {
+      "id": "source-object-ledger-cap",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "attempt-inline-metadata-in-36864-byte-ledger"
+        }
+      ],
+      "expect": {
+        "recordLimitExpanded": false,
+        "effects": 0
+      }
+    },
+    {
+      "id": "source-object-publication-failure",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "fail-object-parent-fsync-after-rename"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "quotaCharged": true,
+        "ready": false
+      }
+    },
+    {
+      "id": "source-object-reopen-missing",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "reopen-reservation-with-missing-object"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "issuance": false
+      }
+    },
+    {
+      "id": "source-object-reopen-orphan",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "reopen-unindexed-metadata-object"
+        }
+      ],
+      "expect": {
+        "quarantined": true,
+        "quotaCharged": true,
+        "issuance": false
+      }
+    },
+    {
+      "id": "source-object-cleanup-failure",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "fail-object-unlink-or-deletion-fsync"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "slotReusable": false
+      }
+    },
+    {
+      "id": "source-object-aggregate-cap",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "exceed-67108864-byte-aggregate-with-retained-objects"
+        }
+      ],
+      "expect": {
+        "error": "preparation-unavailable",
+        "eviction": false
+      }
+    },
+    {
+      "id": "source-object-reply-reopen",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "reopen-complete-object-after-lost-prepare-reply"
+        }
+      ],
+      "expect": {
+        "automaticSpawn": false,
+        "resetCancellation": false
+      }
+    },
+    {
+      "id": "source-fetch-cancelled",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "cancel-owned-preparation-during-source-fetch"
+        }
+      ],
+      "expect": {
+        "ready": false,
+        "releaseOnlyAfterOwnedCleanup": true
+      }
+    },
+    {
+      "id": "source-upload-stage-binding",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "attempt-upload-with-stage-binding"
+        }
+      ],
+      "expect": {
+        "rejected": true,
+        "relaxValidation": false
+      }
+    },
+    {
+      "id": "source-root-unadvertised",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "selected-index-root-not-in-granted-advertisement"
+        }
+      ],
+      "expect": {
+        "error": "checkpoint-invalid",
+        "arbitraryWant": false
+      }
+    },
+    {
+      "id": "source-alias-moved",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "mutable-alias-moves-after-checkpoint-selection"
+        }
+      ],
+      "expect": {
+        "useSelectedImmutableRoots": true,
+        "aliasFallback": false
+      }
+    },
+    {
+      "id": "source-reader-revoked",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "revoke-live-admission-after-ref-selection-before-read"
+        }
+      ],
+      "expect": {
+        "readDenied": true,
+        "ready": false
+      }
+    },
+    {
+      "id": "source-parent-target-forgery",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "use-source-parent-identity-as-target-request"
+        }
+      ],
+      "expect": {
+        "error": "stale-assignment",
+        "readDenied": true
+      }
+    },
+    {
+      "id": "source-selection-unbound",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "existing-request-correlation-cannot-bind-checkpoint"
+        }
+      ],
+      "expect": {
+        "requiresContractDisposition": true,
+        "inventSelector": false
+      }
+    },
+    {
+      "id": "source-portable-import-requested",
+      "steps": [
+        {
+          "requestExample": "prepare-fresh"
+        },
+        {
+          "fixtureEvent": "request-provider-file-import-from-manifest"
+        }
+      ],
+      "expect": {
+        "error": "unsupported-node-operation",
+        "silentHistoryFallback": false
+      }
+    }
+  ],
+  "fixtureOwnership": {
+    "registration": "unique disposable root plus owning supervisor before effects",
+    "teardown": "reset injected test faults only, then authentic stop/native/private/capture settlement",
+    "onUnsettled": "fail and retain supervisor, charge and roots for explicit disposition",
+    "prohibited": [
+      "forced closed status",
+      "invented ACK",
+      "root deletion before settlement",
+      "drop retained owners",
+      "worker disposal counted as cleanup pass"
+    ],
+    "checkpointRead": "Future harness owns head reservation/attempt registries, local installer and retained refs/processes/writes. Teardown fences and joins actual owners before assertions; failed disposal remains charged for operator reconciliation. No fixture may force-delete retained evidence or claim native cleanup from expiry."
+  },
+  "metadataValidationCases": [
+    {
+      "id": "valid-current",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-resume",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000023\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-source\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000011\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000008\\\",\\\"assignmentEpoch\\\":\\\"6\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000023",
+        "manifestSha256": "44ebcad8168ab73f70995dae9d838edeabef3cad50860411242c42f824b484ed"
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "valid-inherited",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000033\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"parent-fixture\\\",\\\"leaseId\\\":\\\"lease-parent\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000031\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000032\\\",\\\"assignmentEpoch\\\":\\\"4\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[{\\\"path\\\":\\\"packages/lib\\\",\\\"repoKey\\\":\\\"repo-lib\\\"}],\\\"inherited\\\":{\\\"sourceAgentId\\\":\\\"ancestor-fixture\\\",\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000040\\\",\\\"executionBase\\\":\\\"9999999999999999999999999999999999999999\\\"}},{\\\"repoKey\\\":\\\"repo-lib\\\",\\\"path\\\":\\\"packages/lib\\\",\\\"forkBase\\\":\\\"5555555555555555555555555555555555555555\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"6666666666666666666666666666666666666666\\\",\\\"index\\\":\\\"7777777777777777777777777777777777777777\\\",\\\"wip\\\":\\\"8888888888888888888888888888888888888888\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000033",
+        "manifestSha256": "d89c1cbd3ec57648ecd80174e4da4193ab2f5f1adefa6e333b8fe15fe3eb8b3d"
+      },
+      "expect": "valid"
+    },
+    {
+      "id": "metadata-missing-attachments",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\"}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "metadata-unknown-field",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}],\"path\":\"/head/source\"}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "metadata-null",
+      "sourceMetadataJson": "{\"manifestJson\":null,\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-not-string",
+      "sourceMetadataJson": "{\"manifestJson\":{},\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-unknown",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30,\"path\":\"/head/source\"}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-missing-bytes",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-negative-bytes",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":-1}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-fractional-bytes",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":1.5}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-id-too-long",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-total-over-limit",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":1073741825}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "descriptor-duplicate-id",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30},{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-unknown-field",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}],\\\"extra\\\":true}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "06f6089f481c670ff6d9305a3a21613d6a54ca410f0b3a55cc095e4c431ae820"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "flattened-repository-unknown-field",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[],\\\"extra\\\":true}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "54e7fa6ef61b8bd41520ee0b98514c9df585e774c6f07051f3b3bbb4c70aa8f9"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "nested-session-unknown-field",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[],\\\"extra\\\":true},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "206768f55f26f86cd168a20c7f65081b12721ab10d0bbb5e6f244d1847b87649"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "unsafe-repository-path",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\"../escape\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "7168a45c0a1fde3d7bd38953934ee72b2a55450012a758e67a813f4738beefa8"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "counter-leading-zero",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"07\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "bfcebb7bc31986abb1e572e5a0dc6c84ac9715a9a11d888de79627aa7dfc35d2"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-checkpoint-selector-mismatch",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000077\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "3d755b77a4f41e70f33c484c062ba3e7bf3260426d65d7a8e46406dd0d2317d3"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "session-cut-mismatch",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"41\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "3ab08be0c1ec2ddb9a4057024b06490e748d6225fad62d6fd2873b63edcc7006"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-duplicate-key",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "c85a9f200f2e9d31588973e59c0eaa6d066c0bb1a260394b60a932af857dc036"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-escaped-duplicate-key",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"\\\\u0066ormatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "17632b081652cef758a2c3399ab364dc37177659ee6fd9de7479ad627df5e1b5"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "nested-duplicate-repo-key",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "586b493299b791f7d302cab0f28ed7c6742e40de0cd39f1f437bae3f3b28391a"
+      },
+      "expect": "invalid-params"
+    },
+    {
+      "id": "manifest-pretty-print",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\n  \\\"formatVersion\\\": 1,\\n  \\\"checkpointId\\\": \\\"00000000-0000-4000-8000-000000000003\\\",\\n  \\\"workspaceId\\\": \\\"workspace-fixture\\\",\\n  \\\"agentId\\\": \\\"agent-fixture\\\",\\n  \\\"leaseId\\\": \\\"lease-fixture\\\",\\n  \\\"incarnation\\\": \\\"00000000-0000-4000-8000-000000000012\\\",\\n  \\\"runId\\\": \\\"00000000-0000-4000-8000-000000000002\\\",\\n  \\\"assignmentEpoch\\\": \\\"7\\\",\\n  \\\"captureRevision\\\": \\\"2\\\",\\n  \\\"capturedAt\\\": \\\"2026-09-30T00:00:00Z\\\",\\n  \\\"journalSeq\\\": \\\"42\\\",\\n  \\\"repos\\\": [\\n    {\\n      \\\"repoKey\\\": \\\"repo-root\\\",\\n      \\\"path\\\": \\\".\\\",\\n      \\\"forkBase\\\": \\\"1111111111111111111111111111111111111111\\\",\\n      \\\"objectFormat\\\": \\\"sha1\\\",\\n      \\\"head\\\": \\\"2222222222222222222222222222222222222222\\\",\\n      \\\"index\\\": \\\"3333333333333333333333333333333333333333\\\",\\n      \\\"wip\\\": \\\"4444444444444444444444444444444444444444\\\",\\n      \\\"branch\\\": \\\"fixture\\\",\\n      \\\"submodules\\\": []\\n    }\\n  ],\\n  \\\"session\\\": {\\n    \\\"provider\\\": \\\"fixture-static-provider\\\",\\n    \\\"mode\\\": \\\"history\\\",\\n    \\\"throughSeq\\\": \\\"42\\\",\\n    \\\"files\\\": []\\n  },\\n  \\\"attachments\\\": [\\n    {\\n      \\\"attachmentId\\\": \\\"attachment-fixture\\\",\\n      \\\"sha256\\\": \\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"\\n    }\\n  ]\\n}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "9eb400356a3a9117f491c414542920ec6a3d0f2fd86a4eb2ae62ac4fc79bc685"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "manifest-reordered-keys",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"journalSeq\\\":\\\"42\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"formatVersion\\\":1}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "a982c19898cc990b25c697971cb4c58cae4eafcd369e3ef72fa7e80b4801f9f4"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "manifest-alternate-string-escape",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-\\\\u0066ixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "d4bb4701a86cb6ad85c5c8b8e51da262cefaa8c11fa52fc6e3d5b5bb80a2d57a"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "raw-hash-mismatch",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"3\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "missing-required-attachment",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "descriptor-hash-mismatch",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "checkpoint-invalid"
+    },
+    {
+      "id": "outer-escaped-duplicate",
+      "sourceMetadataJson": "{\"manifestJson\":\"{\\\"formatVersion\\\":1,\\\"checkpointId\\\":\\\"00000000-0000-4000-8000-000000000003\\\",\\\"workspaceId\\\":\\\"workspace-fixture\\\",\\\"agentId\\\":\\\"agent-fixture\\\",\\\"leaseId\\\":\\\"lease-fixture\\\",\\\"incarnation\\\":\\\"00000000-0000-4000-8000-000000000012\\\",\\\"runId\\\":\\\"00000000-0000-4000-8000-000000000002\\\",\\\"assignmentEpoch\\\":\\\"7\\\",\\\"captureRevision\\\":\\\"2\\\",\\\"capturedAt\\\":\\\"2026-09-30T00:00:00Z\\\",\\\"journalSeq\\\":\\\"42\\\",\\\"repos\\\":[{\\\"repoKey\\\":\\\"repo-root\\\",\\\"path\\\":\\\".\\\",\\\"forkBase\\\":\\\"1111111111111111111111111111111111111111\\\",\\\"objectFormat\\\":\\\"sha1\\\",\\\"head\\\":\\\"2222222222222222222222222222222222222222\\\",\\\"index\\\":\\\"3333333333333333333333333333333333333333\\\",\\\"wip\\\":\\\"4444444444444444444444444444444444444444\\\",\\\"branch\\\":\\\"fixture\\\",\\\"submodules\\\":[]}],\\\"session\\\":{\\\"provider\\\":\\\"fixture-static-provider\\\",\\\"mode\\\":\\\"history\\\",\\\"throughSeq\\\":\\\"42\\\",\\\"files\\\":[]},\\\"attachments\\\":[{\\\"attachmentId\\\":\\\"attachment-fixture\\\",\\\"sha256\\\":\\\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\\\"}]}\",\"attachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}],\"\\u0061ttachments\":[{\"id\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\",\"bytes\":30}]}",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000003",
+        "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+      },
+      "expect": "invalid-params"
+    }
+  ],
+  "metadataBoundaryCases": [
+    {
+      "id": "manifestUtf8Bytes",
+      "limit": 1048576,
+      "atLimit": "within-numeric-bound",
+      "overLimit": "invalid-params",
+      "note": "Static numeric bound only; other structure and authority constraints still apply."
+    },
+    {
+      "id": "manifestRepositories",
+      "limit": 64,
+      "atLimit": "within-numeric-bound",
+      "overLimit": "invalid-params",
+      "note": "Static numeric bound only; other structure and authority constraints still apply."
+    },
+    {
+      "id": "checkpointAttachments",
+      "limit": 128,
+      "atLimit": "within-numeric-bound",
+      "overLimit": "invalid-params",
+      "note": "Static numeric bound only; other structure and authority constraints still apply."
+    },
+    {
+      "id": "attachmentIdUtf8Bytes",
+      "limit": 128,
+      "atLimit": "within-numeric-bound",
+      "overLimit": "invalid-params",
+      "note": "Static numeric bound only; other structure and authority constraints still apply."
+    },
+    {
+      "id": "attachmentTotalBytes",
+      "limit": 1073741824,
+      "atLimit": "within-numeric-bound",
+      "overLimit": "invalid-params",
+      "note": "Static numeric bound only; other structure and authority constraints still apply."
+    }
+  ],
+  "checkpointReadSeed": {
+    "preparation": {
+      "preparationId": "00000000-0000-4000-8000-000000000060",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000070",
+        "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+      },
+      "configuration": {
+        "configId": "00000000-0000-4000-8000-000000000004",
+        "sha256": "e97c1f248780ebc69d196e8deed2ac459dccda41d148709f1a5000f20fbb30b5",
+        "snapshot": {
+          "schemaVersion": 1,
+          "providerId": "fixture-static-provider",
+          "permissionPolicy": "denyAll",
+          "toolProfile": "contained-v1",
+          "terminal": false,
+          "externalAcpMcp": []
+        }
+      },
+      "sourceMetadata": {
+        "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+        "attachments": [
+          {
+            "id": "attachment-fixture",
+            "sha256": "63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795",
+            "bytes": 30
+          }
+        ]
+      }
+    },
+    "headReservationAt": "2026-09-30T00:00:00Z",
+    "sourceDeadline": "2026-09-30T00:10:00Z",
+    "sourceRelation": "current",
+    "target": {
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture",
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3"
+    },
+    "repositoryRoots": [
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/head",
+        "oid": "2222222222222222222222222222222222222222"
+      },
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/index",
+        "oid": "3333333333333333333333333333333333333333"
+      },
+      {
+        "ref": "refs/intent/checkpoints/00000000-0000-4000-8000-000000000070/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/wip",
+        "oid": "4444444444444444444444444444444444444444"
+      }
+    ],
+    "retainedDataBudget": "finite configured backing-store capacity required; this seed allocates no real objects"
+  },
+  "checkpointReadExamples": [
+    {
+      "id": "checkpoint-read-register",
+      "direction": "node-to-head",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000150",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000150",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.checkpoint.read.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000060",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attemptId": "00000000-0000-4000-8000-000000000051"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000150",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000150",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051",
+            "transferId": "00000000-0000-4000-8000-000000000052",
+            "linkGeneration": "3",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000070",
+              "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+            },
+            "state": "issued",
+            "ownership": "retained",
+            "revision": "1",
+            "expiresAt": "2026-09-30T00:02:00Z"
+          }
+        }
+      }
+    },
+    {
+      "id": "checkpoint-read-reconcile",
+      "direction": "node-to-head",
+      "request": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000151",
+          "kind": "request",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000151",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "method": "node.checkpoint.read.prepare",
+          "timeoutMs": 30000,
+          "offset": 0,
+          "more": false,
+          "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+        },
+        "payload": {
+          "preparationId": "00000000-0000-4000-8000-000000000060",
+          "runId": "00000000-0000-4000-8000-000000000002",
+          "assignmentEpoch": "7",
+          "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attemptId": "00000000-0000-4000-8000-000000000051"
+        }
+      },
+      "response": {
+        "header": {
+          "channel": "rpc",
+          "streamId": "00000000-0000-4000-8000-000000000151",
+          "kind": "response",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "requestId": "00000000-0000-4000-8000-000000000151",
+          "agentId": "agent-fixture",
+          "workspaceId": "workspace-fixture",
+          "offset": 0,
+          "more": false
+        },
+        "payload": {
+          "result": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051",
+            "transferId": "00000000-0000-4000-8000-000000000052",
+            "linkGeneration": "3",
+            "checkpoint": {
+              "checkpointId": "00000000-0000-4000-8000-000000000070",
+              "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+            },
+            "state": "closed",
+            "ownership": "released",
+            "revision": "3",
+            "expiresAt": "2026-09-30T00:02:00Z",
+            "outcome": "sent"
+          }
+        }
+      }
+    }
+  ],
+  "checkpointGitOpenExamples": [
+    {
+      "id": "checkpoint-read-open",
+      "direction": "node-to-head",
+      "frame": {
+        "header": {
+          "channel": "git",
+          "kind": "data",
+          "streamId": "00000000-0000-4000-8000-000000000052",
+          "leaseId": "lease-fixture",
+          "incarnation": "00000000-0000-4000-8000-000000000012",
+          "linkGeneration": "3",
+          "gitOpen": {
+            "url": {
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "workspaceId": "workspace-fixture",
+              "agentId": "agent-fixture"
+            },
+            "service": "git-upload-pack",
+            "request": {
+              "requestId": "00000000-0000-4000-8000-000000000052",
+              "agentId": "agent-fixture",
+              "workspaceId": "workspace-fixture",
+              "method": "git.checkpointUploadPack",
+              "timeoutMs": 120000
+            }
+          }
+        },
+        "payloadUtf8": ""
+      },
+      "expect": {
+        "attemptState": "streaming",
+        "revision": "2",
+        "selectedRoots": "checkpointReadSeed.repositoryRoots",
+        "ready": false,
+        "checkpointAck": false
+      }
+    }
+  ],
+  "checkpointReadScenarios": [
+    {
+      "id": "issue-before-open",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "install-typed-local-grant"
+        },
+        {
+          "fixtureEvent": "open-exact-issued-transfer"
+        }
+      ],
+      "expect": {
+        "nativeTransfers": 1,
+        "attemptState": "streaming",
+        "sourceIdentity": "checkpointReadSeed.preparation.checkpoint"
+      }
+    },
+    {
+      "id": "lost-registration-response",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "drop-registration-response"
+        },
+        {
+          "fixtureEvent": "register-same-attempt-new-correlation"
+        }
+      ],
+      "expect": {
+        "sameTransferId": true,
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "duplicate-open",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "open-same-transfer-again"
+        }
+      ],
+      "expect": {
+        "secondOpen": "denied",
+        "nativeTransfers": 1
+      }
+    },
+    {
+      "id": "consumed-installer-receipt",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-consume-installer"
+        },
+        {
+          "fixtureEvent": "reconcile-issued-or-streaming-receipt"
+        },
+        {
+          "fixtureEvent": "attempt-reinstall"
+        }
+      ],
+      "expect": {
+        "reinstalled": false,
+        "nativeTransfersAtMost": 1
+      }
+    },
+    {
+      "id": "lost-installer-state",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-send-open"
+        },
+        {
+          "fixtureEvent": "lose-node-installer-state"
+        },
+        {
+          "fixtureEvent": "reconcile-issued-receipt"
+        }
+      ],
+      "expect": {
+        "oldGrantRestored": false,
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "unknown-id",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "unregistered-transfer-id"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "foreign-same-target-id",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "foreign-preparation-transfer-id"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-repo",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-repository"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-run",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-run"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-epoch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-epoch"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-preparation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-preparation"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-generation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "alter-generation"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "source-id-ordinary-mode",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "source-id-with-git.uploadPack"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "ordinary-id-source-mode",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "ordinary-id-with-git.checkpointUploadPack"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "wrong-direction",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "head-to-node-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "public-routing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "public-wss-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "generic-routing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "workspace-forward-registration"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "missing-local-capability",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "unknown-source-helper-capability"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "expired-local-capability",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "expired-source-helper-capability"
+        }
+      ],
+      "expect": {
+        "deniedBeforeAdvertisement": true,
+        "ordinaryFallback": false
+      }
+    },
+    {
+      "id": "open-stagebinding",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-checkpoint-binding"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-idempotency",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-idempotency-key"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-capability",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "add-operation-capability"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-stream-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-stream-id"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "open-url-scope-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-url-agent"
+        }
+      ],
+      "expect": {
+        "openDenied": true,
+        "objectBytes": 0
+      }
+    },
+    {
+      "id": "changed-nonce-intent",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "same-attempt-id-other-repo-or-generation"
+        }
+      ],
+      "expect": {
+        "errorCode": "request-id-reused",
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "concurrent-nonces",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "different-nonce-same-active-slot"
+        }
+      ],
+      "expect": {
+        "errorCode": "source-read-in-use",
+        "attemptRows": 1
+      }
+    },
+    {
+      "id": "missing-head",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-required-head-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "missing-index",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-required-index-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "missing-wip",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-selected-wip-anchor"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "oid-mismatch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "change-anchor-oid"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "inherited-base-missing",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "remove-inherited-base-closure"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "submodule-not-granted",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "open-unregistered-child-repo"
+        }
+      ],
+      "expect": {
+        "partialAdvertisement": false,
+        "ready": false,
+        "denied": true
+      }
+    },
+    {
+      "id": "moving-alias",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "advance-current-alias"
+        },
+        {
+          "fixtureEvent": "open-exact-issued-transfer"
+        }
+      ],
+      "expect": {
+        "rootSelection": "immutable-expected-names-and-oids",
+        "aliasUnion": false
+      }
+    },
+    {
+      "id": "revoke-before-advertisement",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-source-before-advertisement"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-native-read",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-during-native-read"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-queued-write",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-with-queued-chunk"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "revoke-actual-write",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "revoke-before-actual-write"
+        }
+      ],
+      "expect": {
+        "bytesAfterFence": 0,
+        "releaseRequiresSettlement": true
+      }
+    },
+    {
+      "id": "normal-reply-retirement",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "retire-registration-response-context"
+        }
+      ],
+      "expect": {
+        "attemptState": "issued",
+        "ownership": "retained"
+      }
+    },
+    {
+      "id": "explicit-stop",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "stop-preparation"
+        }
+      ],
+      "expect": {
+        "newReads": 0,
+        "cleanupRequired": true
+      }
+    },
+    {
+      "id": "retry-after-settlement",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "settle-attempt"
+        },
+        {
+          "fixtureEvent": "register-new-nonce"
+        }
+      ],
+      "expect": {
+        "newTransferId": true,
+        "sameCheckpoint": true,
+        "retryCount": 2
+      }
+    },
+    {
+      "id": "reconnect-uncertain",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "disconnect-generation"
+        },
+        {
+          "fixtureEvent": "register-new-generation-before-settlement"
+        }
+      ],
+      "expect": {
+        "newTransferDenied": true,
+        "oldGrantRevived": false
+      }
+    },
+    {
+      "id": "reconnect-settled",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "disconnect-and-settle"
+        },
+        {
+          "fixtureEvent": "register-new-generation-new-nonce"
+        }
+      ],
+      "expect": {
+        "newTransferId": true,
+        "originalWindowRetained": true,
+        "retryCount": 2
+      }
+    },
+    {
+      "id": "retry-exhausted",
+      "steps": [
+        {
+          "fixtureEvent": "settle-three-attempts"
+        },
+        {
+          "fixtureEvent": "register-fourth-attempt"
+        }
+      ],
+      "expect": {
+        "errorCode": "source-read-unavailable",
+        "sourceSubstitution": false
+      }
+    },
+    {
+      "id": "expiry-clock-restart",
+      "steps": [
+        {
+          "fixtureEvent": "register-attempt"
+        },
+        {
+          "fixtureEvent": "restart-with-uncertain-clock"
+        }
+      ],
+      "expect": {
+        "deadlineExtended": false,
+        "automaticGrantRestoration": false
+      }
+    },
+    {
+      "id": "failed-cleanup",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "fail-native-or-pin-cleanup"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "attemptState": "failed_retained",
+        "slotReused": false
+      }
+    },
+    {
+      "id": "stale-receipt",
+      "steps": [
+        {
+          "fixtureEvent": "observe-closed-revision-3"
+        },
+        {
+          "fixtureEvent": "observe-delayed-issued-revision-1"
+        }
+      ],
+      "expect": {
+        "retainedRevision": "3",
+        "attemptState": "closed",
+        "ownership": "released",
+        "reinstalled": false
+      }
+    },
+    {
+      "id": "ordinary-git",
+      "steps": [
+        {
+          "fixtureEvent": "ordinary-helper-grant"
+        },
+        {
+          "fixtureEvent": "ordinary-upload-with-git.uploadPack"
+        }
+      ],
+      "expect": {
+        "registeredSourceSelected": false,
+        "ordinaryBehavior": "unchanged"
+      }
+    },
+    {
+      "id": "eof-not-ready",
+      "steps": [
+        {
+          "fixtureEvent": "register-and-open"
+        },
+        {
+          "fixtureEvent": "observe-head-eof-sent"
+        }
+      ],
+      "expect": {
+        "ready": false,
+        "checkpointAck": false,
+        "nodeClosureValidationRequired": true
+      }
+    },
+    {
+      "id": "zero-attempt-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-256-head-records-without-registering"
+        },
+        {
+          "fixtureEvent": "reserve-257th-record"
+        }
+      ],
+      "expect": {
+        "records": 256,
+        "lastRejectedBeforePinsAndDispatch": true
+      }
+    },
+    {
+      "id": "head-byte-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-maximum-record-capacity"
+        },
+        {
+          "fixtureEvent": "attempt-over-record-or-aggregate-bound"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "head-reference-quota",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-over-repo-or-attachment-or-reference-bound"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "backing-capacity",
+      "steps": [
+        {
+          "fixtureEvent": "backing-store-budget-missing-or-exhausted"
+        },
+        {
+          "fixtureEvent": "reserve-head-source"
+        }
+      ],
+      "expect": {
+        "newPins": 0,
+        "dispatches": 0,
+        "rejected": true
+      }
+    },
+    {
+      "id": "partial-pin-publication",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "acquire-some-pins"
+        },
+        {
+          "fixtureEvent": "interrupt-publication"
+        }
+      ],
+      "expect": {
+        "recordCharged": true,
+        "referencesCharged": true,
+        "freshIdentityBypass": false
+      }
+    },
+    {
+      "id": "lost-prepare-dispatch",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "dispatch-prepare-response-lost"
+        },
+        {
+          "fixtureEvent": "register-no-attempt"
+        }
+      ],
+      "expect": {
+        "recordCharged": true,
+        "referencesCharged": true
+      }
+    },
+    {
+      "id": "identical-head-retry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "repeat-identical-prepare-issuance"
+        }
+      ],
+      "expect": {
+        "sourceRecords": 1,
+        "duplicatePins": 0
+      }
+    },
+    {
+      "id": "conflicting-head-retry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "reuse-preparation-id-with-other-source"
+        }
+      ],
+      "expect": {
+        "rejected": true,
+        "sourceRecords": 1
+      }
+    },
+    {
+      "id": "zero-attempt-expiry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "expire-with-zero-proven-attempts"
+        },
+        {
+          "fixtureEvent": "reconcile-release-pins"
+        }
+      ],
+      "expect": {
+        "newAdmission": false,
+        "releaseRequiresDurableConfirmation": true,
+        "nodeCleanupClaimed": false
+      }
+    },
+    {
+      "id": "uncertain-claim-expiry",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "interrupt-open-claim"
+        },
+        {
+          "fixtureEvent": "expire-source-window"
+        }
+      ],
+      "expect": {
+        "ownership": "retained",
+        "assumeNoAttempt": false
+      }
+    },
+    {
+      "id": "interrupted-pin-release",
+      "steps": [
+        {
+          "fixtureEvent": "close-admission-and-settle-attempts"
+        },
+        {
+          "fixtureEvent": "release-pin-ack-lost"
+        }
+      ],
+      "expect": {
+        "capacityRefunded": false,
+        "sameReleaseIdentityOnRetry": true
+      }
+    },
+    {
+      "id": "compaction-fences",
+      "steps": [
+        {
+          "fixtureEvent": "settle-head-references"
+        },
+        {
+          "fixtureEvent": "compact-source-record"
+        },
+        {
+          "fixtureEvent": "replay-old-prepare-nonce-and-open"
+        }
+      ],
+      "expect": {
+        "allReplaysDenied": true,
+        "retryCountersReset": false,
+        "tombstoneCharged": true
+      }
+    },
+    {
+      "id": "unsafe-tombstone-delete",
+      "steps": [
+        {
+          "fixtureEvent": "compact-source-record"
+        },
+        {
+          "fixtureEvent": "attempt-delete-without-durable-epoch-retirement"
+        }
+      ],
+      "expect": {
+        "deleted": false,
+        "tombstoneCharged": true
+      }
+    },
+    {
+      "id": "safe-tombstone-delete",
+      "steps": [
+        {
+          "fixtureEvent": "settle-all-owned-resources"
+        },
+        {
+          "fixtureEvent": "durably-retire-target-epoch"
+        },
+        {
+          "fixtureEvent": "delete-tombstone"
+        },
+        {
+          "fixtureEvent": "replay-old-identity"
+        }
+      ],
+      "expect": {
+        "deniedBeforeLookup": true,
+        "newEpochIdentityReuse": false
+      }
+    },
+    {
+      "id": "fenced-other-node-recovery",
+      "steps": [
+        {
+          "fixtureEvent": "old-node-cleanup-uncertain"
+        },
+        {
+          "fixtureEvent": "recover-last-durable-source-on-other-fenced-node"
+        }
+      ],
+      "expect": {
+        "oldOwnershipRetained": true,
+        "independentRecoveryAllowed": true
+      }
+    },
+    {
+      "id": "restart-reservation",
+      "steps": [
+        {
+          "fixtureEvent": "reserve-head-source"
+        },
+        {
+          "fixtureEvent": "restart-head-before-dispatch"
+        },
+        {
+          "fixtureEvent": "reconcile-durable-reservation"
+        }
+      ],
+      "expect": {
+        "automaticDispatch": false,
+        "ownership": "retained",
+        "quotaReset": false
+      }
+    }
+  ],
+  "checkpointReadValidationCases": [
+    {
+      "id": "valid-registration",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": true
+    },
+    {
+      "id": "unknown",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"extra\":true}",
+      "valid": false
+    },
+    {
+      "id": "null",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":null}",
+      "valid": false
+    },
+    {
+      "id": "wrong-type",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":7,\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "noncanonical-epoch",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"07\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "nil-id",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-0000-0000-000000000000\"}",
+      "valid": false
+    },
+    {
+      "id": "duplicate",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "escaped-duplicate",
+      "target": "request",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"attempt\\u0049d\":\"00000000-0000-4000-8000-000000000051\"}",
+      "valid": false
+    },
+    {
+      "id": "valid-result",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": true
+    },
+    {
+      "id": "result-unknown",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\",\"extra\":true}",
+      "valid": false
+    },
+    {
+      "id": "result-invalid-revision",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"01\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    },
+    {
+      "id": "result-ownership-mismatch",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"released\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    },
+    {
+      "id": "nested-escaped-duplicate",
+      "target": "result",
+      "rawJson": "{\"preparationId\":\"00000000-0000-4000-8000-000000000060\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"repoKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"attemptId\":\"00000000-0000-4000-8000-000000000051\",\"transferId\":\"00000000-0000-4000-8000-000000000052\",\"linkGeneration\":\"3\",\"checkpoint\":{\"checkpoint\\u0049d\":\"00000000-0000-4000-8000-000000000070\",\"checkpointId\":\"00000000-0000-4000-8000-000000000070\",\"manifestSha256\":\"82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee\"},\"state\":\"issued\",\"ownership\":\"retained\",\"revision\":\"1\",\"expiresAt\":\"2026-09-30T00:02:00Z\"}",
+      "valid": false
+    }
+  ],
+  "checkpointReadBoundaryCases": [
+    {
+      "id": "sourceRegistrationBodyBytes",
+      "limit": 2048,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 2049,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceRegistrationResultBytes",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRecords",
+      "limit": 256,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 257,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRecordBytes",
+      "limit": 32768,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 32769,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceAggregateBytes",
+      "limit": 8388608,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 8388609,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRepoGrants",
+      "limit": 64,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 65,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceAttachmentGrants",
+      "limit": 128,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 129,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "headSourceRetentionReferences",
+      "limit": 320,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 321,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptRows",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptRowBytes",
+      "limit": 4096,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4097,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptAggregateBytes",
+      "limit": 16777216,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 16777217,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceRepoSlots",
+      "limit": 64,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 65,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptsPerRepo",
+      "limit": 3,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 4,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceWindowMs",
+      "limit": 600000,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 600001,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceAttemptMs",
+      "limit": 120000,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 120001,
+      "expectOver": "reject-before-new-effects"
+    },
+    {
+      "id": "sourceIdentityUtf8Bytes",
+      "limit": 512,
+      "atLimit": "structural-bound-only-not-admission",
+      "overLimit": 513,
+      "expectOver": "reject-before-new-effects"
+    }
+  ],
+  "checkpointReconnectObservation": {
+    "status": "prepared-not-executed",
+    "description": "Internal fixture identities and native-drain conditions are setup assertions for a future authenticated harness, not wire fields, measured admission or authority. Current frame binding differs only in generation; the body retains original attempt identity. Existing same-generation corpus is unchanged.",
+    "retainedAttempt": {
+      "preparationId": "00000000-0000-4000-8000-000000000060",
+      "runId": "00000000-0000-4000-8000-000000000002",
+      "assignmentEpoch": "7",
+      "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "attemptId": "00000000-0000-4000-8000-000000000051",
+      "transferId": "00000000-0000-4000-8000-000000000052",
+      "linkGeneration": "3",
+      "checkpoint": {
+        "checkpointId": "00000000-0000-4000-8000-000000000070",
+        "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+      },
+      "state": "issued",
+      "ownership": "retained",
+      "revision": "1",
+      "expiresAt": "2026-09-30T00:02:00Z"
+    },
+    "originalBinding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "3",
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture"
+    },
+    "acceptedObserverBinding": {
+      "leaseId": "lease-fixture",
+      "incarnation": "00000000-0000-4000-8000-000000000012",
+      "linkGeneration": "4",
+      "agentId": "agent-fixture",
+      "workspaceId": "workspace-fixture"
+    },
+    "trustedProvenance": "live retained installer owner; not caller data or recovered bytes alone",
+    "examples": [
+      {
+        "id": "observe-old-closing",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000160",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000160",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000160",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000160",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "closing",
+              "ownership": "retained",
+              "revision": "2",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "unknown"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      },
+      {
+        "id": "observe-old-failed_retained",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000161",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000161",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000161",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000161",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "failed_retained",
+              "ownership": "retained",
+              "revision": "3",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "failed"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      },
+      {
+        "id": "observe-old-closed",
+        "direction": "node-to-head",
+        "request": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000162",
+            "kind": "request",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000162",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "method": "node.checkpoint.read.prepare",
+            "timeoutMs": 30000,
+            "offset": 0,
+            "more": false,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000051"
+          },
+          "payload": {
+            "preparationId": "00000000-0000-4000-8000-000000000060",
+            "runId": "00000000-0000-4000-8000-000000000002",
+            "assignmentEpoch": "7",
+            "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attemptId": "00000000-0000-4000-8000-000000000051"
+          }
+        },
+        "response": {
+          "header": {
+            "channel": "rpc",
+            "streamId": "00000000-0000-4000-8000-000000000162",
+            "kind": "response",
+            "leaseId": "lease-fixture",
+            "incarnation": "00000000-0000-4000-8000-000000000012",
+            "linkGeneration": "4",
+            "requestId": "00000000-0000-4000-8000-000000000162",
+            "agentId": "agent-fixture",
+            "workspaceId": "workspace-fixture",
+            "offset": 0,
+            "more": false
+          },
+          "payload": {
+            "result": {
+              "preparationId": "00000000-0000-4000-8000-000000000060",
+              "runId": "00000000-0000-4000-8000-000000000002",
+              "assignmentEpoch": "7",
+              "repoKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "attemptId": "00000000-0000-4000-8000-000000000051",
+              "transferId": "00000000-0000-4000-8000-000000000052",
+              "linkGeneration": "3",
+              "checkpoint": {
+                "checkpointId": "00000000-0000-4000-8000-000000000070",
+                "manifestSha256": "82d6e5023d6422fda55b8b352c988e593354c9795fa86be65954b9e307a6f9ee"
+              },
+              "state": "closed",
+              "ownership": "released",
+              "revision": "4",
+              "expiresAt": "2026-09-30T00:02:00Z",
+              "outcome": "failed"
+            }
+          }
+        },
+        "expect": {
+          "delivery": "observation-only",
+          "installerAuthority": false,
+          "readAuthority": false,
+          "newAttemptAuthorized": false
+        }
+      }
+    ],
+    "scenarios": [
+      {
+        "id": "failed-stream-accepted-reconnect",
+        "steps": [
+          {
+            "fixtureEvent": "fail-selected-stream"
+          },
+          {
+            "fixtureEvent": "close-shared-link"
+          },
+          {
+            "fixtureEvent": "settle-native-permissions"
+          },
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "observe-original-generation-3"
+          }
+        ],
+        "expect": {
+          "outerGeneration": "4",
+          "bodyGeneration": "3",
+          "delivery": "observation-only",
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "held-native-permission",
+        "steps": [
+          {
+            "fixtureEvent": "fail-selected-stream"
+          },
+          {
+            "fixtureEvent": "retain-native-read-permission"
+          },
+          {
+            "fixtureEvent": "request-generation-4"
+          }
+        ],
+        "expect": {
+          "generationAdmission": "pending-or-denied",
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "permissionForceDropped": false
+        }
+      },
+      {
+        "id": "later-admitted-retained-ledger",
+        "steps": [
+          {
+            "fixtureEvent": "release-native-permission-after-actual-settlement"
+          },
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "retain-failed-ledger-and-pins"
+          },
+          {
+            "fixtureEvent": "observe-original-attempt"
+          }
+        ],
+        "expect": {
+          "generationAdmitted": true,
+          "bodyGeneration": "3",
+          "ownership": "retained",
+          "nodeCleanupClaimed": false
+        }
+      },
+      {
+        "id": "old-issued-not-cleanup-state",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "find-old-issued-record-not-reconciled"
+          },
+          {
+            "fixtureEvent": "request-observation"
+          }
+        ],
+        "expect": {
+          "observationAvailable": false,
+          "recordRewritten": false,
+          "ownership": "retained"
+        }
+      },
+      {
+        "id": "old-streaming-not-cleanup-state",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "find-old-streaming-record-not-reconciled"
+          },
+          {
+            "fixtureEvent": "request-observation"
+          }
+        ],
+        "expect": {
+          "observationAvailable": false,
+          "recordRewritten": false,
+          "ownership": "retained"
+        }
+      },
+      {
+        "id": "old-outer-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "send-outer-generation-3"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "rewritten-body-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "rewrite-receipt-generation-to-4"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "caller-expected-generation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "generic-caller-supplies-generation-override"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-lease",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-lease"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-incarnation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-incarnation"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-owner-node",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-owner-or-node"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-run",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-run"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-preparation",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-preparation"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-transfer",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-transfer-id"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "foreign-checkpoint",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "replace-source-checkpoint-hash"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "unknown-attempt",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "lookup-unknown-attempt"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "newRecordAllocated": false,
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "initial-reply-lost",
+        "steps": [
+          {
+            "fixtureEvent": "lose-first-registration-reply"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "local-correlation-lost",
+        "steps": [
+          {
+            "fixtureEvent": "lose-retained-node-descriptor"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "restart-quarantine",
+        "steps": [
+          {
+            "fixtureEvent": "restart-with-unproved-record-bytes"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "remoteObservationAvailable": false,
+          "headLocalReconciliation": true,
+          "authorityRestored": false
+        }
+      },
+      {
+        "id": "released-credential",
+        "steps": [
+          {
+            "fixtureEvent": "release-lease-credential"
+          },
+          {
+            "fixtureEvent": "attempt-observation"
+          }
+        ],
+        "expect": {
+          "denied": true
+        }
+      },
+      {
+        "id": "queued-response-revoked",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "queue-observation-response"
+          },
+          {
+            "fixtureEvent": "revoke-current-observer-link"
+          }
+        ],
+        "expect": {
+          "bytesAfterFence": 0,
+          "oldReadAuthorityRestored": false
+        }
+      },
+      {
+        "id": "observation-not-installer",
+        "steps": [
+          {
+            "fixtureEvent": "observe-old-closed"
+          },
+          {
+            "fixtureEvent": "attempt-install-consume-open-or-read"
+          }
+        ],
+        "expect": {
+          "denied": true,
+          "oldTransferRebound": false
+        }
+      },
+      {
+        "id": "head-closed-node-uncertain",
+        "steps": [
+          {
+            "fixtureEvent": "observe-head-closed"
+          },
+          {
+            "fixtureEvent": "retain-node-helper-or-restore-owner"
+          },
+          {
+            "fixtureEvent": "attempt-new-read"
+          }
+        ],
+        "expect": {
+          "newReadDenied": true,
+          "localRootReused": false
+        }
+      },
+      {
+        "id": "settled-new-attempt",
+        "steps": [
+          {
+            "fixtureEvent": "settle-head-and-node-owners"
+          },
+          {
+            "fixtureEvent": "fresh-source-target-admission"
+          },
+          {
+            "fixtureEvent": "register-new-nonce-transfer-on-generation-4"
+          }
+        ],
+        "expect": {
+          "newIdentityRequired": true,
+          "originalQuotaWindowPreserved": true
+        }
+      },
+      {
+        "id": "fenced-recovery-elsewhere",
+        "steps": [
+          {
+            "fixtureEvent": "retain-old-local-cleanup"
+          },
+          {
+            "fixtureEvent": "independently-fence-and-recover-elsewhere"
+          }
+        ],
+        "expect": {
+          "oldOwnershipReleased": false,
+          "independentRecoveryAllowed": true
+        }
+      },
+      {
+        "id": "duplicate-response-key",
+        "steps": [
+          {
+            "fixtureEvent": "admit-generation-4"
+          },
+          {
+            "fixtureEvent": "receive-duplicate-or-escaped-duplicate-response-field"
+          }
+        ],
+        "expect": {
+          "decodeRejected": true
+        }
+      },
+      {
+        "id": "delayed-original-receipt",
+        "steps": [
+          {
+            "fixtureEvent": "observe-revision-4-closed"
+          },
+          {
+            "fixtureEvent": "receive-delayed-revision-2-closing"
+          }
+        ],
+        "expect": {
+          "retainedRevision": "4",
+          "state": "closed",
+          "ownership": "released",
+          "installerAuthority": false
+        }
+      },
+      {
+        "id": "equal-revision-disagrees",
+        "steps": [
+          {
+            "fixtureEvent": "observe-revision-4-closed"
+          },
+          {
+            "fixtureEvent": "receive-revision-4-failed-retained"
+          }
+        ],
+        "expect": {
+          "conflictRejected": true,
+          "retainedRevision": "4"
+        }
+      }
+    ],
+    "fixtureOwnership": "Keep actual native permission/owner through teardown. Admit newer generation only after existing fencing/native-drain rules permit it. Release and settle real work before assertions; retained failure is not disposed or counted as cleanup. No fixture may force-drop guards or reset counters to obtain a new link."
+  }
+}

@@ -6,6 +6,14 @@ discovery, forwarding, fan-out, placement, authentication, stream relaying, or n
 method rejection in intentd. Direct daemon calls retain their current behavior.
 Neither the protocol version nor this inventory advertises aggregator support.
 
+The [private node lifecycle](./node-link.md#private-preparation-lifecycle) is
+excluded from the public method inventory below. Its head-to-node preparation,
+status and exact-run control operations are explicitly assignment-authorized;
+they are not public catalog methods, agent workspace bindings or generic namespace
+forwarding. A private control method name that resembles a client agent method
+does not inherit that client's route or authority. Do not add private lifecycle
+names to these public routing tables.
+
 ## Routing and compatibility
 
 For the selected workspace variants below, a future forwarded request must carry
