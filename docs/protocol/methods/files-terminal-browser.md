@@ -372,8 +372,8 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 > returns empty data with `eof: true`.
 >
 > Session ownership comes from the trusted caller envelope, never action arguments.
-> Agent callers may operate on and read only their own captures in the requested
-> workspace/backend; user calls without `agentId` retain existing unrestricted user
+> Session actions and `readCapture` restrict agent callers to their own captures in
+> the requested workspace/backend; user calls without `agentId` retain existing unrestricted user
 > authority. Persisted ownership permits reads after a session ends or its tab
 > closes. Unique capture directories prevent equal display names from colliding.
 > Absolute paths, escaping identifiers, symlink directories/artifacts, foreign
