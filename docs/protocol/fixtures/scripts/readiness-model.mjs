@@ -1,12 +1,15 @@
 // Design prototype only: no production code, network, PTY, database or locks.
-// A monotonically increasing epoch models definition/run/process-attempt fencing.
+// The module acts as a registry-wide definition allocator: recreating an ID must
+// not reuse an earlier definition's fence. The epoch covers run/process attempts.
+let nextDefinitionId = 0n;
+
 export function initial({ configured = true, workspaceId = 'ws-a', scriptId = 'svc' } = {}) {
-  return { configured, workspaceId, scriptId, epoch: 0, status: 'idle',
+  return { configured, workspaceId, scriptId, definitionId: String(++nextDefinitionId), epoch: 0, status: 'idle',
     ...(configured ? { ready: false, readiness: { state: 'idle' } } : {}) };
 }
 
 export function token(s) {
-  return JSON.stringify([s.workspaceId, s.scriptId, s.epoch]);
+  return JSON.stringify([s.workspaceId, s.scriptId, s.definitionId, s.epoch]);
 }
 
 export function runtime(s) {

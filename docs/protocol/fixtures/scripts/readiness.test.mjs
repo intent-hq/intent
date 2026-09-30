@@ -81,6 +81,21 @@ test('same script IDs in different workspaces cannot share readiness evidence', 
   assert.deepEqual(step(b, 'check', { token: token(a), at, httpStatus: 204 }), b);
 });
 
+for (const evidence of [
+  { httpStatus: 204 }, { httpStatus: 503 }, { error: 'timeout' }, { patternMatched: true },
+]) {
+  test(`remove and recreate rejects predecessor evidence ${JSON.stringify(evidence)}`, () => {
+    const before = running();
+    const oldToken = token(before);
+    assert.equal(step(before, 'remove').status, 'removed');
+    const recreated = running({ workspaceId: before.workspaceId, scriptId: before.scriptId });
+    const result = transition(recreated, { type: 'check', token: oldToken, at, ...evidence });
+    assert.deepEqual(result, { state: recreated, events: [] });
+    assert.notEqual(token(recreated), oldToken);
+    assert.equal(check(recreated, { httpStatus: 204 }).ready, true);
+  });
+}
+
 test('no contract preserves legacy wire projection through the lifecycle', () => {
   let s = initial({ configured: false });
   for (const action of ['start', 'spawn', 'detected-url', 'restart', 'spawn', 'stop', 'hydrate']) {
