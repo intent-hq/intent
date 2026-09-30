@@ -12,6 +12,7 @@ set -euo pipefail
 # BASE=HEAD or DRY_RUN=1 exported would change every expected argv).
 unset BASE DRY_RUN INTENTD_DIR BUILD_JOBS TEST_THREADS NEXTEST_SHOW_PROGRESS CARGO_TERM_PROGRESS_WHEN
 unset NEXTEST_RUNNER RESUME GATE_FORCE NO_FAIL_FAST GATE_CACHE_DIR NEXTEST_HIDE_PROGRESS_BAR MAKEFLAGS MFLAGS
+unset COMPACT CARGO_INCREMENTAL CARGO_PROFILE_DEV_DEBUG CARGO_PROFILE_TEST_DEBUG
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 intentd_script="$repo_root/packages/intentd/scripts/changed-tests.sh"
@@ -33,7 +34,7 @@ fail() {
   || fail "$intentd_script is missing; initialize the intentd submodule (git submodule update --init packages/intentd)"
 
 ln -s "$script_bash" "$bin_dir/bash"
-for command in dirname mktemp rm sort; do
+for command in dirname mktemp rm sort grep; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 # python3 runs the real record-writing runner in the end-to-end cases below;
@@ -222,8 +223,8 @@ if [[ -z "$python3" || -z "$make_bin" ]]; then
   echo "rust-changed-tests tests: python3 or make not found; record/resume end-to-end cases skipped"
 else
   e2e_bin="$temp_dir/e2e-bin"
-  repo="$temp_dir/e2e/intentd"
   mono="$temp_dir/e2e/mono"
+  repo="$mono/packages/intentd"
   cache="$temp_dir/gate runs"
   mkdir -p "$e2e_bin" "$repo/scripts" "$repo/crates/alpha/src" "$repo/crates/alpha/tests" "$mono/packages" "$mono/scripts"
   printf '[workspace]\n' >"$repo/Cargo.toml"
@@ -233,6 +234,7 @@ else
     printf '%s\n' "$file" >"$repo/$file"
   done
   ln -s "$intentd_script" "$repo/scripts/changed-tests.sh"
+  cp "$repo_root/packages/intentd/Makefile" "$repo/Makefile"
   g() {
     git -C "$repo" "$@"
   }
@@ -243,10 +245,9 @@ else
   g checkout -q -b feature
   cp "$repo_root/Makefile" "$mono/Makefile"
   cp "$repo_root/scripts/resumable_nextest.py" "$mono/scripts/resumable_nextest.py"
-  ln -s "$repo" "$mono/packages/intentd"
   printf '[submodule "packages/intentd"]\n\tpath = packages/intentd\n\turl = https://example.invalid/intentd.git\n' >"$mono/.gitmodules"
   git -C "$mono" init -q
-  git -C "$mono" add -A
+  git -c advice.addEmbeddedRepo=false -C "$mono" add -A
   git -C "$mono" commit -q -m mono
   printf '%s\n' '{"rust-suites":{"alpha::one":{"package-name":"alpha","binary-name":"one","binary-id":"alpha::one","testcases":{"passes":{},"also_passes":{}}}}}' >"$temp_dir/listing.json"
   printf '%s\n' '{"type":"suite","event":"started","test_count":2}' \
@@ -255,15 +256,19 @@ else
     '{"type":"test","event":"ok","name":"alpha::one$also_passes"}' \
     '{"type":"suite","event":"ok","passed":2,"failed":0,"ignored":0}' >"$temp_dir/events.jsonl"
   export NEXTEST_STUB_LISTING="$temp_dir/listing.json" NEXTEST_STUB_EVENTS="$temp_dir/events.jsonl"
+  export CARGO_COMPACT_LOG="$temp_dir/compact.log"
   printf '#!/usr/bin/env bash\necho "rustc 1.99.0 (stub)"\n' >"$e2e_bin/rustc"
   cat >"$e2e_bin/cargo" <<'SH'
 #!/usr/bin/env bash
 printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
+printf '%s: incremental=%s flags=%s encoded=%s\n' "$*" "${CARGO_INCREMENTAL-}" "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" >>"$CARGO_COMPACT_LOG"
 if [[ "$1" == -V ]]; then echo "cargo 1.99.0 (stub)"; exit 0; fi
 [[ "$1" == nextest ]] || { echo "cargo stub: unexpected argv: $*" >&2; exit 99; }
 case "$2" in
   --version) echo "cargo-nextest 0.9.99 (stub)" ;;
-  list) while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
+  list)
+    [[ "${NEXTEST_STUB_LIST_EXIT:-0}" == 0 ]] || exit "$NEXTEST_STUB_LIST_EXIT"
+    while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_LISTING" ;;
   run)
     config=""
     for arg in "$@"; do
@@ -271,6 +276,7 @@ case "$2" in
     done
     [[ -n "$config" && -f "$config" ]] || { echo "cargo stub: --tool-config-file is missing: '$config'" >&2; exit 98; }
     while IFS= read -r line; do printf '%s\n' "$line"; done <"$NEXTEST_STUB_EVENTS"
+    exit "${NEXTEST_STUB_EXIT:-0}"
     ;;
   *) echo "cargo stub: unexpected argv: $*" >&2; exit 99 ;;
 esac
@@ -280,11 +286,14 @@ SH
   # $1 = RESUME, $2 = GATE_FORCE. CARGO_BIN_DIR puts the e2e stubs ahead of the
   # plain ones on the recipe's PATH.
   e2e_make() {
+    local resume=$1 force=$2
+    shift 2
     : >"$temp_dir/cargo.log"
+    : >"$temp_dir/compact.log"
     set +e
     PATH="$bin_dir" CARGO_TEST_LOG="$temp_dir/cargo.log" \
-      "$make_bin" -C "$mono" --no-print-directory test-changed CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
-      GATE_CACHE_DIR="$cache" RESUME="$1" GATE_FORCE="$2" BUILD_JOBS=2 TEST_THREADS=1 \
+      "$make_bin" -C "${E2E_CWD:-$mono}" --no-print-directory "${E2E_GOAL:-test-changed}" CARGO_BIN_DIR="$e2e_bin" RUSTUP_CARGO= \
+      GATE_CACHE_DIR="$cache" RESUME="$resume" GATE_FORCE="$force" BUILD_JOBS=2 TEST_THREADS=1 "$@" \
       >"$temp_dir/stdout" 2>"$temp_dir/stderr" </dev/null
     status=$?
     set -e
@@ -342,6 +351,59 @@ SH
   expect_recorded_run
   [[ "$stdout" == *"[test-changed] GATE_FORCE=1: running every planned test"* ]] || fail "$case_name: stdout: $stdout"
   [[ "$record_dir" == "$changed_record" ]] || fail "$case_name: record dir moved on an unchanged tree: $record_dir"
+
+  case_name="compact changed run never resumes a default record"
+  e2e_make 1 0 COMPACT=1
+  expect_ok
+  [[ "$stdout" == *"COMPACT=1"* && "$stdout" == *"no passed-test record"* ]] || fail "$case_name: $stdout"
+  [[ "$cargo_log" == *"nextest list -p alpha --test one"* && "$cargo_log" == *"nextest run -p alpha --test one"* ]] || fail "$case_name: $cargo_log"
+  [[ "$(grep -c -- '--config profile.dev.debug=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing profile overrides"
+  [[ "$(grep -c 'incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
+  compact_record=${stdout##*"[test-changed] record: "}
+  [[ "$compact_record" != "$changed_record" ]] || fail "$case_name: default/compact records collide"
+
+  case_name="compact changed resume skips matching record through the real component forwarder"
+  E2E_CWD="$mono/packages/intentd" e2e_make 1 0 COMPACT=1
+  expect_ok
+  [[ "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  case_name="compact force and no-fail-fast survive forwarder and runner"
+  E2E_CWD="$mono/packages/intentd" e2e_make 1 1 COMPACT=1 NO_FAIL_FAST=1
+  expect_ok
+  [[ "$stdout" == *"GATE_FORCE=1"* && "$cargo_log" == *"--no-fail-fast"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  case_name="compact list compiler failure is preserved"
+  NEXTEST_STUB_LIST_EXIT=101 e2e_make 1 1 COMPACT=1
+  [[ "$status" -ne 0 && "$stderr" == *"Error 101"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $stderr $cargo_log"
+
+  case_name="compact test failure is preserved"
+  NEXTEST_STUB_EXIT=100 e2e_make 1 1 COMPACT=1
+  [[ "$status" -ne 0 && "$stderr" == *"Error 100"* ]] || fail "$case_name: $stdout $stderr"
+
+  case_name="COMPACT=0 still resumes the default record"
+  e2e_make 1 0 COMPACT=0
+  expect_ok
+  [[ "$stdout" == *"resumed: skipped 2 tests"* && "$cargo_log" != *"nextest run"* ]] || fail "$case_name: $stdout $cargo_log"
+
+  case_name="lockfile full fallback retains compact settings and full selection"
+  echo "changed lockfile" >>"$repo/Cargo.lock"
+  e2e_make 0 0 COMPACT=1
+  [[ "$status" -eq 0 && "$stderr" == *"build-wide change(s)"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$stdout" == *"falling back to the full 'make test'"* ]] || fail "$case_name: $stdout"
+  [[ "$cargo_log" == *"nextest list --workspace"* && "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
+  [[ "$(grep -c 'incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: recursive make lost compact settings"
+
+  for goal in test test-intentd gate; do
+    case_name="compact $goal runs the full suite (gate recursively invokes test)"
+    E2E_GOAL="$goal" e2e_make 0 0 COMPACT=1 -o check
+    expect_ok
+    [[ "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
+  done
+
+  case_name="forwarded coverage rejects before instrumentation (earlier forwarded goals may run)"
+  E2E_CWD="$mono/packages/intentd" E2E_GOAL=test e2e_make 0 0 COMPACT=1 coverage-changed
+  [[ "$status" -ne 0 && "$stderr" == *"COMPACT=1 is incompatible with coverage"* ]] || fail "$case_name: $stdout $stderr"
+  [[ "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" != *"llvm-cov"* ]] || fail "$case_name: $cargo_log"
 fi
 
 echo "rust-changed-tests tests passed under $("$script_bash" -c 'echo "bash $BASH_VERSION"')"

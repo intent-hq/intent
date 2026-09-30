@@ -23,6 +23,18 @@
 
 .DEFAULT_GOAL := all
 
+# Reject before running ANY recipe, including parallel/mixed gate + coverage
+# goals. Coverage needs its own debug/instrumentation settings.
+COMPACT ?= 0
+export COMPACT
+ifeq ($(COMPACT),1)
+ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
+$(error COMPACT=1 is incompatible with coverage targets; rerun coverage with COMPACT=0)
+endif
+endif
+# Expand only for compact compiler recipes; ordinary invocations stay identical.
+COMPACT_CARGO = $(if $(filter 1,$(COMPACT)),python3 "$(CURDIR)/scripts/resumable_nextest.py" --compact-cargo)
+
 INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
@@ -447,7 +459,7 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
@@ -455,7 +467,7 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 # in intentd therefore needs no change here. Mirrors the intentd `check` CI
 # job so local gates match CI.
 lint-sources: ensure-intentd-submodule ## Run every intentd source lint (tests/*_lint.rs in any intentd crate)
-	cd $(INTENTD_DIR) && cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
+	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
 
 # Deprecated aliases of lint-sources, kept for one release so existing local
 # scripts keep working; each now runs the full source-lint set.
@@ -488,7 +500,7 @@ gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest
 test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
 
 test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
-	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
