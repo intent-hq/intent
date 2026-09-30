@@ -134,7 +134,7 @@ Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) reject
 `COMPACT=1` before instrumentation; run them with `COMPACT=0`. At the monorepo
 root, even mixed goals such as `make test coverage-all COMPACT=1` reject before
 any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
-root makes per goal: `make -C packages/intentd test coverage-all COMPACT=1` may
+root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` may
 run the noncoverage goal before rejecting coverage. It still never starts compact
 coverage. Use separate invocations with the appropriate mode for each goal.
 
