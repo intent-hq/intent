@@ -59,7 +59,7 @@ never resurrects shipped bundles the operator excluded.
 - **SpecialistDef** — `{ id, name, description, codingAgent?, model?, reasoningEffort?,
   roleReminder?, agentType?, role?, icon?, prompt?, hidden?: boolean,
   modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
-  aliases?: [string],
+  aliases?: [string], importedFrom?: "claude-code", unsupportedFields?: [string],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
   scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
   `icon`) are first-class **string** fields on the wire, not
@@ -68,6 +68,40 @@ never resurrects shipped bundles the operator excluded.
   `list`/`get`, `source` is the **winning** tier and `path?` the file it resolved from (omitted
   for `bundled`); on `create`/`edit` the body carries the authored fields and `scope` chooses the
   target tier.
+- **Claude agent discovery (additive)** — user agents in `~/.claude/agents/` and
+  project agents in `<workspace>/.claude/agents/` are available as read-only
+  specialist definitions. Global `specialist.list` includes the user imports;
+  workspace-aware resolution, delegation catalogs, and `specialist.get` with
+  `workspacePath` also include project imports. Routing-only `workspaceId` retains
+  its existing meaning. Intent definitions, including bundled definitions, take
+  precedence over imports; project Claude definitions take precedence over user
+  Claude definitions. Imports do not supply inherited fields to Intent overrides.
+  Files are Markdown with YAML frontmatter; `name` supplies the specialist id and
+  name, `description` the description, and the body the prompt. `codingAgent` is
+  `claude-code`; a bare `model` is preserved, while `inherit` or an empty model
+  leaves model selection to the existing default resolver. A `skills` string array
+  adds instructions to load those named skills through the available skills catalog;
+  it does not preload their contents. Claude's presentation-only `color` is ignored.
+  `importedFrom: "claude-code"` identifies an import, `source` remains `user` or
+  `project`, `path` points to the original file, and `isCustomized` is false.
+  Unsupported frontmatter keys, including tool restrictions, permission modes,
+  hooks, memory, isolation, and MCP configuration, are listed in sorted
+  `unsupportedFields` (omitted when empty). These definitions remain discoverable,
+  but creation/delegation and specialist updates reject them with `-32602` naming
+  the fields, before creating a session. Invalid model/skills values are also
+  reported there. Malformed YAML, missing required name/description, invalid ids,
+  unreadable files, and broken links are skipped. Native provider subagents stay
+  disabled: imports run through Intent delegation.
+  Imported definitions reject `specialist.edit` and `specialist.delete` with
+  `-32602` and a read-only explanation. `specialist.create` may create an explicit
+  Intent override of the same id; deleting that override reveals the import again.
+  None of these operations modifies the original Claude file.
+  Discovery follows linked roots, subdirectories, and Markdown files, deduplicates
+  canonical paths, and stops cycles. Each root is bounded to depth 8, 256 directories,
+  512 Markdown files, 4096 entries, and 1 MiB per file. Same-name definitions within
+  a root use the first encountered file after sorting each directory by name.
+  Canonical directories and link parents use non-recursive shared watches, so
+  external target edits and link replacements refresh the affected specialist set.
 - **`modelTier` is retired** (tolerated-and-ignored, like the retired
   `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
   in an existing file's frontmatter never errors, but the key is stripped on parse — never
