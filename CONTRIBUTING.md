@@ -99,8 +99,9 @@ COMPACT=1 make test-changed
 make -C packages/intentd test COMPACT=1
 ```
 
-Compact mode requires **Python 3.11+** for `tomllib`; ordinary gates retain their
-existing Python support. It applies to the compiler steps in `check`, `test`,
+Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
+TOML 1.1 parser offline, including under `python3 -S`; no parser installation is
+needed. Compact applies to the compiler steps in `check`, `test`,
 `test-changed` and `gate`, and to `clippy` and `lint-sources`.
 It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
 package and build overrides. `strip=none` preserves the existing macOS

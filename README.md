@@ -98,7 +98,7 @@ make build   # cargo build --workspace
 
 For less local Rust build storage, opt in with `COMPACT=1 make gate` (check +
 tests), `COMPACT=1 make test`, or `COMPACT=1 make test-changed`. Compact mode
-requires Python 3.11+ and disables dev/test debug information and incremental
+supports Python 3.10+ and disables dev/test debug information and incremental
 compilation through Cargo settings, including package overrides. Explicit caller
 Rust debug/incremental flags still take precedence. This reduces debugging detail
 and can slow rebuilds; disk savings depend on the workload. Leaving `COMPACT`
