@@ -4,9 +4,10 @@ Intent releases are published to GitHub Releases on the public `intent-hq/cloudl
 
 The dual-architecture Mac procedures below describe the source-reviewed workflow
 at [cloudlands-fe f32df299](https://github.com/intent-hq/cloudlands-fe/commit/f32df299fa33e3f269c72cfea7dc8f33d796a38c).
-They do not establish that Intel support has shipped. Signed native builds and
-full feature gates remain pending at this documentation checkpoint; physical
-Intel installation and an actual auto-update require separate validation.
+For each release, record signed native build results for both Mac CPUs and
+full feature-gate results, separately from physical installation and actual
+auto-update validation on each CPU. Follow the
+[Mac validation checklist](./RELEASING.md#mac-validation-before-release).
 
 ## Release Channels
 

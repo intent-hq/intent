@@ -4,9 +4,10 @@ This document describes the end-to-end release process for Intent (cloudlands-fe
 
 The dual-architecture Mac steps describe the source-reviewed workflow at
 [cloudlands-fe f32df299](https://github.com/intent-hq/cloudlands-fe/commit/f32df299fa33e3f269c72cfea7dc8f33d796a38c).
-At this documentation checkpoint, signed native builds and full feature gates
-are pending; physical Intel installation and auto-update testing are unproven.
-These procedures are not a shipped-support announcement.
+For each release, record signed native build results for both Mac CPUs and
+full feature-gate results, separately from physical installation and actual
+auto-update validation on each CPU. Follow the
+[Mac validation checklist](#mac-validation-before-release).
 
 ## Overview
 
