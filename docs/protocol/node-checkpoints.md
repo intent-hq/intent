@@ -148,6 +148,21 @@ strings in this illustrative schema stand for full validated values):
 }
 ```
 
+Private preparation transfers this complete metadata through
+[node-link sourceMetadata](./node-link.md#immutable-source-metadata), with exact
+typed manifest bytes and checkpoint-bound retained attachment ID/hash/length
+descriptors. Manifest attachments alone do not supply lengths. This preserves the
+checkpoint digest/format; metadata and its descriptor lengths are immutable
+preparation intent, held in separately bounded owned storage rather than expanding
+the compact preparation ledger. An object or successful decode grants no authority.
+
+Head validates current/inherited source selection independently from target-stage
+ownership. Remote restore also requires an admitted selected-checkpoint Git
+read-ref adapter for exact immutable HEAD/index/WIP/inherited closure; Upload
+rejects StageBinding and cannot fetch arbitrary manifest OIDs. Never substitute
+moving aliases or local stage paths. Existing Prompt carries bounded history;
+manifest session metadata introduces no portable-file import or readiness proof.
+
 Required fields are those shown except `branch` (omitted for detached HEAD) and
 `wip` (omitted when clean). A delegated isolated child additionally carries the
 `inherited` entry defined above in each seeded repository; independent agents omit

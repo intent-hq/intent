@@ -174,6 +174,12 @@ preparationId; requestId is only transport correlation.
     "checkpointId": "00000000-0000-4000-8000-000000000003",
     "manifestSha256": "<64 lowercase hex digits>"
   },
+  "sourceMetadata": {
+    "manifestJson": "<exact checkpointFormat 1 typed manifest JSON bytes>",
+    "attachments": [
+      { "id": "attachment-1", "sha256": "<64 lowercase hex digits>", "bytes": 256 }
+    ]
+  },
   "configuration": {
     "configId": "00000000-0000-4000-8000-000000000004",
     "sha256": "<SHA-256 of canonical snapshot JSON>",
@@ -235,6 +241,145 @@ require an inherited parent to impersonate the child's execution identity.
 Verify all granted repository/object closure, inherited worktree/index/submodules
 and checkpoint-bound attachments before ready. No source path supplied by a
 caller is opened.
+
+### Immutable source metadata
+
+Prepare requires `sourceMetadata: { manifestJson, attachments }` alongside the
+checkpoint selector. It is request-only: status and other receipts keep their
+existing selector/revision shapes and never echo these bytes. The
+[lifecycle corpus](./fixtures/nodes/lifecycle.json) contains complete matching
+strings, digests and descriptors; the inline schema above uses placeholders.
+
+The authenticated head selects the exact retained source checkpoint under its
+persisted current-or-inherited reader relation before dispatch. Manifest
+workspace/agent/lease/incarnation/run/epoch/capture revision identify that source;
+prepare's run/epoch and current assignment identify the target. Validate these
+separately. Neither a hash nor deserialized PreparedCheckpoint grants access, and
+a parent must not impersonate the child's target assignment. Each subsequent
+source read requires fresh live source/target admission for that exact selection.
+
+`manifestJson` is a string whose decoded UTF-8 bytes are at most 1 MiB and describe
+at most 64 repositories. Its SHA-256 must equal checkpoint.manifestSha256 and its
+checkpointId must match the selector. Reject unknown/missing/null members, wrong
+types and duplicate keys (including escaped equivalents) at every level of both
+the outer request and the enclosed JSON. Validate the closed checkpointFormat 1
+manifest, including flattened repository fields, full OIDs, canonical decimal
+counters, ordered submodule graph, inherited metadata and safe relative layout.
+
+The digest remains SHA-256 of the existing checkpointFormat 1 **typed compact
+serializer bytes**, not configuration's RFC 8785 encoding. The current head stores
+a typed PreparedCheckpoint, not a separately addressable raw-manifest blob.
+After authorized DurableStages::load validates its stored hash, head reconstructs
+`serde_json::to_vec(loaded.manifest())`, checks that hash again, and sends those
+exact bytes. Receiver strictly decodes the typed format, verifies the raw byte
+hash, and requires byte-for-byte equality on the same typed re-encoding. Never
+round-trip through a generic JSON map, pretty-print, reorder fields/arrays,
+normalize Unicode/escapes or silently change optional-field omission. Equivalent
+JSON with different bytes is not the selected manifest. Unsupported serializer,
+build or format fails explicitly; it cannot justify a new checkpoint digest.
+
+attachments is required (empty when the manifest has none), sorted by ID and
+contains only `{ id, sha256, bytes }`. IDs are unique, nonempty and at most 128
+UTF-8 bytes; hashes are lowercase SHA-256; bytes is a nonnegative integral JSON
+number. At most 128 entries are allowed, with each size and the checked sum at
+most 1 GiB. The ID/hash set must equal the manifest's complete attachment set.
+Head selects lengths from that checkpoint's retained AttachmentInventory, never
+from a current mutable registry file. Lengths are not part of the manifest hash:
+pin them in the complete preparation intent and verify them against retained
+inventory and actual bytes. All existing lower storage limits and the total
+8 MiB RPC framing limit still apply; bulk metadata must not starve stop/heartbeat.
+
+This data provides repository/object closure and attachment requirements, not
+host paths, URLs, credentials, environment maps, retained receipt UUIDs, source
+owner tokens, expiry-based authority or file payloads. Format-defined relative
+repository/submodule/session layout remains inert validated metadata; never open
+a supplied source path. Restore only into trusted anchored target roots. Parent
+session metadata does not authorize portable import or require a fresh child to
+use the parent's provider. The existing prepare.resume/Prompt.history carrier
+remains the sole bounded history-text route; portable session-file import stays
+unsupported when requested. No new fetch method or session carrier is introduced.
+
+### Bounded metadata ownership
+
+The complete immutable intent includes source metadata as well as checkpoint,
+configuration and resume. Identical intent joins one owner; changed manifest
+bytes, digest or attachment descriptor under the same preparation ID fails
+request-id-reused, while a different intent in an occupied assignment fails
+preparation-conflict. A fresh transport requestId does not create a new execution.
+
+Do not embed the large wire member unchanged into the preparation ledger. Its
+entire serialized record remains capped at **36,864 bytes**. A versioned internal
+compact intent must retain small selectors/config/resume plus an opaque locally
+derived metadata-object ID, source checkpoint/hash, exact lengths, descriptor
+checksum and owner-binding checksum. Validate the full encoded record against
+the unchanged cap before writing; never truncate or implicitly expand it.
+Current full-PrepareRequest persistence and its selector-only identity require an
+explicit adapter, not a DTO-only change or automatic restoration of old owners.
+
+Store exact source bytes separately in private node-owned durable storage. Bind
+the internally derived object name/header to full owner/agent/workspace/run/epoch/
+preparation identity and checkpoint/hash; accept no object path/ref from wire.
+Use a versioned exact descriptor encoding and local integrity checksum (not a
+replacement checkpoint digest); qualify that encoding with goldens. Bounds are
+1 MiB manifest, 128 KiB encoded descriptors and 4 KiB binding/header: at most
+1,183,744 bytes per object. Reserve actual bytes against a 64 MiB aggregate cap
+(or lower configured capacity) and no more objects than registry capacity,
+which is at most 256. Pending, temporary, retained-failure and recovery-orphan
+objects stay charged; no duplicate unbounded buffers or eviction of owned data.
+
+1. Under the owning registry/storage lock, validate bounded data and current
+   authorization, then durably reserve one compact preparation record and byte/
+   count charge before object writes or async fetch. Its expected-but-incomplete
+   object reference is not readiness or source admission; retries join the owner.
+2. Write the owned temp object under current effect admission in a separate
+   private no-follow store (the existing flat ledger rejects extra directories).
+   Fsync files and newly created directory links, atomically rename to the derived
+   immutable name, and fsync its parent before any fetch/restore depends on it.
+3. Only a complete matching object and durable intent allow further preparation,
+   still under fresh live admission. Missing/torn/mismatched/unpublished objects
+   or uncertain publication close issuance and retain ownership/quota. Reopen
+   reconciles ledger and object inventory first; unindexed leftovers remain
+   quarantined/charged, never trusted or silently swept. An intact object cannot
+   restore execution authority, replay a prompt or reset cancellation.
+4. Cleanup closes admission and settles every native/capture/blob/repository reader
+   first, removes only this preparation's object/temp files and fsyncs deletion,
+   then durably records closed/released ownership and releases quota. Never delete
+   its ownership record first or remove head checkpoints/other owners' data.
+   Uncertain disposal retains ownership and blocks reuse of this slot/root;
+   independently fenced recovery elsewhere remains allowed.
+
+Malformed/overbudget metadata is invalid-params; mismatched digest, selector,
+source or descriptor set is checkpoint-invalid; stale target authority remains
+stale-assignment. Before-effects capacity failure is preparation-unavailable.
+After reservation, cancellation, missing source bytes or failed persistence must
+settle through owned failed/closing cleanup, retaining failed ownership when
+cleanup cannot be proved. No transient object, partial closure or lost reply can
+produce ready/released/ACK. Typed request retirement/cancellation, independent
+execution lifetime and durable receipt revisions below remain unchanged.
+
+### Selected checkpoint Git reads
+
+Existing Git Upload transports objects but **rejects StageBinding**; only Stage
+accepts that binding. Upload copies granted advertised ref closure and accepts
+wants only for those resolved root OIDs. A manifest OID/hash is not fetch authority
+and the existing lane alone is not selected-checkpoint delivery.
+
+Trusted composition must bind the owned preparation's exact checkpoint/hash and
+current-or-inherited source-reader relation to immutable HEAD/index/WIP/inherited
+read refs through a selected-source HubAccess adapter. Preserve the target-scoped
+HubUrl/request assignment and hold fresh source/target fencing admission through
+actual transfer. Explicit parent/child read-ref grants must not forge parent
+request identity. Required roots absent or mismatched in that exact grant fail
+checkpoint-invalid; never substitute current agent aliases/their current OIDs or
+broaden access to unrelated hub objects. Validate all repository/submodule and
+attachment closure before ready, without ambient stage or registry fallback.
+
+The existing local DurableStages repository map is not this remote adapter, and
+no qualified production selected-source composition is implied by these docs.
+The exact adapter/ref representation and complete delivery qualification remain
+implementation work. If existing request correlation cannot safely bind the
+selected checkpoint, return that concrete contract gap for review before adding
+a wire selector, caller-chosen source path/ref or permissive Upload fallback.
 
 ### Owned states, identity and receipt
 
