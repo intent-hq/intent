@@ -22,6 +22,14 @@ The daemon supports a **stable, client-supplied identity** that survives reconne
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.
 
+**Script lifecycle (prepared additive extension).**
+`server.capabilities.scriptLifecycle: 1` advertises the complete saved/one-off,
+archive/restore, list filtering, result persistence and agent-binding contract
+in [§5.8](./scripts.md#saved-scripts-and-one-off-history-prepared-additive-extension).
+Older daemons omit it; clients must not assume an unknown create option was
+honored just because creation succeeded. Gate lifecycle controls/options on this
+capability, independently of numeric version.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
