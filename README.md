@@ -96,6 +96,17 @@ make test    # cargo nextest run --workspace (needs cargo-nextest: cargo install
 make build   # cargo build --workspace
 ```
 
+For less local Rust build storage, opt in with `COMPACT=1 make gate` (check +
+tests), `COMPACT=1 make test`, or `COMPACT=1 make test-changed`. Compact mode
+supports Python 3.10+ and disables dev/test debug information and incremental
+compilation through Cargo settings, including package overrides. Explicit caller
+Rust debug/incremental flags still take precedence. This reduces debugging detail
+and can slow rebuilds; disk savings depend on the workload. Leaving `COMPACT`
+unset or setting `COMPACT=0` preserves ordinary behavior. Coverage rejects
+`COMPACT=1`; compact/default test resume records are separate. See
+[local Rust gates](CONTRIBUTING.md#local-rust-gates) for flag precedence, resume
+options and the component forwarder's mixed-goal boundary.
+
 `make coverage-e2e` / `make coverage-all` additionally need cargo-llvm-cov and the
 llvm-tools-preview component; `make doctor` reports them as an `[optional]` row, and
 `BOOTSTRAP_COVERAGE=1 make bootstrap-dev-host` installs them.

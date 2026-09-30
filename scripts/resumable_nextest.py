@@ -24,6 +24,13 @@ import sys
 import tempfile
 import threading
 import time
+# Cargo accepts TOML 1.1, which older stdlib tomllib versions cannot parse.
+# Use the pinned parser offline, including direct-script/importlib invocation.
+if __package__:
+    from ._vendor import tomli as cargo_toml
+else:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _vendor import tomli as cargo_toml
 
 SCHEMA_VERSION = 1
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -85,6 +92,94 @@ def rust_flags() -> dict[str, str]:
     }
 
 
+def cargo_configs(cwd: Path) -> dict[Path, bytes]:
+    """Cargo's config search paths (legacy config wins over config.toml).
+
+    Include external configs in resume identity as well: changing a home/parent
+    rustflags setting must not reuse a completed run from the old configuration.
+    """
+    configs: dict[Path, bytes] = {}
+
+    def read(path: Path, ancestors: frozenset[Path] = frozenset()) -> None:
+        # Includes are relative to the logical config path Cargo opened, not
+        # a symlink's destination. Canonical paths are only for cycle checks.
+        path = path.absolute()
+        canonical = path.resolve()
+        if canonical in ancestors:
+            raise RuntimeError(f"cyclic Cargo config include: {path}")
+        if path in configs or not path.is_file():
+            return
+        configs[path] = path.read_bytes()
+        # Cargo accepts a leading UTF-8 BOM; keep raw bytes above for hashing.
+        data = cargo_toml.loads(configs[path].decode("utf-8-sig"))
+        for include in data.get("include", []):
+            name = include if isinstance(include, str) else include["path"]
+            read(path.parent / name, ancestors | {canonical})
+
+    directories = [cwd / ".cargo", *(parent / ".cargo" for parent in cwd.parents)]
+    cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+    # Cargo interprets relative CARGO_HOME from its invocation directory, which
+    # differs from the runner's monorepo cwd for nextest list/run commands.
+    directories.append(cwd / cargo_home)
+    for directory in directories:
+        legacy = directory / "config"
+        read(legacy if legacy.is_file() else directory / "config.toml")
+    return configs
+
+
+def compact_config(cwd: Path) -> list[str]:
+    """Override profiles, never Rust flags, so Cargo keeps its flag precedence.
+
+    A caller explicitly setting -C debuginfo/incremental in Rust flags can
+    defeat these profile settings. Preserve that choice instead of replacing
+    RUSTFLAGS and accidentally hiding target/build flags from Cargo config.
+    """
+    if os.environ.get("COMPACT") != "1":
+        return []
+    documents = [(cwd / "Cargo.toml").read_bytes(), *cargo_configs(cwd).values()]
+    packages = {"*"}
+    for document in documents:
+        profiles = cargo_toml.loads(document.decode("utf-8-sig")).get("profile", {})
+        # test inherits dev; set both sides of every package override.
+        for profile in ("dev", "test"):
+            packages.update(profiles.get(profile, {}).get("package", {}))
+    args = []
+    for profile in ("dev", "test"):
+        prefixes = [f"profile.{profile}", f"profile.{profile}.build-override"]
+        prefixes.extend(f"profile.{profile}.package.{json.dumps(name)}" for name in sorted(packages))
+        for prefix in prefixes:
+            # debug=0 otherwise enables Cargo's implicit strip pass. Keep the
+            # manifest's no-strip workaround for macOS proc-macro dylibs.
+            args.extend(["--config", f"{prefix}.debug=0", "--config", f'{prefix}.strip="none"'])
+    return args
+
+
+def compact_env() -> dict[str, str]:
+    env = os.environ.copy()
+    if env.get("COMPACT") == "1":
+        env["CARGO_INCREMENTAL"] = "0"
+    return env
+
+
+def announce_compact() -> None:
+    if os.environ.get("COMPACT") == "1":
+        print("[compact] COMPACT=1: CARGO_INCREMENTAL=0; dev/test debug=0 "
+              "(including package/build overrides), strip=none. "
+              "Caller Rust flags are unchanged; explicit debug/incremental flags take precedence.",
+              flush=True)
+
+
+def build_settings(cwd: Path) -> dict[str, object]:
+    env = compact_env()
+    return {
+        "compact-config": compact_config(cwd),
+        "environment": {name: value for name, value in env.items()
+                        if name == "CARGO_INCREMENTAL" or name.startswith("CARGO_PROFILE_")},
+        "cargo-configs": {str(path): hashlib.sha256(data).hexdigest()
+                          for path, data in cargo_configs(cwd).items()},
+    }
+
+
 def tree_key(repo_root: Path, intentd_dir: Path) -> str:
     inputs = {
         "schema": SCHEMA_VERSION,
@@ -98,6 +193,7 @@ def tree_key(repo_root: Path, intentd_dir: Path) -> str:
         "cargo": run(["cargo", "-V"], intentd_dir),
         "nextest": run(["cargo", "nextest", "--version"], intentd_dir),
         "rustflags": rust_flags(),
+        "build-settings": build_settings(intentd_dir),
     }
     encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
@@ -413,6 +509,8 @@ def run_nextest(args: argparse.Namespace) -> int:
     intentd_dir = (repo_root / args.intentd_dir).resolve()
     cache_dir = Path(args.cache_dir).expanduser().resolve()
     plans = split_plans(args.plan)
+    cargo_config = compact_config(intentd_dir)
+    announce_compact()
     prune(cache_dir)
     key = tree_key(repo_root, intentd_dir)
     run_dir = cache_dir / key
@@ -453,6 +551,8 @@ def run_nextest(args: argparse.Namespace) -> int:
     # interrupted list step cannot leave a stale `complete` behind.
     complete.unlink(missing_ok=True)
     env = nextest_env()
+    if cargo_config:
+        env["CARGO_INCREMENTAL"] = "0"
     started_at = utc_now()
     results: list[dict[str, object]] = []
 
@@ -499,6 +599,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         "cargo", "nextest", "list", *selection,
                         "--build-jobs", args.build_jobs,
                         "--message-format", "json",
+                        *cargo_config,
                     ],
                     intentd_dir,
                     env,
@@ -555,6 +656,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         "--profile", profile,
                         "--message-format", "libtest-json-plus",
                         "--message-format-version", "0.1",
+                        *cargo_config,
                     ]
                     if no_fail_fast:
                         command.append("--no-fail-fast")
@@ -600,6 +702,16 @@ def run_nextest(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["--compact-cargo"]:
+        try:
+            command = sys.argv[2:]
+            index = command.index("--") if "--" in command else len(command)
+            command[index:index] = compact_config(Path.cwd())
+            announce_compact()
+            os.execvpe("cargo", command, compact_env())
+        except (OSError, RuntimeError, ValueError) as error:
+            print(f"[compact] ERROR: {error}", file=sys.stderr)
+            return HANDLED_ERROR_EXIT
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--intentd-dir", required=True)
@@ -629,7 +741,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return run_nextest(args)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
         print(f"[{args.label}] ERROR: {error}", file=sys.stderr)
         return HANDLED_ERROR_EXIT
 
