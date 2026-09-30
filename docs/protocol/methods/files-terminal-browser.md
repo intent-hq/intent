@@ -373,12 +373,20 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 >
 > Session ownership comes from the trusted caller envelope, never action arguments.
 > Session actions and `readCapture` restrict agent callers to their own captures in
-> the requested workspace/backend; user calls without `agentId` retain existing unrestricted user
-> authority. Persisted ownership permits reads after a session ends or its tab
+> the requested workspace; user calls without `agentId` retain existing unrestricted
+> user authority. The local storage namespace uses the serving desktop's legacy
+> persisted active backend identifier, not the request's backend context; this
+> addition does not guarantee isolation by request backend. Persisted ownership
+> permits reads after a session ends or its tab
 > closes. Unique capture directories prevent equal display names from colliding.
 > Absolute paths, escaping identifiers, symlink directories/artifacts, foreign
-> ownership, invalid byte ranges, missing artifacts and legacy captures without an
-> ownership marker fail through the existing `success: false` action-result envelope.
+> ownership, missing artifacts and legacy captures without an ownership marker fail
+> as executed actions. Agent calls retain these failures in the existing
+> `success: false` action-result envelope. Invalid action schemas (including invalid
+> byte ranges or artifact names) instead reject the batch before execution: the
+> frontend returns `success: false` with empty `results`, which the daemon surfaces
+> as RPC error `-32603`. Client-callable `browser.exec` also preserves its existing
+> error shaping: operational failure envelopes become RPC error `-32603`.
 > There is no arbitrary file-read fallback. Captures remain on the serving desktop;
 > changing the driving client does not transfer them. This addition defines no
 > automatic retention period and does not make snapshot-only artifacts readable.
