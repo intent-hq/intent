@@ -360,21 +360,32 @@ user `~/.agents/skills`, `~/.claude/skills`, `~/.augment/skills`, `~/.intent/ski
 then project `<workspace>/.agents/skills`, `.claude/skills`, `.augment/skills`, and
 `.intent/skills`. It parses `SKILL.md` frontmatter (name, description, allowedTools,
 compatibility), caches the results, and watches these roots for changes.
+A non-empty `CLAUDE_CONFIG_DIR` in the daemon environment replaces the user
+`.claude` root; project `.claude/skills` remains relative to the workspace.
 Discovery follows linked roots, subdirectories, and `SKILL.md` files, including
 targets outside the workspace. Canonical-path deduplication prevents cycles and
-duplicate scans; roots are scanned from highest precedence first so aliases cannot
-steal a higher tier's scope. Broken links are skipped, with link parents and target
+duplicate scans; a shallower alias can revisit a target with more remaining depth
+so a deep alias does not hide reachable children. Roots are scanned from highest
+precedence first so aliases cannot steal a higher tier's scope. Broken links are skipped, with link parents and target
 ancestors retained for recovery. Traversal remains bounded to depth 4, 2000
-directories, and 20,000 directory entries. External target directories and link
-parents use bounded non-recursive shared watches. Cache fingerprints include
+directory visits (including shallower revisits), and 20,000 directory entries.
+Skill documents must be regular UTF-8 files of at most 1 MiB; a scan reads at
+most 32 MiB of skill content, including files that fail decoding or parsing.
+External target directories and link parents use bounded non-recursive shared
+watches. Cache fingerprints include
 resolved link destinations and file metadata so retargets refresh
 even when the old and new target have matching modification times.
+Filesystem change notifications invalidate cached reads even when modification
+time and size were preserved; Unix fingerprints also include change time and file
+identity. Relative companion resources use the resolved skill file's parent when
+only `SKILL.md` is linked elsewhere, while the displayed `location` keeps its alias.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — authorized workspaces without a worktree or repository path return user-scope skills only (an empty array if none exist), without creating a checkout or activating workspace filesystem access; -32602 if the workspace is missing or inaccessible to the caller |
+| skill.list | workspaceId (req) | bare array of `{ name, description, location, scope, resourceDirectory?, allowedTools?, compatibility? }` (name-sorted, scope: "project"\|"user") — authorized workspaces without a worktree or repository path return user-scope skills only (an empty array if none exist), without creating a checkout or activating workspace filesystem access; -32602 if the workspace is missing or inaccessible to the caller |
 
 - `name` / `description` are the parsed SKILL.md frontmatter fields; `location` is the absolute path to the SKILL.md file; `scope` is `"project"` for workspace-tier skills (p5-8) and `"user"` for user-tier skills (p1-4); `allowedTools` / `compatibility` are optional frontmatter fields.
+- `resourceDirectory`, when present, is the absolute directory for relative companion files such as scripts and templates. Prompt catalogs include it as `resource_directory` and instruct the agent to resolve relative resources there. It is omitted when the ordinary location's parent is already that canonical directory.
 - Skills are returned in **name-sorted** order for deterministic output. When a name collision occurs, the higher-precedence tier wins and a warn log is emitted.
 - The daemon watches the eight scan roots and linked targets (using `notify` watchers, the same infrastructure as workspace `file:changed` events); when a SKILL.md file is created/modified/deleted, the daemon re-runs discovery for the affected workspace(s) (user-tier changes affect all workspaces; project-tier changes are workspace-scoped), compares the complete discovered metadata against its own event baseline, and emits `skills:changed` (§6.5) only if the metadata changed (500ms debounce per workspace). A concurrent `skill.list` read does not consume a pending watcher change. Non-existent roots are handled by watching the nearest existing ancestor. The `skill.list` handler also performs a check-on-read as a fallback.
 

@@ -13,7 +13,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | provider?, workspaceId? | { specialists: SpecialistDef[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.list | provider?, workspaceId? | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
 | specialist.get | id (req), workspacePath?, provider?, workspaceId? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
 | specialist.create | id (req), spec (req): SpecialistDef, workspacePath?, scope?: "project"\|"user" (default "user"), workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
 | specialist.edit | id (req), spec (req): SpecialistDef, workspacePath?, scope (req): "project"\|"user", workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
@@ -60,6 +60,7 @@ never resurrects shipped bundles the operator excluded.
   roleReminder?, agentType?, role?, icon?, prompt?, hidden?: boolean,
   modelOptions?: [{ model, hint, reasoningEffort? }], teamAgents?: [string],
   aliases?: [string], importedFrom?: "claude-code", unsupportedFields?: [string],
+  requiredSkills?: [string], missingSkills?: [string],
   source: "project"|"user"|"bundled", path?, resolvedModel?, resolvedProvider? }`. The optional
   scalars (`codingAgent`, `model`, `reasoningEffort`, `roleReminder`, `agentType`, `role`,
   `icon`) are first-class **string** fields on the wire, not
@@ -70,7 +71,10 @@ never resurrects shipped bundles the operator excluded.
   target tier.
 - **Claude agent discovery (additive)** — user agents in `~/.claude/agents/` and
   project agents in `<workspace>/.claude/agents/` are available as read-only
-  specialist definitions. Global `specialist.list` includes the user imports;
+  specialist definitions. A non-empty `CLAUDE_CONFIG_DIR` in the daemon's environment
+  replaces the user `.claude` root for both agents and skills; it does not change
+  the project root. Discovery uses the daemon host's filesystem, not another
+  connected desktop's files. Global `specialist.list` includes the user imports;
   workspace-aware resolution, delegation catalogs, and `specialist.get` with
   `workspacePath` also include project imports. Routing-only `workspaceId` retains
   its existing meaning. Intent definitions, including bundled definitions, take
@@ -81,7 +85,15 @@ never resurrects shipped bundles the operator excluded.
   `claude-code`; a bare `model` is preserved, while `inherit` or an empty model
   leaves model selection to the existing default resolver. A `skills` string array
   adds instructions to load those named skills through the available skills catalog;
-  it does not preload their contents. Claude's presentation-only `color` is ignored.
+  it does not preload their contents. The trimmed, deduplicated names are exposed as
+  `requiredSkills` in declaration order. `missingSkills` lists names that the same
+  scope's skill discovery cannot load; both fields are omitted when empty. Creation,
+  delegation, and specialist updates check the actual launch workspace and reject
+  unavailable required skills with `-32602`, before persisting a session. A global
+  list can report a missing skill that exists in a later launch's project scope.
+  Clients refresh dependency information after `skills:changed`; fresh reads also
+  detect repairs, removals and normal skill-name precedence. Claude's
+  presentation-only `color` is ignored.
   `importedFrom: "claude-code"` identifies an import, `source` remains `user` or
   `project`, `path` points to the original file, and `isCustomized` is false.
   Unsupported frontmatter keys, including tool restrictions, permission modes,
@@ -90,7 +102,7 @@ never resurrects shipped bundles the operator excluded.
   but creation/delegation and specialist updates reject them with `-32602` naming
   the fields, before creating a session. Invalid model/skills values are also
   reported there. Malformed YAML, missing required name/description, invalid ids,
-  unreadable files, and broken links are skipped. Native provider subagents stay
+  unreadable files, and broken links are skipped with import diagnostics. Native provider subagents stay
   disabled: imports run through Intent delegation.
   Imported definitions reject `specialist.edit` and `specialist.delete` with
   `-32602` and a read-only explanation. `specialist.create` may create an explicit
@@ -98,10 +110,28 @@ never resurrects shipped bundles the operator excluded.
   None of these operations modifies the original Claude file.
   Discovery follows linked roots, subdirectories, and Markdown files, deduplicates
   canonical paths, and stops cycles. Each root is bounded to depth 8, 256 directories,
-  512 Markdown files, 4096 entries, and 1 MiB per file. Same-name definitions within
-  a root use the first encountered file after sorting each directory by name.
+  512 Markdown files, 4096 entries, 1 MiB per file, and 32 MiB of file content.
+  Raw bytes count toward the total even if decoding or parsing fails.
+  Same-name definitions within a root use the first encountered file after sorting
+  each directory by name.
+  A directory that exceeds the remaining entry budget is skipped as a whole, rather
+  than selecting an arbitrary subset from filesystem enumeration. A previously
+  visited canonical directory can be revisited with a larger remaining depth budget.
   Canonical directories and link parents use non-recursive shared watches, so
   external target edits and link replacements refresh the affected specialist set.
+- **Import diagnostics (additive)** — catalog responses include `importDiagnostics`
+  only when non-empty. Each `ImportDiagnostic` is `{ path, source: "user"|"project",
+  code, message, isDirectory?: boolean, specialistId?, winnerPath? }`. Codes are `invalid`, `unreadable`,
+  `broken-link`, `too-large`, `shadowed`, and `scan-limit`. `message` explains the
+  reason and corrective action; `path` identifies the source definition or folder.
+  `isDirectory: true` marks an existing folder target for Open; absent/false uses
+  the file action. A `scan-limit` can identify either kind of target.
+  A `shadowed` entry names the losing `specialistId` and, when file-backed, the
+  `winnerPath`. Normal missing roots and duplicate aliases of the same canonical
+  file do not produce warnings. Diagnostics are capped at 128 entries; the final
+  entry reports omitted problems when the cap is reached. Correcting a file clears
+  its diagnostic on the next discovery; changes to diagnostics participate in the
+  `specialists:changed` fingerprint. Skipped files never appear as launchable agents.
 - **`modelTier` is retired** (tolerated-and-ignored, like the retired
   `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
   in an existing file's frontmatter never errors, but the key is stripped on parse — never
