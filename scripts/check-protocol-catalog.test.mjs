@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   CATALOG_PATH,
@@ -12,11 +14,19 @@ import {
   collectDocumentedMethods,
   extractRustCatalog,
   formatError,
+  formatRefBanner,
+  formatRefOffPinWarning,
+  formatWarning,
   methodNamesInFirstCell,
   parseCatalog,
   runChecks,
   tokenizeRowSuffixes,
 } from './check-protocol-catalog.mjs';
+import { submoduleOf } from './submodule-ref.mjs';
+import { cleanNodeEnv } from './test-env.mjs';
+
+const SCRIPT = fileURLToPath(new URL('./check-protocol-catalog.mjs', import.meta.url));
+const INTENTD_DIR = submoduleOf(INTENTD_CATALOG_PATH);
 
 const CATALOG = `> Part of the protocol docs — §5 Method Catalog.
 
@@ -118,10 +128,15 @@ async function makeRoot({ catalog = CATALOG, methods = { 'agents.md': METHODS_DO
 }
 
 const messages = (result) => result.errors.map(formatError);
+const warningMessages = (result) => result.warnings.map(formatWarning);
 
-test('passing fixture: both layers run and report no errors', async () => {
+const LEAD_HINT_RE =
+  /expected while the docs lead the intentd pin \(the submodule pin advances automatically once the intentd PR merges; rebase onto main if it already has\); if no intentd change is adding it, treat this as an error and remove the entry$/;
+
+test('passing fixture: both layers run and report no errors or warnings', async () => {
   const result = await runChecks(await makeRoot());
   assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result), []);
   assert.equal(result.skipped, null);
   assert.equal(result.layer2Ran, true);
 });
@@ -190,36 +205,113 @@ test('Layer 2: a router method in catalog.rs missing from its namespace row fail
   ]);
 });
 
-test('Layer 2: a row Count that disagrees with catalog.rs fails', async () => {
+test('Layer 2: a row Count above catalog.rs with a matching token list is not a Count error (docs lead the pin)', async () => {
   const rust = RUST.replace('    "agent.stop",\n', '');
   const catalog = CATALOG.replace('create, list, stop — live agents', 'create, list — live agents');
   const result = await runChecks(await makeRoot({ catalog, rust, methods: { 'agents.md': METHODS_DOC.replace('| agent.stop | agentId (req) | { ok } |\n', '') } }));
   const line = catalog.split('\n').findIndex((l) => l.startsWith('| agent |')) + 1;
   assert.deepEqual(messages(result), [
-    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but ${INTENTD_CATALOG_PATH} ROUTER_METHODS has 2`,
     `docs/protocol/05-method-catalog.md:${line}: error: agent row says 3 methods but lists 2 (create, list)`,
   ]);
+  assert.deepEqual(warningMessages(result), []);
 });
 
-test('Layer 2: catalog entries absent from catalog.rs are orphans with the rebase hint', async () => {
+test('Layer 2: a row Count below the catalog.rs method count fails (pin ahead of docs)', async () => {
+  const catalog = CATALOG.replace('| agent | 3 |', '| agent | 2 |').replace('(6 total)', '(5 total)').replace('**10 dispatchable', '**9 dispatchable').replace('**Router methods:** 6', '**Router methods:** 5');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| agent |')) + 1;
+  assert.deepEqual(messages(result), [
+    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 2 methods but ${INTENTD_CATALOG_PATH} ROUTER_METHODS has 3`,
+    `docs/protocol/05-method-catalog.md:${line}: error: agent row says 2 methods but lists 3 (create, list, stop)`,
+  ]);
+  assert.deepEqual(warningMessages(result), []);
+});
+
+test('Layer 2: catalog entries absent from catalog.rs are warnings, not errors, with the docs-lead hint', async () => {
   const rust = RUST.replace('    "github.relatedRepos.list",\n', '').replace('    "client.hello",\n', '');
   const result = await runChecks(await makeRoot({ rust }));
-  const msgs = messages(result);
-  assert.equal(msgs.length, 4, msgs.join('\n'));
-  assert.match(msgs[0], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github row says 2 methods but .* has 1$/);
-  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the github row but is not a router method in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
-  assert.match(msgs[2], /^docs\/protocol\/05-method-catalog\.md:\d+: error: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main \(the submodule pin advances automatically\) and re-run$/);
-  assert.match(msgs[3], /client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs/);
+  assert.deepEqual(messages(result), []);
+  const msgs = warningMessages(result);
+  assert.equal(msgs.length, 3, msgs.join('\n'));
+  assert.match(msgs[0], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: github\.relatedRepos\.list is listed in the github row but is not a router method in the pinned intentd catalog\.rs — /);
+  assert.match(msgs[0], LEAD_HINT_RE);
+  assert.match(msgs[1], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: github\.relatedRepos\.list is listed in the catalog but not in the pinned intentd catalog\.rs — /);
+  assert.match(msgs[1], LEAD_HINT_RE);
+  assert.match(msgs[2], /^docs\/protocol\/05-method-catalog\.md:\d+: warning: client\.hello is listed in the catalog but not in the pinned intentd catalog\.rs — /);
 });
 
-test('Layer 2: a fake suffix in a row whose Count still matches catalog.rs fails naming it', async () => {
+test('Layer 2: a row listing one extra not-yet-pinned method is one warning and zero errors', async () => {
+  const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 3 | pulls.list, relatedRepos.list, issues.list |')
+    .replace('(6 total)', '(7 total)').replace('**10 dispatchable', '**11 dispatchable').replace('**Router methods:** 6', '**Router methods:** 7');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: github\\.issues\\.list is listed in the github row but is not a router method in the pinned intentd catalog\\.rs — `));
+});
+
+test('Layer 2: a whole not-yet-pinned namespace row is a warning only', async () => {
+  const catalog = CATALOG.replace('| system (router) |', '| widget | 2 | list, get |\n| system (router) |')
+    .replace('(6 total)', '(8 total)').replace('**10 dispatchable', '**12 dispatchable').replace('**Router methods:** 6', '**Router methods:** 8');
+  const result = await runChecks(await makeRoot({ catalog }));
+  const line = catalog.split('\n').findIndex((l) => l.startsWith('| widget |')) + 1;
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: router namespace widget is listed in the catalog but not in the pinned intentd catalog\\.rs — `));
+});
+
+test('Layer 2: a catalog.rs router method with no docs row is still an error', async () => {
+  const rust = RUST.replace('    "system.capabilities",\n', '    "system.capabilities",\n    "widget.list",\n');
+  const result = await runChecks(await makeRoot({ rust }));
+  assert.deepEqual(result.errors.map((e) => e.message), [
+    `router namespace widget (1 methods in ${INTENTD_CATALOG_PATH}) has no row in the router table`,
+  ]);
+  assert.deepEqual(warningMessages(result), []);
+});
+
+test('Layer 2: fast-path, alias, and reverse-RPC orphans are warnings; their Rust-only twins stay errors', async () => {
+  const catalog = CATALOG.replace('client.hello, host.openInEditor, system.status', 'client.hello, host.openInEditor, system.status, system.ping')
+    .replace('### Fast-path methods (3 total)', '### Fast-path methods (4 total)')
+    .replace('**Fast-path methods:** 3', '**Fast-path methods:** 4')
+    .replace('**10 dispatchable', '**11 dispatchable')
+    .replace('- `git.diff` → `git.diffs`', '- `git.diff` → `git.diffs`\n- `git.log` → `git.history`')
+    .replace('### Method aliases (1 total)', '### Method aliases (2 total)')
+    .replace('**11 dispatchable', '**12 dispatchable')
+    .replace('- `host.openExternal` — open a URL (daemon→client only)', '- `host.openExternal` — open a URL (daemon→client only)\n- `host.prompt` — ask the user')
+    .replace('### Client-served reverse RPCs (2 total)', '### Client-served reverse RPCs (3 total)');
+  const result = await runChecks(await makeRoot({ catalog }));
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(
+    result.warnings.map((w) => w.message.split(' — ')[0]),
+    [
+      'system.ping is listed in the catalog but not in the pinned intentd catalog.rs',
+      'alias git.log → git.history is listed in the catalog but not in the pinned intentd catalog.rs',
+      'host.prompt is listed in the catalog but not in the pinned intentd catalog.rs',
+    ],
+  );
+
+  const rust = RUST.replace('    "system.status",\n', '    "system.status",\n    "system.ping",\n')
+    .replace('&[("git.diff", "git.diffs")]', '&[("git.diff", "git.diffs"), ("git.log", "git.history")]')
+    .replace('    "host.openInEditor",\n];', '    "host.openInEditor",\n    "host.prompt",\n];');
+  const rustAhead = await runChecks(await makeRoot({ rust }));
+  assert.deepEqual(rustAhead.errors.map((e) => e.message), [
+    `system.ping is in ${INTENTD_CATALOG_PATH} FASTPATH_METHODS but missing from the fast-path list`,
+    `alias git.log → git.history is in ${INTENTD_CATALOG_PATH} METHOD_ALIASES but missing from the alias list`,
+    `host.prompt is in ${INTENTD_CATALOG_PATH} REVERSE_METHODS but missing from the reverse-RPC list`,
+  ]);
+  assert.deepEqual(warningMessages(rustAhead), []);
+});
+
+test('Layer 2: a fake suffix in a row whose Count still matches catalog.rs fails on the token count and warns on the suffix', async () => {
   const catalog = CATALOG.replace('| github | 2 | pulls.list, relatedRepos.list |', '| github | 2 | pulls.list, relatedRepos.list, fake |');
   const result = await runChecks(await makeRoot({ catalog }));
   const line = catalog.split('\n').findIndex((l) => l.startsWith('| github |')) + 1;
   assert.deepEqual(messages(result), [
     `docs/protocol/05-method-catalog.md:${line}: error: github row says 2 methods but lists 3 (pulls.list, relatedRepos.list, fake)`,
-    `docs/protocol/05-method-catalog.md:${line}: error: github.fake is listed in the github row but is not a router method in the pinned intentd catalog.rs — if the intentd PR adding it merged after this branch was cut, rebase onto main (the submodule pin advances automatically) and re-run`,
   ]);
+  assert.equal(warningMessages(result).length, 1);
+  assert.match(warningMessages(result)[0], new RegExp(`^docs/protocol/05-method-catalog\\.md:${line}: warning: github\\.fake is listed in the github row but is not a router method in the pinned intentd catalog\\.rs — `));
+  assert.match(warningMessages(result)[0], LEAD_HINT_RE);
 });
 
 test('Layer 2: a row whose token count disagrees with its Count fails even when catalog.rs agrees with Count', async () => {
@@ -247,17 +339,90 @@ test('tokenizeRowSuffixes stops at the first em dash and tolerates surrounding w
   assert.deepEqual(tokenizeRowSuffixes('a, b (x), c'), { tokens: ['a', 'b (x)', 'c'], invalid: ['b (x)'] });
 });
 
-test('Layer 2: a whole documented namespace absent from catalog.rs is an orphan row', async () => {
+test('Layer 2: a whole documented namespace absent from catalog.rs is an orphan-row warning', async () => {
   const rust = RUST.replace('    "github.pulls.list",\n    "github.relatedRepos.list",\n', '');
   const result = await runChecks(await makeRoot({ rust }));
-  assert.match(messages(result)[0], /router namespace github is listed in the catalog but not in the pinned intentd catalog\.rs/);
+  assert.deepEqual(messages(result), []);
+  assert.match(warningMessages(result)[0], /warning: router namespace github is listed in the catalog but not in the pinned intentd catalog\.rs/);
 });
 
 test('Layer 2 is skipped (exit 0 on Layer 1 alone) when catalog.rs is absent', async () => {
   const result = await runChecks(await makeRoot({ rust: null }));
   assert.deepEqual(messages(result), []);
+  assert.deepEqual(result.warnings, []);
   assert.equal(result.layer2Ran, false);
   assert.equal(result.skipped, `skipped: ${INTENTD_CATALOG_PATH} (submodule not initialized)`);
+  assert.equal(result.ref, null);
+});
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'test',
+  GIT_AUTHOR_EMAIL: 'test@example.invalid',
+  GIT_COMMITTER_NAME: 'test',
+  GIT_COMMITTER_EMAIL: 'test@example.invalid',
+};
+const git = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+// A passing fixture whose packages/intentd is a nested git repo with catalog.rs committed and recorded as
+// the monorepo gitlink. `advance()` commits an extra router method in intentd so the checkout moves off the pin.
+async function makeGitRoot(t) {
+  const root = await makeRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const intentd = path.join(root, INTENTD_DIR);
+  git(intentd, 'init', '-q', '-b', 'main');
+  git(intentd, 'add', '.');
+  git(intentd, 'commit', '-q', '-m', 'pin');
+  const pin = git(intentd, 'rev-parse', 'HEAD');
+  git(root, 'init', '-q', '-b', 'main');
+  git(root, 'update-index', '--add', '--cacheinfo', `160000,${pin},${INTENTD_DIR}`);
+  git(root, 'commit', '-q', '-m', 'monorepo');
+  const advance = async () => {
+    await fs.writeFile(path.join(root, INTENTD_CATALOG_PATH), RUST.replace('    "agent.stop",\n', '    "agent.stop",\n    "agent.unwatch",\n'));
+    git(intentd, 'commit', '-q', '-am', 'ahead of the pin');
+    return git(intentd, 'rev-parse', 'HEAD');
+  };
+  return { root, pin, advance };
+}
+
+const runCli = (root) => spawnSync(process.execPath, [SCRIPT, root], { encoding: 'utf8', env: cleanNodeEnv() });
+
+test('a root outside any git repository yields an unknown ref: no banner, no warning, checks unchanged', async () => {
+  const result = await runChecks(await makeRoot());
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: null, pin: null });
+  assert.equal(formatRefBanner(result.ref), null);
+  assert.equal(formatRefOffPinWarning(result.ref), null);
+});
+
+test('at the pin: the banner names checkout == pin on stdout, no warning, exit code and output otherwise unchanged', async (t) => {
+  const { root, pin } = await makeGitRoot(t);
+  const result = await runChecks(root);
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: pin, pin, dirty: false });
+  assert.equal(formatRefOffPinWarning(result.ref), null);
+  const cli = runCli(root);
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.equal(cli.stdout, `check-protocol-catalog: intentd catalog.rs from ${INTENTD_DIR} checkout ${pin.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\nProtocol method catalog is consistent (Layer 1 + Layer 2).\n`);
+  assert.equal(cli.stderr, '');
+});
+
+test('off the pin: results reflect the checkout and the stderr warning names both SHAs without changing the exit code', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  assert.notEqual(head, pin);
+  const result = await runChecks(root);
+  assert.deepEqual(result.ref, { source: 'checkout', dir: INTENTD_DIR, checkout: head, pin, dirty: false });
+  assert.ok(messages(result).length >= 1, 'the checkout catalog.rs (with the extra method) is what was compared');
+  assert.match(messages(result).join('\n'), /agent\.unwatch/);
+  const banner = `check-protocol-catalog: intentd catalog.rs from ${INTENTD_DIR} checkout ${head.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})\n`;
+  const warning = `warning: ${INTENTD_DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)}; results reflect the checkout, not the pin. Run git submodule update --checkout ${INTENTD_DIR} to compare against the pin.\n`;
+  const cli = runCli(root);
+  assert.equal(cli.status, 1);
+  assert.equal(cli.stdout, banner);
+  assert.ok(cli.stderr.startsWith(warning), cli.stderr);
+  assert.match(cli.stderr, /agent\.unwatch/);
 });
 
 test('extractRustCatalog pulls the four constants from a realistic snippet', () => {
@@ -290,4 +455,222 @@ test('collectDocumentedMethods reads rows, annotated rows, headings, and skips f
   assert.deepEqual(methodNamesInFirstCell('browser.listTabs *(v9.10)*, browser.upsertTab *(v9.10)*'), ['browser.listTabs', 'browser.upsertTab']);
   assert.deepEqual(methodNamesInFirstCell('No decidable default (`model.defaultProvider` unset)'), []);
   assert.deepEqual(methodNamesInFirstCell('`model.defaultProvider` unset — falls through'), []);
+});
+
+test('Layer 1: explicit field tables do not declare methods or change catalog comparisons', async () => {
+  const doc = `${METHODS_DOC}\n| Field | Qualified response |\n| --- | --- |\n| \`details.source\`, \`details.target\` | Confirmed branch identities. |\n`;
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result), []);
+  assert.equal(result.layer2Ran, true);
+});
+
+test('collectDocumentedMethods recognizes field headers with alignment and escaped pipes', () => {
+  for (const table of [
+    '| Field | Meaning |\n| --- | --- |',
+    '| field | Meaning |\n| :--- | ---: |',
+    '| Field | Meaning |\n| - | -- |',
+    '| FIELD | Meaning | Type |\n| :---: | --- | ---: |',
+    '| Field | Meaning \\| notes |\n| --- | --- |',
+    '| Field | Meaning\n| --- | ---',
+  ]) {
+    const extra = table.includes('| Type |') ? ' text |' : '';
+    const doc = `${table}\n| source | Simple field. |${extra}\n| details.source | Nested field. |${extra}\n| \`details.target\`, details.branch *(v1)* | More fields \\| alternatives. |${extra}`;
+    assert.deepEqual(collectDocumentedMethods(doc), [], table);
+  }
+});
+
+for (const [shape, row] of [
+  ['short', '| details.source |'],
+  ['excess', '| details.source | Known source. | Extra cell. |'],
+]) {
+  test(`collectDocumentedMethods retains field context after ${shape} body rows`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${row}\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    assert.deepEqual(collectDocumentedMethods(`${doc}\n| Method | Result |\n| --- | --- |\n| unknown.method | Result. |`), [
+      { name: 'unknown.method', line: 7 },
+    ]);
+  });
+}
+
+for (const [position, prefix] of [
+  ['first', ''],
+  ['later', '| details.branch | Known branch. |\n'],
+]) {
+  test(`collectDocumentedMethods retains field context with a hyphen in the ${position} body row`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| details.source | - |\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    const next = `${doc}\n| Unknown | Result |\n| --- | --- |\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(next), [
+      { name: 'unknown.method', line: next.split('\n').length },
+    ]);
+  });
+}
+
+for (const target of ['details.target', 'target']) {
+  test(`collectDocumentedMethods retains mixed field names before a hyphen on ${target}`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| source | Source. |\n| ${target} | - |\n| details.id | Id. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+  });
+}
+
+test('collectDocumentedMethods field-body combinations preserve data and later method boundaries', () => {
+  for (const name of ['target', 'details.target']) {
+    for (const prefix of ['', '| source | Source. |\n', '| details.source | Source. |\n']) {
+      for (const cells of ['', ' - |', ' - | Extra cell. |']) {
+        const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| ${name} |${cells}\n| details.id | Id. |`;
+        assert.deepEqual(collectDocumentedMethods(doc), [], doc);
+        for (const boundary of ['\n', '| Method | Result |\n| --- | --- |\n', '| Unknown | Result |\n| --- | --- |\n']) {
+          const next = `${doc}\n${boundary}| unknown.method | Result. |`;
+          assert.deepEqual(collectDocumentedMethods(next), [
+            { name: 'unknown.method', line: next.split('\n').length },
+          ], next);
+        }
+      }
+    }
+  }
+});
+
+test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
+  for (const header of [
+    '| Method | Result |\n| --- | --- |',
+    '| Method | Result |',
+    '| Method | Result |\n| invalid | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field names | Result |\n| --- | --- |',
+    '| Field | Meaning |',
+    '| Field | Meaning |\n\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '| Field | Meaning |\n| invalid | --- |',
+    '| Field | Meaning |\n| ---:--- | --- |',
+    '| Field | Meaning |\n| : | --- |',
+    '| Field | Meaning |\n| --- |',
+    '| Field | Meaning |\n| --- | --- | --- |',
+    '| Field | |\n| --- | --- |',
+    '| Field | Meaning |\nnot a separator',
+  ]) {
+    for (const prefix of ['', '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n']) {
+      const doc = `${prefix}${header}\n| \`unknown.method\`, unknown.other *(v2)* | Result. |`;
+      const line = doc.split('\n').length;
+      assert.deepEqual(collectDocumentedMethods(doc), [
+        { name: 'unknown.method', line }, { name: 'unknown.other', line },
+      ], doc);
+    }
+  }
+});
+
+test('collectDocumentedMethods ends field context at table and non-table boundaries', () => {
+  for (const boundary of [
+    '',
+    'Some prose.',
+    '### Another table',
+    '| Method | Result |\n| --- | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '\n| Unknown | Result |\n| invalid | --- |',
+    '```text\n| Field | Result |\n| --- | --- |\n```',
+    '~~~text\n| ignored.method | Result |\n~~~',
+  ]) {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n${boundary}\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), [
+      { name: 'unknown.method', line: doc.split('\n').length },
+    ], boundary);
+  }
+});
+
+test('collectDocumentedMethods needs a boundary before an ambiguous malformed unknown table', async () => {
+  const fields = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |';
+  const rows = '| Unknown | Result |\n| invalid | --- |\n| unknown.method | Result. |';
+  assert.deepEqual(collectDocumentedMethods(`${fields}\n${rows}`), []);
+  for (const [doc, line] of [[rows, 3], [`${fields}\n\n${rows}`, 7]]) {
+    const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+    assert.deepEqual(messages(result), [
+      `docs/protocol/methods/fields.md:${line}: error: unknown.method is documented here but missing from docs/protocol/05-method-catalog.md`,
+    ]);
+  }
+});
+
+test('collectDocumentedMethods restarts field context for an adjacent field table', () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n| Field | Type | Meaning |\n| --- | --- | --- |\n| details.target | string | Field. |';
+  assert.deepEqual(collectDocumentedMethods(doc), []);
+});
+
+test('Layer 1: field table boundaries preserve heading and row file:line diagnostics', async () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n### `unknown.heading`\n| unknown.legacy | Result. |\n| Unknown | Result |\n| --- | --- |\n| unknown.table | Result. |';
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), [
+    'docs/protocol/methods/fields.md:4: error: unknown.heading is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:5: error: unknown.legacy is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:8: error: unknown.table is documented here but missing from docs/protocol/05-method-catalog.md',
+  ]);
+});
+
+const PROTOCOL_DIR = new URL('../docs/protocol/', import.meta.url);
+const SUBSCRIPTION_NAMES = ['note', 'task', 'agent', 'workspace', 'comment', 'chat', 'note.presence']
+  .flatMap((channel) => [`${channel}.subscribe`, `${channel}.unsubscribe`]);
+
+async function routingRows() {
+  const text = await fs.readFile(new URL('workspace-routing.md', PROTOCOL_DIR), 'utf8');
+  return text.split('\n').filter((line) => /\| (Add|Propagate|Exclude) \|/.test(line)).map((line) => {
+    const [, cell, disposition, field, variant] = line.split('|').map((s) => s.trim());
+    const names = methodNamesInFirstCell(cell);
+    assert.ok(names.length > 0, `routing inventory must use exact names: ${line}`);
+    assert.ok(variant, `routing inventory must explain the variant: ${line}`);
+    if (disposition === 'Add') assert.equal(field, '`workspaceId`');
+    if (disposition === 'Propagate') assert.ok(['`workspaceId`', '`targetWorkspaceId`'].includes(field), line);
+    if (disposition === 'Exclude') assert.equal(field, '—');
+    return { names, disposition, field, variant };
+  });
+}
+
+test('workspace routing inventory covers every catalog name, alias, reverse RPC and snapshot channel exactly by variant', async () => {
+  const catalog = parseCatalog(await fs.readFile(new URL('05-method-catalog.md', PROTOCOL_DIR), 'utf8'));
+  const expected = new Set([
+    ...catalog.routerRows.flatMap((row) => tokenizeRowSuffixes(row.cell).tokens.map((suffix) => `${row.ns}.${suffix}`)),
+    ...catalog.fastPath.names,
+    ...catalog.aliases.pairs.flatMap(({ alias, canonical }) => [alias, canonical]),
+    ...catalog.reverse.names.map(({ name }) => name),
+    ...SUBSCRIPTION_NAMES,
+  ]);
+  const rows = await routingRows();
+  const actual = new Set(rows.flatMap(({ names }) => names));
+  assert.deepEqual([...expected].filter((name) => !actual.has(name)), [], 'missing routing classifications');
+  assert.deepEqual([...actual].filter((name) => !expected.has(name)), [], 'unknown or abbreviated method names');
+  const variants = rows.flatMap(({ names, variant }) => names.map((name) => `${name}: ${variant}`));
+  assert.equal(new Set(variants).size, variants.length, 'duplicate method/variant rows');
+
+  // The channels are intercepted before router.rs and absent from most catalog constants.
+  // Check their current classifier as well when intentd is initialized (CI initializes it).
+  const source = await fs.readFile(new URL('../packages/intentd/crates/intent-transport/src/subscriptions.rs', import.meta.url), 'utf8')
+    .catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+  if (source !== null) {
+    const classify = source.split('pub(crate) fn classify')[1].split('/// Validate')[0];
+    const names = [...classify.matchAll(/"([a-z]+(?:\.[a-z]+)*\.(?:subscribe|unsubscribe))"/g)].map((m) => m[1]);
+    assert.deepEqual([...new Set(names)].sort(), [...SUBSCRIPTION_NAMES].sort());
+  }
+});
+
+test('routing inventory preserves source export, target reads and scope-sensitive method variants', async () => {
+  const rows = await routingRows();
+  const forMethod = (name) => rows.filter((row) => row.names.includes(name));
+  const dispositions = (name) => [...new Set(forMethod(name).map((row) => row.disposition))].sort();
+  assert.deepEqual(dispositions('workspace.export.start'), ['Propagate']);
+  for (const method of ['workspace.export.read', 'workspace.export.finalize', 'workspace.export.abort']) {
+    assert.deepEqual(dispositions(method), ['Add']);
+    assert.match(forMethod(method)[0].variant, /Source workspace/);
+  }
+  for (const method of ['crossWorkspace.readNote', 'crossWorkspace.listNotes']) {
+    assert.equal(forMethod(method)[0].field, '`targetWorkspaceId`');
+  }
+  for (const method of ['mcp.servers.toggle', 'search.messages', 'search.events', 'events.subscribe', 'rules.list', 'rules.get']) {
+    assert.deepEqual(dispositions(method), ['Exclude', 'Propagate']);
+  }
+  for (const method of ['specialist.create', 'specialist.edit', 'specialist.delete', 'events.unsubscribe', 'search.cancel']) {
+    assert.deepEqual(dispositions(method), ['Add', 'Exclude']);
+  }
+  assert.deepEqual(dispositions('agent.unsubscribe'), ['Exclude', 'Propagate']);
+  assert.match(forMethod('agent.subscribe').find((row) => /Collection-channel/.test(row.variant)).variant, /events\.unsubscribe/);
+  for (const method of ['workspace.import.begin', 'workspace.import.chunk', 'workspace.import.commit', 'workspace.import.abort', 'system.shutdown']) {
+    assert.deepEqual(dispositions(method), ['Exclude']);
+  }
 });

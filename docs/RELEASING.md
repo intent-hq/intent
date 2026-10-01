@@ -166,10 +166,26 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   cut would ship fe commits merged after that tag was cut, it defers — those
   commits may depend on intentd work in no published sidecar, and the next
   intentd alpha's pin-bump push chains into a cut that re-evaluates (push runs
-  with polling budget left retry in-run). Automation commits (the sidecar
-  pin-bump itself, `chore(release):` merges) are exempt from the freshness test,
-  and the check fails open on any lookup error (missing `INTENTD_READ_PAT`,
-  unreadable pin/tags/comparison) — same convention as the in-flight guardrail.
+  with polling budget left retry in-run). A confirmed release-plz no-op also
+  exempts this freshness deferral (intent-hq/intent#6045): the latest
+  `release-plz.yml` main-push run must succeed for the **exact current intentd
+  main SHA**, with a successful job named
+  `Release-plz no release needed: <baseline-tag>@<baseline-commit-sha>` in its
+  latest attempt. The producer emits that job only after the real release-pr
+  action succeeds with `prs: []` and resolves the checked-out daemon package
+  version to an existing ancestor release tag. The consumer requires no open
+  same-repository `release-plz-*` PR and both baseline tag and commit to match
+  the sidecar pin on fe main; it rechecks run, PR, tag, pin, and main identities
+  before accepting proof. An absent or manually closed PR alone is insufficient.
+  Pending, failed, skipped, stale, malformed, or unreadable proof retains the
+  existing deferral, as do newer releases not yet pinned and release merges
+  awaiting their tag. This exemption does not bypass in-flight builds, pin-bump
+  PRs, holds, CI, review, or throttle guards. `workflow_dispatch` retains its
+  explicit freshness override. Automation commits (the sidecar pin-bump itself,
+  `chore(release):` merges) remain exempt, and the original pin, tag, comparison,
+  and frontend-commit lookups still fail open — only reads of the new no-op
+  proof fail closed for the exemption. Public intentd workflow and job reads
+  use the existing token permissions; no new secret is needed.
 - Stable: dispatch `release-stable.yml` with the `version` input. The same beta-first
   guard applies: the workflow checks the current beta channel version (the `beta`
   release's `latest-mac.yml` feed on `intent-hq/cloudlands-releases`) is >= the
@@ -214,6 +230,17 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   the issue picks it up. When completeness cannot be determined (API error, token
   cannot see a repo), the notifier skips with a warning rather than post a
   possibly-false claim.
+- How to link a multi-PR fix: put `Fixes intent-hq/intent#N` on **every** PR of the fix
+  (intentd and cloudlands-fe alike). GitHub auto-closes the issue when the first PR
+  merges; that early close is expected, because the completeness gate above holds the
+  cloudlands-fe comment — the user-facing signal — until every linked fix PR is merged
+  and contained (the component-scoped intentd notifier may comment earlier, as the gate
+  bullet describes). Do not downgrade the other PRs to `Refs` / `Part of` to avoid the
+  early close: mention-only references are invisible to the gate. All-mention-only
+  linkage → no auto-close and no comment at all
+  ([intent-hq/intent#5383](https://github.com/intent-hq/intent/issues/5383)); mixed
+  linkage (one `Fixes`, one `Refs`) → the gate cannot account for the unlinked PR and
+  may post the comment before the fix has fully shipped.
 - Comments embed a hidden per-component/version marker, so tag rebuilds and workflow
   re-runs never double-post. `--dry-run` prints intended comments without posting.
 - Posting uses the `MONOREPO_ISSUES_TOKEN` secret (issues:write on
@@ -235,6 +262,194 @@ the crons (:15 pin bump, :30 cut) keep everything working at cron cadence. A
 cloudlands-fe stable promotion is followed by a website release notes PR on
 `intent-hq/intentapp.dev`, proposed for human review and outside the pipeline (see
 [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).
+
+## Prerelease retention
+
+The shared command, [`scripts/cleanup_prereleases.py`](../scripts/cleanup_prereleases.py),
+removes older GitHub **release records and their assets**, preserving Git tags.
+Each component owns `.github/workflows/cleanup-prereleases.yml` in its source
+repository and cleans its source/mirror pair. There is no monorepo cleanup schedule.
+
+### Policy and protected downloads
+
+The fixed policy keeps every versioned prerelease published within the last
+**30 days**, including the boundary, and at least the **newest 20 prereleases per
+repository**, ordered by `published_at` (release ID breaks ties). GitHub's
+`prerelease` flag determines eligibility, not a version suffix. Stable releases,
+drafts, rolling channels, `sitter-*` releases and unrecognized tags are retained.
+A version retained by the age/count policy or stable/draft metadata in either
+source or mirror protects its counterpart too.
+
+Protection also includes daemon channel manifests, frontend platform update
+feeds, the daemon pin on frontend `main`, and daemon pins referenced by **every
+extant frontend release record**, even frontend records eligible for deletion.
+Channel references protect both source and mirror. Modern frontend manifests use
+`intentdVersion`; when a release has no manifest, its source tag resolves to an
+immutable commit whose `intentd.version` is read. Historical source-built frontend
+releases are accepted only through the script's reviewed exact release/build
+commit and workflow-blob identities; legacy `intentdSha` manifests also require
+verified daemon commit metadata. A missing pin, unknown legacy identity or
+malformed manifest is not permission to ignore a dependency. Retained Git tags
+without release records are not enumerated as live dependencies.
+
+`--max-delete` defaults to **20 release deletion attempts per invocation across
+the selected pair**, not 20 versions per repository. This batch limit is separate
+from the newest-20 retention floor; deleting source and mirror records consumes
+two attempts. Preview lists all candidates regardless of this limit. Later runs
+replan from live data and work through deferred candidates. The 30-day/newest-20
+policy is not a CLI or workflow input; changing it requires a reviewed code change.
+
+### Schedules and writer exclusion
+
+| Source workflow repository | Daily UTC schedule | Deletion scope | Shared concurrency group |
+| --- | --- | --- | --- |
+| `intent-hq/cloudlands-fe` | `17 2 * * *` (02:17) | `cloudlands-fe`, `cloudlands-releases` | `cloudlands-release` |
+| `intent-hq/intentd` | `17 3 * * *` (03:17) | `intentd`, `intentd-releases` | `intentd-release-writers` |
+
+The earlier frontend run can release unused daemon pins sooner; correctness does
+not depend on schedule order or punctual execution. Both workflows run only in
+their canonical source repository on `refs/heads/main`; manual tag/feature-branch
+dispatches skip cleanup. Manual dispatch has a `mode` choice that defaults to
+`preview`. Schedules also preview until repository variable
+`PRERELEASE_CLEANUP_ENABLED` is exactly `true`, then schedules apply. Manual
+`mode=apply` is refused until that same activation variable is true.
+
+Both groups use `cancel-in-progress: false` and `queue: max`. GitHub permits up to
+100 pending jobs/runs per group and cancels overflow; monitor queue depth and
+cancelled publishers. Queue order follows arrival at the concurrency group, not
+necessarily dispatch order. See [GitHub concurrency controls](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+The lock spans inventory, protection discovery, rechecks and deletion. Daemon
+`v-release.yml` holds it from dist planning through source/mirror and alpha
+publication; `publish-channel-manifest.yml` inherits its caller's lock and must
+not reacquire it. `mirror-release.yml`, `promote-beta.yml` and
+`promote-stable.yml` hold the same group for their entire workflows. PR-only dist
+plans have separate run-specific groups. After `dist generate`, run daemon
+`python3 scripts/configure-release-concurrency.py` to restore the generated
+workflow's lock; daemon CI tests this contract. Sitter publication only writes
+excluded sitter releases and is outside this daemon-version lock.
+
+Frontend `release-alpha.yml`, `promote-beta.yml`, `release-stable.yml` and
+`release-please.yml` share the frontend group with cleanup. Including
+release-please protects source release creation as well as mirror publishing.
+There is no nested acquisition. The shared command's Actions/repository checks
+are misuse guards, not proof of lock ownership; use the component workflows for
+apply, never a stand-alone process with spoofed Actions variables.
+
+These locks are repository-local. Before each daemon deletion the command
+rereads frontend release inventories and the current main pin; changed inventory
+stops the batch. Preserving all extant frontend dependencies also covers their
+concurrent promotions. **Arbitrary future frontend repins or builds targeting an
+old daemon are outside the guarantee**, including a new cross-repository pin
+change after the last recheck. There is no cross-repository transaction. Coordinate
+such repins with cleanup and verify the required assets still exist first.
+
+### Credentials
+
+Set a dedicated `PRERELEASE_CLEANUP_TOKEN` secret in each component repository.
+Both wrappers use it for authenticated `gh` reads/deletes and the pinned
+`intent-hq/intent` checkout, with `persist-credentials: false` and no submodule
+checkout. There is no fallback to `GITHUB_TOKEN`. Required **effective** access:
+
+| Component credential | Contents read/write | Contents read |
+| --- | --- | --- |
+| Daemon cleanup | `intent-hq/intentd`, `intent-hq/intentd-releases` | `intent-hq/cloudlands-fe`, `intent-hq/cloudlands-releases`, `intent-hq/intent` |
+| Frontend cleanup | `intent-hq/cloudlands-fe`, `intent-hq/cloudlands-releases` | `intent-hq/intentd`, `intent-hq/intentd-releases`, `intent-hq/intent` |
+
+Each invocation reads protection data from all four release repositories even
+when it only deletes from one pair. Read access includes releases/assets, Git
+tags/commits, workflow file contents used for historical provenance, and frontend
+pins. Metadata read is implicit; no Actions, Issues, Pull requests or Workflows
+write permission is needed. Missing credentials visibly fail the workflow;
+denied/incomplete reads stop the script without a destructive plan.
+
+A fine-grained PAT has **one repository permission set for all selected
+repositories**; it cannot assign Contents write to two selected repositories and
+Contents read to the other three. Use a dedicated identity whose underlying
+repository grants limit write access to its component pair and permit reads on
+the other repositories; the token cannot exceed that identity's grants. Selecting
+all five repositories with Contents write on an identity that can write all five
+grants broader access than this table requires. Do not describe that token as
+read-only on the other three, or grant monorepo/opposite-component writes merely
+to enable cleanup. Repository selection, identity grants, expiration and any
+organization approval must be reviewed together. See [GitHub token permissions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+and [REST permission requirements](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens).
+
+### Deployment and activation
+
+1. Obtain human permission and merge the monorepo script/tests/docs PR first.
+2. Replace the temporary validation SHA in **both** component cleanup wrappers
+   with the final merged monorepo commit SHA. Rerun checks and review that affected
+   delta. Obtain separate human authorization for each component PR merge; do not
+   deploy a dependency on an unmerged monorepo branch commit. Normal automation
+   advances monorepo submodule pins afterward.
+3. Merge all component writer-lock changes while activation remains unset. Drain
+   every running or queued publisher, mirror, promotion and cleanup run using
+   older workflow definitions. Old-tag runs and reruns retain old definitions:
+   **do not rerun pre-lock revisions after activation**. Frontend old-tag rebuilds
+   can dispatch `release-alpha.yml` from `main` with its `tag` input. Any other old
+   revision requires an explicitly coordinated maintenance window with cleanup
+   disabled and drained; retaining the Git tag alone does not make a rerun safe.
+4. Provision the reviewed credentials, dispatch a preview on `main` for each
+   component, and inspect its audit and permission failures before enabling
+   deletion. For example:
+
+   ```bash
+   gh workflow run cleanup-prereleases.yml --repo intent-hq/cloudlands-fe --ref main -f mode=preview
+   gh workflow run cleanup-prereleases.yml --repo intent-hq/intentd --ref main -f mode=preview
+   ```
+
+5. Only after the old writers drain and an operator approves the preview, set
+   `PRERELEASE_CLEANUP_ENABLED=true` separately in each source repository. Subsequent
+   schedules apply; explicit manual `mode=apply` is now permitted on `main` under
+   the same lock. Monitor initial batches and queued publishers.
+
+### Audit, API cost and recovery
+
+For read-only local inspection, use `python3 -S -B scripts/cleanup_prereleases.py`
+(all four repositories) or add `--component intentd` / `--component cloudlands-fe`.
+Python 3.11+ and authenticated `gh` are sufficient. `--component all --apply` is
+rejected. CI and `make test-scripts` run offline unit and mocked functional tests;
+they do not need cleanup credentials or contact live release APIs.
+
+Daemon runs upload `cleanup-report.json` as
+`intentd-prerelease-cleanup-<run_id>-<run_attempt>`; frontend runs upload
+`cleanup-audit.json` as `prerelease-cleanup-<run_id>-<run_attempt>`. Both artifact
+retentions are 30 days. Control/checkout failures can occur before an audit file
+exists; inspect the failed step logs in that case. JSON `releases` rows identify
+repository, release ID, tag, planned action and retention reasons. `action=delete`
+is a candidate, not evidence of deletion. Apply adds `outcomes`: `deleted`,
+`already-removed` (confirmed absent), `retained-on-recheck`, or `failed`, plus the
+number `deferred`. `source_built_frontend` lists validated historical exceptions.
+Exit 0 and `ok=true` mean that invocation succeeded, not that every candidate was
+deleted; exit 1 indicates a failed read or partial apply, and exit 2 invalid CLI
+use. Apply also flushes per-attempt JSON to stderr, including `deleting` before
+the request. If interrupted, consult these logs: a pending/uncertain request is
+not proof of either success or failure, and prior deletions are not rolled back.
+
+Reads paginate completely and fail closed on malformed data or errors. A GET or
+DELETE 404 counts as absence only after a successful authorized inventory proves
+the release ID absent. API failures, including rate limits, stop without retry;
+recheck credentials/quota and rerun later to replan. There is no automatic quota
+reservation or wait-for-reset loop. Preview itself can consume substantial quota:
+the offline 1,600-record fixture uses 1,122 `gh` requests for planning plus a
+20-attempt daemon apply batch (400 manifest reads; test ceiling 1,150 requests).
+This is a regression budget for that fixture, not a production upper bound.
+Immutable pin/asset caching reduces repeated reads, but rolling assets and
+frontend inventories are refreshed. Avoid overlapping full previews on the same
+credential; inspect `gh api rate_limit` and wait for reset after exhaustion.
+
+Clear or set `PRERELEASE_CLEANUP_ENABLED=false` to return future schedules to
+preview and reject future manual applies; disabling the cleanup workflow stops
+future scheduled runs. These controls do not stop a job that already selected
+apply. Inspect running and queued cleanup runs and cancel/drain them if needed
+before maintenance or reverting writer locks. Cancelling can leave a partial
+batch; use the audit and a new preview to reconcile it. Never remove exclusion
+while cleanup can still run. Reverting code, disabling cleanup or keeping Git
+tags **cannot restore deleted binaries or release records**. Recovery requires
+separately republishing known artifacts or rebuilding through a coordinated
+workflow, and release IDs/metadata may differ. Old direct asset URLs and future
+promotions of deleted prereleases are not preserved by this retention policy.
 
 ## Gotchas
 

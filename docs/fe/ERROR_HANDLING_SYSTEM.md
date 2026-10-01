@@ -138,12 +138,17 @@ The system automatically categorizes errors:
 
 ## Suppressed Errors
 
-The following errors are automatically suppressed to reduce noise:
+The following errors are automatically suppressed to reduce noise. The list is owned by
+`classifyBenignError()` in `src/lib/utils/benign-error-classification.ts`; both the global
+`ErrorHandler` and the layout `ErrorBoundary` classify through it, so a rule added there is
+honoured by every listener (intent-hq/intent#5241 reappeared while the two kept separate lists):
 
 1. **ResizeObserver**: "ResizeObserver loop completed with undelivered notifications"
-2. **Svelte Effects**: `effect_update_depth_exceeded` / `svelte.dev/e/effect_update_depth_exceeded`
-3. **Monaco Editor**: disposal, cancellation, and related unhandled rejection noise handled by `shouldSuppressMonacoUnhandledRejection()`
-4. **bits-ui cleanup**: component-unmount cleanup errors such as `.current is not a function` and minified `*.call is not a function` variants
+2. **Svelte Effects**: `effect_update_depth_exceeded` / `svelte.dev/e/effect_update_depth_exceeded` / "Maximum update depth exceeded"
+3. **Monaco Editor**: disposal, cancellation (`Canceled`), `isInHiddenArea`, `inmemory://` TS worker lookups, and related unhandled rejection noise handled by `shouldSuppressMonacoUnhandledRejection()`
+4. **Electron webview stale guest**: `Invalid guestInstanceId: <n>` thrown when a `<webview>` whose guest already closed is removed (`isStaleWebviewGuestError()`)
+5. **bits-ui cleanup**: component-unmount cleanup errors such as `.current is not a function` and minified `*.call is not a function` variants
+6. **Svelte transition reset**: "Cannot read properties of undefined (reading 'reset')" with a `transitions` stack frame, from `{#each}` reconciliation racing an in-flight crossfade
 
 ## Enhanced Context
 

@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.30 `models.list` — model catalog · §5.38 Provider catalog — `providers.catalog`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.30 `models.list` — model catalog
 
 The BE-owned model catalog every FE model picker reads (ModelPicker, background-agent settings,
@@ -8,7 +10,7 @@ workspace initializers, onboarding). It is the **richer, additive sibling** of `
 
 | Method | Params | Result |
 | --- | --- | --- |
-| models.list | providerId?, forceRefresh?: boolean (default false) — no `workspaceId` | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
+| models.list | providerId?, forceRefresh?: boolean (default false), workspaceId? | without `providerId`: { models: ModelInfo[], source: "auggie" \| "static", stale?, warning? }; with `providerId`: { providerId, models: ModelInfo[], source, stale?, warning? } |
 
 **ModelInfo** — `{ id, name, provider, description?, modelGroupPriority?: number, costTier?: number, badges?: [{ color, label, variant? }], effortLevels?: string[], isDefault?: boolean, priority?: number, isLegacyModel?: boolean }`.
 `id` is the bare model id (`shortName`/`value`), `name` the display label
@@ -104,9 +106,9 @@ Errors: `-32603` only on internal failure; probe/CLI failures degrade as describ
 
 ### 5.38 Provider catalog — `providers.catalog` *(v2.6; wire shape changed by [intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922); `supportsTestPrompt` added in v9.3 by [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))*
 
-The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global**: no params and no `workspaceId` (like `system.capabilities`), available on both UDS and WSS. The data is **compiled into the daemon** — there is no cache or TTL; the result only changes when the daemon binary does.
+The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` table) served over the wire (monorepo#928), so clients no longer need a local copy of the provider config. **Daemon-global result**, available on both UDS and WSS. Optional `workspaceId` is prepared routing context only, like `system.capabilities`; it does not filter the registry. The registry is **compiled into the daemon**, with visibility evaluated against the daemon process environment; there is no cache or TTL.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -115,10 +117,12 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
   "providers": [
     {
       "id": "auggie",
+      "legacyAliases": ["default", "acp", "augment"], // optional — authoritative historical identities
       "displayName": "Augment Auggie",
       "shortName": "Auggie",
       "command": "auggie",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "loginCommandHint": "auggie login",           // optional
       "loginDocsUrl": "https://docs.augmentcode.com/cli/overview",  // optional
       "authErrorPatterns": ["authentication required", "auggie login", "please run `auggie login`"],  // optional
@@ -131,7 +135,18 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Claude Code",
       "command": "claude-agent-acp",
       "canBeDisabled": true,
+      "supportsFastMode": true,                    // additive; absent means unsupported
       "loginDocsUrl": "https://code.claude.com/docs/en/quickstart#step-2-log-in-to-your-account",  // optional
+      "visible": true,
+      "supportsTestPrompt": true
+    },
+    {
+      "id": "codex",
+      "displayName": "OpenAI Codex",
+      "shortName": "Codex",
+      "command": "codex-acp",
+      "canBeDisabled": true,
+      "supportsFastMode": true,
       "visible": true,
       "supportsTestPrompt": true
     },
@@ -141,6 +156,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Cortex",
       "command": "cortex-acp",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "requiresEnvVar": "INTENTD_ENABLE_CORTEX",    // optional — raw gating field passed through
       "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
       "supportsTestPrompt": true
@@ -154,6 +170,7 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
       "shortName": "Mock",
       "command": "node",
       "canBeDisabled": true,
+      "supportsFastMode": false,
       "requiresEnvVar": "MOCK_AGENT_SCRIPT_PATH",   // optional — raw gating field passed through
       "visible": false,                             // daemon-evaluated: env var absent in the daemon environment
       "supportsTestPrompt": true
@@ -163,10 +180,21 @@ The static provider registry (the `intent-providers` crate's `ACP_PROVIDERS` tab
 ```
 
 - `providers` carries **all** registered providers — gated-off rows included — one row per registry entry, in **registry order**. The order is informational, not a contract: clients must key rows by `id`, never by array position.
+- `legacyAliases?: string[]` advertises historical provider identities that resolve to the row's canonical `id`. It is derived from the daemon's recognized-alias resolver, not its separate fallback for arbitrary unknown IDs. Resolve an exact registered `id` first, then an exact, case-sensitive advertised alias. No case folding, trimming, fuzzy matching, or settings/default/order inference applies. Currently `default`, `acp`, and `augment` resolve to `auggie`; clients consume the advertised mapping rather than hardcoding that target. Empty strings and absent identity are not aliases.
+- Alias metadata describes **identity**, independently of the configured default, enablement, installation, authentication, visibility, or model availability. It does not select a default or make a provider usable. Selection flags and provider capabilities retain their existing meanings.
+- **Additive compatibility:** `legacyAliases` is omitted when a row has no aliases, never `null`. Older daemons omit it entirely; a catalog that has not loaded supplies no alias authority either. Without an advertised match, preserve the raw unresolved identity and avoid alias-dependent writes until authoritative metadata is available. Canonical IDs and explicit canonical user choices remain usable. An omitted field must not be replaced by a settings-derived or positional guess. Existing clients accept the optional field and keep their existing behavior; corrected alias handling requires a client that consumes it and a daemon that supplies it. This addition uses the existing RPC and [field-presence compatibility policy](../versioning.md#compatibility-policy), with no protocol-version bump or session migration.
 - `command` is the registry's **logical CLI name** (the `ACP_PROVIDERS` `command` field, e.g. `claude-agent-acp` for `claude-code`) — provider metadata, **not** necessarily the binary the daemon spawns. Launch resolution belongs to `host.providerDiscovery` (§5.14), whose `command` reports what the daemon actually resolves and launches — so the two can differ: an npx-only provider like `claude-code` launches via `npx <npxPackage>` and reports `command: "npx"` there. Clients must not assume the values match across the two methods.
 - `visible` is the **daemon-evaluated** gating verdict: `requiresEnvVar` is checked for **presence** against the **daemon's** process environment (an empty-string value counts as set), and a configured `requiresFeatureCode` **always** gates the row off (**default-deny** — the daemon stores no feature-code enablement; no registered provider currently carries one, but the mechanism remains for future providers). `cortex` and `droid` carry `requiresEnvVar` (`INTENTD_ENABLE_CORTEX` / `INTENTD_ENABLE_DROID`) and are hidden by default — not yet well-tested; setting the env var in the daemon's environment restores the provider. The raw gating fields pass through when set, so clients can either trust the verdict or re-derive it. This is the single env-var/feature-code gate shared with `host.providerDiscovery`'s `gatedOff` (§5.14).
-- The optional fields (`loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
+- The optional fields (`legacyAliases`, `loginCommandHint`, `loginDocsUrl`, `authErrorPatterns`, `requiresEnvVar`, `requiresFeatureCode`) are **omitted when unset, never null** — clients detect by presence.
 - `supportsTestPrompt` *(v9.3; [intent-hq/intentd#1657](https://github.com/intent-hq/intentd/pull/1657))* is **always present**: whether the provider can be exercised by the live `host.providerTestPrompt` probe (§5.14). `false` for `unsloth`, whose first prompt can trigger a long model download, and `antigravity`, which requires a private guarded profile. For these providers, the RPC returns `unsupported` without resolution or spawn.
+- `supportsFastMode` is an additive boolean: whether this daemon can apply the
+  provider's `providers.fastMode` preference (§5.12). Implementing daemons emit it
+  on every row: `true` for `claude-code` and `codex`, `false` for other providers.
+  Older daemons omit it; clients treat omission as `false` and also require the
+  setting to be present in `settings.list` before offering the toggle. This is an
+  integration capability, not current account/model eligibility or confirmation
+  that a running session uses Fast mode. Model selection and provider availability
+  keep their existing meanings.
 - **No default designation, no model metadata ([intent-hq/intentd#922](https://github.com/intent-hq/intentd/pull/922)).** Rows carry no `isDefault` flag, the payload carries no top-level `defaultProviderId`, and the former per-row `modelTiers` (`{ fast, balanced, smart }` tier→model-id map) is gone — the static tier tables were removed with the model-tier concept. Model discovery is fully dynamic via `models.list` (§5.30). Clients derive the **effective default provider** from settings: `model.defaultProvider` when it names a registered provider (§5.12; [intent-hq/intentd#1648](https://github.com/intent-hq/intentd/pull/1648)), else it is unset — there is no positional fallback to the first registered provider ([intent-hq/monorepo#3044](https://github.com/intent-hq/monorepo/issues/3044)) — the same derivation the daemon applies (§5.5 "Creation-time default-model resolution").
 
 Antigravity is an opt-in catalog entry: `id: "antigravity"`, `command: "antigravity-acp"`, and `canBeDisabled: true`. Discovery does not enable it or change the active provider. Initial verification covers macOS Apple Silicon with personal Google OAuth. Other platforms and authentication methods are not certified by this integration.

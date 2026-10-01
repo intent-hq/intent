@@ -6,9 +6,25 @@
 # cloned). If any pin differs, the remote tip wins (pins track main): the
 # auto/submodule-bump branch is force-updated with the new gitlink(s), pushed,
 # and a PR is created or updated with auto-merge (squash) enabled.
+# A queued PR is left untouched; a main gitlink push resumes pending tips
+# after it merges, with the scheduled workflow as a backstop.
+#
+# When packages/intentd moves, the bump also regenerates the generated
+# docs/protocol/methods/mcp-bindings.md index from the ws.* help text in
+# tools.rs at the new tip (a single-blob partial fetch, no clone), so the bump
+# tree already passes check-mcp-bindings. The index is only touched when it
+# differs from HEAD's, and any failure along the way is a warning: the
+# gitlink-only bump still lands.
 #
 # packages/ios is best-effort: if its remote tip cannot be read (private repo,
 # no token access), it is skipped with a warning and never fails the run.
+#
+# When every pin was read and none is behind but an auto/submodule-bump PR is
+# still open (main already carries its pins, e.g. a labeled pin PR landed the
+# same SHA), the stale PR is closed with a comment and its branch deleted, so
+# it never sits open and red. A missing gh or a failed close only warns. If
+# any pin read was skipped (unreadable ios tip, missing gitlink), the PR may
+# still carry an unlanded pin for it, so it is left untouched.
 #
 # Usage: auto-bump-submodules.sh [--dry-run]
 #   --dry-run  Report which pins are behind; never writes, pushes, or
@@ -16,6 +32,9 @@
 set -euo pipefail
 
 BRANCH="auto/submodule-bump"
+INTENTD_PATH="packages/intentd"
+TOOLS_RS="crates/intent-acp/src/mcp_server/tools.rs"
+INDEX_PATH="docs/protocol/methods/mcp-bindings.md"
 DRY_RUN=0
 for arg in "$@"; do
   case "$arg" in
@@ -31,12 +50,15 @@ fi
 
 warn() { echo "warning: $*" >&2; }
 
-# Collect drifted submodules (parallel arrays).
+# Collect drifted submodules (parallel arrays) and the paths whose pin could
+# not be compared.
 paths=()
 names=()
 olds=()
 news=()
 repos=()
+urls=()
+skipped=()
 while read -r key path; do
   name=${key#submodule.}
   name=${name%.path}
@@ -46,12 +68,14 @@ while read -r key path; do
 
   if ! old=$(git rev-parse --verify --quiet "HEAD:$path"); then
     warn "$path: no gitlink recorded in HEAD; skipping"
+    skipped+=("$path")
     continue
   fi
 
   if ! tip_line=$(git ls-remote "$url" "refs/heads/$branch") || [ -z "$tip_line" ]; then
     if [ "$path" = "packages/ios" ]; then
       warn "$path: cannot read remote tip (no token access?); skipping"
+      skipped+=("$path")
       continue
     fi
     echo "error: $path: git ls-remote $url refs/heads/$branch failed" >&2
@@ -72,10 +96,72 @@ while read -r key path; do
   olds+=("$old")
   news+=("$new")
   repos+=("$repo")
+  urls+=("$url")
 done < <(git config -f .gitmodules --get-regexp '^submodule\..*\.path$')
+
+# Only an open, unqueued PR can be mutated. Re-read by number so a stale
+# list response cannot make us edit a merged PR or recreate its branch.
+# Deferral ends the run successfully; an unreadable state returns failure
+# (stale cleanup handles that fail-soft, while a bump must fail closed).
+guard_pr() {
+  local pr=$1 status
+  if ! status=$(gh api graphql \
+    -f query='query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) { state isInMergeQueue }
+      }
+    }' -F owner='{owner}' -F name='{repo}' -F number="$pr" \
+    --jq '.data.repository.pullRequest | [.state, .isInMergeQueue] | @tsv'); then
+    warn "could not read PR #$pr queue state; leaving it untouched"
+    return 1
+  fi
+  case "$status" in
+    $'OPEN\tfalse') return 0 ;;
+    $'OPEN\ttrue')
+      echo "Deferred: PR #$pr is in the merge queue; leaving its branch and metadata untouched."
+      ;;
+    $'MERGED\tfalse'|$'CLOSED\tfalse')
+      echo "Deferred: PR #$pr is no longer open; the next run will recompute pins from current main."
+      ;;
+    *) warn "unexpected queue state for PR #$pr: $status; leaving it untouched"; return 1 ;;
+  esac
+  exit 0
+}
+
+# Close a rolling PR left open once main already carries its pins; every
+# failure only warns so a missing or failing gh never fails the run.
+close_stale_pr() {
+  local pr
+  if ! command -v gh >/dev/null 2>&1; then
+    warn "gh not found; cannot check for a stale $BRANCH PR"
+    return 0
+  fi
+  if ! pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty'); then
+    warn "could not list open $BRANCH PRs; leaving any stale PR open"
+    return 0
+  fi
+  if [ -z "$pr" ]; then
+    return 0
+  fi
+  guard_pr "$pr" || return 0
+  if gh pr close "$pr" --delete-branch --comment "Closing: \`main\` already carries these submodule pins, so this rolling bump PR is stale. The next pin drift opens a fresh one."; then
+    echo "Closed stale PR #$pr (main already carries its pins) and deleted $BRANCH."
+  else
+    warn "could not close stale PR #$pr; leaving it open"
+  fi
+}
 
 if [ ${#paths[@]} -eq 0 ]; then
   echo "All submodule pins match their remote tips; nothing to do."
+  if [ "$DRY_RUN" = 1 ]; then
+    echo "dry-run: skipping the stale $BRANCH PR check (requires gh)."
+    exit 0
+  fi
+  if [ ${#skipped[@]} -gt 0 ]; then
+    echo "Skipped ${skipped[*]}: an open $BRANCH PR may still carry its pin, so it cannot be proven stale; leaving it untouched."
+    exit 0
+  fi
+  close_stale_pr
   exit 0
 fi
 
@@ -83,6 +169,10 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "dry-run: would bump ${#paths[@]} submodule pin(s) via branch $BRANCH"
   exit 0
 fi
+
+# Do this before constructing a bump, including the identical-tree path.
+pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+if [ -n "$pr" ]; then guard_pr "$pr"; fi
 
 # "intentd" / "intentd and cloudlands-fe" / "intentd, cloudlands-fe and ios"
 join_names() {
@@ -109,28 +199,131 @@ export GIT_COMMITTER_EMAIL=${GIT_COMMITTER_EMAIL:-$GIT_AUTHOR_EMAIL}
 
 tmp_index=$(mktemp)
 pr_body_file=$(mktemp)
-trap 'rm -f "$tmp_index" "$pr_body_file"' EXIT
+tmp_work=$(mktemp -d)
+trap 'rm -f "$tmp_index" "$pr_body_file"; rm -rf "$tmp_work"' EXIT
+
+# Run git in another repository with the http credentials actions/checkout
+# persisted for this checkout (the SUBMODULE_BUMP_TOKEN extraheader; newer
+# checkout versions reach it through an includeIf, hence --includes), passed
+# through the environment rather than argv.
+git_with_http_config() (
+  n=0
+  while read -r key value; do
+    export "GIT_CONFIG_KEY_$n=$key" "GIT_CONFIG_VALUE_$n=$value"
+    n=$((n + 1))
+  done < <(git config --includes --get-regexp '^http\..*\.extraheader$' || true)
+  GIT_CONFIG_COUNT=$n exec git "$@"
+)
+
+# Regenerate the mcp-bindings index against tools.rs at the new intentd tip.
+# Sets index_blob to the regenerated index's blob id when it differs from
+# HEAD's; every failure only warns and leaves index_blob empty.
+index_blob=""
+regenerate_bindings_index() {
+  local url=$1 sha=$2 repo=$tmp_work/intentd.git root=$tmp_work/root new_blob head_blob
+  if ! command -v node >/dev/null 2>&1; then
+    warn "node not found; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  mkdir -p "$root/${INTENTD_PATH}/${TOOLS_RS%/*}"
+  # Partial fetch of one commit (trees only), then a lazy fetch of the single blob.
+  if ! { git init --quiet --bare "$repo" &&
+         git -C "$repo" remote add origin "$url" &&
+         git_with_http_config -C "$repo" fetch --quiet --depth=1 --filter=blob:none origin "$sha" &&
+         git_with_http_config -C "$repo" cat-file blob "$sha:$TOOLS_RS" > "$root/$INTENTD_PATH/$TOOLS_RS"; }; then
+    warn "$INTENTD_PATH: could not fetch $TOOLS_RS at ${sha:0:7}; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  if ! git archive "$head" docs/protocol | tar -x -C "$root"; then
+    warn "could not extract docs/protocol from HEAD; $INDEX_PATH not regenerated"
+    return 0
+  fi
+  # A non-zero exit here is normally prose drift in docs/protocol, reported
+  # after the index was already written; the written index is still used.
+  if ! node scripts/check-mcp-bindings.mjs --write "$root"; then
+    warn "check-mcp-bindings exited non-zero against intentd ${sha:0:7}; using whatever index it wrote"
+  fi
+  if [ ! -f "$root/$INDEX_PATH" ]; then
+    warn "check-mcp-bindings did not write $INDEX_PATH; not regenerated"
+    return 0
+  fi
+  if ! new_blob=$(git hash-object -w "$root/$INDEX_PATH") || [ -z "$new_blob" ]; then
+    warn "could not store the regenerated $INDEX_PATH as a blob; not regenerated"
+    return 0
+  fi
+  head_blob=$(git rev-parse --verify --quiet "$head:$INDEX_PATH" || true)
+  if [ "$new_blob" = "$head_blob" ]; then
+    echo "$INDEX_PATH: unchanged by intentd ${sha:0:7}"
+  else
+    index_blob=$new_blob
+    echo "$INDEX_PATH: regenerated for intentd ${sha:0:7}"
+  fi
+}
 
 # Build the bumped tree in a temporary index; the worktree is never touched.
 head=$(git rev-parse HEAD)
 GIT_INDEX_FILE=$tmp_index git read-tree "$head"
 for i in "${!paths[@]}"; do
   GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "160000,${news[i]},${paths[i]}"
+  if [ "${paths[i]}" = "$INTENTD_PATH" ]; then
+    regenerate_bindings_index "${urls[i]}" "${news[i]}" || warn "$INDEX_PATH regeneration failed; continuing with the gitlink-only bump"
+  fi
 done
+if [ -n "$index_blob" ]; then
+  if GIT_INDEX_FILE=$tmp_index git update-index --cacheinfo "100644,$index_blob,$INDEX_PATH"; then
+    commit_body+=$'\n'"$INDEX_PATH: regenerated from the new intentd ws.* help text"$'\n'
+  else
+    warn "could not add the regenerated $INDEX_PATH to the bump tree; continuing with the gitlink-only bump"
+    index_blob=""
+  fi
+fi
 tree=$(GIT_INDEX_FILE=$tmp_index git write-tree)
 
 # Skip the push when the remote branch already carries this exact tree, so
 # repeated runs don't churn the PR (and its CI) with identical commits.
 push_needed=1
+remote_head=""
 if git fetch --quiet origin "refs/heads/$BRANCH" 2>/dev/null; then
+  remote_head=$(git rev-parse FETCH_HEAD)
   if [ "$(git rev-parse --verify --quiet 'FETCH_HEAD^{tree}' || true)" = "$tree" ]; then
     push_needed=0
     echo "Branch $BRANCH already has the desired pins; skipping push."
   fi
 fi
+
+# A merge can finish during tree construction or an open-PR lookup. Do not
+# publish a tree based on the old main, even if the PR disappeared from list.
+if [ -n "$pr" ]; then guard_pr "$pr"; fi
+main_tip=$(git ls-remote origin refs/heads/main)
+if [ -z "$main_tip" ]; then
+  echo "error: cannot read current main; leaving $BRANCH untouched" >&2
+  exit 1
+fi
+if [ "${main_tip%%[[:space:]]*}" != "$head" ]; then
+  echo "Deferred: main advanced during this run; the next run will recompute pins from current main."
+  exit 0
+fi
+
 if [ "$push_needed" = 1 ]; then
   commit=$(git commit-tree "$tree" -p "$head" -m "$title" -m "$commit_body")
-  git push --force origin "$commit:refs/heads/$BRANCH"
+  # The lease also prevents resurrecting a branch deleted by a merge after
+  # our last lookup. GitHub protects a PR enqueued after that lookup too.
+  if push_output=$(git push --force-with-lease="refs/heads/$BRANCH:$remote_head" origin "$commit:refs/heads/$BRANCH" 2>&1); then
+    printf '%s\n' "$push_output"
+  else
+    push_status=$?
+    printf '%s\n' "$push_output" >&2
+    # Match the complete observed server diagnostic, ignoring only wrapping
+    # and transport padding. Other GH006 reasons (even alongside this one)
+    # and authentication/transport failures must keep their nonzero status.
+    remote_error=$(sed -n 's/^remote: *//p' <<<"$push_output" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/ $//')
+    queue_error="error: GH006: Protected branch update failed for refs/heads/$BRANCH. - A pull request for this branch has been added to a merge queue. Branches that are queued for merging cannot be updated. To modify this branch, dequeue the associated pull request."
+    if [ "$remote_error" = "$queue_error" ]; then
+      echo "Deferred: GitHub enqueued the rolling PR before the push; pending tips will resume after its merge."
+      exit 0
+    fi
+    exit "$push_status"
+  fi
   echo "Pushed $commit to $BRANCH."
 fi
 
@@ -143,10 +336,19 @@ fi
     compare="https://github.com/${repos[i]}/compare/${olds[i]}...${news[i]}"
     echo "| ${paths[i]} | ${olds[i]:0:7} | ${news[i]:0:7} | [${olds[i]:0:7}...${news[i]:0:7}]($compare) |"
   done
+  if [ -n "$index_blob" ]; then
+    echo
+    echo "Also regenerates \`$INDEX_PATH\` from the new intentd \`ws.*\` help text (\`node scripts/check-mcp-bindings.mjs --write\`), so \`check-mcp-bindings\` passes on this tree."
+  fi
 } > "$pr_body_file"
 
-pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+# Retain a previously observed PR number: if it merged in the meantime, its
+# disappearance from the open list must not cause us to create a second PR.
+if [ -z "$pr" ]; then
+  pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+fi
 if [ -n "$pr" ]; then
+  guard_pr "$pr"
   gh pr edit "$pr" --title "$title" --body-file "$pr_body_file"
   echo "Updated existing PR #$pr."
 else
@@ -155,10 +357,12 @@ else
   echo "Created PR #$pr."
 fi
 
+guard_pr "$pr"
 # Enabling auto-merge fails when the PR is already in clean status ("Pull
 # request is in clean status"); fall back to a direct squash merge so the PR
 # doesn't sit open unmerged. Only if both fail do we warn and leave it open.
 if ! gh pr merge "$pr" --auto --squash; then
+  guard_pr "$pr"
   warn "could not enable auto-merge on PR #$pr; attempting direct merge"
   if ! gh pr merge "$pr" --squash; then
     warn "could not merge PR #$pr; leaving it open"

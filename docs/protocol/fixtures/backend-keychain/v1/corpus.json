@@ -1,0 +1,1845 @@
+{
+  "fixtureFormatVersion": 1,
+  "payloadVersion": 1,
+  "service": "com.cloudlands.intent.backends",
+  "tombstoneTtlMs": 2592000000,
+  "parseCases": [
+    {
+      "id": "live-lan",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "tunnel-only",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"tcMiXeD_Case-Address\",\"hosts\":[],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "tcMiXeD_Case-Address",
+          "hosts": [],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "tcMiXeD_Case-Address",
+          "hosts": [],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "route-absent",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-null",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":null,\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-empty",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-whitespace",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\" \\t\\n \",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-number",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":42,\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-boolean",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":true,\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-object",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":{\"address\":\"tcOther\"},\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-array",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":[\"tcOther\"],\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": null,
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": null
+        }
+      }
+    },
+    {
+      "id": "route-padded",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\" \\ttcMiXeD_Case-Address\\n \",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": " \ttcMiXeD_Case-Address\n ",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "route-case-distinct",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMIXED_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMIXED_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMIXED_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "legacy-defaults",
+      "payload": "{\"v\":1,\"label\":\"Legacy\",\"host\":\" Legacy.LOCAL \",\"port\":8843,\"fingerprint\":\"\",\"updatedAt\":0}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Legacy",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": " Legacy.LOCAL ",
+          "hosts": [
+            " Legacy.LOCAL "
+          ],
+          "port": 8843,
+          "fingerprint": "",
+          "hostname": null,
+          "tcAddress": null,
+          "detectHosts": true,
+          "token": "",
+          "updatedAt": 0
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Legacy",
+          "host": " Legacy.LOCAL ",
+          "hosts": [
+            " Legacy.LOCAL "
+          ],
+          "port": 8843,
+          "fingerprint": "",
+          "hostname": null,
+          "tcAddress": null,
+          "detectHosts": true,
+          "token": "",
+          "updatedAt": 0,
+          "deleted": false,
+          "deletedAt": null
+        }
+      }
+    },
+    {
+      "id": "optional-type-defaults",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",7],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":7,\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":1,\"token\":false,\"updatedAt\":1000,\"deleted\":1,\"deletedAt\":900}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": null,
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": true,
+          "token": "",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": null,
+          "detectHosts": true,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "older-numeric-version",
+      "payload": "{\"v\":0,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "malformed-json",
+      "payload": "{",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "array-root",
+      "payload": "[]",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "null-root",
+      "payload": "null",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "v-absent",
+      "payload": "{\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "v-null",
+      "payload": "{\"v\":null,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "v-wrong-type",
+      "payload": "{\"v\":true,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "label-absent",
+      "payload": "{\"v\":1,\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "label-null",
+      "payload": "{\"v\":1,\"label\":null,\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "label-wrong-type",
+      "payload": "{\"v\":1,\"label\":42,\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "host-absent",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "host-null",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":null,\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "host-wrong-type",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":42,\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "port-absent",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "port-null",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":null,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "port-wrong-type",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":true,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "fingerprint-absent",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "fingerprint-null",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":null,\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "fingerprint-wrong-type",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":42,\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "updatedAt-absent",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\"}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "updatedAt-null",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":null}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "updatedAt-wrong-type",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":true}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "host-blank",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\" \\t\\n \",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "port-string",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":\"8843\",\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "port-fractional",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843.5,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843.5,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "invalid"
+      }
+    },
+    {
+      "id": "future-version",
+      "payload": "{\"v\":2,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000}",
+      "desktop": {
+        "kind": "newer-version"
+      },
+      "ios": {
+        "kind": "newer-version"
+      }
+    },
+    {
+      "id": "future-fractional-version",
+      "payload": "{\"v\":1.5}",
+      "desktop": {
+        "kind": "newer-version"
+      },
+      "ios": {
+        "kind": "newer-version"
+      }
+    },
+    {
+      "id": "unknown-metadata",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000,\"accent\":\"violet\",\"detectedDeviceKind\":\"laptop\",\"deviceIcon\":\"auto\",\"futureMetadata\":{\"nested\":[\"KeepCase\",7],\"enabled\":true}}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "violet",
+          "detectedDeviceKind": "laptop",
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "accent-invalid",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000,\"accent\":42}",
+      "desktop": {
+        "kind": "invalid"
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "fixture-token-not-a-secret",
+          "updatedAt": 1000,
+          "deleted": false,
+          "deletedAt": null,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "removal-explicit",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000,\"deleted\":true,\"deletedAt\":2000}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 2000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 2000,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "removal-fallback",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000,\"deleted\":true}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 1000,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    },
+    {
+      "id": "removal-invalid-clock",
+      "payload": "{\"v\":1,\"label\":\"Studio Mac\",\"host\":\"Mac.Local\",\"hosts\":[\"Mac.Local\",\"10.0.0.8\"],\"port\":8843,\"fingerprint\":\" aa:BB \",\"hostname\":\"studio\",\"tcAddress\":\"tcMiXeD_Case-Address\",\"detectHosts\":false,\"token\":\"fixture-token-not-a-secret\",\"updatedAt\":1000,\"deleted\":true,\"deletedAt\":true}",
+      "desktop": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "accent": "blue",
+          "detectedDeviceKind": null,
+          "deviceIcon": "auto",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "tcAddress": "tcMiXeD_Case-Address",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 1000
+        }
+      },
+      "ios": {
+        "kind": "record",
+        "record": {
+          "label": "Studio Mac",
+          "host": "Mac.Local",
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.8"
+          ],
+          "port": 8843,
+          "fingerprint": " aa:BB ",
+          "hostname": "studio",
+          "detectHosts": false,
+          "token": "",
+          "updatedAt": 1000,
+          "deleted": true,
+          "deletedAt": 1000,
+          "tcAddress": "tcMiXeD_Case-Address"
+        }
+      }
+    }
+  ],
+  "identityCases": [
+    {
+      "id": "fingerprint-normalized",
+      "host": " Mac.LOCAL \n",
+      "port": 8843,
+      "fingerprint": " aa:BB \n",
+      "accountKey": "mac.local:8843",
+      "registryKey": "fp:AA:BB"
+    },
+    {
+      "id": "legacy-address",
+      "host": " Legacy.LOCAL ",
+      "port": 8843,
+      "fingerprint": " \t ",
+      "accountKey": "legacy.local:8843",
+      "registryKey": "addr:legacy.local:8843"
+    },
+    {
+      "id": "tunnel-account-only-lowercases",
+      "host": "tcMiXeD_Case-Address",
+      "port": 8843,
+      "fingerprint": "cc:DD",
+      "accountKey": "tcmixed_case-address:8843",
+      "registryKey": "fp:CC:DD"
+    }
+  ],
+  "serializeCases": [
+    {
+      "id": "live-lan",
+      "record": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000
+      },
+      "expected": {
+        "v": 1,
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000
+      }
+    },
+    {
+      "id": "tunnel-only",
+      "record": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "tcMiXeD_Case-Address",
+        "hosts": [],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000
+      },
+      "expected": {
+        "v": 1,
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "tcMiXeD_Case-Address",
+        "hosts": [],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000
+      }
+    },
+    {
+      "id": "removal-scrubs-token",
+      "record": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000,
+        "deleted": true,
+        "deletedAt": 2000
+      },
+      "expected": {
+        "v": 1,
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "",
+        "updatedAt": 1000,
+        "deleted": true,
+        "deletedAt": 2000
+      }
+    },
+    {
+      "id": "removal-default-clock",
+      "record": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000,
+        "deleted": true
+      },
+      "expected": {
+        "v": 1,
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "",
+        "updatedAt": 1000,
+        "deleted": true,
+        "deletedAt": 1000
+      }
+    },
+    {
+      "id": "metadata-known-only",
+      "record": {
+        "label": "Studio Mac",
+        "accent": "violet",
+        "detectedDeviceKind": "laptop",
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000,
+        "futureMetadata": {
+          "nested": [
+            "KeepCase",
+            7
+          ],
+          "enabled": true
+        }
+      },
+      "expected": {
+        "v": 1,
+        "label": "Studio Mac",
+        "accent": "violet",
+        "detectedDeviceKind": "laptop",
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-token-not-a-secret",
+        "updatedAt": 1000
+      }
+    }
+  ],
+  "expiryCases": [
+    {
+      "id": "before-expiry",
+      "parseCaseId": "removal-explicit",
+      "nowMs": 2592001999,
+      "expired": false
+    },
+    {
+      "id": "at-expiry",
+      "parseCaseId": "removal-explicit",
+      "nowMs": 2592002000,
+      "expired": true
+    },
+    {
+      "id": "after-expiry",
+      "parseCaseId": "removal-explicit",
+      "nowMs": 2592002001,
+      "expired": true
+    },
+    {
+      "id": "fallback-expiry",
+      "parseCaseId": "removal-fallback",
+      "nowMs": 2592001000,
+      "expired": true
+    },
+    {
+      "id": "live-never-expires",
+      "parseCaseId": "live-lan",
+      "nowMs": 2592002000,
+      "expired": false
+    }
+  ],
+  "iosPublishCases": [
+    {
+      "id": "pair-lan",
+      "operation": "pair",
+      "existing": [],
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": "tcNew_MiXeD",
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "expected": {
+        "outcome": "published",
+        "writes": [
+          {
+            "account": "mac.local:8843",
+            "payload": {
+              "v": 1,
+              "hostname": null,
+              "detectHosts": true,
+              "label": "Paired Mac",
+              "host": "Mac.Local",
+              "hosts": [
+                "Mac.Local"
+              ],
+              "port": 8843,
+              "fingerprint": "aa:bb",
+              "token": "fixture-new-token",
+              "updatedAt": 3000,
+              "tcAddress": "tcNew_MiXeD"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "pair-tunnel-only",
+      "operation": "pair",
+      "existing": [],
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": "tcNew_MiXeD",
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "expected": {
+        "outcome": "published",
+        "writes": [
+          {
+            "account": "tcnew_mixed:8843",
+            "payload": {
+              "v": 1,
+              "hostname": null,
+              "detectHosts": true,
+              "label": "Paired Mac",
+              "host": "tcNew_MiXeD",
+              "hosts": [],
+              "port": 8843,
+              "fingerprint": "aa:bb",
+              "token": "fixture-new-token",
+              "updatedAt": 3000,
+              "tcAddress": "tcNew_MiXeD"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "pair-no-route",
+      "operation": "pair",
+      "existing": [],
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": null,
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "expected": {
+        "outcome": "published",
+        "writes": [
+          {
+            "account": "mac.local:8843",
+            "payload": {
+              "v": 1,
+              "hostname": null,
+              "detectHosts": true,
+              "label": "Paired Mac",
+              "host": "Mac.Local",
+              "hosts": [
+                "Mac.Local"
+              ],
+              "port": 8843,
+              "fingerprint": "aa:bb",
+              "token": "fixture-new-token",
+              "updatedAt": 3000,
+              "tcAddress": null
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "repair-preserves-metadata",
+      "operation": "pair",
+      "existing": [
+        {
+          "account": "mac.local:8843",
+          "payload": {
+            "v": 1,
+            "label": "Studio Mac",
+            "host": "Mac.Local",
+            "hosts": [
+              "Mac.Local",
+              "10.0.0.8"
+            ],
+            "port": 8843,
+            "fingerprint": " aa:BB ",
+            "hostname": "studio",
+            "tcAddress": "tcMiXeD_Case-Address",
+            "detectHosts": false,
+            "token": "fixture-token-not-a-secret",
+            "updatedAt": 1000,
+            "accent": "violet",
+            "detectedDeviceKind": "laptop",
+            "deviceIcon": "auto",
+            "futureMetadata": {
+              "nested": [
+                "KeepCase",
+                7
+              ],
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": null,
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "expected": {
+        "outcome": "published",
+        "writes": [
+          {
+            "account": "mac.local:8843",
+            "payload": {
+              "v": 1,
+              "label": "Paired Mac",
+              "host": "Mac.Local",
+              "hosts": [
+                "Mac.Local",
+                "10.0.0.8"
+              ],
+              "port": 8843,
+              "fingerprint": "aa:bb",
+              "hostname": "studio",
+              "tcAddress": "tcMiXeD_Case-Address",
+              "detectHosts": false,
+              "token": "fixture-new-token",
+              "updatedAt": 3000,
+              "accent": "violet",
+              "detectedDeviceKind": "laptop",
+              "deviceIcon": "auto",
+              "futureMetadata": {
+                "nested": [
+                  "KeepCase",
+                  7
+                ],
+                "enabled": true
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "routes-preserve-metadata",
+      "operation": "routes",
+      "existing": [
+        {
+          "account": "mac.local:8843",
+          "payload": {
+            "v": 1,
+            "label": "Studio Mac",
+            "host": "Mac.Local",
+            "hosts": [
+              "Mac.Local",
+              "10.0.0.8"
+            ],
+            "port": 8843,
+            "fingerprint": " aa:BB ",
+            "hostname": "studio",
+            "tcAddress": "tcMiXeD_Case-Address",
+            "detectHosts": false,
+            "token": "fixture-token-not-a-secret",
+            "updatedAt": 1000,
+            "accent": "violet",
+            "detectedDeviceKind": "laptop",
+            "deviceIcon": "auto",
+            "futureMetadata": {
+              "nested": [
+                "KeepCase",
+                7
+              ],
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": "tcNew_MiXeD",
+        "pendingSyncUpdatedAt": null,
+        "pendingRoutePublication": {
+          "hosts": [
+            "Mac.Local",
+            "10.0.0.9"
+          ],
+          "tcAddress": "tcNew_MiXeD",
+          "previousTcAddress": "tcMiXeD_Case-Address",
+          "updatedAt": 3000,
+          "tcUpdatedAt": 3000
+        }
+      },
+      "expected": {
+        "outcome": "published",
+        "writes": [
+          {
+            "account": "mac.local:8843",
+            "payload": {
+              "v": 1,
+              "label": "Studio Mac",
+              "host": "Mac.Local",
+              "hosts": [
+                "Mac.Local",
+                "10.0.0.8",
+                "10.0.0.9"
+              ],
+              "port": 8843,
+              "fingerprint": " aa:BB ",
+              "hostname": "studio",
+              "tcAddress": "tcNew_MiXeD",
+              "detectHosts": false,
+              "token": "fixture-token-not-a-secret",
+              "updatedAt": 3000,
+              "accent": "violet",
+              "detectedDeviceKind": "laptop",
+              "deviceIcon": "auto",
+              "futureMetadata": {
+                "nested": [
+                  "KeepCase",
+                  7
+                ],
+                "enabled": true
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "iosImportCases": [
+    {
+      "id": "import-lan",
+      "parseCaseId": "live-lan",
+      "expected": {
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:BB",
+        "token": "fixture-token-not-a-secret",
+        "tcAddress": "tcMiXeD_Case-Address"
+      }
+    },
+    {
+      "id": "import-tunnel-only",
+      "parseCaseId": "tunnel-only",
+      "expected": {
+        "hosts": [],
+        "port": 8843,
+        "fingerprint": "aa:BB",
+        "token": "fixture-token-not-a-secret",
+        "tcAddress": "tcMiXeD_Case-Address"
+      }
+    }
+  ],
+  "noWriteCases": [
+    {
+      "id": "future-version",
+      "parseCaseId": "future-version",
+      "account": "mac.local:8843",
+      "localRecord": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-new-token",
+        "updatedAt": 3000
+      },
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": "tcNew_MiXeD",
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "nowMs": 3000,
+      "expected": {
+        "desktop": {
+          "applied": [],
+          "upserts": [],
+          "deletes": []
+        },
+        "ios": {
+          "outcome": "retry",
+          "writes": []
+        }
+      }
+    },
+    {
+      "id": "v-wrong-type",
+      "parseCaseId": "v-wrong-type",
+      "account": "mac.local:8843",
+      "localRecord": {
+        "label": "Studio Mac",
+        "accent": "blue",
+        "detectedDeviceKind": null,
+        "deviceIcon": "auto",
+        "host": "Mac.Local",
+        "hosts": [
+          "Mac.Local",
+          "10.0.0.8"
+        ],
+        "port": 8843,
+        "fingerprint": " aa:BB ",
+        "hostname": "studio",
+        "tcAddress": "tcMiXeD_Case-Address",
+        "detectHosts": false,
+        "token": "fixture-new-token",
+        "updatedAt": 3000
+      },
+      "connection": {
+        "label": "Paired Mac",
+        "hosts": [
+          "Mac.Local"
+        ],
+        "port": 8843,
+        "fingerprint": "aa:bb",
+        "token": "fixture-new-token",
+        "tcAddress": "tcNew_MiXeD",
+        "pendingSyncUpdatedAt": 3000,
+        "pendingRoutePublication": null
+      },
+      "nowMs": 3000,
+      "expected": {
+        "desktop": {
+          "applied": [],
+          "upserts": [],
+          "deletes": []
+        },
+        "ios": {
+          "outcome": "retry",
+          "writes": []
+        }
+      }
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { cleanNodeEnv } from './test-env.mjs';
 import { createBridge, MAX_MESSAGE_BYTES } from './uds-ws-bridge.mjs';
 
 const BRIDGE_PATH = fileURLToPath(new URL('./uds-ws-bridge.mjs', import.meta.url));
@@ -328,7 +329,9 @@ test('upgrade with a loopback Origin is accepted and round-trips', async (t) => 
 });
 
 test('non-loopback host is refused at startup without the unsafe opt-out', async () => {
-  const child = spawn(process.execPath, [BRIDGE_PATH, '--host', '0.0.0.0', '--socket', '/nonexistent.sock']);
+  const child = spawn(process.execPath, [BRIDGE_PATH, '--host', '0.0.0.0', '--socket', '/nonexistent.sock'], {
+    env: cleanNodeEnv(),
+  });
   let stderr = '';
   child.stderr.on('data', (d) => (stderr += d));
   const [code] = await once(child, 'exit');
@@ -339,7 +342,7 @@ test('non-loopback host is refused at startup without the unsafe opt-out', async
 
 test('existing non-socket paths are refused at startup', async () => {
   for (const socketPath of [process.execPath, os.tmpdir()]) {
-    const child = spawn(process.execPath, [BRIDGE_PATH, '--socket', socketPath, '--port', '0']);
+    const child = spawn(process.execPath, [BRIDGE_PATH, '--socket', socketPath, '--port', '0'], { env: cleanNodeEnv() });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => (stdout += d));

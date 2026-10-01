@@ -1,22 +1,65 @@
-> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.17 `client.hello` handshake & stable client identity.
+> Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.17 `client.hello` handshake & stable client identity · §5.46 Connection principal — `principal.me`.
+
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
 
 ### 5.17 `client.hello` handshake & stable client identity
+
+**Shared-host extension (10.9).** [§5.49](./shared-host-membership.md) adds server
+capability flags `hostMembership: 1`, `collaborationIdentity: 1`,
+`personalPairing: 1`, `authenticatedDevices: 1`. Each means full support for its
+contract, not caller authority. The legacy examples below remain valid for older
+daemons. On each connection, read `principal.me` before activating member controls;
+never infer the role from this client's capabilities or its saved registry category.
+
+**Direct agent retirement (10.10).** `server.capabilities.agentRetire: 1` advertises
+support for [§5.5 `agent.retire`](./agents.md#direct-user-retirement), including stopping
+a running target and cancelling its wake sources. Clients enable the retirement action
+only when this capability is present; older daemons omit it. This is a server support
+flag, independent of the model's `agentFeatures.peerAgents` gate, and does not grant
+caller authority: workspace lifecycle permissions still apply.
 
 The daemon supports a **stable, client-supplied identity** that survives reconnects; the ephemeral
 per-connection id used internally for subscription bookkeeping is retained purely for transport
 bookkeeping and never crosses the wire.
 
+**Script lifecycle (10.11 implemented candidate).**
+`server.capabilities.scriptLifecycle: 1` advertises the complete saved/one-off,
+archive/restore, list filtering, result persistence and agent-binding contract
+in [§5.8](./scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate).
+The verified candidate implements this capability; current pins and deployed
+clients are not thereby upgraded. Older daemons omit it; clients must not assume
+an unknown create option was
+honored just because creation succeeded. Gate lifecycle controls/options on this
+capability, independently of numeric version.
+
+**Worker observations (prepared additive extension).**
+`server.capabilities.agentWorkers: 1` advertises the read-only list/subscription
+contract in [§5.5b](./agent-workers.md), not process liveness or exit evidence.
+Provider-session support is reported independently; older daemons omit this flag.
+
+**Service readiness (prepared additive extension).**
+`server.capabilities.scriptReadiness: 1` advertises the complete persisted
+health/pattern readiness contract in
+[§5.8](./scripts.md#service-readiness-prepared-additive-extension), including
+per-process resets, bounded local checks and agent bindings. It is independent
+of `scriptLifecycle`. Without it, clients must not send readiness options or
+interpret successful creation/URL detection as proof of readiness. Scripts
+without a contract omit `ready` and `readiness` even when support is advertised.
+
 | Method | Params | Result |
 | --- | --- | --- |
 | client.hello | clientId?, name?, capabilities?, hostname? *(v9.9)*, prettyHostname? *(v9.9)*, deviceKind? *(v9.9)* | { clientId, protocolVersion, server: { locality, hasDisplay, osArch, version, buildCommit?, protocolVersion, capabilities } } |
-| client.list *(v9.9)* | — (global; no `workspaceId`) | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
+| client.list *(v9.9)* | workspaceId? | { clients: [{ clientId, name?, hostname?, prettyHostname?, deviceKind?, capabilities, connections, transports, connectedAt }] } — the **live, hello'd** connections grouped by logical `clientId`; see the `client.list` block below |
 
 - **Global handshake.** `client.hello` does **not** require `workspaceId` (§3.6); it is the
   first call a client makes after the auth upgrade (§2) and before scoped work.
 - **Client-persisted `clientId`.** The client **generates and persists its own `clientId`** (a
   UUID in its local storage) and **re-presents it on every (re)connect**. If the client omits
   `clientId`, the server generates one and returns it for the client to persist and reuse from
-  then on.
+  then on. On a connection bound to a **non-administrator principal** (§2.4 / §5.48) the returned
+  `clientId` is namespaced as `{principalId}:{presented}` — idempotent, so a client that persists
+  the returned id re-hellos to the same identity — and a collaborator can only ever act as a
+  client id inside its own namespace; the administrator, agents and the daemon keep the raw id.
 - **Connection → client mapping.** The daemon maps each live connection to its logical
   `clientId`; **multiple connections may share one `clientId`** (the same client reconnecting, or
   several windows of one app).
@@ -101,7 +144,7 @@ per-workspace browser-client pin (§5.1 `workspace.setBrowserClient`) — [inten
 
 #### `client.list` — live logical clients (v9.9)
 
-`client.list` is a **global router method** (no `workspaceId`, like `settings.list`) returning
+`client.list` is a **global router method** (optional `workspaceId` is routing context only, like `settings.list`) returning
 every logical client that currently holds **at least one live, hello'd connection** — one entry
 per `clientId`, ordered by each client's first (oldest live) connection. Un-hello'd connections
 are omitted entirely. Clients **without** `browserExec` are included: this is the presence
@@ -146,3 +189,72 @@ this capability in its hello before using the connection-owned setup methods.
 See [§5.44](./models-providers.md#544-guided-antigravity-setup). A new hello
 revokes the preceding setup operation on that connection. WSS cannot gain
 setup access by advertising the capability.
+
+#### Authenticated device roster additions *(10.9)*
+
+With `authenticatedDevices: 1`, every `client.list` row adds `principalId`,
+`hostRole`, `login: string | null`, `displayName: string | null`,
+`avatarUrl: string | null` and optional `identity`, all from the admitted credential.
+Owner/member callers see the host roster; a workspace guest sees only its own
+principal's logical devices. The same filtering applies to live and durable client
+events. New `client:updated` carries the full row after metadata/role/profile changes;
+`client:connected`/`disconnected` retain their existing keys and add the principal
+projection. Logical IDs distinguish devices/windows, not credentials; multiple
+devices can share one persistent personal credential. Claimed person/role fields
+in hello are never trusted. See [§5.49](./shared-host-membership.md#persistent-personal-pairing-and-authenticated-devices)
+for selected-host pairing and iOS persistence/sync requirements.
+
+### 5.46 Connection principal — `principal.me` *(v10.3; [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869))*
+
+Every connection is bound to a **principal** at admission, for the life of the connection —
+identity is never taken from `client.hello` (§5.17), which carries only the logical client id.
+UDS connections and the legacy bearer token (`server.auth.token`) bind the **primary user**
+as administrator; a hashed per-principal credential (`principal_credential` row, matched by
+the SHA-256 of the presented token) binds **its principal** as a non-administrator.
+`principal.me` returns that binding. Daemon-global — no `workspaceId`.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| principal.me | — (no params; daemon-global, no `workspaceId`) | { id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator } |
+
+```json
+// → no params
+{ "jsonrpc":"2.0","id":3,"method":"principal.me" }
+// ← the connection's bound principal
+{ "jsonrpc":"2.0","id":3,"result":{ "id":"prn-9c2e","login":"octocat","displayName":"The Octocat",
+  "avatarUrl":"https://avatars.githubusercontent.com/u/583231","isAdministrator":true } }
+// ← before any GitHub identity has been cached: the profile fields are PRESENT as null
+{ "jsonrpc":"2.0","id":4,"method":"principal.me" }
+{ "jsonrpc":"2.0","id":4,"result":{ "id":"prn-9c2e","login":null,"displayName":null,"avatarUrl":null,"isAdministrator":true } }
+```
+
+**Result:**
+
+- `id: string` — the principal id the connection was bound to.
+- `login`, `displayName`, `avatarUrl: string | null` — the principal's **cached** GitHub
+  identity, served offline from the store. **Always present, `null` when unknown** (the
+  pre-profile state, or a principal whose identity was never fetched); never omitted.
+  Reading the primary principal also triggers a rate-limited, detached background refresh
+  of its identity from GitHub `GET /user` — the read never waits on it, and any failure (not
+  configured, offline, timeout) leaves the cached row untouched, so a later call may return
+  filled fields where an earlier one returned `null`.
+- `isAdministrator: boolean` — `true` for the primary user (UDS / legacy token), `false` for
+  a per-principal-credential connection.
+
+**Caller resolution.** A wire caller resolves to the principal bound at admission. Agent
+callers (MCP) and daemon-internal callers resolve to the primary principal, with
+`isAdministrator` = that principal's `is_primary` flag.
+
+**Errors.** Fail-closed: a request with no bound caller — a connection admitted unbound
+because the composition root exposes no principal store — is `-32603` (`message` "Internal
+error", `data` = `"forbidden: request is not bound to a principal"`; §9). No `-32602` arm:
+params are ignored.
+
+**Shared-host fields (10.9).** The full `PrincipalMe` shape is the existing result
+plus `identity?: { provider, host, externalUserId }` (10.8), `hostRole: "owner" |
+"member" | "guest"` and `hostMembershipRevision: integer` (10.9). The profile may
+remain unlinked/null for an owner; no repository connection is needed. A member
+has `isAdministrator: false`; cached roles are refreshed on reconnect and
+`host:members-changed`. The principal ID remains immutable while effective host
+role is current. [§5.49](./shared-host-membership.md#authority-and-discovery) gives
+the fail-closed compatibility rules when fields/capabilities are missing.

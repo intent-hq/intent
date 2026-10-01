@@ -3,6 +3,7 @@
 import contextlib
 import importlib.util
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,14 @@ def event(kind, name, **extra):
     return json.dumps({"type": "test", "event": kind, "name": name, **extra}) + "\n"
 
 
+def suite_event(kind="ok", crate="alpha", binary="one", **counts):
+    return json.dumps({
+        "type": "suite", "event": kind,
+        "nextest": {"crate": crate, "test_binary": binary, "kind": "test"},
+        **counts,
+    }) + "\n"
+
+
 def make_args(root, **overrides):
     values = dict(
         repo_root=root,
@@ -47,6 +56,7 @@ def make_args(root, **overrides):
         cache_dir=root / "cache",
         resume="0",
         force="0",
+        no_fail_fast="0",
         build_jobs="2",
         test_threads="1",
         label="test-changed",
@@ -425,6 +435,108 @@ class ResumableNextestTests(unittest.TestCase):
                 {("alpha::one", "passes"), ("alpha::one", "fails")},
             )
 
+    def test_suite_ignored_totals_with_missing_terminal_events(self):
+        for planned, resume, individual, failed in product(
+            (False, True), ("0", "1"), (False, True), (False, True)
+        ):
+            with self.subTest(planned=planned, resume=resume,
+                              individual=individual, failed=failed), \
+                    tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = make_args(root, resume=resume)
+                if not planned:
+                    args.plan = None
+                run_dir = root / "cache" / KEY
+                run_dir.mkdir(parents=True)
+                journal = run_dir / "passed.jsonl"
+                if resume == "1":
+                    journal.write_text(gate.record_line("alpha::one", "passes", "ok"))
+                lines = [event("started", "alpha::one$skipped")]
+                if individual:
+                    lines.append(event("ignored", "alpha::one$skipped"))
+                if resume == "0":
+                    lines.append(event("ok", "alpha::one$passes"))
+                if failed:
+                    lines.append(event("failed", "alpha::one$fails"))
+                passed = int(resume == "0")
+                status = 100 if failed else 0
+                lines.append(suite_event(
+                    "failed" if failed else "ok", passed=passed,
+                    failed=int(failed), ignored=1, filtered_out=17,
+                ))
+                harness = PlannedRunHarness(root, [(lines, status)])
+                self.assertEqual(harness.execute(args), status)
+                record_dir = run_dir
+                if planned:
+                    record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(args.plan))
+                    result = json.loads((record_dir / "run.json").read_text())
+                    self.assertEqual(
+                        (result["passed"], result["failed"], result["ignored"], result["skipped_resumed"]),
+                        (passed, int(failed), 1, int(resume)),
+                    )
+                expected = gate.summary_line(
+                    args.label, {"passed": passed, "failed": int(failed), "ignored": 1}, int(resume)
+                )
+                self.assertEqual((record_dir / "summary.txt").read_text(), expected + "\n")
+                self.assertEqual(harness.output_lines[-2], expected)
+                self.assertEqual(gate.load_passed(journal), {("alpha::one", "passes")})
+                self.assertNotIn("skipped", journal.read_text())
+                self.assertEqual((record_dir / "complete").exists(), not failed)
+
+    def test_suite_ignored_totals_are_reconciled_per_suite_and_plan(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            args = make_args(root, plan=["-p alpha", "-p beta"])
+            summary = suite_event(ignored=1, passed=0, failed=0)
+            lines = [
+                event("ignored", "beta::two$skipped"),
+                event("started", "alpha::one$skipped"),
+                summary,
+                summary,
+            ]
+            harness = PlannedRunHarness(root, [(lines, 0), ([summary], 0)])
+            self.assertEqual(harness.execute(args), 0)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
+            result = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(result["ignored"], 3)
+            self.assertEqual([row["ignored"] for row in result["results"]], [2, 1])
+            self.assertEqual((result["passed"], result["failed"]), (0, 0))
+
+    def test_suite_ignored_count_requires_valid_terminal_summary(self):
+        for kind in ("ok", "failed"):
+            self.assertEqual(gate.suite_ignored_count(suite_event(kind, ignored=2)), ("alpha::one", 2))
+        for line in (
+            "not json", "[]", event("ignored", "alpha::one$skipped"),
+            suite_event("started", ignored=1), suite_event(),
+            suite_event(ignored=-1), suite_event(ignored=True),
+            suite_event(ignored="1"), suite_event(ignored=1.5),
+            suite_event(crate=None, ignored=1), suite_event(binary="", ignored=1),
+            '{"type":"suite","event":"ok","ignored":1}',
+            '{"type":"suite","event":"ok","ignored":1,"nextest":[]}',
+        ):
+            with self.subTest(line=line):
+                self.assertIsNone(gate.suite_ignored_count(line))
+
+    def test_suite_ignored_reconciliation_preserves_partial_and_interrupted_results(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def lines():
+                yield event("ignored", "alpha::one$skipped")
+                yield event("started", "alpha::one$missing")
+                yield suite_event(ignored=2, passed=0, failed=0)
+                yield event("ignored", "beta::two$skipped")
+                raise KeyboardInterrupt
+
+            args = make_args(root)
+            harness = PlannedRunHarness(root, [(lines(), 0)])
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(harness.execute(args), 130)
+            record_dir = root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(args.plan))
+            result = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual((result["passed"], result["failed"], result["ignored"]), (0, 0, 3))
+            self.assertFalse((record_dir / "complete").exists())
+
     def test_planned_run_appends_to_shared_record_and_resumes_in_plan_tests(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -511,6 +623,83 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertEqual(
                 gate.load_passed(run_dir / "passed.jsonl"), {("alpha::one", "passes")}
             )
+
+    def test_no_fail_fast_flag_is_forwarded_only_when_enabled(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            default = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(default.execute(make_args(root)), 0)
+            self.assertNotIn("--no-fail-fast", default.run_commands[0])
+
+            enabled = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(enabled.execute(make_args(root, no_fail_fast="1")), 0)
+            self.assertIn("--no-fail-fast", enabled.run_commands[0])
+            self.assertTrue(
+                (root / "cache" / KEY / "changed" / gate.plan_key(gate.split_plans(["-p alpha --test one"])) / "complete").is_file()
+            )
+
+            workspace = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            args = make_args(root, no_fail_fast="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
+            self.assertEqual(workspace.execute(args), 0)
+            self.assertEqual(workspace.run_commands[0][3], "--workspace")
+            self.assertIn("--no-fail-fast", workspace.run_commands[0])
+
+    def test_no_fail_fast_runs_every_plan_and_returns_first_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plans = ["-p alpha --test one", "-p beta"]
+            harness = PlannedRunHarness(
+                root,
+                [
+                    ([event("ok", "alpha::one$passes"), event("failed", "alpha::one$fails")], 100),
+                    ([event("ok", "alpha::one$skipped")], 0),
+                ],
+            )
+            self.assertEqual(harness.execute(make_args(root, plan=plans, no_fail_fast="1")), 100)
+            self.assertEqual(len(harness.run_commands), 2)
+            for command in harness.run_commands:
+                self.assertIn("--no-fail-fast", command)
+            run_dir = root / "cache" / KEY
+            record_dir = run_dir / "changed" / gate.plan_key(gate.split_plans(plans))
+            self.assertFalse((record_dir / "complete").exists())
+            self.assertFalse((run_dir / "complete").exists())
+            run_record = json.loads((record_dir / "run.json").read_text())
+            self.assertEqual(run_record["exit_code"], 100)
+            self.assertEqual(
+                run_record["results"],
+                [
+                    {"plan": plans[0], "passed": 1, "failed": 1, "ignored": 0, "exit_code": 100},
+                    {"plan": plans[1], "passed": 1, "failed": 0, "ignored": 0, "exit_code": 0},
+                ],
+            )
+            self.assertEqual(
+                harness.output_lines[-2:],
+                [
+                    "[test-changed] summary: 2 passed, 1 failed, 0 skipped/ignored, 0 resumed "
+                    "(tests already passed for this tree)",
+                    f"[test-changed] record: {record_dir}",
+                ],
+            )
+            self.assertEqual(
+                gate.load_passed(run_dir / "passed.jsonl"),
+                {("alpha::one", "passes"), ("alpha::one", "skipped")},
+            )
+
+            trailing = PlannedRunHarness(
+                root,
+                [
+                    ([event("ok", "alpha::one$passes")], 0),
+                    ([event("failed", "alpha::one$fails")], 100),
+                    ([event("failed", "alpha::one$skipped")], 101),
+                ],
+            )
+            three = plans + ["-p gamma"]
+            self.assertEqual(trailing.execute(make_args(root, plan=three, no_fail_fast="1")), 100)
+            self.assertEqual(len(trailing.run_commands), 3)
+            record_three = run_dir / "changed" / gate.plan_key(gate.split_plans(three))
+            results = json.loads((record_three / "run.json").read_text())["results"]
+            self.assertEqual([result["exit_code"] for result in results], [0, 100, 101])
+            self.assertFalse((record_three / "complete").exists())
 
     def test_interrupted_run_terminates_cargo_and_still_prints_record(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -609,7 +798,7 @@ class Proc:
         return -15
 
 args = SimpleNamespace(repo_root=Path({str(root)!r}), intentd_dir="intentd", cache_dir=Path({str(root / "cache")!r}),
-    resume="0", force="0", build_jobs="2", test_threads="1", label="test-changed",
+    resume="0", force="0", no_fail_fast="0", build_jobs="2", test_threads="1", label="test-changed",
     plan=["-p alpha --test one"], base=None)
 with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.object(
     gate, "run", return_value={LISTING!r}

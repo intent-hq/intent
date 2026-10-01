@@ -38,7 +38,7 @@ served on the `AgentSession` and `AgentLite` projections (shapes in
 [protocol/methods/agents.md](./protocol/methods/agents.md) §5.5):
 
 - **`harnessVersion`** — the harness version current at creation
-  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.4"`). There is no
+  (`intent_core::CURRENT_HARNESS_VERSION`, today `"2.7"`). There is no
   upgrade/migration/pinning operation; new sessions always get the latest
   version. The stamp depends only on creation time, never on the creator: a
   delegated child mints the current version regardless of the parent's pin,
@@ -76,6 +76,8 @@ The harness lives in `crates/intent-services/src/harness/`:
 - **`Harness` trait** (`harness/mod.rs`) — one method per system-generated
   text surface (prompt-layer joining, rule wrappers, specialist sections,
   turn-envelope composition, completion wakes, PR-monitor notices, the
+  consolidated post-unarchive notice for archive-cancelled hooks and PR
+  monitors (v2.7, `workspace_archived_watches_cancelled_notice`), the
   delegation first message, …). Implementations own 100% of the wording;
   call sites carry typed data in and never format doctrine/envelope text
   themselves, so a future version can reword or reorder surfaces without

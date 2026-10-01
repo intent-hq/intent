@@ -15,27 +15,39 @@ preferred_block=$((path_hash % BLOCK_COUNT))
 # bind fails (EADDRINUSE from a LISTEN socket). Recently closed connections in
 # TIME_WAIT/CLOSE_WAIT do not block a SO_REUSEADDR bind, so they read as free —
 # the same answer the FE dev server (which also sets SO_REUSEADDR) would get.
-port_is_free() {
-  python3 - "$1" <<'PY'
+# All ports are probed in one interpreter: startup dominates each probe, so one
+# process per candidate block keeps resolution well under a second. Probing
+# stops at the first busy port, which is printed on stdout with exit status 1.
+first_busy_port() {
+  python3 - "$@" <<'PY'
 import socket
 import sys
 
-port = int(sys.argv[1])
-probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-probe.settimeout(0.25)
-try:
-    if probe.connect_ex(("127.0.0.1", port)) == 0:
+
+def port_is_free(port):
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.25)
+    try:
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return False
+    finally:
+        probe.close()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", port))
+    except OSError:
+        return False
+    finally:
+        sock.close()
+    return True
+
+
+for arg in sys.argv[1:]:
+    port = int(arg)
+    if not port_is_free(port):
+        print(port)
         raise SystemExit(1)
-finally:
-    probe.close()
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    sock.bind(("127.0.0.1", port))
-except OSError:
-    raise SystemExit(1)
-finally:
-    sock.close()
 PY
 }
 
@@ -64,7 +76,7 @@ validate_explicit_ports() {
       return 1
     fi
     seen_ports+="$normalized "
-    if ! port_is_free "$normalized"; then
+    if ! first_busy_port "$normalized" >/dev/null; then
       echo "[dev-ports] ERROR: explicit $name=$normalized is busy; explicit ports are never remapped." >&2
       return 1
     fi
@@ -92,12 +104,9 @@ resolve_block() {
         break
       fi
       unique+="$candidate "
-      if ! port_is_free "$candidate"; then
-        available=0
-        break
-      fi
     done
     ((available)) || continue
+    first_busy_port "${values[@]}" >/dev/null || continue
 
     if ((attempt > 0)); then
       echo "[dev-ports] WARNING: preferred port block is busy; using the next free block." >&2

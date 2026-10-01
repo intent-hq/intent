@@ -65,6 +65,7 @@ name: Issue triage
 # next comment removes `needs-info` and re-runs the pass-1 label derivation
 # (comments from anyone else do not), and a body edit that completes the
 # issue removes the label too (only when the marker shows we applied it).
+# This workflow never closes an issue: `needs-info` closure lives in stale.yml.
 #
 # Pass 2 — agentic triage (`agentic-triage` job): on `opened` only, after
 # pass 1, an LLM pass (Auggie CLI) suggests duplicate candidates, the

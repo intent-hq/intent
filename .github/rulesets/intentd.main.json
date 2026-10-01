@@ -1,0 +1,101 @@
+[
+  {
+    "ruleset_source": "intent-hq",
+    "ruleset_source_type": "Organization",
+    "type": "deletion"
+  },
+  {
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "deletion"
+  },
+  {
+    "parameters": {
+      "check_response_timeout_minutes": 60,
+      "grouping_strategy": "ALLGREEN",
+      "max_entries_to_build": 5,
+      "max_entries_to_merge": 5,
+      "merge_method": "SQUASH",
+      "min_entries_to_merge": 1,
+      "min_entries_to_merge_wait_minutes": 0
+    },
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "merge_queue"
+  },
+  {
+    "ruleset_source": "intent-hq",
+    "ruleset_source_type": "Organization",
+    "type": "non_fast_forward"
+  },
+  {
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "non_fast_forward"
+  },
+  {
+    "parameters": {
+      "allowed_merge_methods": [
+        "rebase",
+        "squash"
+      ],
+      "dismiss_stale_reviews_on_push": false,
+      "dismissal_restriction": {
+        "allowed_actors": [],
+        "enabled": false
+      },
+      "require_code_owner_review": false,
+      "require_extra_approval_for_unattributed_changes": true,
+      "require_last_push_approval": false,
+      "required_approving_review_count": 0,
+      "required_review_thread_resolution": true,
+      "required_reviewers": []
+    },
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "pull_request"
+  },
+  {
+    "parameters": {
+      "allowed_merge_methods": [
+        "rebase",
+        "squash"
+      ],
+      "dismiss_stale_reviews_on_push": false,
+      "require_code_owner_review": false,
+      "require_extra_approval_for_unattributed_changes": true,
+      "require_last_push_approval": false,
+      "required_approving_review_count": 0,
+      "required_review_thread_resolution": true,
+      "required_reviewers": []
+    },
+    "ruleset_source": "intent-hq",
+    "ruleset_source_type": "Organization",
+    "type": "pull_request"
+  },
+  {
+    "ruleset_source": "intent-hq",
+    "ruleset_source_type": "Organization",
+    "type": "required_linear_history"
+  },
+  {
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "required_linear_history"
+  },
+  {
+    "parameters": {
+      "do_not_enforce_on_create": false,
+      "required_status_checks": [
+        {
+          "context": "CI Gate",
+          "integration_id": 15368
+        }
+      ],
+      "strict_required_status_checks_policy": false
+    },
+    "ruleset_source": "intent-hq/intentd",
+    "ruleset_source_type": "Repository",
+    "type": "required_status_checks"
+  }
+]

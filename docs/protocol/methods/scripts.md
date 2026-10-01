@@ -2,17 +2,28 @@
 
 ### 5.8 `script.*`
 
+The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
+adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
+`readiness` runtime fields. These are capability-gated, not yet shipped.
+
 | Method | Params | Result |
 | --- | --- | --- |
-| script.list | workspaceId (req) | { scripts: [...] } |
-| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId? | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt? } — the persisted `WorkspaceScript` record |
+| script.list | workspaceId (req), archive? (`active` \| `archived` \| `all`, default `all`) | { scripts: [...] } — definition plus `runtime`; see the 10.11 lifecycle candidate below |
+| script.create | workspaceId (req), name (req), command (req), mode (req: `service` \| `command`), cwd?, env?, category?, autoStart?, scriptId?, purpose? (`saved` \| `oneOff`), healthUrl?, readyPattern?, clearReadiness? (prepared; see below) | { id, workspaceId, name, command, mode, source, createdAt, cwd?, env?, category?, autoStart?, updatedAt?, purpose?, archivedAt?, lastRun?, healthUrl?, readyPattern? } — the persisted `WorkspaceScript` record |
+| script.archive | workspaceId (req), scriptIds (req: nonempty string array) | { archived: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; inactive commands only |
+| script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
 | script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
-| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
+| script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
 | script.run | workspaceId (req), scriptId (req), maxLines?, timeoutSeconds? (alias timeout?) | { exitCode?, output, timedOut?, warning? } — `exitCode` follows the same total exit contract as the runtime state (new in intentd, unreleased): `-1` when the exit was unobservable — see the total exit contract note below |
+
+> **Implemented lifecycle candidate (10.11).** The additive purpose/archive fields, filters and
+> archive/restore methods above are gated by `scriptLifecycle: 1`, as specified
+> below. Archive preserves the existing runtime and manual-stop semantics;
+> the extension adds retention and compact result metadata, not new statuses.
 
 > **Unified PTY host (new in intentd).** Scripts run inside (possibly headless) terminals on
 > the daemon and share the **unified PTY/terminal host** with interactive terminals (§5.13), so
@@ -104,3 +115,502 @@
 >   rehydrates as `previouslyRunning: true` (or the `lost` reading) after the next daemon
 >   restart, and the client can dismiss it again.
 
+
+#### Service readiness (prepared additive extension)
+
+This contract addresses [intent-hq/intent#4256](https://github.com/intent-hq/intent/issues/4256).
+It leads implementation and does not establish that the issue is fixed.
+Advertise `client.hello.server.capabilities.scriptReadiness: 1` only after the
+whole contract, persistence and MCP bindings are implemented and tested. Allocate
+the next minor against main at implementation time; no new RPC or event names.
+This capability is independent of `scriptLifecycle`.
+
+**Configuration and compatibility.** `script.create` accepts mutually exclusive
+optional `healthUrl: string` and `readyPattern: string`, only in `mode: "service"`.
+Persist and return the configured field on definitions from create/list. Neither
+field is inferred from `detectedUrl`, command text, category or purpose. Reject
+both fields together, explicit null, empty values, invalid types or either field
+on a command with `-32602`, before persistence or stopping an upserted process.
+Omitting both on a new definition creates no contract. Omitting both on an upsert
+preserves the existing contract; providing one replaces the other. To explicitly
+clear it, accept `clearReadiness: true` on create with an existing `scriptId`,
+without either field; otherwise reject that flag. It is an input only, never a
+definition field. Switching to command mode requires clearing an existing
+contract in that same upsert. All accepted upserts retain existing stop/replace
+semantics, including a fresh readiness state. Contract persistence failure fails
+the operation; never report successful configuration without the durable write.
+Repository-config scripts without these options retain no contract; repository
+configuration import of readiness options is outside this extension.
+
+A script without a contract omits both runtime fields, even on a supporting
+daemon, and retains existing start/status/output/URL behavior. Absent `ready`
+means **unknown/not configured**, never true or false. Existing stored scripts
+need no inferred backfill. A client must check `scriptReadiness: 1` before sending
+any readiness option, including clear. Older daemons can silently ignore unknown
+options: successful create is not proof of support. Clients needing readiness
+must report unsupported or use their existing explicit checks; never silently
+fall back to URL detection. Old clients may ignore additive fields, and their
+upserts preserve an existing contract when they omit the new inputs.
+
+**Runtime shape.** For a configured service, `script.status`, each list entry's
+`runtime`, and the runtime snapshot on `script:state` carry:
+
+| Field | Meaning |
+| --- | --- |
+| `ready: boolean` | Always present for configured services; true only after the current process attempt passes its contract while still running. |
+| `state` (inside `readiness`) | `idle` before launch/after stop or exit, `pending` while starting/restarting/checking, or `ready` after success. No change to the existing process `status` enum. |
+| `checkedAt?: string` (inside `readiness`) | RFC 3339 UTC time of the last completed HTTP attempt or successful pattern match; absent before either. |
+| `lastStatus?: integer` (inside `readiness`) | Most recent HTTP attempt's response status (100–599), absent if no response was received; never present for a pattern. |
+| `lastError?: string` (inside `readiness`) | One safe code: `http-status`, `timeout`, `connection-failed`, `tls-failed`, `unsafe-url`, or `output-gap`; absent after success. No arbitrary exception text. |
+
+Optional fields are omitted, never null. `ready` is exactly equivalent to
+`readiness.state === "ready"` and implies process `status === "running"`.
+No-contract scripts do not emit a synthetic `readiness.state = idle`.
+The `ready` state is a startup latch, not a continuous health monitor: checks
+stop at success and a later HTTP outage alone does not change it. A health
+endpoint decides what readiness means; 2xx cannot prove browser hydration or
+dependency availability unless the endpoint itself checks them.
+
+**HTTP checks.** `healthUrl` (maximum 2,048 UTF-8 bytes) is either an absolute
+HTTP(S) URL or an origin-relative path beginning with one `/` (not `//`). Resolve
+paths against the current attempt's detected URL's **origin**, ignoring its path
+and query. Before URL detection a relative contract stays pending without a
+request, timestamp or error. An absolute URL needs no detected URL. Reject
+credentials, fragments, backslashes, control characters, missing/invalid hosts
+and non-HTTP(S) schemes. Query strings are permitted, but never copied into
+readiness errors or logs. Validate absolute configuration at create time and
+validate the final resolved target again before each request.
+
+Only literal loopback addresses (`127.0.0.0/8` or `::1`) and exact `localhost`
+are allowed; reject IPv4-mapped IPv6, unspecified addresses, LAN/public IPs,
+other DNS names and browser tunnel aliases such as `daemon.localhost`. For
+`localhost`, connect directly to loopback (IPv4/IPv6 candidates only), never use
+DNS; literal IP connections likewise require no DNS. Pin the actual connection
+to those addresses, disable environment/system proxies, and do not follow any
+redirect, even to another loopback URL. TLS uses normal certificate/hostname
+validation; no insecure bypass. Requests execute on the daemon host, not in the
+browser. This keeps user-configured checks local; it does not prove ownership of
+the listening process, so use a dedicated endpoint/port for the service.
+
+Send GET without authentication, cookies or inherited headers. Success is any
+200–299 response header, without reading the body. Close/drop every response
+without collecting or exposing bodies, response headers, redirect locations or
+credentials in status/events/errors/logs. Keep only timestamp, status and safe
+error code. A non-2xx result records `http-status`; a network/TLS/timeout failure
+records its code and clears previous `lastStatus`. An unsafe resolved URL makes
+no request, records `unsafe-url`, and stays pending. Errors never stop/restart
+the service and do not overwrite its process `error` field.
+
+One attempt per configured running service at a time; first eligible attempt
+runs immediately, subsequent attempts start at least 1,000 ms after completion.
+Each request has a 2,000 ms total deadline, including connection/TLS/headers;
+enforce a 16 KiB response-header limit (overflow is `connection-failed`). A
+daemon-wide cap of eight active requests uses a fair queue containing at most
+one entry per active configured service. Wait time for a slot is not a completed
+attempt. There is no overall startup deadline: failures retry until success or
+lifecycle cancellation. Reads of status/list never perform I/O. Polls must not
+block output draining or process-exit detection.
+
+**Output checks.** `readyPattern` is a case-sensitive **literal UTF-8 substring**,
+not a regular expression (maximum 1,024 UTF-8 bytes; reject CR, LF and control
+characters). Match against ANSI-stripped text from the current process attempt.
+Scripts use a PTY that combines stdout and stderr; either stream can satisfy the
+contract. A match may span output chunks, UTF-8 fragments and ANSI fragments but
+not a line boundary; CR and LF each end a line. Retain at most 1,023 decoded text
+bytes plus bounded UTF-8/ANSI decoder state across chunks; scan longer chunks
+incrementally. Discard overlong ANSI control sequences with bounded memory.
+Do not match synthetic supervisor separators, previous-attempt scrollback or
+output arriving after exit. A dropped/lagged output segment resets partial
+matching state and records `output-gap` without `checkedAt`; subsequent complete
+observed output can still match. A match records `checkedAt` and clears the error;
+do not expose matched text in readiness metadata.
+
+**Reset and stale-result rules.** Create/hydrate configured services as
+`ready: false, readiness: { state: "idle" }`; never persist positive readiness.
+At launch admission reset to false/pending, with all old check metadata cleared,
+before start replies. A repeated start on a running/starting service remains the
+existing no-op and does not clear valid readiness. Explicit restart resets before
+teardown; automatic restart resets when the old process exits, before backoff.
+Every replacement process starts with fresh check/matcher state. Terminal exit,
+spawn failure and stop reset to false/idle and clear all check metadata. Daemon
+shutdown, remove and upsert cancel queued/in-flight work and release slots;
+hydration follows the existing was-running behavior, never reusing old success.
+
+Every probe result, output match and readiness event is scoped by workspace,
+script ID, definition generation, admitted run and **process attempt** (automatic
+respawns within one supervisor need a new identity). Validate that identity and
+running/not-stopping state atomically at publication. A late success/failure from
+an earlier attempt, removed definition or same ID in another workspace must not
+change either state or events. Cancel on stop acceptance, before awaiting process
+teardown, so a late check cannot restore readiness during stop. Do not hold a
+registry/admission lock over network work or joins that need that lock.
+
+Reuse `script:state` for readiness transitions. Publish reset before any successor
+ready event, and serialize publication with lifecycle transitions so a captured
+old snapshot cannot arrive after reset. Successful readiness changes appear in
+status/list before their event is sent. Repeated pending failures update the
+readable check metadata without emitting a new durable event each polling tick;
+emit on readiness state changes, with the full current runtime snapshot. No
+new `script:changed` event is needed for checks (configuration changes retain
+existing definition invalidation). Consumers replace the readiness snapshot;
+omitted optional check fields clear old metadata.
+
+**Examples and implementation proof.** The bounded executable reset model and
+contract tests in `../fixtures/scripts/readiness-model.mjs` and
+`../fixtures/scripts/readiness.test.mjs` are design prototypes only. They do not
+exercise HTTP, persistence, the real PTY, locks or WSS. Component acceptance must
+add regression-first tests for URL-before-503-before-204, automatic/explicit
+restart, delayed predecessor success/failure and event ordering, stop/remove/
+upsert/shutdown cancellation, same IDs across workspaces, no-contract byte-shape
+compatibility and old-client upserts. Real HTTP fixtures must prove no redirects,
+proxy/DNS escape, body leakage or deadline/concurrency growth; PTY fixtures must
+cover split text/UTF-8/ANSI, stderr, line boundaries, lag and old scrollback. Real
+WSS tests must cover create/status/list/state-event envelopes, authorization,
+validation errors and capability negotiation. Persistence tests use isolated DBs.
+Run the daemon gates and consumer checks before advertising support.
+
+#### Command creation defaults (prepared breaking change)
+
+This change leads implementation; it does not claim released or installed support.
+It changes the 10.11 creation default described by the original lifecycle candidate.
+Recommend protocol **11.0** against the reviewed 10.11 baseline: an omitted-purpose
+command changes retention, and a previously valid new autostart command now fails
+validation. No method, field, enum value or event is added or removed. Confirm the
+version against daemon main before implementation lands; see [versioning](../versioning.md).
+
+| Creation input | Resulting purpose |
+| --- | --- |
+| New `mode: "command"`, purpose omitted | `oneOff` |
+| New `mode: "service"`, purpose omitted | `saved` |
+| Explicit `purpose: "saved"` | `saved`, including reusable/autostart commands |
+| Existing `scriptId`, purpose omitted | Preserve the stored purpose |
+| Hydrated/imported/repository-config definition, purpose absent | `saved`; no reclassification |
+
+The new-ID rule also applies when a caller supplies a `scriptId` that does not
+exist. Resolve omitted purpose from the stored definition before validation on
+an upsert; use the mode default only for a genuinely new definition. Validate the
+resolved purpose before persistence or stopping an existing process. An omitted
+purpose on an existing one-off does not silently promote it when changing to a
+service or setting `autoStart: true`: either change requires explicit `saved`.
+A new command with omitted purpose and `autoStart: true` is invalid (`-32602`),
+just like explicit `oneOff` with autostart. Explicit null and unknown values remain
+invalid. There is no schema migration, backfill, archive sweep, or change to the
+legacy deserialization default. Existing saved rows stay saved; existing one-offs
+stay one-off. Completion, output, hooks, manual archive and restore are unchanged.
+
+**Caller migration.** Audit reusable command creators, boot/setup commands and
+any command using autostart: send `purpose: "saved"` explicitly. Apply this to raw
+JSON-RPC, CLI JSON requests, MCP helpers and frontend creation forms. Do not make
+an omission into `saved` in a forwarding wrapper; preserve omission for the daemon
+to distinguish new creation from upsert. Do not apply creation defaults while
+hydrating a legacy response. Services continue to default to saved.
+
+`scriptLifecycle: 1` proves lifecycle support, not which creation default applies:
+it is also advertised by the earlier saved-default daemon. Explicit purpose is
+the portable choice across lifecycle-capable generations. On a daemon without
+that capability, absent purpose still hydrates as saved and one-off retirement
+cannot be promised; unknown request fields may be ignored. An old client that
+omits purpose on a new command receives the new one-off behavior after a daemon
+upgrade. Its unfiltered list still returns archived definitions and its known-ID
+status/output reads still work; this does not preserve the old creation default.
+
+Prepared examples (execute only against a daemon supporting lifecycle):
+
+```javascript
+// Explicit retention works across old and new lifecycle-capable defaults.
+const reusable = await ws.script.create("Check", "make check", "command", { purpose: "saved" });
+const disposable = await ws.script.create("Once", "make check", "command", { purpose: "oneOff" });
+// With the new default, a new command can omit purpose; services remain saved.
+const once = await ws.script.create("Once", "make check", "command");
+const service = await ws.script.create("Dev", "make dev", "service");
+```
+
+The monorepo CLI probe forwards the same JSON contract; replace the workspace ID:
+
+```bash
+make rpc METHOD=script.create PARAMS='{"workspaceId":"<workspace-id>","name":"Check","command":"make check","mode":"command","purpose":"saved"}'
+```
+
+For a command with `autoStart: true`, keep that explicit saved purpose. For an
+upsert, add the existing `scriptId` and omit purpose only to retain its stored
+classification. These examples create definitions, not a successful test result.
+The generated MCP index remains pin-owned and is not edited for this preparation.
+
+#### Saved scripts and one-off history (10.11 implemented candidate)
+
+The complete extension is implemented and independently verified in intentd
+[`7a80f18905377545ec1e8a88a8331772557e772e`](https://github.com/intent-hq/intentd/commit/7a80f18905377545ec1e8a88a8331772557e772e)
+([PR #2195](https://github.com/intent-hq/intentd/pull/2195)), which advertises
+protocol `10.11` and `client.hello.server.capabilities.scriptLifecycle: 1`.
+This covers persistence, all settled command outcomes, durable admission recovery,
+concurrency protection and the agent bindings. The lifecycle-aware frontend is
+[`25c9335afd3032b6782b2f52155f95710e89ed76`](https://github.com/intent-hq/cloudlands-fe/commit/25c9335afd3032b6782b2f52155f95710e89ed76)
+([PR #3041](https://github.com/intent-hq/cloudlands-fe/pull/3041)). These are
+component candidates, not a claim of merged, pinned, released or installed support;
+combined client/runtime acceptance and deployment remain separate gates. See
+[versioning](../versioning.md) for the reviewed pin baseline and merge order.
+Only advertise the capability for the complete extension. Existing methods and status enum remain;
+`script.archive` and `script.restore` are the only new RPC names. History is a view
+of retained definitions and their latest result, **not a per-run log archive**.
+
+**Definition fields and compatibility.** A supporting daemon always returns
+`purpose: "saved" | "oneOff"` on definitions (`script.create` and `script.list`).
+`archivedAt?: string` is an RFC 3339 UTC timestamp, omitted while active, never
+`null`. Archive state and purpose persist across restart. `lastRun?` is the compact
+persisted command result described below; it is absent if no result is known.
+These fields belong to the definition, not `ScriptRuntimeState`.
+
+- Under the prepared [creation default change](#command-creation-defaults-prepared-breaking-change),
+  new commands default to `oneOff` and services to `saved` when purpose is omitted.
+  The original 10.11 candidate defaulted both to `saved`. Every pre-existing,
+  imported or repository-config definition without explicit purpose stays `saved`.
+  Never infer one-off purpose from source (including `source=user`), name, command,
+  category, age, idle status, agent ownership, or lack of output.
+- `oneOff` is a retention choice for `mode: "command"`; `mode` still
+  controls execution. Reject `oneOff` with `mode: "service"` or `autoStart: true`
+  as `-32602` invalid params, without mutation. Unknown purpose/archive-filter
+  values and explicit `null` are invalid params too. Services are never retired
+  automatically and are excluded from command archive selection.
+- A new client on an older daemon treats absent purpose as `saved` and absent
+  archive metadata as active. Without `scriptLifecycle: 1`, hide history/archive
+  controls and do not send lifecycle fields, filters or mutations. Old parsers
+  can silently ignore unknown fields: a successful create is **not** proof that
+  one-off retirement is supported. Never fall back to `script.remove`.
+- Old clients on a supporting daemon can start/status/output known IDs as before.
+  With the prepared default change, omitted-purpose new commands become one-off;
+  earlier lifecycle daemons create saved definitions. Old clients ignore additive
+  fields and
+  continue receiving **all definitions when the wire filter is omitted**, even
+  after `script:changed` triggers a refetch. This preserves their existing row
+  maps, selected output and runtime failure state. They cannot show the new
+  History view or remove archived rows from their ordinary list; upgrading the
+  client enables those affordances. Server capability advertisement alone does
+  not change legacy client behavior. A stale new-method request to an older
+  daemon can return method-not-found or Forbidden at its collaborator allowlist;
+  surface it without claiming success.
+
+**Lists and history.** On the wire, omitted `archive` is equivalent to
+`archive: "all"`, preserving the existing unfiltered result for legacy clients.
+`"active"` selects definitions without `archivedAt`, `"archived"` selects history,
+and `"all"` selects both. Lifecycle-aware frontend normal lists and the updated
+MCP helper's default list **explicitly send `archive: "active"`**; that is how
+finished one-offs leave the normal view without changing older clients' lists.
+History sends `"archived"`; retained/open-ID recovery can send `"all"`. When the
+capability is absent, the frontend omits the filter and retains legacy behavior.
+Every selection returns the same `{ scripts: [...] }` envelope and full
+definitions with `runtime`. Preserve the existing oldest-created-first order,
+breaking equal `createdAt` ties by `id`. Clients may sort History by `archivedAt`
+locally. There is no implicit age cutoff, deletion or pagination in this extension.
+Bootstrap from repository config only if the workspace has **no definitions at
+all**; an empty filtered view must not recreate archived definitions.
+
+**Explicit archive and restore.** Both RPCs take only the named workspace and
+an explicit selection of 1–1,000 nonempty `scriptIds` (limit checked before
+deduplication; duplicates deduplicated in first-occurrence order). Validate the whole request and workspace authority
+before mutation. Each selected ID gets exactly one outcome, preserving input
+order within the success and skipped arrays. Archive reasons are `live`,
+`service`, and `notFound`; restore's only skipped reason is `notFound`. Foreign
+and absent IDs are indistinguishable `notFound`. For archive, check existence,
+then service mode, then liveness. No command text or metadata is returned for a
+skipped ID. An already archived command counts as `archived` without changing
+its timestamp; an already active definition counts as `restored`. Repetition is
+safe. A service can be a restore no-op, but can never be newly archived here.
+
+The batch is deliberately **per-ID**, not all-or-nothing: eligible entries can
+succeed while a concurrent start makes another entry `live`. Persistence errors
+fail the RPC with `-32603`; earlier IDs may have committed. Re-read the list and
+retry the same selection to reconcile. Never report an ID archived/restored
+until its durable update commits. Skip/no-op entries emit no change event.
+Restore clears `archivedAt`, preserving purpose, latest result, current runtime
+and available output; it does not start a process. A restored one-off remains a
+one-off and retires again after its next settled run. To make it reusable,
+explicitly replace it with `purpose: "saved"` using `script.create`.
+
+**Atomic protection.** A command can be archived only when its status is `idle`
+or final `exited` **and** it has no live process, pending launch/run reservation,
+supervisor teardown or restart operation. Treat unknown future states as live.
+This check and the archive commit must serialize against `start`, `run`,
+`restart`, definition replacement and removal; a list-then-update check is not
+sufficient. Archive must never stop, kill, detach, evict the runtime entry,
+clear its PTY/output handle, or synthesize an exit. Protect the complete restart
+stop→start gap, including a momentary predecessor exit. Completion work must
+validate both definition identity and the specific admitted run, so a delayed
+completion cannot archive a replacement or a newer run with the same ID.
+
+For a start/archive race there are only two legal orders: start reserves first
+and archive reports `live`; or archive commits first and start restores before
+reserving the launch. An archived live process is never a legal result. Apply
+the same rule to `script.run`'s pre-spawn reservation and all restart paths.
+A restore/start persistence failure refuses the new launch; no process is
+started hidden in history. Keep authorization and durable writes qualified by
+workspace, with the same member/owner permissions as script definition edits.
+Non-members cannot discover the workspace or scripts through this extension;
+connection allowlists and service-level scope checks both cover the new methods.
+
+**Completion, failure and cancellation.** A one-off command moves
+to history after its admitted run has **settled**, whether it succeeded, failed,
+was cancelled, timed out, or was interrupted. Settlement requires that its
+process and launch/run reservation have ended and no restart is pending. Never
+retire a never-run `idle` definition or a transient idle/exit during restart.
+Saved commands and services never auto-archive. Publish the final runtime state
+where the existing path emits `script:state` before the archive invalidation;
+all prior output chunks keep their existing ordering. A stop path that already
+resets to idle without a state event need not invent one; its archive invalidation
+still follows settlement. Do not hide a run before final output/state can be read.
+
+Failure must not disappear silently: History renders the recorded result and
+error, and its entry point visibly signals failed/cancelled/interrupted entries.
+Those outcomes retire just like success; the indication must not depend on a
+transient toast, output buffer, or a selected script still being in the active
+list. There is no inferred age/command-name/success-count cleanup policy.
+Automatic archive write failure keeps the row active, logs the persistence
+error, and leaves the real terminal state intact; it must not turn a successful
+command into a failed command or lose its output.
+
+Manual-stop behavior is **unchanged**, including `idle` after stopping a launch
+before spawn or resetting a settled script. Archive itself never clears or
+rewrites that state. Stopping an admitted one-off records a `cancelled` result
+once teardown settles, even if the terminated child reports 0; stopping a
+never-run idle command creates no result and does not auto-archive. Stopping an
+already settled script is not a new run: preserve its preceding result and
+archive state while applying existing runtime/dismiss semantics. The stop phase
+of `restart` is not final completion and cannot trigger retirement.
+
+Cancellation of an RPC waiter alone is not a user stop: once an owned launch or
+completion task has taken over, it continues supervising normally. A dropped
+`script.run` waiter before spawn releases its reservation without fabricating a
+completed run, with the entry left active (even if starting it restored it from
+history). Its previous result remains available. A timeout that kills a spawned
+command records `cancelled` and a timeout diagnostic, keeps `timedOut: true` on
+the existing run result, and retires after teardown settles.
+
+**Compact last result and restart.** After a command attempt settles, persist
+`lastRun: { outcome, exitCode?, startedAt?, stoppedAt, error? }`. `outcome` is
+`succeeded | failed | cancelled | interrupted`; timestamps are RFC 3339 UTC.
+Use the same observed exit code or `-1` diagnostic as an `exited` runtime reading.
+When cancellation ends at `idle` before spawn with no observed exit, omit
+`exitCode` rather than inventing a process result. `startedAt` is absent when no
+process started. `error` describes launch failure, cancellation, timeout or
+unobservable exit when applicable. A spawn/cwd failure is `failed`; an
+unobservable process exit or daemon loss is `interrupted`. Nonzero observed exit
+is `failed` unless cancellation/interruption is known. `succeeded` requires an
+observed 0 with none of those conditions. Persist this bounded latest-result
+metadata for commands of either purpose; do not invent outcomes for legacy idle
+definitions or reconstruct them from names or output. No durable stdout/stderr,
+PID, per-run ledger, or full runtime snapshot is promised.
+
+Keep the preceding `lastRun` during a new launch (label it as a **previous**
+result while live); replace it when that attempt settles. Starting clears the
+runtime terminal fields as before. A definition upsert clears `lastRun` because
+it replaces the command definition. Automatic archive and that run's result
+must be persisted together, so history cannot contain a newly retired one-off
+with no result, including failure/cancellation. A result write failure is logged,
+the terminal state remains readable in memory and auto-archive is withheld;
+restart durability cannot be claimed when the database rejected the write.
+Manual archive of a legacy definition with no known result remains allowed;
+History shows that outcome as unknown, never as success.
+
+Hydrate archived definitions too, retaining their IDs, archive timestamps and
+last results; never start them automatically. Runtime hydration remains the
+existing behavior: a completed command normally returns to `idle` after daemon
+restart; History reads `lastRun` instead of mistaking that transient state for an
+unknown/successful result. A command live at daemon shutdown instead hydrates as
+the existing `exited` / `-1` / `lost: the daemon stopped while the script was running`
+reading, with `lastRun.outcome: "interrupted"` persisted; an explicit one-off then
+retires after recovery settlement, while a saved command remains active. The
+recovery marker takes precedence over an older successful result. Cover accepted
+launches and run/restart reservations too; do not let a restart between admission
+and spawn turn unfinished work into a success or an unmarked idle row. When the
+exact stop time is unobservable, `lastRun.stoppedAt` is the recovery observation
+time, not a claim about the process's exact exit time. Repeated hydration of the
+same interrupted run is idempotent: retain its first archive timestamp and
+recorded result rather than creating another completion. Service recovery and
+existing was-running dismiss semantics remain unchanged.
+
+An already observed terminal result takes precedence over interruption recovery:
+shutdown preserves its outcome, exit code and timestamps even if persistence is
+still pending. Only unfinished admissions recover as interrupted. Restart admission
+cannot inherit the predecessor's observed result; completion remains scoped to
+the admitted run.
+
+**Rerun and replacement.** `start`, `run`, and `restart` of an archived ID
+restore it durably before accepting a launch. They preserve its purpose and ID,
+clear the runtime terminal fields for the new run and publish the restoration
+invalidation before that run's first live state event. Existing duplicate-start
+no-op / already-running warning behavior extends across every live reservation,
+including `restarting`. Do not schedule a second launch to restore an already
+live entry. Restore-only leaves terminal status/output untouched. A
+`script.create` upsert with the same ID intentionally replaces the definition
+and restores it, preserving existing source/creation identity behavior. Omitted
+purpose preserves the existing purpose (the prepared default change applies only
+to new IDs: commands default to `oneOff`, services to `saved`);
+explicit purpose replaces it, subject to mode validation. Changing an existing
+one-off to service therefore requires explicit `purpose: "saved"`. Existing
+upsert teardown behavior is unchanged: unlike archive, replacement can stop the
+old process. Completion from the replaced run cannot retire its replacement.
+
+**Events and completion hooks.** Reuse `script:changed` with existing payload
+`{ scriptId, action: "updated" }` for real archive/restore transitions and last
+result updates (coalesce result+archive into one invalidation). Do not emit
+`action: "removed"` for archive. No new event type or runtime status is added.
+Consumers invalidate and refetch the selected list, retain direct status/output
+handles, and must not add a hidden row back to the active list merely because a
+`script:state` arrives. New subscribers/reconnects obtain authoritative archive
+state from `script.list`; invalidation events alone are not a row snapshot.
+
+Archive does **not** cancel completion hooks or subscriptions. After `start`
+returns, hooks keep using direct `status`/`output` by ID even after the row leaves
+the lifecycle-aware active list. Natural exit and failure still satisfy
+`state.status === "exited" && state.exitCode !== undefined`; a hook that also
+handles manual stop must accept `idle` after launch acceptance, as with the
+existing manual-stop contract. Never gate on `exitCode` alone, and keep waiting
+through `starting`, `running` and `restarting`. Archive must not reset an
+`exited` reading to idle or remove its error. Direct `script.output` reads the
+same available buffer and must not fail because the ID is archived.
+
+Selected/open output tabs and their subscriptions survive archive. Keep a
+retained row/ID outside the active-list filter or resolve it with `archive: "all"`;
+do not close a tab, clear selection/output, or treat an absent active-list row
+as deleted. On reconnect, recover archived open IDs through the all/history
+view. Restore makes the entry visible without opening a new process/tab.
+PTY scrollback remains transient and may be empty after daemon restart; an empty
+buffer is not success. Rerun, replacement and explicit removal retain their
+existing output lifetime limits. Hooks track the current run of an ID, not an
+immutable run ledger: callers needing independent completion watches must use
+distinct IDs or finish observing the preceding run before reusing its ID.
+
+**Agent API (implemented candidate signatures, not installed bindings).** The
+verified daemon candidate implements these helpers with the capability. The
+generated binding index continues to represent only the pinned implementation:
+
+```text
+ws.script.list({ archive? }?) → [scripts]
+ws.script.create(name, command, mode, { ...options, purpose? }) → { id }
+ws.script.archive(scriptIds) → { archived, skipped }
+ws.script.restore(scriptIds) → { restored, skipped }
+```
+
+List remains an unwrapped array. The updated helper defaults an omitted options
+bag or omitted `archive` option to an explicit wire `archive: "active"`; passing
+`"archived"` or `"all"` forwards that choice. Older helper implementations that
+omit the wire filter continue receiving all definitions. Archive/restore return
+the RPC batch result.
+Workspace scope is injected by the host as for existing helpers; no
+caller-supplied cross-workspace escape is added. Existing no-argument `list()`
+and create/start/status/output signatures remain valid. Send explicit `purpose: "saved"`
+for reusable/autostart commands; explicit `oneOff` gives throwaway checks the same
+retention on both lifecycle-capable default generations. New commands may omit
+purpose once the prepared default change is implemented. Never use
+remove as automatic cleanup. The generated MCP binding index reflects the
+monorepo pin, not necessarily the installed daemon. Automatic pin advancement
+regenerates it; this candidate documentation does not manually advance it. Use
+the connected daemon's capability and installed helper help to establish support.
+
+Prepared examples and race expectations are in
+[`fixtures/scripts/lifecycle.json`](../fixtures/scripts/lifecycle.json).
+They are synthetic contract inputs, not evidence of implemented runtime behavior.
+Run their static consistency checks with
+`node --test docs/protocol/fixtures/scripts/contract.test.mjs`; component tests
+exercise the implemented lifecycle with isolated databases and controlled
+launch/completion race barriers. The JSON remains a prepared scenario catalog;
+its static checker does not execute those component tests.

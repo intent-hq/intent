@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # State schema: intentdSource is installed|bin|dev|release|none; UI uses none
 # with a null socket because it does not connect to a daemon.
+#
+# Test-only hook: SANDBOX_TEST_FORK_HOLD=<path> pauses the script between each
+# child fork and its pid capture for as long as <path> exists, so a test can
+# deliver a signal inside that window deterministically. Unset in normal use.
 
 set -u
 
@@ -33,6 +37,8 @@ build_jobs=${BUILD_JOBS:--2}
 socket_path=${INTENTD_SOCKET:-}
 fe_pid=""
 daemon_pid=""
+pending_sig=""
+fork_hold=${SANDBOX_TEST_FORK_HOLD:-}
 cleaning=0
 child_exit_status=0
 state_file="$state_dir/$mode.json"
@@ -434,6 +440,31 @@ trap cleanup EXIT
 trap 'on_signal 130' INT
 trap 'on_signal 143' HUP TERM
 
+# A signal landing between a child fork and its `$!` capture would run cleanup
+# with an empty pid and leak the child (intent-hq/intent#5420). Across that
+# window the traps only record the signal. They stay real traps rather than
+# `trap ''`: an ignored disposition survives exec into the child, a trapped one
+# is reset. Once the pid is captured the real traps come back and a recorded
+# signal is honoured, now with the child known to cleanup.
+defer_signals() {
+  pending_sig=""
+  trap 'pending_sig=143' HUP TERM
+  trap 'pending_sig=130' INT
+}
+
+# Test-only (SANDBOX_TEST_FORK_HOLD): widen the fork → `$!` window so a test can
+# land a signal inside it. A foreground `sleep` does not touch `$!`.
+hold_fork_window() {
+  while [[ -n "$fork_hold" && -e "$fork_hold" ]]; do sleep 0.05; done
+}
+
+capture_child_pid() {
+  printf -v "$1" '%s' "$!"
+  trap 'on_signal 130' INT
+  trap 'on_signal 143' HUP TERM
+  [[ -z "$pending_sig" ]] || on_signal "$pending_sig"
+}
+
 socket_accepts() {
   [[ -S "$socket_path" ]] || return 1
   python3 - "$socket_path" <<'PY' >/dev/null 2>&1
@@ -604,8 +635,8 @@ if [[ "$mode" == app ]]; then
   fi
 elif [[ "$mode" == stack ]]; then
   case "$intentd_profile" in
-    dev) profile_dir=debug; profile_args=() ;;
-    release) profile_dir=release; profile_args=(--release) ;;
+    dev) profile_dir=debug; build_args=(build) ;;
+    release) profile_dir=release; build_args=(build --release) ;;
     *) echo "[dev-sandbox-stack] ERROR: INTENTD_PROFILE must be 'dev' or 'release'." >&2; exit 2 ;;
   esac
   if [[ -n "$intentd_bin" ]]; then
@@ -620,7 +651,7 @@ elif [[ "$mode" == stack ]]; then
     fi
     intentd_bin="$intentd_target_dir/$profile_dir/intentd"
     echo "[dev-sandbox-stack] Building intentd ($intentd_profile profile, BUILD_JOBS=$build_jobs)..."
-    cargo build "${profile_args[@]}" -p intentd --manifest-path "$intentd_dir/Cargo.toml" --jobs "$build_jobs" || exit $?
+    cargo "${build_args[@]}" -p intentd --manifest-path "$intentd_dir/Cargo.toml" --jobs "$build_jobs" || exit $?
   fi
   echo "[dev-sandbox-stack] Starting intentd binary: $intentd_bin"
   socket_path="$dev_data_dir/intentd.sock"
@@ -630,9 +661,12 @@ elif [[ "$mode" == stack ]]; then
     daemon_args+=(--insecure)
     echo "[dev-sandbox-stack] WARNING: SANDBOX_TCP=1 enables unauthenticated TCP on 0.0.0.0:${DEV_TCP_PORT:-5181}." >&2
   fi
+  defer_signals
   INTENTD_DATA_DIR="$dev_data_dir" INTENTD_TCP_PORT="$dev_tcp_port" \
+    INTENTD_WORKSPACES_DIR="$dev_data_dir/workspaces" INTENTD_ASSERT_HERMETIC_ROOT=1 \
     INTENTD_LEGACY_IMPORT_ROOTS="" "$intentd_bin" "${daemon_args[@]}" &
-  daemon_pid=$!
+  hold_fork_window
+  capture_child_pid daemon_pid
 fi
 
 if [[ "$mode" != ui ]]; then
@@ -641,12 +675,14 @@ fi
 
 fe_script=dev:web
 [[ "$mode" == ui ]] && fe_script=dev:ui
+defer_signals
 (
   cd "$fe_dir" || exit 1
   INTENTD_SOCKET="$socket_path" INTENT_DEV_DAEMON_BRIDGE=$([[ "$mode" == ui ]] && echo 0 || echo 1) \
     exec corepack pnpm run "$fe_script"
 ) &
-fe_pid=$!
+hold_fork_window
+capture_child_pid fe_pid
 
 deadline=$((SECONDS + ready_timeout))
 while true; do

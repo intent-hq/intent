@@ -1,11 +1,24 @@
 #!/usr/bin/env bash
 # JSON schema:
-# {"host":{"doctorOk":bool,"gaps":[string]},"ports":{},"sandboxes":[],
-#  "repos":{"name":{"branch":string|null,"dirty":bool,"ahead":int|null,
-#  "behind":int|null,"pin":string|null,"gitlinkDirty":bool,
+# {"setup":{"running":bool,"markers":[string]},
+#  "host":{"doctorOk":bool,"gaps":[string],
+#  "coverageTooling":{"ready":bool,"detail":string},
+#  "github":{"state":string,"rest":{},"graphql":{},"prReady":bool}},"ports":{},"sandboxes":[],
+#  "repos":{"name":{"gitState":"absent"|"readable"|"error",
+#  "gitErrors":[{"probe":string,"detail":string}],"initialized":bool|null,
+#  "branch":string|null,"dirty":bool|null,"ahead":int|null,
+#  "behind":int|null,"pin":string|null,"gitlinkDirty":bool|null,
+#  "behindOriginMain":int|null,
 #  "pr?":{"number":int,"url":string,"state":string,
 #  "checks":{"total":int,"passing":int,"failing":int,"pending":int}}}},
 #  "docs":{"remoteHost":"AGENTS.md#developing-on-a-remote-host"}}
+# Knobs: STATUS_JSON=1 (or --json) emits JSON; DEV_STATUS_PORT_TIMEOUT=<seconds>
+# bounds the scripts/dev-ports.sh probe behind "ports" (default 10, fractional ok);
+# DEV_STATUS_PROBE_TIMEOUT=<seconds> bounds every other probe (doctor, sandbox
+# status and health, git, gh; default 10, fractional ok). Either knob is ignored
+# with a warning unless it is a positive number of at most 86400 seconds.
+# GitHub identity probes additionally obey GITHUB_READINESS_TIMEOUT (3s per
+# API by default, maximum 10s); two calls total, shared with the doctor report.
 
 set -euo pipefail
 
@@ -19,19 +32,85 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 exec python3 - "$repo_root" "$json_output" <<'PY'
-import json
-import os
-import shutil
-import subprocess
 import sys
+
+# Check before importing helpers or probing the host: removeprefix needs 3.9.
+if sys.version_info < (3, 9):
+    sys.exit(
+        "dev-status: Python 3.9+ required; found {}. "
+        "Install a newer python3 and put it on PATH, then run make doctor.".format(
+            ".".join(map(str, sys.version_info[:3]))
+        )
+    )
+
+import functools
+import json
+import math
+import os
+import re
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 
 root, json_output = sys.argv[1], sys.argv[2] == "1"
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.join(root, "scripts"))
+from github_readiness import readiness, describe
+
+# subprocess/socket timeouts overflow their C representation for huge finite
+# values (1e20 raised OverflowError instead of degrading), so one day is the
+# ceiling either knob accepts.
+TIMEOUT_MAX = 86400.0
 
 
-def run(command, *, cwd=root, env=None, timeout=3):
+def timeout_from_env(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is None or not math.isfinite(value) or value <= 0 or value > TIMEOUT_MAX:
+        print(
+            f"dev-status: ignoring {name}={raw!r} "
+            f"(expected a positive number of seconds, at most {TIMEOUT_MAX:g}); "
+            f"using {default:g}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+# One scripts/dev-ports.sh run costs at least one python3 startup per candidate
+# port block (~0.8 s each on a loaded host, more when explicit ports are set or
+# the preferred block is busy); the former 2 s budget emptied "ports" under
+# load, and 10 s keeps generous headroom for loaded hosts while still bounding
+# the report.
+PORT_TIMEOUT_DEFAULT = 10.0
+
+# The doctor (bootstrap-dev-host.sh --check) and dev-sandbox.sh status each
+# cost ~0.9 s on a 32-core host at load average 16 and exceeded the former 3 s
+# budget at load ~50, emptying "sandboxes"; 10 s matches the port knob's
+# headroom. Every non-port probe (doctor, sandbox status and health, git, gh)
+# shares this budget.
+PROBE_TIMEOUT_DEFAULT = 10.0
+
+
+@functools.lru_cache(maxsize=None)
+def port_timeout():
+    return timeout_from_env("DEV_STATUS_PORT_TIMEOUT", PORT_TIMEOUT_DEFAULT)
+
+
+@functools.lru_cache(maxsize=None)
+def probe_timeout():
+    return timeout_from_env("DEV_STATUS_PROBE_TIMEOUT", PROBE_TIMEOUT_DEFAULT)
+
+
+def run(command, *, cwd=root, env=None, timeout=None):
+    if timeout is None:
+        timeout = probe_timeout()
     try:
         return subprocess.run(
             command,
@@ -46,19 +125,61 @@ def run(command, *, cwd=root, env=None, timeout=3):
         return None
 
 
+# The daemon writes the workspace setup script to <worktree>/.intent/setup-<uuid>.sh
+# while it runs and removes it on exit, so a matching file means the worktree is
+# still being provisioned and everything below is provisional.
+SETUP_MARKER = re.compile(r"^setup-[0-9a-f]{32}\.sh$")
+
+
+def setup_status():
+    intent_dir = os.path.join(root, ".intent")
+    try:
+        names = os.listdir(intent_dir)
+    except OSError:
+        names = []
+    markers = sorted(
+        os.path.join(".intent", name) for name in names if SETUP_MARKER.match(name)
+    )
+    return {"running": bool(markers), "markers": markers}
+
+
+COVERAGE_UNKNOWN = {"ready": False, "detail": "unknown"}
+
+
+def coverage_tooling(lines):
+    # Derived from the doctor's "[optional] cargo-llvm-cov: ..." row; ready only
+    # when both cargo-llvm-cov and llvm-tools-preview are present.
+    for line in lines:
+        detail = line.removeprefix("[optional] ").strip()
+        if line.startswith("[optional] ") and detail.startswith("cargo-llvm-cov:"):
+            return {"ready": "with llvm-tools-preview" in detail, "detail": detail}
+    return dict(COVERAGE_UNKNOWN)
+
+
 def doctor_status():
-    result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"])
+    env = os.environ.copy()
+    env["DEV_STATUS_SKIP_GITHUB"] = "1"
+    result = run([os.path.join(root, "scripts/bootstrap-dev-host.sh"), "--check"], env=env)
     if result is None:
-        return {"doctorOk": False, "gaps": ["doctor check could not complete"]}
+        return {
+            "doctorOk": False,
+            "gaps": ["doctor check could not complete"],
+            "coverageTooling": dict(COVERAGE_UNKNOWN),
+        }
+    lines = result.stdout.splitlines()
     gaps = []
-    for line in result.stdout.splitlines():
+    for line in lines:
         if line.startswith("[missing]  "):
             gaps.append(line.removeprefix("[missing]  ").strip())
-    return {"doctorOk": result.returncode == 0, "gaps": gaps}
+    return {
+        "doctorOk": result.returncode == 0,
+        "gaps": gaps,
+        "coverageTooling": coverage_tooling(lines),
+    }
 
 
 def port_status():
-    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=2)
+    result = run([os.path.join(root, "scripts/dev-ports.sh")], timeout=port_timeout())
     ports = {}
     if result is None or result.returncode != 0:
         return ports
@@ -93,16 +214,49 @@ def sandbox_health(url):
         return None
     health_url = urllib.parse.urljoin(url.rstrip("/") + "/", "__sandbox/health")
     try:
-        with urllib.request.urlopen(health_url, timeout=0.4) as response:
+        with urllib.request.urlopen(health_url, timeout=probe_timeout()) as response:
             payload = json.load(response)
         return payload if isinstance(payload, dict) else None
     except (OSError, ValueError, urllib.error.URLError):
         return None
 
 
-def git_output(path, *arguments):
-    result = run(["git", "-C", path, *arguments], timeout=1)
-    if result is None or result.returncode != 0:
+# Terminal escapes and control characters in Git diagnostics (including paths)
+# must not become terminal instructions or additional report lines.
+ANSI_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])")
+GIT_DETAIL_LIMIT = 240
+
+
+def git_error(errors, probe, detail):
+    if errors is not None:
+        detail = ANSI_ESCAPE.sub("", detail)
+        detail = " ".join("".join(c if c.isprintable() else " " for c in detail).split())
+        if len(detail) > GIT_DETAIL_LIMIT:
+            detail = detail[:GIT_DETAIL_LIMIT - 3] + "..."
+        errors.append({"probe": probe, "detail": detail or "Git probe failed"})
+
+
+def git_output(path, *arguments, errors=None, probe=None):
+    env = os.environ.copy()
+    # git status otherwise refreshes the index even though this is a report.
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    # Pin repository discovery to this marker. Git can otherwise ignore an
+    # invalid .git directory and report the containing monorepo as the component.
+    env["GIT_DIR"] = os.path.join(path, ".git")
+    try:
+        result = subprocess.run(
+            ["git", "-C", path, *arguments], cwd=root, env=env,
+            capture_output=True, text=True, errors="replace",
+            timeout=probe_timeout(), check=False,
+        )
+    except subprocess.TimeoutExpired:
+        git_error(errors, probe, f"Git probe timed out after {probe_timeout():g}s")
+        return None
+    except OSError as error:
+        git_error(errors, probe, str(error))
+        return None
+    if result.returncode != 0:
+        git_error(errors, probe, result.stderr or f"Git exited with status {result.returncode}")
         return None
     return result.stdout.strip()
 
@@ -133,7 +287,6 @@ def branch_pr(path, branch):
         ["gh", "pr", "list", "--head", branch, "--state", "open", "--limit", "1",
          "--json", "number,url,state,statusCheckRollup"],
         cwd=path,
-        timeout=3,
     )
     if result is None or result.returncode != 0:
         return None
@@ -152,8 +305,8 @@ def branch_pr(path, branch):
     }
 
 
-def recorded_pin(relative_path):
-    entry = git_output(root, "ls-tree", "HEAD", "--", relative_path)
+def recorded_pin(relative_path, errors):
+    entry = git_output(root, "ls-tree", "HEAD", "--", relative_path, errors=errors, probe="pin")
     if not entry:
         return None
     fields = entry.split(None, 3)
@@ -162,62 +315,91 @@ def recorded_pin(relative_path):
     return fields[2]
 
 
+def behind_origin_main(path):
+    # Counts the checked-out HEAD against the already-fetched remote-tracking
+    # ref only; no fetch. A missing ref fails the call and maps to None.
+    count = git_output(path, "rev-list", "--count", "HEAD..refs/remotes/origin/main")
+    try:
+        return int(count)
+    except (TypeError, ValueError):
+        return None
+
+
 def repo_status(relative_path, gh_ready):
     path = os.path.join(root, relative_path)
-    pin = recorded_pin(relative_path)
-    short_pin = pin[:7] if pin else None
-    git_marker = os.path.join(path, ".git")
-    inside = git_output(path, "rev-parse", "--is-inside-work-tree") if os.path.exists(git_marker) else None
-    if inside != "true":
-        return {
-            "initialized": False,
-            "branch": None,
-            "dirty": False,
-            "ahead": None,
-            "behind": None,
-            "pin": short_pin,
-            "gitlinkDirty": False,
-        }
-
-    branch = git_output(path, "branch", "--show-current") or None
-    porcelain = git_output(path, "status", "--short", "--untracked-files=normal")
-    head = git_output(path, "rev-parse", "HEAD")
+    errors = []
+    pin = recorded_pin(relative_path, errors)
+    pin_known = not errors
     repo = {
-        "initialized": True,
-        "branch": branch,
-        "dirty": bool(porcelain),
+        "gitState": "absent",
+        "gitErrors": errors,
+        "initialized": False,
+        "branch": None,
+        "dirty": False,
         "ahead": None,
         "behind": None,
-        "pin": short_pin,
-        "gitlinkDirty": bool(pin and head and head != pin),
+        "pin": pin[:7] if pin else None,
+        "gitlinkDirty": False if pin_known else None,
+        "behindOriginMain": None,
     }
-    if branch is None:
-        repo["head"] = git_output(path, "rev-parse", "--short", "HEAD")
+    git_marker = os.path.join(path, ".git")
+    try:
+        # lstat observes dangling symlinks and distinguishes unreadable markers
+        # from absence. Never let Git discover the containing monorepo instead.
+        os.lstat(git_marker)
+        marker_present = True
+    except FileNotFoundError:
+        marker_present = False
+    except OSError as error:
+        git_error(errors, "initialization", str(error))
+        marker_present = None
 
-    counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
-    if counts:
-        try:
-            behind, ahead = (int(value) for value in counts.split())
-            repo["ahead"], repo["behind"] = ahead, behind
-        except (TypeError, ValueError):
-            pass
+    if marker_present is not False:
+        repo.update(initialized=None, dirty=None, gitlinkDirty=None)
+        inside = git_output(path, "rev-parse", "--is-inside-work-tree",
+                            errors=errors, probe="initialization") if marker_present else None
+        if inside == "true":
+            repo["initialized"] = True
+            repo["gitState"] = "readable"
+        elif inside is not None:
+            git_error(errors, "initialization", "Git did not confirm a worktree")
 
-    if gh_ready and branch:
-        pr = branch_pr(path, branch)
-        if pr is not None:
-            repo["pr"] = pr
+    if repo["initialized"] is True:
+        branch = git_output(path, "branch", "--show-current", errors=errors, probe="branch")
+        repo["branch"] = branch or None
+        porcelain = git_output(path, "status", "--short", "--untracked-files=normal",
+                               errors=errors, probe="status")
+        head = git_output(path, "rev-parse", "--verify", "HEAD", errors=errors, probe="head")
+        repo["dirty"] = bool(porcelain) if porcelain is not None else None
+        if pin_known and head is not None:
+            repo["gitlinkDirty"] = bool(pin and head != pin)
+        repo["behindOriginMain"] = behind_origin_main(path)
+        if branch == "" and head is not None:
+            repo["head"] = git_output(path, "rev-parse", "--short", "HEAD") or head[:7]
+
+        # Optional refs may legitimately be absent; retain null counts without
+        # treating them as failures of the required worktree observations.
+        counts = git_output(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+        if counts:
+            try:
+                behind, ahead = (int(value) for value in counts.split())
+                repo["ahead"], repo["behind"] = ahead, behind
+            except (TypeError, ValueError):
+                pass
+
+        if gh_ready and branch:
+            pr = branch_pr(path, branch)
+            if pr is not None:
+                repo["pr"] = pr
+    if errors:
+        repo["gitState"] = "error"
     return repo
 
 
-def github_ready():
-    if shutil.which("gh") is None:
-        return False
-    result = run(["gh", "auth", "status"], timeout=1)
-    return result is not None and result.returncode == 0
-
-
-gh_ready = github_ready()
+github = readiness(timeout=probe_timeout())
+gh_ready = github["prReady"]
 report = {
+    "setup": setup_status(),
     "host": doctor_status(),
     "ports": port_status(),
     "sandboxes": sandbox_status(),
@@ -227,16 +409,33 @@ report = {
     },
     "docs": {"remoteHost": "AGENTS.md#developing-on-a-remote-host"},
 }
+report["host"]["github"] = github
 
 if json_output:
     json.dump(report, sys.stdout, separators=(",", ":"))
     print()
     raise SystemExit(0)
 
+if report["setup"]["running"]:
+    print(
+        "SETUP SCRIPT STILL RUNNING — status below is provisional "
+        f"({', '.join(report['setup']['markers'])})"
+    )
 print("Intent worktree status")
 print(f"Host       doctor {'ok' if report['host']['doctorOk'] else 'has gaps'}")
+print(f"GitHub     {describe(github)}")
 for gap in report["host"]["gaps"]:
     print(f"           gap: {gap}")
+coverage = report["host"]["coverageTooling"]
+if coverage["ready"]:
+    coverage_text = "cargo-llvm-cov ready"
+elif coverage["detail"] == "unknown":
+    coverage_text = "cargo-llvm-cov unknown"
+elif coverage["detail"].startswith("cargo-llvm-cov: not installed"):
+    coverage_text = "cargo-llvm-cov not installed"
+else:
+    coverage_text = "cargo-llvm-cov installed, llvm-tools-preview missing"
+print(f"Coverage   {coverage_text}")
 ports = report["ports"]
 print("Ports      " + "  ".join(f"{name}={value}" for name, value in ports.items()))
 if report["sandboxes"]:
@@ -249,6 +448,13 @@ if report["sandboxes"]:
 else:
     print("Sandboxes  none")
 for name, repo in report["repos"].items():
+    if repo["gitState"] == "error":
+        dirty = {True: "dirty", False: "clean", None: "unknown"}[repo["dirty"]]
+        gitlink = {True: "moved", False: "unchanged", None: "unknown"}[repo["gitlinkDirty"]]
+        print(f"Repo       {name}: Git state unavailable (worktree={dirty}, gitlink={gitlink})")
+        for error in repo["gitErrors"]:
+            print(f"           {error['probe']}: {error['detail']}")
+        continue
     if not repo["initialized"]:
         print(f"Repo       {name}: uninitialized")
         continue
@@ -264,6 +470,13 @@ for name, repo in report["repos"].items():
             f" PR #{pr['number']} checks={checks['passing']} pass/"
             f"{checks['pending']} pending/{checks['failing']} fail"
         )
-    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{pr_text}")
+    lag = repo["behindOriginMain"]
+    lag_text = f" behind-origin/main={'-' if lag is None else lag}"
+    print(f"Repo       {name}: {branch} {dirty} ahead/behind={tracking}{gitlink_text}{lag_text}{pr_text}")
+    if lag:
+        print(
+            f"           checked-out HEAD is {lag} commit(s) behind origin/main — branch component "
+            "work from origin/main; auto-bump-submodules will advance the pin"
+        )
 print(f"Docs       {report['docs']['remoteHost']}")
 PY

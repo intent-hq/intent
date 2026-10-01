@@ -22,6 +22,8 @@ on:
     paths:
       - scripts/bootstrap-dev-host.sh
       - scripts/bootstrap-dev-host.test.sh
+      - scripts/github-readiness.sh
+      - scripts/github_readiness.py
       - packages/intentd
       - packages/cloudlands-fe
       - .gitmodules

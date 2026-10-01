@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.22 `mcp.servers.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.22 `mcp.servers.*`
 
 The **external** MCP-server lifecycle/config surface, backed by the `mcp.servers` setting
@@ -38,7 +40,7 @@ and lifecycle transitions are pushed via `mcp.servers:status-changed` (§6.5).
 | mcp.servers.delete | serverId (req) | { success: true } |
 | mcp.servers.toggle | serverId (req), enabled (req): boolean, workspaceId? | { status: McpServerStatus } — enable starts the server, disable stops it (replaces start/stop). With `workspaceId` the toggle is workspace-scoped instead and returns { status, workspaceDisabled } (see "Per-workspace disable") |
 | mcp.servers.restart | serverId (req) | { status: McpServerStatus } — authoritative stop-then-start: reset the current connection/session, then perform a fresh launch or remote probe |
-| mcp.servers.getStatus | serverId (req) | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
+| mcp.servers.getStatus | serverId (req), workspaceId? | { status: McpServerStatus } — optional point read; live updates arrive via `mcp.servers:status-changed` |
 
 - **McpServerConfig** — `{ id, name, transport: "stdio"|"http"|"sse", command?, args?: string[],
   env?: object, url?, headers?: object, enabled: boolean, scope?: "user"|"workspace" }`. `command`

@@ -1,0 +1,5 @@
+# Grandfathered fixed sleeps per shell suite: `<path> <unannotated count>`, sorted by path.
+# Checked by `scripts/lint-fixed-sleeps.sh`. Entries only ratchet down: burn a file's
+# sleeps down (observable-event waits, or a `# timing-guard: <reason>` marker for a
+# justified one) and the lint names the corrected line to write here.
+scripts/bootstrap-dev-host.test.sh 1

@@ -51,12 +51,12 @@ Changes that touch a submodule land in two phases:
    branch in the submodule repo (e.g. `intent-hq/intentd`), open a PR there, and
    merge it (squash merge preferred).
 2. **Phase 2 — automated monorepo pin advance.** The `auto-bump-submodules`
-   workflow (triggered by `repository_dispatch` from submodule merges for
-   ~1-minute latency, with a 30-minute cron backstop, plus manual dispatch)
-   advances the monorepo's submodule pins to the merged tips via a single
-   rolling auto-merged PR on the `auto/submodule-bump` branch. **Do not file
-   manual submodule bump PRs** — if an urgent bump is needed, dispatch the
-   workflow manually
+   workflow advances pins via one rolling auto-merged PR on `auto/submodule-bump`.
+   Triggers are `repository_dispatch` from submodule merges, a 30-minute cron
+   backstop, manual `workflow_dispatch`, and monorepo `main` pushes changing
+   submodule gitlinks; this continuation picks up deferred tips after a queued
+   bump merges. **Do not file manual submodule bump PRs** — for an urgent bump,
+   dispatch the workflow manually
    (`gh workflow run auto-bump-submodules.yml`) instead of opening a PR.
 
 Monorepo-only changes (docs, Makefile, CI, scripts, templates) are unaffected by
@@ -84,6 +84,60 @@ Keep the relevant checks green before opening a PR:
   run `make test` for the test suite.
 - **cloudlands-fe**: `pnpm run check` and `pnpm vitest run`.
 - **ios**: build + test targets passing.
+
+### Local Rust gates
+
+`make gate` runs `make check` followed by the full nextest suite. `make test`
+runs tests only; `make test-changed` selects tests changed against `BASE`
+(default `origin/main`) and falls back to the full suite for build-wide changes.
+
+Opt in to smaller local build artifacts with:
+
+```bash
+COMPACT=1 make gate
+COMPACT=1 make test-changed
+make -C packages/intentd test COMPACT=1
+```
+
+Compact and ordinary gates support **Python 3.10+**. The runner uses a bundled
+TOML 1.1 parser offline, including under `python3 -S`; no parser installation is
+needed. Compact applies to the compiler steps in `check`, `test`,
+`test-changed` and `gate`, and to `clippy` and `lint-sources`.
+It sets `CARGO_INCREMENTAL=0` and dev/test profile `debug=0`, including discovered
+package and build overrides. `strip=none` preserves the existing macOS
+proc-macro workaround. Test selection, changed-test fallback and failure handling
+are unchanged. Leaving `COMPACT` unset or setting `COMPACT=0` keeps ordinary
+gate behavior; release profiles are unaffected.
+
+These are Cargo profile/environment settings. Caller Rust flags are preserved
+with Cargo's normal precedence, including `RUSTFLAGS`,
+`CARGO_ENCODED_RUSTFLAGS`, `CARGO_BUILD_RUSTFLAGS` and target/build flags in Cargo
+configuration. An effective explicit `-C debuginfo=2` can therefore retain debug
+information, and `-C incremental=/path` can re-enable incremental artifacts even
+though compact sets `CARGO_INCREMENTAL=0`. Conflicting flags reduce or remove the
+storage benefit. Without those overrides, compact trades source-line backtraces
+and debugger detail for smaller artifacts; disabling incremental compilation can
+make rebuilds slower. It neither guarantees a disk bound nor deletes existing
+targets or caches. Switching modes in one target directory may retain artifacts
+from both; use a task-owned `CARGO_TARGET_DIR` when measuring or isolating builds.
+
+`RESUME=1 make test` (or `make test-changed`) skips tests recorded as passed for
+the same worktree and effective build settings; `GATE_FORCE=1` runs them again.
+Use `COMPACT=1 RESUME=1 make test` to resume a compact run. Compact/default runs
+have separate resume identities, including profile/incremental settings and
+effective Cargo config contents, so switching modes cannot reuse the other
+mode's passes. Records live under `GATE_CACHE_DIR` (default
+`$HOME/.cache/intent/gate-runs`) and expire after seven days. `NO_FAIL_FAST=1`
+continues past failures while preserving the nonzero exit status. `make gate`
+always reruns its checks before the resumable test phase.
+
+Coverage targets (`coverage-changed`, `coverage-e2e`, `coverage-all`) reject
+`COMPACT=1` before instrumentation; run them with `COMPACT=0`. At the monorepo
+root, even mixed goals such as `make test coverage-all COMPACT=1` reject before
+any recipe runs. The unchanged `packages/intentd` forwarder invokes separate
+root makes per goal: `make -C packages/intentd test coverage-changed COMPACT=1` may
+run the noncoverage goal before rejecting coverage. It still never starts compact
+coverage. Use separate invocations with the appropriate mode for each goal.
 
 ## Filing issues
 

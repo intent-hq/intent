@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.14 Execution locus, locality & remote behavior.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.14 Execution locus, locality & remote behavior
 
 All side effects — PTYs, scripts, file I/O, git, ACP provider processes — run on the **daemon
@@ -26,7 +28,7 @@ in the bullet under this table).
 
 | Method | Direction | Params | Result |
 | --- | --- | --- | --- |
-| host.status | client → daemon | — (no workspaceId) | { os, arch, hostname, prettyHostname?, deviceKind?, hardwareModel?, hasDisplay, locality, displayServer? } — host capability probe. `prettyHostname?` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available; always present on daemons that ship it, but older daemons omit it — detect by presence. `deviceKind?` and `hardwareModel?` are additive and omitted (never `null`) when unknown — detect them by presence |
+| host.status | client → daemon | workspaceId? | { os, arch, hostname, prettyHostname?, deviceKind?, hardwareModel?, hasDisplay, locality, displayServer? } — host capability probe. `prettyHostname?` (additive, [intent-hq/intentd#1466](https://github.com/intent-hq/intentd/pull/1466)) is the OS "pretty" device name (macOS Computer Name, e.g. "Clement's Mac Studio"), falling back to `hostname` when no pretty name is available; always present on daemons that ship it, but older daemons omit it — detect by presence. `deviceKind?` and `hardwareModel?` are additive and omitted (never `null`) when unknown — detect them by presence |
 | host.openExternal | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | url (req) | { ok: true } — **FE-served**: routes an "open in browser/app" intent back to the *user's* machine |
 | host.openInEditor | **client → daemon** (trigger) *and* **daemon → client** (reverse RPC, `id: "rev-<n>"`) | editorId (req), path (req), line?, column? | { ok: true } — launches the user's editor on `path` (optional `line`/`column` hint). **Client-callable trigger**: the FE calls this like any other method; on a local connection the daemon short-circuits via the resolved `host.listInstalledEditors` entry and launches on the daemon host, on a remote connection the daemon re-dispatches the intent to the connected client as the FE-served reverse RPC so the editor opens on the user's laptop. `-32602` on missing `editorId`/`path` or an `editorId` unknown to the platform catalog; `-32603` when the editor is not installed, the local host is headless, or the launch / reverse proxy fails |
 | host.pickApplication | **daemon → client** (reverse RPC, `id: "rev-<n>"`) | path (req) | { applicationId? } — **FE-served**: "open with…" chooser. Always dispatched to the connected client, which echoes its selection back as `applicationId?` (or nothing when no chooser is available); there is no daemon-side chooser |
@@ -34,8 +36,8 @@ in the bullet under this table).
 | host.createDirectory | client → daemon | path (req) | { path } — creates the directory on the daemon host with parents (`create_dir_all` semantics); succeeding when the directory already exists is deliberate (idempotent). A leading `~` / `~/` is **expanded to the daemon-host home on the daemon**, exactly like `host.listDirectory` (`~user` forms pass through verbatim), and the returned `path` is always the fully expanded created path so the FE can navigate into it. `-32602` on a missing/empty `path`; IO failures surface as `-32603` with the error message |
 | host.exec | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId? | { stdout, stderr, exitCode, timedOut? } — daemon-owned one-shot exec |
 | host.execStream | client → daemon | command (req), args? (string[]), cwd?, env? (Record<string,string>), timeoutMs?, workspaceId?, stdin? (string), stdinBase64?, requestId? | { requestId } — daemon-owned **streaming** exec; stdout/stderr/exit surface as `host:exec:*` bus frames |
-| host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool) | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
-| host.execStream.cancel | client → daemon | requestId (req) | { ok: true, cancelled: bool } — reap a live stream's process group (idempotent on unknown ids) |
+| host.execStream.write | client → daemon | requestId (req), stdin? (string), stdinBase64?, eof? (bool), workspaceId? | { ok: true } — write follow-up stdin to a live stream (closes the child's stdin end when `eof=true`) |
+| host.execStream.cancel | client → daemon | requestId (req), workspaceId? | { ok: true, cancelled: bool } — reap a live stream's process group (idempotent on unknown ids) |
 
 - `host.hasDisplay` / `host.locality` are also folded into the daemon's `status` / `doctor`
   reports, so a client can gate UI **before** connecting. When
@@ -250,3 +252,11 @@ a **local** (UDS) connection forwarding is unnecessary and these are no-ops.
 // ← { "jsonrpc":"2.0","id":92,"result":{ "ok": true, "cancelled": true } }
 ```
 
+
+### Prepared node execution boundary
+
+The current host-local contracts above remain the default. For future placed
+agents, [node routing](../node-link.md#namespace-routing-and-file-contracts)
+separates the agent node from the head daemon and frontend. A node cwd is opaque
+on head; node live reads/commands use scoped bidirectional RPC. Existing
+`host.openInEditor` must not receive a node path as a frontend-local path.

@@ -1,5 +1,7 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.9 `browser.*`, `terminal.*`, `file.*` · §5.13 Interactive `terminal.*`.
 
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+
 ### 5.9 `browser.*`, `terminal.*`, `file.*`
 
 | Method | Params | Result |
@@ -9,19 +11,69 @@
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
-| file.read | path (req) | file contents — paths outside the workspace rejected (-32603) |
-| file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the workspace rejected (-32603); missing file → -32603 per the file-op convention |
+| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
+| file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded), gitRootId? (v11.1; see below) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602); missing file → -32603 per the file-op convention |
 | file.write | path (req), content (req) | { ok, path, size } |
 | file.list | path? (default .) | [{ name, type }] |
 | file.delete | path (req) | { ok, path, deleted } |
 | file.mkdir | path (req) | { ok, path, created? |
 | file.rename | oldPath (req), newPath (req) | { ok, oldPath, newPath } |
 | file.placeAttachment | fileName (req), data? (base64), sourcePath? (absolute host path) — exactly one of data/sourcePath; mimeType? (v6.12); idempotencyKey? (v9.13; 1–128 chars, no surrounding whitespace; non-string → -32602) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — `path` is workspace-relative under `.intent/attachments/`, `size` is the placed byte length (v6.5; monorepo#1948). `attachmentId` / `mimeType?` / `uploadedAt` (v6.12) are the additive attachment-registry fields (presence-detected; pre-6.12 daemons omit them): the daemon-minted UUID the placement was registered under, the client-supplied MIME type echoed back (omitted when not supplied), and the ISO registration timestamp. With `idempotencyKey` (v9.13; see the idempotent-placement block below) a same-key retry whose payload identity matches the bound placement answers the ORIGINAL result plus `replayed: true` (presence-detected; never present on a first placement or an unkeyed call) and places nothing; a same-key call with a different payload identity is -32602 ("idempotencyKey already used with a different payload") |
-| file.getAttachmentInfo | attachmentId? — or — workspaceId + idempotencyKey? (v9.13): exactly one selector | { attachmentId, fileName, mimeType?, size, uploadedAt, path, exists } — attachment-registry metadata lookup (v6.12): `path` is the stored workspace-relative path (under `.intent/attachments/`) and `exists` reflects whether the file is still on disk at read time (the registry row survives an out-of-band delete). Unknown id → -32602 naming the id ("unknown attachment id"). The key arm (v9.13) resolves a live idempotency-key binding of that workspace to the same row shape; a key that was never bound in the workspace, belongs to another workspace, or is past the 7-day retention → -32602 ("unknown idempotency key"); both selectors, neither, or a key without `workspaceId` → -32602 |
+| file.getAttachmentInfo | attachmentId with optional workspaceId routing context — or — workspaceId + idempotencyKey (v9.13): exactly one selector | { attachmentId, fileName, mimeType?, size, uploadedAt, path, exists } — attachment-registry metadata lookup (v6.12): `path` is the stored workspace-relative path (under `.intent/attachments/`) and `exists` reflects whether the file is still on disk at read time (the registry row survives an out-of-band delete). Unknown id → -32602 naming the id ("unknown attachment id"). The key arm (v9.13) resolves a live idempotency-key binding of that workspace to the same row shape; a key that was never bound in the workspace, belongs to another workspace, or is past the 7-day retention → -32602 ("unknown idempotency key"); both selectors, neither, or a key without `workspaceId` → -32602 |
 | file.attachmentUpload.begin *(v6.16)* | fileName (req), sizeBytes (req; positive, ≤ 1 GiB), sha256 (req; 64-hex of the complete payload), mimeType?, idempotencyKey? (v9.13) | { uploadId, maxChunkBytes, replayed? } — opens a staged chunked attachment upload session (16 MiB decoded per chunk); the workspace must exist, `fileName` must pass the same basename sanitization placement applies (fail-early: a name commit would reject fails here, before any bytes are staged), and validation failures are -32602 naming the specifics. A workspace holds at most **4** live sessions (monorepo#2275): a begin at the cap is -32602 naming the live count ("commit or abort one before beginning another"), and every begin first sweeps idle-expired sessions (15-minute idle TTL — see the session-bounds block below) so expired sessions never hold cap slots. With `idempotencyKey` (v9.13): a same-key begin with the same `(fileName, sizeBytes, sha256)` while that session is still live answers the SAME `uploadId` plus `replayed: true` (a lost begin reply) instead of opening a second session; a key already bound to a committed attachment is -32602 ("already committed; look it up via file.getAttachmentInfo { workspaceId, idempotencyKey }") — begin stays shape-stable and the client recovers through the lookup; either case with a different payload identity is -32602 ("idempotencyKey already used with a different payload") |
-| file.attachmentUpload.chunk *(v6.16)* | uploadId (req), seq (req; 0-based), data (req; base64) | { uploadId, seq, receivedBytes } — stages one seq-numbered slice; per-seq retry is idempotent (the same seq overwrites the same chunk file; only new bytes count against the declared total) and chunks may arrive in any order. Over-cap chunks and totals beyond `sizeBytes` are -32602; unknown uploadId → -32602 ("no attachment upload in progress"); a chunk on an idle-expired session is -32602 ("expired after Ns of inactivity — begin a new upload", monorepo#2275) |
-| file.attachmentUpload.commit *(v6.16)* | uploadId (req) | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — byte-shape-identical to a successful file.placeAttachment result: verifies staged bytes = sizeBytes with gap-free seqs from 0 and a matching SHA-256, then places through the same collision-safe placement + attachment-registry path. A failed commit leaves the session alive for retry or abort (and refreshes the idle clock, monorepo#2275); incomplete/gapped/mismatched payloads are -32602. A commit on an idle-expired session is -32602 ("expired … — begin a new upload"), and a commit racing an in-flight chunk (the pipelined chunk+commit race) is -32602 advising to wait for the chunk call to return and retry — the reserved-but-unwritten guise was formerly -32603 Internal; the partially-written guise was already -32602 and gains the retry advice (monorepo#2275). A session opened with an `idempotencyKey` (v9.13) binds the key to the committed attachment in the same store transaction as the registry row, so a lost commit reply is recovered through `file.getAttachmentInfo { workspaceId, idempotencyKey }` (the session itself is retired, so a second commit stays the pre-9.13 unknown-uploadId -32602). The commit runs the same keyed replay/conflict check as `file.placeAttachment`: when the key was meanwhile bound on another surface with a matching fingerprint (a same-key single-shot placement that landed first), the commit places nothing, retires the session, and answers that original placement's result plus the presence-detected `replayed: true`; a mismatched fingerprint is the `-32602` conflict and leaves the session alive |
-| file.attachmentUpload.abort *(v6.16)* | uploadId (req) | { uploadId, aborted } — drops the session and its staging directory; idempotent (an unknown id returns `aborted: false` instead of erroring) |
+| file.attachmentUpload.chunk *(v6.16)* | uploadId (req), seq (req; 0-based), data (req; base64), workspaceId? | { uploadId, seq, receivedBytes } — stages one seq-numbered slice; per-seq retry is idempotent (the same seq overwrites the same chunk file; only new bytes count against the declared total) and chunks may arrive in any order. Over-cap chunks and totals beyond `sizeBytes` are -32602; unknown uploadId → -32602 ("no attachment upload in progress"); a chunk on an idle-expired session is -32602 ("expired after Ns of inactivity — begin a new upload", monorepo#2275) |
+| file.attachmentUpload.commit *(v6.16)* | uploadId (req), workspaceId? | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — byte-shape-identical to a successful file.placeAttachment result: verifies staged bytes = sizeBytes with gap-free seqs from 0 and a matching SHA-256, then places through the same collision-safe placement + attachment-registry path. A failed commit leaves the session alive for retry or abort (and refreshes the idle clock, monorepo#2275); incomplete/gapped/mismatched payloads are -32602. A commit on an idle-expired session is -32602 ("expired … — begin a new upload"), and a commit racing an in-flight chunk (the pipelined chunk+commit race) is -32602 advising to wait for the chunk call to return and retry — the reserved-but-unwritten guise was formerly -32603 Internal; the partially-written guise was already -32602 and gains the retry advice (monorepo#2275). A session opened with an `idempotencyKey` (v9.13) binds the key to the committed attachment in the same store transaction as the registry row, so a lost commit reply is recovered through `file.getAttachmentInfo { workspaceId, idempotencyKey }` (the session itself is retired, so a second commit stays the pre-9.13 unknown-uploadId -32602). The commit runs the same keyed replay/conflict check as `file.placeAttachment`: when the key was meanwhile bound on another surface with a matching fingerprint (a same-key single-shot placement that landed first), the commit places nothing, retires the session, and answers that original placement's result plus the presence-detected `replayed: true`; a mismatched fingerprint is the `-32602` conflict and leaves the session alive |
+| file.attachmentUpload.abort *(v6.16)* | uploadId (req), workspaceId? | { uploadId, aborted } — drops the session and its staging directory; idempotent (an unknown id returns `aborted: false` instead of erroring) |
+
+**Reading a file in a registered Git root (v11.1, additive prepared contract).**
+
+**Client support gate.** Before sending either reader with a nonblank
+`gitRootId`, clients must establish support from the **connected daemon's**
+advertised `client.hello.protocolVersion`: a well-formed, supported protocol
+version at least `11.1`. Missing, malformed, older, or otherwise unknown support
+must fail closed before sending the scoped text or chunk request. Re-establish
+support after reconnecting or switching daemons; a previous daemon's result is
+not evidence for the current connection. Documentation version headers and
+unrelated capability flags do not establish support. Older daemons can ignore
+the unknown selector and successfully return a same-named primary-workspace
+file, so neither a trial scoped read nor retrying without `gitRootId` is a safe
+fallback. Ordinary reads without a selector keep their existing behavior.
+
+`file.read` and `file.readChunk` accept an additive optional `gitRootId` request
+field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
+using the same ownership rules as the [Git read-root convention](./git.md).
+The selected root can be nested inside the primary workspace or registered
+outside it. `path` is relative to that root, and the read returns its current
+working-tree contents, including untracked files; it does not read a Git ref
+or the index.
+
+An unknown ID and an ID registered to another workspace both return `-32602`
+with the identical message `Unknown git root: <id>`. An omitted, empty, or
+whitespace-only `gitRootId` preserves existing workspace/agent root resolution
+and read behavior. A nonblank selector chooses the registered root instead
+of the agent root; it never falls back to the primary workspace on failure.
+
+The existing lexical and canonical path checks apply within the selected root:
+parent traversal that escapes it or an absolute path outside it is rejected,
+and a symlink whose resolved target escapes it is rejected (`-32603`). An absolute path
+already inside the selected root remains subject to both checks. Selecting a
+registered external root does not grant access outside that root.
+
+Both response shapes are unchanged: `file.read` returns a bare UTF-8 string;
+`file.readChunk` returns `{ content, bytesRead, size }`, with base64 `content`.
+Neither adds root metadata. Existing size, binary, encoding and I/O-error
+handling is unchanged. Chunk reads retain the 0-based byte `offset`, positive
+`length` capped at 16 MiB decoded, empty content and zero bytes at/past EOF,
+and a shortened final chunk when the window crosses EOF. No file write/mutation
+API gains root support; all other file APIs retain their existing scope.
+
+```json
+// → request (read an untracked working-tree file)
+{ "jsonrpc":"2.0","id":39,"method":"file.read",
+  "params":{ "workspaceId":"ws-abc","gitRootId":"root-xyz","path":"notes/new.txt" } }
+// ← response
+{ "jsonrpc":"2.0","id":39,"result":"hello\n" }
+```
 
 ```json
 // → request
@@ -326,6 +378,80 @@
 > top-level `navigate` / `openTab` URLs are interpreted — never URLs inside pages
 > (redirects, fetches, links).
 >
+> **Planned addition — bounded browser failure capture (intent#4328).** This
+> frontend-served addition is documented ahead of implementation landing; older
+> frontends reject `readCapture`. The daemon remains a thin `browser.exec` proxy.
+> This supplies diagnostic evidence, not a fix for the intermittent route failure.
+>
+> Start a capture session with `startSession`, then await `startCapture` **before**
+> navigating or reloading. Capture installs document-start `error` and
+> `unhandledrejection` listeners and records CDP exceptions, console messages and
+> network requests with timestamps, status, failure reason and bounded initiator
+> stacks. `endCapture` unsubscribes local capture and requests removal of the guest
+> listeners and document-start script; `endSession` also flushes diagnostics to the
+> session's artifacts. Setup has a five-second deadline across its CDP stages, and
+> cleanup waits at most one second for its CDP commands and remaining body results.
+> Ending a session or capture cancels pending setup and waits for its bounded cleanup
+> before flushing. A timeout does not cancel an underlying CDP command: a stuck
+> guest may execute queued removal later; late setup results trigger best-effort
+> removal of any newly installed binding, script or listeners. Cleanup targets
+> the original guest even if its tab disappeared or was remounted. Only one capture
+> may record a guest at a time.
+>
+> Failed HTTP responses may include a textual `body` and `bodyTruncated` flag when
+> CDP retains the response. Capture never repeats a request to obtain its body.
+> Transport failures, unavailable bodies and capture limits use `bodyUnavailable`.
+> Request headers, cookies and POST data are not collected; URL credentials, query
+> strings and fragments are removed, and recognizable credential assignments and
+> full Authorization, Cookie and Set-Cookie values are redacted from text.
+> Arbitrary page text can still contain
+> sensitive information; redaction is not a guarantee that every secret is detected.
+> Text fields are capped at 16,384 characters plus a truncation marker; CDP stacks have
+> at most 20 frames. Across start/stop intervals a session retains at most 4,096
+> diagnostic events and 4 MiB of serialized event payload, with dropped-event counts
+> in `session.json`'s `diagnostics`. Pending requests are capped at 512. Body retrieval
+> admits textual responses up to 65,536 encoded bytes, at most 32 bodies per capture
+> interval and four outstanding CDP body commands per guest, each with a one-second
+> result deadline. Timed-out commands retain their slots until they actually settle,
+> including across capture intervals; late body results do not change finalized
+> diagnostics. Retained body text uses the same text limit. These bounds cover diagnostics, not screenshots or
+> explicitly requested traces.
+>
+> **`readCapture { captureId, artifact, offset?, maxBytes? }`** retrieves completed
+> session diagnostics from the frontend that serves the call. `captureId` is the
+> opaque identifier returned by capture, not an arbitrary filesystem path.
+> `artifact` is exactly `console.jsonl`, `network.jsonl`, `summary.json` or
+> `session.json`. `offset` defaults to zero and must be a nonnegative safe integer;
+> `maxBytes` defaults to 65,536 and must be an integer from 1 through 65,536.
+> Success uses the existing `{ action: "readCapture", success: true, result }`
+> envelope, with result fields `{ captureId, artifact, encoding: "base64", data,
+> offset, nextOffset, eof, totalBytes }`. Offsets and `totalBytes` count bytes, not
+> characters. Decode each chunk to bytes, concatenate them, and decode UTF-8 after
+> assembly; continue at `nextOffset` until `eof`. Reading at or beyond the end
+> returns empty data with `eof: true`.
+>
+> Session ownership comes from the trusted caller envelope, never action arguments.
+> Session actions and `readCapture` restrict agent callers to their own captures in
+> the requested workspace; user calls without `agentId` retain existing unrestricted
+> user authority. `getSummary` also checks persisted ownership for captures carrying
+> an ownership marker; legacy summaries without that marker retain their existing
+> workspace-scoped access. The local storage namespace uses the serving desktop's legacy
+> persisted active backend identifier, not the request's backend context; this
+> addition does not guarantee isolation by request backend. Persisted ownership
+> permits reads after a session ends or its tab
+> closes. Unique capture directories prevent equal display names from colliding.
+> Absolute paths, escaping identifiers, symlink directories/artifacts, foreign
+> ownership, missing artifacts and legacy captures without an ownership marker fail
+> as executed actions. Agent calls retain these failures in the existing
+> `success: false` action-result envelope. Invalid action schemas (including invalid
+> byte ranges or artifact names) instead reject the batch before execution: the
+> frontend returns `success: false` with empty `results`, which the daemon surfaces
+> as RPC error `-32603`. Client-callable `browser.exec` also preserves its existing
+> error shaping: operational failure envelopes become RPC error `-32603`.
+> There is no arbitrary file-read fallback. Captures remain on the serving desktop;
+> changing the driving client does not transfer them. This addition defines no
+> automatic retention period and does not make snapshot-only artifacts readable.
+>
 > **Agent-scoped tab ownership — FE-enforced (monorepo#2857).** Every embedded browser
 > tab carries a **nullable `ownerAgentId`**. User-opened tabs start **unowned**
 > (`ownerAgentId: null`); agent-opened tabs are owned by the opening agent from
@@ -595,16 +721,76 @@
 | Method | Params | Result |
 | --- | --- | --- |
 | terminal.create | workspaceId (req), cols (req,int), rows (req,int), cwd?, command?, env? (Record<string,string>) | { terminalId } — spawns a PTY; `command` omitted → default shell; `cwd` omitted → the workspace's worktree root (falls back to the daemon's cwd when the workspace has no resolvable worktree); `env` layers onto the daemon's inherited environment (later keys override) |
-| terminal.write | terminalId (req), data (req, base64) | { ok: true } — `data` is base64-encoded input bytes |
-| terminal.resize | terminalId (req), cols (req,int), rows (req,int) | { ok: true } |
-| terminal.kill | terminalId (req) | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
-| terminal.getBuffer | terminalId (req), maxBytes? | { terminalId, data } — base64 scrollback for replay |
+| terminal.write | terminalId (req), data (req, base64), workspaceId? | { ok: true } — `data` is base64-encoded input bytes |
+| terminal.resize | terminalId (req), cols (req,int), rows (req,int), workspaceId? | { ok: true } |
+| terminal.kill | terminalId (req), workspaceId? | { ok: true } — signals the PTY; emits `terminal:exit` (§6.5) |
+| terminal.getBuffer | terminalId (req), maxBytes?, workspaceId? | { terminalId, data, daemonBootId, startOffset, endOffset } — base64 scrollback and atomic byte range for replay |
 
 **Base64 framing.** Terminal payloads are **binary-safe**: input (`terminal.write` `data`),
 scrollback (`terminal.getBuffer` `data`), and streamed output (`terminal:data` `chunk`, §6.5)
 are **base64-encoded** so arbitrary bytes (control sequences, UTF-8, non-text) survive the
 JSON-RPC text channel. Clients decode on receipt and encode on send.
 `terminal.readOutput` (§5.9) stays a plaintext convenience read.
+
+**Exact output replay cursors (additive extension).** `terminal.getBuffer` and every
+`terminal:data` event include `daemonBootId`, `startOffset` and `endOffset` alongside
+unchanged `terminalId` and base64 `data` / `chunk`. Older clients may ignore these
+fields. Clients talking to an older daemon must feature-detect the complete extension;
+missing cursor fields do not permit exact replay through byte-equality heuristics.
+This contract does not imply that existing clients already use cursors.
+
+- The stream identity is **(`daemonBootId`, `terminalId`)**. The boot ID is the same
+  non-persisted UUID returned by `terminal.list`; it changes when the daemon restarts.
+  A terminal ID is never reused within a boot, but may repeat after restart. A new
+  terminal starts a new stream at zero even if it runs the same command in the same
+  workspace. Offsets from different stream identities must never be compared.
+- Positions are **unsigned decimal strings** (`"0"` through `"18446744073709551615"`),
+  avoiding JSON/JavaScript integer rounding. They count raw decoded PTY **output
+  bytes**, not Unicode characters, base64 characters, event sequence numbers, input
+  writes, or terminal screen cells. Ranges are half-open: `[startOffset, endOffset)`;
+  decoded payload length equals `endOffset - startOffset`.
+- The reader assigns each event range when it appends the output to scrollback,
+  under the same lock. A snapshot's bytes and both boundaries are captured under
+  that lock too. Delivery may lag this capture: a covered event can arrive before
+  **or after** the snapshot response. The initial streamer backlog has the retained
+  bytes' actual range, which need not start at zero.
+- Scrollback is bounded. Eviction never resets the counter; snapshot `startOffset`
+  identifies the oldest returned byte. `maxBytes` selects a trailing byte window
+  without changing `endOffset`; omitted or legacy negative bounds return all
+  retained bytes. Zero returns an empty range at the current end. An empty stream
+  returns `startOffset = endOffset = "0"`. Snapshot boundaries may split UTF-8 or
+  escape sequences, so clients must preserve binary framing.
+
+A cursor-aware client subscribes before requesting a snapshot and buffers live
+output while the request is in flight. For an initial attach it renders the snapshot
+and sets `next = endOffset`. For a same-stream reconnect it keeps its prior `next`
+and treats the snapshot as another positioned range, appending only the unseen
+suffix. For **both** queued and subsequently arriving events:
+
+1. Validate the stream identity and decoded length. Ignore stale events from a
+   different boot/session; a newly confirmed boot requires a fresh snapshot and
+   discarding the old cursor and pending output.
+2. Discard a range with `endOffset <= next`. If `startOffset <= next < endOffset`,
+   append bytes beginning at `next - startOffset` and advance `next = endOffset`.
+   Identical byte sequences at different positions are distinct output.
+3. A range with `startOffset > next` reveals a gap. Before continuing, request
+   `terminal.getBuffer` **without `maxBytes`**, so recovery includes all retained
+   output. A capped snapshot alone cannot prove eviction: its requested window
+   may exclude bytes still available in the ring. Apply the uncapped snapshot's
+   unseen suffix using step 2. Only when this uncapped snapshot also starts beyond
+   `next` is that prefix no longer retained. Indicate truncation and reset the
+   displayed history to the returned snapshot (or insert an explicit missing-output
+   marker before the retained suffix), then set `next = endOffset` of that snapshot.
+   Do not silently concatenate across the gap or claim lost bytes were recovered.
+
+Events remain transient and subscribers can lag or disconnect. Cursors identify
+overlap and gaps; they do not provide unlimited retention or guaranteed delivery.
+On reconnect or stream exit, a final snapshot can reconcile output whose event was
+missed, subject to retention. If the session was released, `terminal.getBuffer`
+returns the usual not-found error; it never resurrects the process. Replaying output
+must never call `terminal.write`: reads, reconnects and snapshots do not replay input.
+Only explicit user input invokes writes; kernel-echoed input counts as output once
+it is read from the PTY.
 
 ```json
 // → create an 80×24 PTY running the default shell
@@ -619,7 +805,8 @@ JSON-RPC text channel. Clients decode on receipt and encode on send.
 { "jsonrpc":"2.0","method":"events.event","params":{ "subscriptionId":"ws-sub-1",
   "event":{ "type":"terminal:data","workspaceId":"ws-abc","id":"evt-901",
     "timestamp":"2026-06-17T05:00:00.000Z","actor":{ "type":"system" },
-    "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK" } } } }
+    "data":{ "terminalId":"term-1","chunk":"bHMKZmlsZS50eHQK",
+      "daemonBootId":"boot-uuid","startOffset":"0","endOffset":"12" } } } }
 ```
 
 ### 5.45 Browser tab registry — `browser.listTabs` / `upsertTab` / `removeTab` / `syncTabs` / `navigateTab` / `closeTab`
@@ -755,4 +942,3 @@ nothing emits nothing.
 { "jsonrpc":"2.0","id":82,"method":"browser.syncTabs","params":{ "tabs":[ { "tabId":"tab-3", ... } ] } }
 // ← { "jsonrpc":"2.0","id":82,"result":{ "drop":[] } }
 ```
-

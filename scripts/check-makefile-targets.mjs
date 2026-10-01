@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
@@ -273,6 +274,11 @@ function git(args, { cwd } = {}) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 
+// execFileSync reports a missing executable as ENOENT on the spawn itself (no exit status), the same
+// shape as a missing cwd; a git command that ran and failed carries a status instead.
+const gitNotFound = (error, cwd) => error?.code === 'ENOENT' && error.status == null && existsSync(cwd);
+const GIT_NOT_FOUND = 'error: git not found on PATH; install git or add it to PATH and retry';
+
 // Only git object access at the gitlink: never the submodule working tree, so a
 // locally advanced or dirty checkout cannot mask a stale pin.
 export function createGitlinkReader(sha, { cwd = process.cwd(), intentdDir = DEFAULT_INTENTD_DIR } = {}) {
@@ -308,7 +314,8 @@ export function resolveGitlink({ cwd = process.cwd(), intentdDir = DEFAULT_INTEN
   if (!requested) {
     try {
       requested = git(['rev-parse', `HEAD:${intentdDir}`], { cwd }).trim();
-    } catch {
+    } catch (error) {
+      if (gitNotFound(error, cwd)) throw new CheckError(GIT_NOT_FOUND);
       throw new CheckError(`error: cannot read the ${intentdDir} gitlink from HEAD; run from the monorepo root`);
     }
   }
@@ -316,7 +323,8 @@ export function resolveGitlink({ cwd = process.cwd(), intentdDir = DEFAULT_INTEN
     return git(['-C', path.resolve(cwd, intentdDir), 'rev-parse', '--verify', '--quiet', `${requested}^{commit}`], {
       cwd,
     }).trim();
-  } catch {
+  } catch (error) {
+    if (gitNotFound(error, cwd)) throw new CheckError(GIT_NOT_FOUND);
     throw new CheckError(
       `error: intentd gitlink ${requested} is not present in ${intentdDir}; run 'git submodule update --init ${intentdDir}' (or 'git -C ${intentdDir} fetch origin ${requested}') and retry`,
     );

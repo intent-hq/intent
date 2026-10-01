@@ -1,0 +1,36 @@
+{
+  "name": "tomli",
+  "version": "2.4.1",
+  "license": "MIT",
+  "repository": "https://github.com/hukkin/tomli",
+  "revision": "c5f44690c68c5ed29534faa8f9df18882113728c",
+  "source": "https://github.com/hukkin/tomli/tree/c5f44690c68c5ed29534faa8f9df18882113728c",
+  "policy": "Unmodified upstream runtime source and license only. On upgrade, verify Git blob identities and update SHA-256 integrity records; tests verify these pinned files offline.",
+  "files": {
+    "__init__.py": {
+      "source": "src/tomli/__init__.py",
+      "git_blob_sha1": "ebe90013092f032a79946b153eea68ef9865b0f2",
+      "sha256": "9eb042d7c0db5d14c2168ec4946e410de5a91c9cce86892f5e4db5e4633c6762"
+    },
+    "_parser.py": {
+      "source": "src/tomli/_parser.py",
+      "git_blob_sha1": "41b06418805bdfe2b5fba390566aaa4d274f829e",
+      "sha256": "a412234c86bf710b361e0943276961f0e25fa6d7c36ba7a0e7eec87a3e018c7b"
+    },
+    "_re.py": {
+      "source": "src/tomli/_re.py",
+      "git_blob_sha1": "fc374ed63d3e3742a97134349fc25b14223ab57b",
+      "sha256": "a12359fe294523a72112e434d58452a14c9d050affa2417f9927474e4166bfdd"
+    },
+    "_types.py": {
+      "source": "src/tomli/_types.py",
+      "git_blob_sha1": "d949412e03b29d70592c7721fe747e5085c2e280",
+      "sha256": "f864c6d9552a929c7032ace654ee05ef26ca75d21b027b801d77e65907138b74"
+    },
+    "LICENSE": {
+      "source": "LICENSE",
+      "git_blob_sha1": "e859590f886cd78344206af1a8ccb3080d4385e0",
+      "sha256": "b80816b0d530b8accb4c2211783790984a6e3b61922c2b5ee92f3372ab2742fe"
+    }
+  }
+}

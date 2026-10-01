@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { cleanNodeEnv } from './test-env.mjs';
 import {
   CheckError,
   HINT,
@@ -552,9 +553,54 @@ function makeFixture(t) {
 }
 
 function runCli(cwd, ...args) {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], { cwd, encoding: 'utf8', env: cleanNodeEnv() });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
+
+// Points the parent's NODE_OPTIONS at a preload that writes to stderr, the way
+// host-level tracer injection does, and restores the original env afterwards.
+function withNoisyNodeOptions(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-makefile-targets-noise-'));
+  const preload = path.join(dir, 'noise.cjs');
+  fs.writeFileSync(preload, 'process.stderr.write("NOISE\\n");\n');
+  const saved = { NODE_OPTIONS: process.env.NODE_OPTIONS, DD_TRACE_DEBUG: process.env.DD_TRACE_DEBUG };
+  process.env.NODE_OPTIONS = `--require ${preload}`;
+  process.env.DD_TRACE_DEBUG = 'true';
+  t.after(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+}
+
+test('cleanNodeEnv drops NODE_OPTIONS and DD_* keys without mutating process.env', (t) => {
+  withNoisyNodeOptions(t);
+  const env = cleanNodeEnv({ EXTRA: '1' });
+  assert.equal(Object.hasOwn(env, 'NODE_OPTIONS'), false);
+  assert.equal(Object.hasOwn(env, 'DD_TRACE_DEBUG'), false);
+  assert.deepEqual(
+    Object.entries(env).filter(([key]) => key.startsWith('DD_')).sort(),
+    [['DD_TRACE_ENABLED', 'false'], ['DD_TRACE_STARTUP_LOGS', 'false']],
+  );
+  assert.equal(env.EXTRA, '1');
+  assert.equal(env.PATH, process.env.PATH);
+  assert.match(process.env.NODE_OPTIONS, /--require /);
+  assert.equal(process.env.DD_TRACE_DEBUG, 'true');
+});
+
+test('CLI stderr is exactly the checker output even when the host injects NODE_OPTIONS', (t) => {
+  const { root, sha } = makeFixture(t);
+  withNoisyNodeOptions(t);
+  fs.writeFileSync(path.join(root, 'Makefile'), 'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test uncommitted\n');
+  const result = runCli(root);
+  assert.equal(result.status, 1);
+  assert.equal(
+    result.stderr,
+    `Makefile:2: error: cargo test target 'uncommitted' (crate 'foo') is missing at pinned intentd gitlink ${sha.slice(0, 7)}: crates/foo/tests/uncommitted.rs not found\n${HINT}\n`,
+  );
+});
 
 test('resolves the gitlink from HEAD and reads crates through git objects only', (t) => {
   const { root, sha } = makeFixture(t);
@@ -582,6 +628,31 @@ test('exits 2 with a submodule hint when the gitlink object is absent', (t) => {
   assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /is not present in packages\/intentd/);
   assert.match(result.stderr, /git submodule update --init packages\/intentd/);
+});
+
+test('exits 2 naming the missing git executable, not the monorepo root, when git is not on PATH', (t) => {
+  const { root, sha } = makeFixture(t);
+  fs.writeFileSync(path.join(root, 'Makefile'), 'lint:\n\tcd $(INTENTD_DIR) && cargo test -p foo --test flat\n');
+  const emptyBin = fs.mkdtempSync(path.join(os.tmpdir(), 'check-makefile-targets-nogit-'));
+  t.after(() => fs.rmSync(emptyBin, { recursive: true, force: true }));
+  const previousPath = process.env.PATH;
+  process.env.PATH = emptyBin;
+  t.after(() => {
+    process.env.PATH = previousPath;
+  });
+  const missingGit = (error) => error instanceof CheckError && error.exitCode === 2 && error.message === 'error: git not found on PATH; install git or add it to PATH and retry';
+  assert.throws(() => resolveGitlink({ cwd: root }), missingGit);
+  assert.throws(() => resolveGitlink({ cwd: root, gitlink: sha }), missingGit);
+  const result = spawnSync(process.execPath, [SCRIPT], { cwd: root, encoding: 'utf8', env: cleanNodeEnv({ PATH: emptyBin }) });
+  assert.equal(result.status, 2);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, 'error: git not found on PATH; install git or add it to PATH and retry\n');
+  process.env.PATH = previousPath;
+  assert.throws(
+    () => resolveGitlink({ cwd: path.join(root, 'does-not-exist') }),
+    (error) => error instanceof CheckError && error.message.includes('run from the monorepo root'),
+    'a missing cwd is still reported as a wrong root, not as missing git',
+  );
 });
 
 test('CLI prints the success summary on a Makefile whose references exist at the pin', (t) => {

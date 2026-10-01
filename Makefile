@@ -23,6 +23,18 @@
 
 .DEFAULT_GOAL := all
 
+# Reject before running ANY recipe, including parallel/mixed gate + coverage
+# goals. Coverage needs its own debug/instrumentation settings.
+COMPACT ?= 0
+export COMPACT
+ifeq ($(COMPACT),1)
+ifneq ($(filter coverage-%,$(MAKECMDGOALS)),)
+$(error COMPACT=1 is incompatible with coverage targets; rerun coverage with COMPACT=0)
+endif
+endif
+# Expand only for compact compiler recipes; ordinary invocations stay identical.
+COMPACT_CARGO = $(if $(filter 1,$(COMPACT)),python3 "$(CURDIR)/scripts/resumable_nextest.py" --compact-cargo)
+
 INTENTD_DIR = packages/intentd
 FE_DIR = packages/cloudlands-fe
 IOS_DIR = packages/ios
@@ -118,28 +130,82 @@ CDP_PORT ?= $(call dev_port_value,CDP_PORT)
 # An explicit INTENTD_SOCKET always takes precedence.
 BRIDGE_PLATFORM ?= $(shell uname -s)
 
-.PHONY: ports status docs-check check-protocol-catalog check-makefile-targets event-catalog-check shipped-in rpc
+.PHONY: check-agent-worker-contract test-transfer-selection-contract check-transfer-selection-contract check-backend-keychain-contract ports status consumer-checks docs-check check-protocol-catalog check-mcp-bindings mcp-bindings-doc check-makefile-targets check-protocol-field-parity check-rulesets event-catalog-check shipped-in rpc
 ports: ## Print this worktree's resolved development ports
 	@set -- .dev/sandbox/*.json; if [ -e "$$1" ]; then \
 		echo "[ports] Note: these ports are for the next start; read running ports from 'make sandbox-status' or .dev/sandbox/<mode>.json." >&2; \
 	fi
 	@printf '%s\n' "DEV_PORT=$(DEV_PORT)" "DEV_TCP_PORT=$(DEV_TCP_PORT)" "BRIDGE_PORT=$(BRIDGE_PORT)" "CDP_PORT=$(CDP_PORT)"
 
-status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON)
+status: ## Show host, ports, sandboxes, and submodule/PR state (STATUS_JSON=1 for JSON; DEV_STATUS_PORT_TIMEOUT=<seconds> bounds the port probe and DEV_STATUS_PROBE_TIMEOUT=<seconds> every other probe, default 10 each)
 	@DEV_PORT="$(DEV_PORT)" DEV_TCP_PORT="$(DEV_TCP_PORT)" BRIDGE_PORT="$(BRIDGE_PORT)" CDP_PORT="$(CDP_PORT)" \
 		STATUS_JSON="$(STATUS_JSON)" scripts/dev-status.sh
 
-docs-check: event-catalog-check ## Check documented development targets, knobs, and remote-host guidance
+# Every monorepo consumer check the ci.yml docs-check job runs, as one runner
+# that keeps going past a failure and ends with a per-check table naming the
+# monorepo file(s) to update. The upstream (intentd / cloudlands-fe) consumer
+# job calls the same script, so the two lists cannot drift. Advisory checks:
+# CONSUMER_CHECKS_ADVISORY="<targets>"; CONSUMER_CHECKS_CONTEXT=upstream adds
+# the fix-order line. See scripts/consumer-checks.sh for the mechanism.
+consumer-checks: ## Run every monorepo consumer check (docs, catalogs, field parity) and print a per-check fix-path summary
+	@MAKE="$(MAKE)" scripts/consumer-checks.sh
+
+test-transfer-selection-contract: ensure-intentd-submodule ensure-fe-submodule ## Regenerate the transfer-selection contract and feed fresh responses to ModelPicker (requires both pinned harnesses and installed FE deps)
+	@node scripts/test-transfer-selection-contract.mjs
+
+check-transfer-selection-contract: ## Validate transfer-selection fixtures and provenance without compiling components
+	@node scripts/check-transfer-selection-contract.mjs
+
+check-agent-worker-contract: ## Validate synthetic worker observation goldens, model and regression sensitivity
+	@node scripts/agent-worker-contract.mjs
+	@node --test scripts/agent-worker-contract.test.mjs scripts/agent-worker-contract-sensitivity.test.mjs
+
+check-backend-keychain-contract: ## Validate canonical backend Keychain fixtures and any adopted component mirrors without compilation
+	@node scripts/backend-keychain-contract.mjs check
+
+docs-check: event-catalog-check check-mcp-bindings ## Check documented development targets, knobs, and remote-host guidance
 	@scripts/docs-check.sh
 
 check-protocol-catalog: ## Check docs/protocol method catalog against methods/*.md and intentd's catalog.rs
 	@node scripts/check-protocol-catalog.mjs
 
+# The MCP `ws.*` binding surface is documented only by the help-text constants
+# in intentd's tools.rs; docs/protocol/methods/mcp-bindings.md is the generated
+# signature index, and prose mentions under docs/protocol/ must match it.
+# The help text is read from the packages/intentd checkout (the run names the
+# checkout and the recorded pin, and warns when they differ); PINNED=1 reads it
+# from the recorded gitlink through git objects instead.
+PINNED ?=
+check-mcp-bindings: ## Check docs/protocol ws.* MCP binding index and prose against intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs $(if $(PINNED),--pinned)
+
+mcp-bindings-doc: ## Regenerate docs/protocol/methods/mcp-bindings.md from intentd's help text (PINNED=1 reads the recorded gitlink instead of the checkout)
+	@node scripts/check-mcp-bindings.mjs --write $(if $(PINNED),--pinned)
+
 # Every `cargo ... -p <crate> --test <name>` this Makefile runs inside
 # INTENTD_DIR must exist at the pinned intentd gitlink; a Makefile change that
 # depends on an unmerged intentd PR must wait for the auto-bump.
+# CHECK_MAKEFILE_TARGETS_GITLINK=<rev> checks another intentd commit instead
+# (the upstream consumer-checks job passes HEAD, the caller's own head).
+CHECK_MAKEFILE_TARGETS_GITLINK ?=
 check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced intentd crates and --test targets exist at the pinned gitlink
-	@node scripts/check-makefile-targets.mjs
+	@node scripts/check-makefile-targets.mjs $(if $(CHECK_MAKEFILE_TARGETS_GITLINK),--gitlink $(CHECK_MAKEFILE_TARGETS_GITLINK))
+
+# Every wire field an intentd row struct emits (AgentLite, Workspace) must be
+# present in the cloudlands-fe type that consumes it, or listed in the script's
+# ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
+check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
+	@node scripts/check-protocol-field-parity.mjs
+
+# The live main-branch rulesets of intent, intentd and cloudlands-fe (required
+# CI Gate check, thread resolution, merge queue) are snapshotted under
+# .github/rulesets/; a silent edit on GitHub shows up as drift. UPDATE=1
+# accepts the live rules into the snapshots; a token avoids the unauthenticated
+# rate limit. With RULESET_ADMIN_TOKEN set (administration read on the three
+# repositories) the rulesets' bypass actors are compared with
+# .github/rulesets/*.bypass.json too; without it they are skipped with a warning.
+check-rulesets: ## Check live GitHub main branch rulesets against .github/rulesets/*.json (UPDATE=1 rewrites them; RULESET_ADMIN_TOKEN adds bypass actors)
+	@node scripts/check-rulesets.mjs $(if $(UPDATE),--update)
 
 # The event-type catalog is vendored on three surfaces: the intentd golden
 # (source of truth), the protocol sidecar docs/protocol/event-types.json, and
@@ -179,7 +245,8 @@ WORKSPACES_DIR ?= $(HOME)/intent/workspaces
 SWEEP_DAYS ?= 3
 
 # Parallelism caps shared by the Rust build/test/coverage targets
-# (build-intentd, clippy, test-intentd, test-changed, coverage-e2e, coverage-all).
+# (build-intentd, clippy, test-intentd, test-changed, coverage-changed,
+# coverage-e2e, coverage-all).
 # Negative values mean "logical CPUs minus N" (clamped to at least 1):
 # cargo-nextest accepts them for test threads (NEXTEST_TEST_THREADS /
 # --test-threads) and cargo for build jobs (CARGO_BUILD_JOBS / --jobs) —
@@ -199,19 +266,22 @@ BUILD_JOBS ?= -2
 # human at a terminal can restore the bars with
 # `make test NEXTEST_SHOW_PROGRESS=bar CARGO_TERM_PROGRESS_WHEN=auto`.
 # CI already sets CI=true, under which both tools are non-interactive anyway.
-gate test test-intentd test-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
+gate test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export NEXTEST_SHOW_PROGRESS ?= none
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export CARGO_TERM_PROGRESS_WHEN ?= never
 # Pagers on the same targets. A saved-script PTY has no keyboard, so any
 # git/gh step that pages to `less` stalls forever waiting for a keypress.
 # nextest ignores PAGER (only --no-pager / user config disable its paging),
 # hence the explicit --no-pager on list-tests.
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
-gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export PAGER ?= cat
+gate check clippy lint-sources build-intentd test test-intentd test-changed coverage-changed coverage-e2e coverage-all list-tests: export GIT_PAGER ?= cat
 
 # Resumable local test runs are opt-in. Records are keyed by the complete
 # monorepo + intentd worktree state and kept outside the checkout.
 RESUME ?= 0
 GATE_FORCE ?= 0
+# NO_FAIL_FAST=1 keeps nextest running past a known flake so the remaining
+# tests still run and are recorded (the run still exits non-zero).
+NO_FAIL_FAST ?= 0
 GATE_CACHE_DIR ?= $(HOME)/.cache/intent/gate-runs
 
 # Node heap ceiling (MB) for the FE production build. The renderer's vite build
@@ -224,8 +294,8 @@ FE_BUILD_HEAP_MB ?= 16384
 .PHONY: all help doctor bootstrap-dev-host ensure-submodules ensure-intentd-submodule ensure-fe-submodule ensure-ios-submodule \
 	ensure-fe-toolchain \
 	update \
-	build build-intentd build-sidecar gate test test-intentd test-changed list-tests coverage-e2e coverage-all \
-	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child check clean clean-dev \
+	build build-intentd build-sidecar gate test test-intentd test-scripts test-changed list-tests coverage-changed coverage-e2e coverage-all \
+	fmt clippy lint-sources lint-repo-slug lint-event-types lint-fixed-sleeps lint-raw-child lint-shell-sleeps lint-shell check clean clean-dev \
 	sweep sweep-all seed-dev-providers seed-dev-workspaces dev-daemon release-daemon \
 	run-intentd dev-ui dev-sandbox-ui dev-sandbox-app dev-sandbox-stack dev-fe fe-launch \
 	sandbox-status sandbox-stop \
@@ -236,12 +306,16 @@ all: build
 
 help: ## List documented targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  %-16s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf '\nLocal Rust gates: COMPACT=1 make gate (also check, test, test-changed; Python 3.10+).\n'
+	@printf '  Opt-in dev/test debug=0 and CARGO_INCREMENTAL=0; caller Rust flags retain precedence.\n'
+	@printf '  Default: COMPACT=0. Compact/default resume records are separate; coverage rejects COMPACT=1.\n'
+	@printf '  See CONTRIBUTING.md for debugging tradeoffs and the component mixed-goal boundary.\n'
 
 doctor: ## Report missing intentd + cloudlands-fe development prerequisites
 	@scripts/bootstrap-dev-host.sh --check
 
-bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use)
-	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,)
+bootstrap-dev-host: ## Install missing development prerequisites (BOOTSTRAP_YES=1 for non-interactive use; BOOTSTRAP_COVERAGE=1 adds cargo-llvm-cov + llvm-tools-preview)
+	@scripts/bootstrap-dev-host.sh $(if $(filter 1 yes true,$(BOOTSTRAP_YES)),--yes,) $(if $(filter 1 yes true,$(BOOTSTRAP_COVERAGE)),--coverage,)
 
 # Frontend-toolchain preflight for the targets that shell out to
 # `corepack pnpm`. Fails fast with doctor's [missing] wording plus
@@ -393,7 +467,7 @@ fmt: ensure-intentd-submodule ## cargo fmt --check
 	cd $(INTENTD_DIR) && cargo fmt --check
 
 clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
-	cd $(INTENTD_DIR) && cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
+	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo clippy --workspace --all-targets --jobs $(BUILD_JOBS) -- -D warnings
 
 # Source lints are discovered by convention: every `tests/*_lint.rs` in any
 # intentd crate is a cargo test target whose name ends in `_lint`, and cargo's
@@ -401,7 +475,7 @@ clippy: ensure-intentd-submodule ## cargo clippy --all-targets -- -D warnings
 # in intentd therefore needs no change here. Mirrors the intentd `check` CI
 # job so local gates match CI.
 lint-sources: ensure-intentd-submodule ## Run every intentd source lint (tests/*_lint.rs in any intentd crate)
-	cd $(INTENTD_DIR) && cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
+	cd $(INTENTD_DIR) && $(COMPACT_CARGO) cargo test --workspace --test '*_lint' --jobs $(BUILD_JOBS)
 
 # Deprecated aliases of lint-sources, kept for one release so existing local
 # scripts keep working; each now runs the full source-lint set.
@@ -410,12 +484,31 @@ lint-event-types: lint-sources ## Deprecated alias of lint-sources
 lint-fixed-sleeps: lint-sources ## Deprecated alias of lint-sources
 lint-raw-child: lint-sources ## Deprecated alias of lint-sources
 
-check: check-makefile-targets fmt clippy lint-sources ## Makefile target check + fmt + clippy + source lints
+# Fixed sleeps in scripts/*.test.sh must carry a `# timing-guard: <reason>`
+# marker or be grandfathered in scripts/fixed-sleep-baseline.txt, which only
+# ratchets down. Pure shell + awk; needs no submodule.
+lint-shell-sleeps: ## Check scripts/*.test.sh fixed sleeps are marked or baselined
+	@scripts/lint-fixed-sleeps.sh
+
+# shellcheck over scripts/*.sh (the *.test.sh suites match the same glob); -x
+# follows `source` lines into the sibling scripts. Rule policy lives in the
+# repo-root .shellcheckrc. Not part of `make check` yet: dev hosts that have not
+# re-run `make bootstrap-dev-host` lack the binary, so this fails fast with
+# doctor's [missing] wording instead of falling back to npx.
+lint-shell: ## Run shellcheck over scripts/*.sh (needs shellcheck; make bootstrap-dev-host installs it)
+	@command -v shellcheck >/dev/null 2>&1 || { \
+		echo "[missing]  shellcheck: required by make lint-shell; run make bootstrap-dev-host" >&2; exit 1; }
+	@shellcheck -x scripts/*.sh
+
+check: check-makefile-targets check-protocol-field-parity lint-shell-sleeps fmt clippy lint-sources ## Makefile target check + protocol field parity + shell sleep lint + fmt + clippy + source lints
 
 gate: check ## Run all local Rust gates (fmt, clippy, source lints, then nextest)
 	@$(MAKE) --no-print-directory test
 
-test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all)
+test: test-intentd ## Run Rust tests; after interruption use RESUME=1 (GATE_FORCE=1 runs all, NO_FAIL_FAST=1 continues past failures)
+
+test-scripts: ## Run the Python script unit tests (Python 3.11+, no submodules needed)
+	python3 -S -B -m unittest -v scripts.test_resumable_nextest scripts.test_compact_gate scripts.test_seed_dev_providers scripts.test_seed_dev_workspaces scripts.test_cleanup_prereleases scripts.test_script_test_target
 
 # Runs under nextest so local full-suite runs pick up the same
 # .config/nextest.toml protections CI uses (timing-serial test group,
@@ -437,39 +530,70 @@ test-intentd: ensure-intentd-submodule
 		--cache-dir "$(GATE_CACHE_DIR)" \
 		--resume "$(RESUME)" \
 		--force "$(GATE_FORCE)" \
+		--no-fail-fast "$(NO_FAIL_FAST)" \
 		--build-jobs "$(BUILD_JOBS)" \
 		--test-threads "$(TEST_THREADS)"
 
 # Pre-queue gate when the full suite is impractical: runs only the nextest
-# targets the intentd checkout changed vs BASE (default origin/main), mapped
-# per crate by scripts/rust-changed-tests.sh (see its header) and executed
-# through scripts/resumable_nextest.py, so the run writes the same gate-run
-# record as `make test` (junit, summary, run.json under GATE_CACHE_DIR, path
-# printed on exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse
-# dependencies are not propagated, so `make test` stays the complete gate.
+# targets the intentd checkout changed vs BASE (default origin/main). The
+# selection is intentd's $(INTENTD_DIR)/scripts/changed-tests.sh (see its
+# header for the path → crate mapping; the same script drives intentd's
+# pull_request `coverage-changed` job), executed through
+# scripts/resumable_nextest.py, so the run writes the same gate-run record as
+# `make test` (junit, summary, run.json under GATE_CACHE_DIR, path printed on
+# exit) and RESUME=1 / GATE_FORCE=1 apply unchanged. Reverse dependencies are
+# not propagated, so `make test` stays the complete gate.
 # The script exits 3 when a build-wide file (Cargo.toml/Cargo.lock, nextest
 # config, toolchain) changed; the target then announces the fallback and runs
 # the full `make test` (skipped under DRY_RUN=1, which only prints the plan).
 # The runner line names its paths as "$VAR" references that the script's eval
 # expands, so apostrophes or spaces in CURDIR/GATE_CACHE_DIR never reach a
-# nested quote.
-test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, DRY_RUN=1 prints the plan)
+# nested quote; the script execs the runner from this directory, so the
+# relative scripts/ path resolves against the monorepo root.
+test-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE, recording the run (RESUME=1 resumes, NO_FAIL_FAST=1 continues past failures, DRY_RUN=1 prints the plan)
 	@cargo nextest --version >/dev/null 2>&1 || { \
 		echo "[test-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
 		exit 1; \
 	}
+	@if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ] && [ "$(NO_FAIL_FAST)" = 1 ]; then \
+		echo "[test-changed] NO_FAIL_FAST=1: nextest runs with --no-fail-fast"; \
+	fi
 	@INTENTD_DIR="$(INTENTD_DIR)" BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" \
 		BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
 		GATE_REPO_ROOT="$(CURDIR)" GATE_CACHE_DIR="$(GATE_CACHE_DIR)" \
-		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" \
-		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE"' \
-		scripts/rust-changed-tests.sh; status=$$?; \
+		RESUME="$(RESUME)" GATE_FORCE="$(GATE_FORCE)" NO_FAIL_FAST="$(NO_FAIL_FAST)" \
+		NEXTEST_RUNNER='python3 scripts/resumable_nextest.py --repo-root "$$GATE_REPO_ROOT" --intentd-dir "$$INTENTD_DIR" --cache-dir "$$GATE_CACHE_DIR" --resume "$$RESUME" --force "$$GATE_FORCE" --no-fail-fast "$$NO_FAIL_FAST"' \
+		$(INTENTD_DIR)/scripts/changed-tests.sh; status=$$?; \
 	if [ "$$status" -ne 3 ]; then exit "$$status"; fi; \
 	if [ -n "$(DRY_RUN)" ] && [ "$(DRY_RUN)" != 0 ]; then \
 		echo "[test-changed] DRY_RUN: would fall back to the full 'make test'"; exit 0; \
 	fi; \
 	echo "[test-changed] falling back to the full 'make test'"; \
 	exec $(MAKE) --no-print-directory test
+
+# Local equivalent of intentd's pull_request `coverage-changed` CI job: the
+# same changed-tests.sh selection as test-changed, run under the cargo-llvm-cov
+# instrumentation the merge queue's coverage-e2e / coverage-all jobs use
+# (INTENTD_TEST_TIMEOUT_MULTIPLIER=3, auggie_context_e2e excluded), so a test
+# that only fails instrumented (intent-hq/intentd#1947) fails here before the
+# queue. No report or floor is produced; a build-wide change runs the mapped
+# crates/ selection instead of falling back. No gate-run record is written
+# (the instrumented run is not resumable). The script does not install
+# cargo-llvm-cov / llvm-tools itself, hence the preflight (skipped under
+# DRY_RUN=1, which only prints the plan).
+coverage-changed: ensure-intentd-submodule ## Run only the Rust tests the intentd branch changed vs BASE under llvm-cov, as intentd's PR coverage-changed job does (DRY_RUN=1 prints the plan)
+	@if [ -z "$(DRY_RUN)" ] || [ "$(DRY_RUN)" = 0 ]; then \
+		cargo nextest --version >/dev/null 2>&1 || { \
+			echo "[coverage-changed] ERROR: cargo-nextest is not installed — run 'cargo install cargo-nextest --locked'"; \
+			exit 1; \
+		}; \
+		cargo llvm-cov --version >/dev/null 2>&1 || { \
+			echo "[coverage-changed] ERROR: cargo-llvm-cov is not installed — run 'cargo install cargo-llvm-cov --locked' and 'rustup component add llvm-tools-preview'"; \
+			exit 1; \
+		}; \
+	fi
+	@BASE="$(BASE)" DRY_RUN="$(DRY_RUN)" BUILD_JOBS="$(BUILD_JOBS)" TEST_THREADS="$(TEST_THREADS)" \
+		$(INTENTD_DIR)/scripts/changed-tests.sh --instrumented
 
 # nextest ignores PAGER, so --no-pager is passed explicitly (see the pager
 # export above). ARGS passes through, e.g. `make list-tests ARGS="-p intentd"`.

@@ -2,28 +2,51 @@
 
 ## 5. Method Catalog
 
-The API exposes **366 dispatchable method names** across the following categories:
+The [workspace routing inventory](./workspace-routing.md) documents additive
+optional context fields ahead of component implementation, with exact supported
+and excluded variants for every catalog name and snapshot channel. It preserves
+direct-daemon compatibility and does not advertise aggregator support.
 
-- **Router methods:** 315 methods dispatched via the main router (`router::dispatch`)
-- **Fast-path methods:** 49 methods intercepted before the router for performance or per-connection state
+The 10.9 [shared-host extension (§5.49)](./methods/shared-host-membership.md) is documented ahead of the pinned daemon. Capability discovery and authority in that section govern its new methods and additions to existing methods; the catalog alone is not a support probe.
+
+The prepared [node execution contract (§5.50)](./methods/nodes.md) reserves nine
+additional router methods ahead of implementation. Its capability flags, not
+catalog presence, establish support; per-agent CoW entries remain during rollout.
+
+The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
+implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
+advertises complete support, not catalog presence or a numeric version alone.
+
+The prepared [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+changes omitted purpose for new commands to `oneOff`, retaining stored upsert and
+legacy hydration defaults. It changes no catalog names or counts and makes no
+shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
+
+The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
+adds a read-only list and subscription; `agentWorkers: 1` gates support.
+
+The documented surface reserves **421 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 361 methods dispatched via the main router (`router::dispatch`)
+- **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 366 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 421 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 366 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 421 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.45) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.50) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (315 total)
+### Router methods by namespace (361 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 5 | addRemote, execute, getStatus, mergePR, prepare — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 46 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate |
-| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global — no `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
+| agent | 50 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.subscribe |
+| client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
@@ -32,50 +55,60 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file-tracking | 6 | getAgentLocks, getChanges, getLineStats, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 28 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 26 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread |
+| github | 29 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, identityProof.create, identityProof.delete, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search — `identityProof.create` / `identityProof.delete` (§5.27; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), daemon-global — no `workspaceId`) are the **guest half** of the gist identity-proof join (§5.48): the guest's own daemon publishes a host-issued nonce in a secret gist made with its stored GitHub token (`gist` scope) and deletes it after the join; owner-client only, the token never crosses the wire |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
+| host (router) | 5 | executionContext, invite.list, invite.revoke, members.list, members.remove — additive shared-host contract (§5.49); host administration stays owner-only; executionContext is a safe owner/member read |
+| hub | 3 | discard, merge, publish — prepared node execution contract (§5.50) |
+| identity | 6 | authStatus, cancelAuth, connect, getUser, revoke, select — collaboration-purpose sign-in on the person’s own daemon (§5.49), isolated from repository credentials |
+| lease | 2 | list, release — prepared node execution contract (§5.50) |
 | linear | 11 | authStatus, createIssue, getIssue, listIssues, listLabels, listProjects, listTeams, listWorkflowStates, searchIssues, updateIssue, viewer |
 | mcp | 12 | oauth.delete, oauth.get, oauth.list, oauth.set, servers.create, servers.delete, servers.getStatus, servers.list, servers.restart, servers.toggle, servers.update, testConnection |
 | metrics | 4 | clearAgentStats, getAgentStats, getAllWorkspaceStats, getWorkspaceStats |
 | models | 1 | list |
+| node | 4 | drain, list, register, remove — prepared node execution contract (§5.50) |
 | note | 18 | add, create, delete, edit, editLines, get, getVersion, lineAttribution.computeNow, lineAttribution.load, list, listTasks, listVersions, readAsset, restoreVersion, saveAsset, setContent, update, updateMetadata |
 | pr | 2 | refresh, status — the 11 other `pr.*` methods were removed in v5.0 (§5.7) |
 | prMonitor | 3 | list, cancel, flush — the FE surface over centralized PR monitors (§5.42; v6.1). No wire registration method: monitors are agent-owned via the MCP `ws.pr.monitor` binding only, per the §6.8 principle (like `hook.*` vs `ws.hook.schedule`) |
+| presence | 1 | snapshot — the current online roster of a member workspace, i.e. the `presence:changed` payload (§6.5) on demand (`{ workspaceId }` req; §5.47; shipped in intentd b518d31). Ephemeral read, no host reach; the presence writes are fast-path (`presence.update`, `note.presence.update`, below) and the per-note viewer channel is `note.presence.subscribe` / `note.presence.unsubscribe` (§6.9) |
 | primitive | 4 | addAgentAction, addCli, addPatch, addReference |
-| providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global — no `workspaceId`) |
+| principal | 3 | list, me, revokeSelf — `me` is the principal this connection was bound to at admission (`{ id, login: string \| null, displayName: string \| null, avatarUrl: string \| null, isAdministrator, identity? }` — the profile fields are always present, `null` until a forge identity is cached; `identity?` is the v10.8 provider-neutral triple `{ provider, host, externalUserId }`, omitted while unlinked; §5.46; v10.3, [intent-hq/intentd#1869](https://github.com/intent-hq/intentd/pull/1869), no params, daemon-global — no `workspaceId`). Fails closed (`-32603`) when no caller is bound. `list` ([intent-hq/intentd#2023](https://github.com/intent-hq/intentd/pull/2023); §5.48) is the administrator-only roster of credentialed guests `{ principals: [{ principalId, login: string \| null, displayName: string \| null, avatarUrl: string \| null, githubUserId: integer \| null, identity? }] }` the direct member add draws from (the four profile keys always present, `null` when uncached — the `me` convention; `identity?` omitted while unlinked). `revokeSelf` (shipped in intentd b518d31; §5.48) revokes the caller's **own** credentials and drops its collaborator memberships (each publishing the `removedPrincipalId` `workspace:updated`, §6.5); self-directed only (no target parameter), the administrator is refused in the service layer |
+| providers | 1 | catalog — the static provider registry served over the wire (§5.38; v2.6, daemon-global result; optional routing-only `workspaceId`) |
 | repo | 3 | list, remove, warmCache — opportunistic background repo-cache refresh for one GitHub repo (§5.11; v6.10, daemon-global — no `workspaceId`) |
 | repoConfig | 4 | ensureDir, get, has, save |
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
-| script | 9 | create, list, output, remove, restart, run, start, status, stop |
+| script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
 | skill | 1 | list |
+| sourceControl | 7 | authStatus, cancelAuth, connect, getUser, identityProof.create, identityProof.delete, revoke — the provider-generic forge auth surface (§5.27 "Provider-generic auth — `sourceControl.*`"; v10.5, daemon-global; optional routing-only `workspaceId` on `authStatus` / `getUser` only) plus, in v10.8, the provider-generic guest half of the invite identity proof (`identityProof.create` / `identityProof.delete`, §5.27 "Identity proof"; `github.identityProof.*` are their `provider: "github"` aliases, separate dispatchable names like the auth rows). The `github.authStatus` / `connect` / `cancelAuth` / `revoke` / `getUser` rows of the `github` namespace are aliases of these with `provider: "github"` pinned; they remain separate dispatchable names (not `METHOD_ALIASES` entries) because their result shapes are the byte-identical pre-v10.5 projections |
 | specialist | 5 | create, delete, edit, get, list |
 | stats | 2 | getRateHistory, getUsage — `getRateHistory` is daemon-global (§5.39; v2.9, no `workspaceId`) |
-| system (router) | 1 | capabilities — machine-level capabilities, no workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
+| system (router) | 1 | capabilities — machine-level capabilities, optional routing-only workspaceId; distinct from the `system.*` fast-path controls below (v2.3, see the note after the fast-path catalog) |
 | task | 15 | assignAgent, convertBlocks, createPrerequisite, get, getMyTask, linkAgent, list, listAgentLinks, markAsTask, removeAgentFromAllTasks, setRelations, unlinkAgent, update, updateNoteStatus, updateStatus |
 | terminal | 7 | create, getBuffer, kill, list, readOutput, resize, write |
 | unsloth | 2 | status, stop — observe / gracefully stop the daemon-managed singleton Unsloth server (§5.37; v2.5, daemon-global — no `workspaceId`) |
 | voice | 2 | getWorkspaceVocabulary, transcribe — `getWorkspaceVocabulary` is the auto-derived per-workspace vocabulary served for client-side transcription engines (§5.41; v5.1, `workspaceId` req); `transcribe` is daemon-owned speech-to-text via the configured provider (§5.41; v4.3, daemon-global — no required `workspaceId`; optional `workspaceId?` workspace-vocabulary injection since v5.1) |
-| workspace | 39 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, list, localChanges, markSeen, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext |
+| workspace | 45 | archive, cancelDelete, cleanup, create, delete, detectProjectType, diskUsage, dismissAttention, duplicate, export.abort, export.finalize, export.read, export.start, findRepositories, generateSetupScript, get, getAutoCommit, getBrowserClient, getContext, getSetupScript, getTokenUsage, getUiContext, import.abort, import.begin, import.chunk, import.commit, initializeRepository, invite.list, invite.revoke, list, localChanges, markSeen, members.add, members.leave, members.list, members.remove, restore, saveSetupScript, setAutoCommit, setBrowserClient, transfer.plan, unarchive, update, updateContext, updateUiContext — the multiplayer membership surface (§5.48; shipped in intentd b518d31): `members.list` → `{ members: [{ principal fields…, role }] }` (any member); `members.add { principalId }` → `{ added, memberCount }` (owner-only; attaches a credentialed guest from `principal.list` as a collaborator without an invite link, idempotent — a repeat answers `added: false`; an unknown principal, the primary principal or a principal with no active credential is `-32602`, a spent guest cap `-32602 { code: "guest-limit" }`; publishes the same `addedPrincipalId` `workspace:updated` an invite join does — [intent-hq/intentd#2025](https://github.com/intent-hq/intentd/pull/2025)); `members.remove` → `{ removed }` (owner-only; the owner row is `-32602`, a non-member is `removed: false`) and `members.leave` (the caller drops its **own** collaborator membership; owners cannot leave) both publish the `removedPrincipalId` `workspace:updated` (§6.5); `invite.list` → `{ invites: [WorkspaceInvite] }` (secrets never included) and `invite.revoke` → `{ revoked }` are owner-only, with `invite.create` on the fast path, below |
 
 Namespaces without their own numbered subsection below (`accept-changes.*`, `file-tracking.*`, `drafts.*`, `forward.*`, `host.*`) are covered in §5.14–§5.20; `browser.exec` is in §5.9 and the `browser.*` tab-registry methods are in §5.45.
 
-### Fast-path methods (49 total)
+### Fast-path methods (58 total)
 
-The following 49 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task.
+The following 58 methods are intercepted **before** the main router for performance or to access per-connection state. They share the same JSON-RPC envelope validation but are dispatched earlier in the connection task. The retired `invite.redeem` is not dispatchable at the current pin; `/invite` serves only inspect, accept, challenge and prove.
 
-browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, pairing.getInfo, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status
+browser.closeTab, browser.exec, browser.listTabs, browser.navigateTab, browser.removeTab, browser.syncTabs, browser.upsertTab, client.hello, drafts.clear, drafts.get, drafts.set, events.subscribe, events.unsubscribe, forward.close, forward.create, forward.list, host.checkAuggie, host.checkGh, host.checkGit, host.checkNode, host.createDirectory, host.directoryStatus, host.env, host.exec, host.execStream, host.execStream.cancel, host.execStream.write, host.findApp, host.findBinary, host.invite.create, host.listDirectory, host.listInstalledEditors, host.openInEditor, host.providerAuthStatus, host.providerDiscovery, host.providerTestPrompt, host.status, host.toolAvailability, invite.accept, invite.challenge, invite.inspect, invite.prove, note.presence.update, pairing.getInfo, pairing.getSelfInfo, presence.update, providers.setup.cancel, providers.setup.login, providers.setup.start, providers.setup.status, server.pairingInfo, server.rotateToken, system.gitCredential, system.importLegacy, system.requestUpdate, system.shutdown, system.status, workspace.invite.create
+
+The multiplayer methods (presence §5.47, invites §5.48) are fast-path because they act on per-connection state: `presence.update` sets the connection's **own** focus set and typing target (member workspaces only; transient, never persisted; returns the connection's opaque typing source handle) and `note.presence.update` the caller's own caret on a note it holds a `note.presence.subscribe` lease for (coalesced daemon-side, never persisted) — both feed the `presence:changed` / `note:presence` events (§6.5); `workspace.invite.create` (owner/member under §5.49; no linked-forge prerequisite with `hostMembership: 1`; otherwise the legacy owner-only policy; optional `pinLogin` with its v10.8 `pinProvider` / `pinHost`, `expiresInSecs` default 7 days) mints an invite the transport wraps into the `intent://invite?…` link, and the four `invite.*` methods are the unauthenticated join served on the `/invite` endpoint only: `invite.inspect` previews an open `(inviteId, secret)` → `{ workspaceId, workspaceTitle, hostname, prettyHostname, pinIdentity }`, with the required `pinIdentity` triple or explicit `null` (10.8; see [Selecting the guest identity](./methods/multiplayer.md#selecting-the-guest-identity) for the triple shape, legacy pins, and older-daemon omission rules); `invite.challenge` returns the same preview plus the single-use `nonce` and `nonceExpiresAt`, and the guest publishes the nonce under its forge account (`sourceControl.identityProof.create`); `invite.prove { …, nonce, login, proofId, provider?, host? }` verifies that proof and commits the join → `{ status: "authorized", token, principalId, login, workspaceId }` exactly once, and `invite.accept { …, credential }` is the returning guest's proof-less join with a credential this host minted earlier ([intent-hq/intentd#1963](https://github.com/intent-hq/intentd/pull/1963), [#1965](https://github.com/intent-hq/intentd/pull/1965)). `invite.redeem` — the earlier two-phase, host-run GitHub device-flow join — was removed from intentd by [#1969](https://github.com/intent-hq/intentd/pull/1969); its name stays listed above only until the pinned intentd advances past that removal, then this entry is dropped.
 
 The six `browser.*` tab-registry methods (`listTabs`, `upsertTab`, `removeTab`, `syncTabs`, `navigateTab`, `closeTab`; v9.10–v9.11) are fast-path because the host-only reports are keyed by the connection's `client.hello` identity — see §5.45. The four `providers.setup.*` methods (v9.8, [intent-hq/intentd#1742](https://github.com/intent-hq/intentd/pull/1742)) are the guided managed-provider (Antigravity) setup surface — per-connection setup operations whose sign-in step is delegated back to the owning app via the `providers.setup.openLogin` reverse RPC (below); their local-app-only contract is documented in [§5.44](./methods/models-providers.md#544-guided-antigravity-setup).
 
-The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
+The snapshot+delta subscription channels (`note.subscribe`, `chat.subscribe`, `note.presence.subscribe`, …, §6.9) are likewise intercepted on the subscription fast-path.
 
 **UDS-only methods:** `system.shutdown`, `system.importLegacy` (v2.2), and `system.gitCredential` (v2.5) are only available on the Unix-domain socket transport (a remote WSS/TCP caller is rejected with `-32001`). `system.status` and `system.requestUpdate` (v8.6, see below) are available on both UDS and WSS transports. `system.status` reports daemon liveness + transport/port/client/agent/cert-fingerprint/host-capability state, and `system.shutdown` requests a graceful daemon shutdown; both are consumed by `intentd status` / `intentd stop`. `system.importLegacy` triggers a legacy workspace import (see below). `system.gitCredential` resolves the daemon-managed GitHub credential for the `intentd git-credential` helper (see below). `pairing.getInfo`, `server.pairingInfo`, and `server.rotateToken` are likewise local-only: they are gated on the real connection origin (UDS vs TCP), so a remote (TCP/WSS) caller is rejected with `-32001` regardless of locality flags.
 
-**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It takes no params (no `workspaceId`) and returns machine-level capabilities:
+**`system.capabilities` is a router method, not a fast-path control (v2.3).** Unlike the `system.*` fast-path methods above (which are answered by the composition root's control surface), `system.capabilities` dispatches through the main router to the service layer and is available on **both** UDS and WSS. It accepts optional routing-only `workspaceId` under the prepared contract and returns the same machine-level capabilities; `{}` remains compatible on direct daemons:
 
 ```json
 // → request
@@ -135,6 +168,22 @@ The `system.status` result additionally reports the daemon's **whole descendant 
 - `childMemoryPeakBytes` is the high-water mark of the daemon's **sampled** descendant-tree memory since daemon start. It is **not** simply the maximum of the `childMemoryBytes` values a client has seen: the tree is swept every **500 ms** while an ephemeral ACP adapter chain holds a slot in the daemon-wide adapter bound (`agents.maxConcurrentAdapters`, §5.12) — one-shot `agent.completeOnce` on ACP providers, and model probes — against the 5 s cadence `childProcesses` / `childMemoryBytes` are published at, so **the peak can legitimately exceed every instantaneous value ever published**. That is deliberate: those chains live only seconds, so by the time a debug bundle is captured the instantaneous value has drained back to baseline (intentd#1139, monorepo#2107; fast cadence introduced by [intent-hq/intentd#1167](https://github.com/intent-hq/intentd/pull/1167) — measured, a 16-chain burst peaked at 6.97 GB while `childMemoryBytes` read 0 at every published sample).
 - The fast cadence applies **only** to descendants spawned through the ephemeral-adapter bound — the one-shot ACP runner and the model probe. Everything else in the tree — the **auggie** route of the same quick actions (it spawns its CLI directly and takes no slot), `host.exec` children, PTY sessions, MCP bridge servers, the Unsloth server, and the tool children a long-lived agent runs — is sampled at the 5 s baseline only, so a burst from one of those that spikes and drains inside one baseline interval may not appear in the peak.
 - The tree's baseline sampling cadence is **5s**. All three keys are always present on the wire and are `null` — never `0` — until the first sample lands (~5s after daemon start); `0` is a real measurement meaning an empty tree. Clients must detect them by **presence**, not by protocol version.
+
+#### `system.status` — agent-attributed share of the tree (additive, v10.4)
+
+The `system.status` result additionally reports how much of the descendant tree above belongs to **spawned agents**, from the same sweep:
+
+```jsonc
+{
+  "agentMemoryBytes": 4831838208, // sum of the per-agent subtree buckets, in bytes; null until first sample
+  "agentProcessCount": 3          // spawned agents with a live root pid in the sweep; null until first sample
+  // ...existing status fields (childProcesses, childMemoryBytes, childMemoryPeakBytes, ...)
+}
+```
+
+- `agentMemoryBytes` is the share of `childMemoryBytes` attributable to agents: each descendant's RSS is credited to its nearest registered agent root (the same buckets behind `agent.diagnostics`' `subtreeMemoryBytes`, §5.5, and the per-agent rows of `agent.memoryUsage`, §5.5). Descendants under no registered root — one-shot adapter chains, `host.exec` children, PTY sessions, the Unsloth server — count only in the aggregate, so `agentMemoryBytes ≤ childMemoryBytes` always; the difference is the daemon's non-agent tree cost.
+- `agentProcessCount` is the number of buckets — spawned agents whose root pid was alive in the sweep — **not** a process count (the per-agent process rows live on `agent.memoryUsage`).
+- Both keys follow the child-tree convention: always present on the wire, `null` — never `0` — until the first sample lands, `0` a real measurement (no live agent). Clients must detect them by **presence**, not by protocol version.
 
 #### `system.status` — aggregate memory budget fields (additive)
 
@@ -344,6 +393,54 @@ Asks the daemon's supervising [`intentd-sitter`](https://github.com/intent-hq/in
 - Clients can read `updateSupported` on `system.status` (above) to gate the update affordance instead of probing for the `-32603` failure. It is a read-time hint, not a guarantee: supervision can change between the status read and this call, so callers must still handle `-32603` here.
 - This is the **immediate** variant: a newer version installs and the daemon restarts right away, in-flight turns included. The daemon separately runs **idle-triggered** checks on its own (SIGUSR2 to the sitter, rate-limited, only while no turn is in flight) and exits for a staged update only when idle — observable via `system.status` `idleUpdateCheck` / `busyAgents` (v10.2, above). The sitter's 12–24 h periodic check remains the forced fallback.
 
+#### Exact-version `system.requestUpdate` (additive, v10.3)
+
+An authenticated UDS or WSS caller may request `{ "targetVersion": "0.9.99" }`.
+It MUST first read `system.status` and require `exactUpdateSupported === true`.
+Older daemons ignore unknown parameters; **never** send a target without the
+capability and never retry it as a parameterless channel update.
+
+`exactUpdateSupported` is always a boolean on supporting daemons. It requires Unix
+sitter supervision (verified direct parent, process name, and pid range) and the
+sitter's `INTENTD_SITTER_EXACT_UPDATE=1` handshake, which guarantees serialized
+installer/state mutations. An older sitter must be updated manually before this
+capability becomes available. `updateSupported` retains its channel-update meaning.
+
+- The target is a bare SemVer release identifier, at most 128 bytes, with no `v`
+  prefix, whitespace, path/URL components, or build metadata. Prereleases are allowed.
+  Malformed targets, null, non-string targets, and unknown parameters return `-32602`.
+- The target must be strictly newer than the running daemon; current/older targets,
+  unsupported supervision, and overlapping requests return `-32603` immediately.
+  A target below the already-installed version is rejected asynchronously with
+  `targetUpdate.state: "failed"` after acceptance. Parameterless channel requests
+  are rejected while an exact update is active.
+- Acceptance returns `{ "ok": true, "targetVersion": "0.9.99" }`; it does not mean
+  installation succeeded. Installation runs off the connection read loop, using
+  platform-derived assets and checksum sidecars from fixed release hosts. Channel
+  configuration is preserved. Archive verification or installation failure leaves
+  the daemon running and does not trigger a channel fallback.
+- `system.status.targetUpdate` is absent before the first request and after restart.
+  During the operation it is `{ "targetVersion": "0.9.99", "state": "installing" }`,
+  then `state: "restarting"`. Failure is `{ "targetVersion": "0.9.99", "state": "failed", "message": "…" }`;
+  a failed operation may be retried. There is no progress event.
+- After installation the daemon re-verifies the sitter and sends restart-only
+  `SIGHUP`, without a channel check. Clients poll status, tolerate the restart
+  disconnect, reconnect using existing credentials/fingerprint, and confirm
+  `system.status.version` matches the requested target by SemVer precedence before
+  reporting success: a reported `v` prefix and build metadata may be ignored, but
+  the release numbers and prerelease identifier must match. The request and
+  acceptance `targetVersion` remain the exact bare release identifier.
+  An unrelated concurrent update may win; a reconnected version mismatch is a
+  failure, not successful completion of the exact request. Polling must be bounded.
+
+#### `pairing.getSelfInfo` (current authenticated person)
+
+The 10.9 personal pairing fast path is specified in [§5.49](./methods/shared-host-membership.md#persistent-personal-pairing-and-authenticated-devices).
+It is callable over UDS/WSS by the current owner/member/guest and returns that connection's
+persistent admitted credential with the existing pairing fields plus `principal`.
+No target-principal parameter, expiry or ticket is added. Existing local-only pairing and
+server-token administration below retain their separate transport guards.
+
 #### `pairing.getInfo` (local-only)
 
 Returns the structured QR pairing payload so local clients (the `intentd pair` CLI, desktop GUI) can render a QR code for LAN pairing.
@@ -408,7 +505,7 @@ Returns the raw pairing/connection material — bearer token, TLS cert fingerpri
 
 #### `server.rotateToken` (local-only)
 
-Regenerates the bearer token (invalidating the previous one for new connections) and returns the updated pairing info.
+Regenerates the bearer token and returns the updated pairing info. Legacy behavior invalidates the previous token for new connections; with `personalPairing: 1`, it also closes affected token-authenticated sessions as specified in §5.49. Trusted local UDS administration is unaffected.
 
 **Request:** `{}` (no parameters)
 
@@ -421,7 +518,7 @@ Regenerates the bearer token (invalidating the previous one for new connections)
 
 Resolves the auggie CLI on the daemon host. **Resolution-only** ([intent-hq/intentd#977](https://github.com/intent-hq/intentd/pull/977)): no `--version` spawn and no `version` field.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -436,7 +533,7 @@ Resolves the auggie CLI on the daemon host. **Resolution-only** ([intent-hq/inte
 
 Detects the `git` / `node` / `gh` binary on the daemon host: PATH resolution (plus OS-common install dirs) followed by a `<path> --version` probe on a blocking thread.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -451,7 +548,7 @@ Detects the `git` / `node` / `gh` binary on the daemon host: PATH resolution (pl
 
 Daemon-owned provider auth probes: reports whether each CLI-backed agent provider is authenticated, so clients consume verdicts instead of orchestrating auth-check commands themselves.
 
-**Request:** `{ "providerId": "grok", "force": true }` — both parameters optional. `providerId` scopes the sweep to a single provider; it must be a non-empty string when present, and an unknown, empty, or non-string `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
+**Request:** `{ "providerId": "grok", "force": true }` — both probe parameters optional; the prepared contract also accepts optional routing-only `workspaceId`. `providerId` scopes the sweep to a single provider; it must be a non-empty string when present, and an unknown, empty, or non-string `providerId` yields `-32602`. `force` must be a boolean when present (`-32602` otherwise).
 
 **Response:**
 
@@ -500,7 +597,7 @@ Live end-to-end provider test: spawns the provider's ACP adapter through the sam
 
 Daemon-owned provider discovery: reports which CLI-backed agent providers are installed on the daemon host (binary resolution + npx fallback status, honoring valid `providers.paths` overrides), so clients render install state without probing `PATH` themselves.
 
-**Request:** `{}` (no parameters)
+**Prepared request:** `{ workspaceId?: string }`; `{}` remains compatible on direct daemons.
 
 **Response:**
 
@@ -537,14 +634,14 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
       "resolvedPath": "/usr/local/bin/npx",
       "hasNpxFallback": false,
       "npxOnly": true,
-      "npxPackage": "pi-acp@0.0.33",
+      "npxPackage": "pi-acp@0.0.34",
       "cliCommand": "pi",                          // pi row only — the probed `pi` CLI command
       "cliResolved": true,
       "cliResolvedPath": "/usr/local/bin/pi",      // optional — present only when the CLI resolved
       "cliVersion": "0.79.0",                      // optional — present only when the version probe succeeded
       "cliVersionOk": false,
-      "cliRequirement": "Pi CLI 0.80.4+",
-      "unavailableReason": "pi CLI 0.79.0 is too old — Pi CLI 0.80.4+ is required by pi-acp@0.0.33"  // optional — present iff the CLI gate fires
+      "cliRequirement": "Pi CLI 0.81.0+",
+      "unavailableReason": "pi CLI 0.79.0 is too old — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"  // optional — present iff the CLI gate fires
     }
   ],
   "npx": { "resolvedPath": "/usr/local/bin/npx", "version": "10.2.4", "versionOk": true }
@@ -558,8 +655,8 @@ Daemon-owned provider discovery: reports which CLI-backed agent providers are in
 - `gatedOff` (optional string, not shown above) is present — with a human-readable reason — only when the provider is gated off (e.g. a required env var or feature code is missing). Gated providers skip binary probing entirely, so a gated entry never carries `resolvedPath`, `secondaryCommand`, `secondaryResolved`, or `secondaryResolvedPath` and always reports `installed: false`.
 - `npxOnly` is `true` for providers with no local-binary path at all (claude-code): they are launched via `npx <package>`, `installed` reflects npx resolution, and `resolvedPath` (when present) is the npx binary. `npxPackage` (the pinned package spec) is present **iff** `npxOnly` is `true`.
 - `hasNpxFallback` is `true` for providers that prefer a local binary but can fall back to an npx-launched adapter when the binary is absent — so a `hasNpxFallback: true` provider with `installed: false` may still be usable if the `npx` probe below reports `versionOk: true`.
-- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These fields appear **only** on the pi row, and only when it is not `gatedOff` (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the human-readable requirement, `"Pi CLI 0.80.4+"`). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
-- **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.80.4+ is required by pi-acp@0.0.33"`). An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
+- **`pi` CLI verdict fields** *(additive, intentd#1044 / monorepo#1662)* — the `pi` row additionally folds in a probe of the real `pi` CLI (the binary the pinned `pi-acp` adapter spawns — distinct from npx, which only launches the adapter). These fields appear **only** on the pi row, and only when it is not `gatedOff` (gated rows are never probed). The probed pi row **always** carries `cliCommand` (the command probed: a non-empty `PI_ACP_PI_COMMAND` daemon-env override, else bare `pi`), `cliResolved` (whether the command resolved to an executable), `cliVersionOk` (`true` **iff** the probe confirmed the minimum version or newer), and `cliRequirement` (the pinned adapter's human-readable requirement, e.g. `"Pi CLI 0.81.0+"` for `pi-acp@0.0.34`; this value can change with the adapter pin). `cliResolvedPath` (absolute path) is present only when the CLI resolved, and `cliVersion` (the trimmed first line of `pi --version` output) only when the version probe succeeded — both **omitted (never null)** otherwise. A bare command name is resolved against the **spawn-time enhanced PATH** (npx's parent dir and `~/.augment/bin` ahead of the enriched/inherited dirs), so the probe reports the same binary the spawned pi-acp child would actually exec.
+- **`pi` CLI gating** — a **missing** or **confirmed-too-old** CLI marks the pi row unavailable (it never sets `gatedOff`, which stays reserved for the env-var/feature-code mechanism above): `installed` is forced to `false` and `unavailableReason` (optional string, pi row only) carries an actionable message naming the found version (when too old), the requirement, and the adapter pin (e.g. `"pi CLI not found — Pi CLI 0.81.0+ is required by pi-acp@0.0.34"`). An **inconclusive** probe — spawn failure, timeout, unparseable `--version` output, or a relative separator-carrying `PI_ACP_PI_COMMAND` override that did not resolve from the daemon's CWD — is **permissive**: the daemon logs a WARN and does not gate, so `cliVersionOk` is `false` but `installed` is untouched and `unavailableReason` is omitted (a changed `--version` format never false-negatives the provider). Invariant: `unavailableReason` present ⇒ `installed: false` and `cliVersionOk: false`. The same gate fails agent creation fast with a clear error (instead of a silent hang) when a Pi agent is spawned against a missing/too-old CLI.
 - `npx` reports the daemon's npx probe: `resolvedPath` is `null` when npx is not found; `version` is `null` when npx is missing **or** the version probe fails (a failed probe leaves `resolvedPath` set); `versionOk` is whether the resolved version meets the minimum requirement (`false` whenever `version` is `null`).
 
 ### Method aliases (2 total)
@@ -591,4 +688,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.45) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.50) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

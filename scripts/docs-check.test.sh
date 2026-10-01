@@ -199,14 +199,20 @@ grep -q "documented make target 'an'" <<<"$check_output" &&
 if ! run_check; then
   fail "browser contract surfaces in sync were rejected: $check_output"
 fi
+grep -q 'warning:' <<<"$check_output" &&
+  fail "browser contract surfaces in sync produced a warning: $check_output"
 
+# Docs lead the pin: a canonical token a pinned component does not carry yet
+# is a warning naming the lagging component, never an error.
 sed -i.bak 's/`deadline-exhausted`/`deadline-exhaust`/' "$temp_dir/$intentd_overview"
 rm -f "$temp_dir/$intentd_overview.bak"
-if run_check; then
-  fail "errorCode token missing from the intentd overview was accepted"
+if ! run_check; then
+  fail "errorCode token missing from the intentd overview was rejected: $check_output"
 fi
-grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not documented in $intentd_overview" <<<"$check_output" ||
-  fail "missing intentd overview token failure did not name the token and file: $check_output"
+grep -q "$protocol_doc:6: warning: browser errorCode 'deadline-exhausted' is documented but not yet in $intentd_overview (pinned intentd lags the docs)" <<<"$check_output" ||
+  fail "missing intentd overview token warning did not name the token and file: $check_output"
+grep -q 'error:' <<<"$check_output" &&
+  fail "missing intentd overview token was reported as an error: $check_output"
 write_intentd_overview
 
 # Remove only the union member; the runtime `errorCode: 'still-loading'`
@@ -215,34 +221,101 @@ grep -v "^    | 'still-loading'$" "$temp_dir/$fe_executor" >"$temp_dir/$fe_execu
 mv "$temp_dir/$fe_executor.tmp" "$temp_dir/$fe_executor"
 grep -q "errorCode: 'still-loading'" "$temp_dir/$fe_executor" ||
   fail "fixture lost its runtime still-loading literal"
-if run_check; then
-  fail "errorCode token missing from the fe union was accepted"
+if ! run_check; then
+  fail "errorCode token missing from the fe union was rejected: $check_output"
 fi
-grep -q "$protocol_doc:7: error: browser errorCode 'still-loading' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
-  fail "missing fe union token failure did not name the token and files: $check_output"
+grep -q "$protocol_doc:7: warning: browser errorCode 'still-loading' is documented but not yet declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp (pinned cloudlands-fe lags the docs)" <<<"$check_output" ||
+  fail "missing fe union token warning did not name the token and files: $check_output"
 write_fe_executor
 
 # Same for the alias: the executor's runtime `'deadline-exhausted'` literal
 # must not stand in for a removed CaptureErrorCode member.
 printf '%s\n' "export type CaptureErrorCode = 'not-painting';" >"$temp_dir/$fe_cdp"
-if run_check; then
-  fail "errorCode token missing from the CaptureErrorCode alias was accepted"
+if ! run_check; then
+  fail "errorCode token missing from the CaptureErrorCode alias was rejected: $check_output"
 fi
-grep -q "$protocol_doc:6: error: browser errorCode 'deadline-exhausted' is not declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp" <<<"$check_output" ||
-  fail "missing CaptureErrorCode member failure did not name the token and files: $check_output"
+grep -q "$protocol_doc:6: warning: browser errorCode 'deadline-exhausted' is documented but not yet declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp (pinned cloudlands-fe lags the docs)" <<<"$check_output" ||
+  fail "missing CaptureErrorCode member warning did not name the token and files: $check_output"
 write_fe_cdp
 
-sed -i.bak "s/    | 'navigated-away'/    | 'navigated-away'\\
+# Docs leading both pins: only the canonical bullet is added; one warning per
+# lagging component, exit 0.
+add_protocol_bullet() {
+  sed -i.bak 's/^> - `not-painting` — the surface has not painted.$/&\
+> - `tab-crashed` — the renderer process is gone./' "$temp_dir/$protocol_doc"
+  rm -f "$temp_dir/$protocol_doc.bak"
+  grep -q '`tab-crashed`' "$temp_dir/$protocol_doc" || fail "fixture did not gain the tab-crashed bullet"
+}
+add_fe_union_member() {
+  sed -i.bak "s/    | 'navigated-away'/    | 'navigated-away'\\
     | 'tab-crashed'/" "$temp_dir/$fe_executor"
-rm -f "$temp_dir/$fe_executor.bak"
+  rm -f "$temp_dir/$fe_executor.bak"
+}
+add_intentd_token() {
+  printf '%s\n' 'A crashed renderer fails with `tab-crashed`.' >>"$temp_dir/$intentd_overview"
+}
+
+add_protocol_bullet
+if ! run_check; then
+  fail "canonical errorCode bullet ahead of both pins was rejected: $check_output"
+fi
+grep -q "$protocol_doc:10: warning: browser errorCode 'tab-crashed' is documented but not yet declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp (pinned cloudlands-fe lags the docs)" <<<"$check_output" ||
+  fail "docs-leading warning did not name the lagging fe files: $check_output"
+grep -q "$protocol_doc:10: warning: browser errorCode 'tab-crashed' is documented but not yet in $intentd_overview (pinned intentd lags the docs)" <<<"$check_output" ||
+  fail "docs-leading warning did not name the lagging intentd overview: $check_output"
+grep -q 'docs-check: 2 warning(s) (docs lead the pin)' <<<"$check_output" ||
+  fail "docs-leading run did not summarize its warnings: $check_output"
+grep -q 'error:' <<<"$check_output" &&
+  fail "docs-leading run reported an error: $check_output"
+
+# cloudlands-fe caught up, intentd still pinned before the token: warning only.
+add_fe_union_member
+if ! run_check; then
+  fail "fe caught up with the docs was rejected because intentd lags: $check_output"
+fi
+grep -q "$protocol_doc:10: warning: browser errorCode 'tab-crashed' is documented but not yet in $intentd_overview (pinned intentd lags the docs)" <<<"$check_output" ||
+  fail "intentd-lag warning was not reported: $check_output"
+grep -q 'docs-check: 1 warning(s) (docs lead the pin)' <<<"$check_output" ||
+  fail "fe-caught-up run did not report exactly one warning: $check_output"
+write_fe_executor
+
+# intentd caught up, cloudlands-fe still pinned before the token: warning only.
+add_intentd_token
+if ! run_check; then
+  fail "intentd caught up with the docs was rejected because fe lags: $check_output"
+fi
+grep -q "$protocol_doc:10: warning: browser errorCode 'tab-crashed' is documented but not yet declared in the errorCode union / CaptureErrorCode alias in $fe_executor $fe_cdp (pinned cloudlands-fe lags the docs)" <<<"$check_output" ||
+  fail "fe-lag warning was not reported: $check_output"
+grep -q 'docs-check: 1 warning(s) (docs lead the pin)' <<<"$check_output" ||
+  fail "intentd-caught-up run did not report exactly one warning: $check_output"
+
+# Everything caught up: no warning remains.
+add_fe_union_member
+if ! run_check; then
+  fail "all three surfaces carrying the new token were rejected: $check_output"
+fi
+grep -q 'warning:' <<<"$check_output" &&
+  fail "fully caught-up surfaces still produced a warning: $check_output"
+write_protocol_doc
+write_fe_executor
+write_intentd_overview
+
+# Component ahead of the docs: an fe union member with no canonical bullet is
+# still an error naming the canonical doc, whatever the intentd overview says.
+add_fe_union_member
 if run_check; then
   fail "fe errorCode literal absent from the protocol doc was accepted"
 fi
-grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc" <<<"$check_output" ||
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc (add its canonical bullet first; the docs may lead the pin)" <<<"$check_output" ||
   fail "undocumented fe literal failure did not name the token and file: $check_output"
-grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $intentd_overview" <<<"$check_output" ||
-  fail "undocumented fe literal failure did not name the intentd overview: $check_output"
+add_intentd_token
+if run_check; then
+  fail "fe errorCode literal absent from the protocol doc was accepted because intentd carries it"
+fi
+grep -q "$fe_executor:10: error: browser errorCode 'tab-crashed' is not documented in $protocol_doc" <<<"$check_output" ||
+  fail "undocumented fe literal failure with intentd ahead did not name the canonical doc: $check_output"
 write_fe_executor
+write_intentd_overview
 
 rm -rf "$temp_dir/packages/intentd"
 if ! run_check; then

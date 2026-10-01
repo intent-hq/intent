@@ -2,6 +2,13 @@
 
 ## 8. Permission Flow
 
+The [workspace routing preparation](./workspace-routing.md) adds optional
+`workspaceId` to `agent.pendingPermissions { agentId?, workspaceId? }` and
+`agent.respondPermission { requestId, outcome, workspaceId? }`. Workspace clients
+capture the originating ID with the permission prompt and retain it across
+recovery and late responses. Direct callers may omit it. It selects no new
+snapshot filter and changes neither prompt authorization nor resolution behavior.
+
 When an agent's provider (e.g. auggie) wants to run a tool that requires approval, it sends an ACP`session/request_permission` request **to the backend** (over the provider's stdio channel, not theclient WebSocket). The backend mediates approval:
 
 1. **Bypass / auto-approve.** For non-interactive providers running in `bypassPermissions` mode (orwhen the provider can't set a mode), the backend auto-selects an "allow" option and respondsimmediately — no client involvement.
@@ -63,3 +70,30 @@ The frontend responds with the chosen outcome, which the backend forwards to the
 
 Outcomes: `{ "outcome": "selected", "optionId": "<id>" }`, or `{ "outcome": "cancelled" }`.Unanswered requests **time out after 5 minutes** and resolve as `cancelled`, unblocking the agent. The recoverability path (a reconnecting client re-fetching outstanding prompts via `agent.pendingPermissions` so a page refresh does not strand the agent) is **now wired** — see the implementation note above.
 
+### Authorization for shared-host permission prompts *(10.9)*
+
+Under [§5.49](./methods/shared-host-membership.md), prompt snapshots and answers use
+the target agent's current workspace management grant, reflected by `canManage`.
+The primary and active host members retain their management scope; a guest with a
+retained explicit workspace-owner row can read and answer only in that owned
+workspace. An ordinary collaborator or unrelated guest cannot. These guest RPCs
+are already transport-admitted, then scope-checked in the service; `canManage`
+does not admit other methods such as guest-denied WSS `script.*` calls.
+Enforce scope for `agent.pendingPermissions { agentId }`, the unfiltered aggregate
+`agent.pendingPermissions {}`, and
+`agent.respondPermission { requestId, outcome }`. Resolve the request's workspace
+server-side, never from a claimed client role or workspace ID.
+
+The aggregate filters before projecting requests; it cannot leak prompt IDs or
+content from unauthorized workspaces. A known but unauthorized prompt answer is
+Forbidden; a hidden workspace/agent retains the indistinguishable `not-found`
+policy. An absent/already-settled request keeps `{ resolved: false }`.
+
+Events have an additional audience gate: `agent:permission:request` and
+`agent:permission:resolved` remain host owner/member-only, scoped to the prompting
+workspace, at live delivery and durable-query time. Guest owners use the admitted
+snapshot/answer RPCs; their `canManage: true` does not grant prompt-event access.
+Demotion or removal ends the corresponding scoped read/answer authority; exact
+credential revocation independently prevents admission even if a durable owner
+row remains. These changes do not cancel another person's running agent. Existing
+outcome shapes, timeout and first-resolution behavior are unchanged.

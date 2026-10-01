@@ -13,8 +13,66 @@
 5. [Test Issues](#test-issues)
 6. [TypeScript Issues](#typescript-issues)
 7. [Migration Issues](#migration-issues)
+8. [Codex Runtime and Models](#codex-runtime-and-models)
 
 ## Common Issues and Solutions
+
+### Codex Runtime and Models
+
+When Codex model choices differ between Intent and a terminal, run diagnostics on the
+daemon host with the same Intent configuration:
+
+```bash
+intentd doctor
+intentd doctor --codex-models
+```
+
+The first command reports the pinned managed ACP adapter and whether its Node.js/npx
+prerequisites are available. Like production, it ignores `providers.paths.codex`, local
+`codex-acp` installations, and `CODEX_PATH`. The adapter receives Intent's fixed
+`CODEX_CONFIG` policy disabling built-in subagents, not inherited configuration. A
+configured pin is not a measured adapter or bundled runtime version. Ordinary doctor
+adds no npm resolution or live catalog calls, so these versions remain unknown until
+the selected package is inspected by an explicit live check. No unrelated PATH `codex`
+is substituted; unverified packages, missing runtimes, and timeouts are reported as unknown.
+
+On Linux, diagnostic process probes require `/bin/bash` for private process supervision.
+If it is unavailable, probes report a failure and their results remain unknown. Diagnostics
+do not install Bash or fall back to another shell; normal provider launches are unaffected.
+
+On macOS, diagnostics report launch selection and the configured pin without resolving
+the managed package or inspecting ignored local adapters. Package metadata applies only
+when the selected entrypoint has been established; a declared package version is labeled
+**metadata, not measured** and does not prove the running adapter or runtime version.
+Version and catalog process probes report an explicit unsupported result because detached-child
+cleanup cannot be guaranteed. `--codex-models` does not execute diagnostic providers,
+resolve npm, capture authentication, or create temporary probe state on macOS. The
+comparison remains inconclusive; normal agent/provider execution is unchanged.
+
+On Linux and Windows, `--codex-models` permits managed package resolution/download and compares
+fresh ACP advertisements with `model/list` from the verified runtime. Read each catalog's
+status separately: one can fail while the other succeeds. An advertised empty catalog
+differs from no advertisement. Original model IDs, raw aliases, hidden flags, and source
+messages are preserved; exact comparison does not normalize effort suffixes. Withheld
+IDs or incomplete catalogs make comparison inconclusive. ACP choices may be synthesized;
+presence is not proof of entitlement, and absence is not proof of an account restriction
+or a remedy for model access.
+
+Live checks use existing file authentication from `CODEX_HOME/auth.json` or the default
+home's `.codex/auth.json`, plus the selected `OPENAI_API_KEY`, `CODEX_API_KEY`, and
+`CODEX_ACCESS_TOKEN` environment values. Keyring-only credentials may be unavailable in
+the isolated probe. User/project configuration, MCP servers, and model caches are not
+copied. No prompt, login, or token-refresh request is sent, and account metadata,
+credentials, and raw child errors are not printed.
+
+Allow more than 30 seconds for the entire command: local inspection/version operations
+each allow three seconds and 16 KiB of stdout; ACP and raw startup/conversation phases
+each allow 30 seconds and 1 MiB per output stream. Raw pagination stops at ten pages or
+a repeated cursor, catalogs at 2,000 rows, and authentication/entrypoint files at 64 KiB.
+Process startup and cleanup have additional budgets; cleanup confirmation allows five
+seconds. Unknown or failed provider checks are advisory. Existing daemon-health checks
+still control the exit status. A cleanup warning means temporary state was retained
+because termination could not be confirmed.
 
 ### Agent Creation Issues
 
