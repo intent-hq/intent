@@ -980,14 +980,16 @@ concurrent workspace creation and no per-member persisted grant fan-out.
 Existing workspace events now reach effective members, including permission,
 terminal, script, browser and preview events needed for management. Filter at
 delivery and durable-query time, including aggregate queries. Guests retain the
-existing event allowlist and workspace narrowing, apart from the explicit own-
-device events above. Own-principal identity changes may be delivered to that
+existing event allowlist and workspace narrowing, with the explicit own-device
+events above and scoped permission events described below. Own-principal identity changes may be delivered to that
 principal; unrelated global identity/settings/auth events remain hidden.
 Permission snapshots and answers use the prompt's current workspace management
 grant, including retained explicit guest ownership. Permission request/resolved
-events additionally require host owner/member admission at live delivery and
-durable-query time; a guest owner receives neither. See [§8](../08-permission-flow.md)
-for these separate checks. `canManage` does not broaden the guest event allowlist.
+events use that same grant at live delivery and durable-query time, including
+aggregate reads. Recheck current authority for each prompt delivery; demotion or
+removal ends access without waiting for a cached visibility verdict. See
+[§8](../08-permission-flow.md). This does not admit other guest-denied management
+events or RPCs.
 
 #### Multiplayer lab rollout (client policy)
 
@@ -1029,7 +1031,7 @@ the assertions; passing documentation gates is not runtime evidence.
 | Managed GitHub helper enabled/disabled, each with and without an alternative owner helper | Member reads the exact effective switch and setting name from the connected host; disabled never supplies the daemon credential to children. Git still succeeds with an authorized alternative helper; disabled/no helper explains owner recovery without member auth fallback |
 | Configured but expired/revoked/under-scoped Git or AI authorization; missing authorization | Classified operation failure carries `ExecutionAuthorizationFailure` (including asynchronous AI failure); asks that host's owner to repair authorization. Configured/readiness cache is not proof of validity; unrelated operations and invitations remain usable |
 | Owner toggles helper policy, changes repository/AI authorization, or a probe/operation discovers revocation | Sanitized execution-context invalidation refreshes member policy/readiness without exposing settings or auth flows. Reconnect/host switch discards old responses and reads the selected host, including when local setup differs |
-| Filtered/aggregate permission snapshots, answers and separate live/durable event reads | Owner/member can act in manageable workspaces; a retained guest owner can read/answer only its owned workspace's prompts through already-admitted RPCs. Ordinary collaborators/unrelated guests see no unauthorized request or ID and cannot answer. Permission events remain owner/member-only, including for guest owners; script RPCs remain guest-refused |
+| Filtered/aggregate permission snapshots, answers and separate live/durable event reads | Owner/member can act in manageable workspaces; a retained guest owner can read/answer only its owned workspace's prompts through already-admitted RPCs. Ordinary collaborators/unrelated guests see no unauthorized request or ID and cannot answer. Permission events use the same current management scope, including guest owners, across live and durable/aggregate reads; demotion removes access. Script RPCs remain guest-refused |
 | Two humans sharing a handle on GitHub/GitLab, and on two canonical GitLab instances (including equal external IDs) | New user comments keep the same existing label spelling but distinct daemon-bound principal IDs and complete identity triples; latest-author summaries copy the same selected comment. Transcript authors and presence people expose their resolved optional triple; no handle-based merging |
 | Bound owner without a forge, plus linked owner/member/guest add and respond | Resulting user comments persist the admitted principal ID; only linked humans get an identity snapshot. Unlinked-primary compatibility preserves its supplied label/type; a non-user result omits both metadata fields |
 | Agent/daemon add/respond and spoofed attribution fields over existing RPC/MCP entry points | Agent/daemon label/type semantics remain, without fabricated human metadata, even for a supplied user type. Supplied principal/identity output keys of any value/type are ignored; bound-human attribution comes only from trusted caller state |
