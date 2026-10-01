@@ -32,13 +32,23 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 exec python3 - "$repo_root" "$json_output" <<'PY'
+import sys
+
+# Check before importing helpers or probing the host: removeprefix needs 3.9.
+if sys.version_info < (3, 9):
+    sys.exit(
+        "dev-status: Python 3.9+ required; found {}. "
+        "Install a newer python3 and put it on PATH, then run make doctor.".format(
+            ".".join(map(str, sys.version_info[:3]))
+        )
+    )
+
 import functools
 import json
 import math
 import os
 import re
 import subprocess
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request

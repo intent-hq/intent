@@ -160,6 +160,25 @@ if [[ -n "$loadable_pty" ]]; then
 fi
 [[ "$elapsed_ms" -lt 5000 ]] || fail "healthy doctor took ${elapsed_ms}ms (expected under 5000ms)"
 
+# Python must meet the status reporter's minimum, not merely exist on PATH.
+for version in 3.8.20 3.9.0 3.10.0; do
+  write_launcher python3 "echo Python $version"
+  run_doctor
+  if [[ "$version" == 3.8.20 ]]; then
+    expect_line "[missing]  Python 3.9+: found Python $version; install a newer python3 and put it on PATH"
+    reject_line "[ok]       Python:"
+  else
+    expect_line "[ok]       Python: Python $version"
+  fi
+done
+write_launcher python3 'exit 1'
+run_doctor
+expect_line "[missing]  Python 3.9+:"
+reject_line "[ok]       Python:"
+rm -f "$bin_dir/python3"
+run_doctor
+expect_line "[missing]  Python 3.9+: required for workspace status; install a newer python3 and put it on PATH"
+
 # A Corepack launcher that re-invokes itself fails within the probe timeout and names its path.
 write_launcher corepack 'exec "$0" pnpm "$@"'
 run_doctor

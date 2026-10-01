@@ -62,6 +62,7 @@
     "client:disconnected",
     "client:updated",
     "comment:added",
+    "comment:deleted",
     "comment:resolved",
     "draft:changed",
     "file:changed",
