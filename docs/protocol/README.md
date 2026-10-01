@@ -1,8 +1,13 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `11.1` (registered-root file reads: additive prepared contract over daemon `11.0`; not a shipped-version claim). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `11.2` (single-node platform launch: additive prepared contract; not a shipped-version claim). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
+
+The [model-directed platform extension](./model-platform-routing.md) defines optional
+OS/architecture constraints, one named multi-agent node, durable capacity/launch identity
+and safe model discovery. Its [static fixtures](./fixtures/nodes/platform-routing.test.mjs)
+do not qualify runtime scheduling. Private lifecycle/capture formats are unchanged.
 
 ## Section → file map
 

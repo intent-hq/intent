@@ -436,3 +436,12 @@ The `defaultAutoCommit` field mentioned in early drafts was **not implemented** 
 // ← response
 { "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
 ```
+
+### Prepared specialist platform default (11.2)
+
+The [platform contract](../model-platform-routing.md#placement-input-and-propagation)
+defines optional structured runsOn on specialist create/edit/list/get and the
+single-line JSON-object frontmatter encoding, whole-object tier inheritance and
+clear semantics. This execution constraint is separate from codingAgent/model
+provider selection. Validation and propagation require agentPlatformRouting 1;
+an ignored unknown frontmatter key is not support.

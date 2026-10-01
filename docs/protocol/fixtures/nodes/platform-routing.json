@@ -1,0 +1,402 @@
+{
+  "schemaVersion": 1,
+  "publicVersion": "11.2",
+  "capability": {
+    "agentPlatformRouting": 1
+  },
+  "qualification": "prepared-static-only",
+  "placementCases": [
+    {
+      "id": "arch-only",
+      "raw": "{\"arch\":\"x86_64\"}",
+      "valid": true
+    },
+    {
+      "id": "os-only",
+      "raw": "{\"os\":\"linux\"}",
+      "valid": true
+    },
+    {
+      "id": "both",
+      "raw": "{\"os\":\"macos\",\"arch\":\"aarch64\"}",
+      "valid": true
+    },
+    {
+      "id": "empty",
+      "raw": "{}",
+      "valid": true
+    },
+    {
+      "id": "old-complete",
+      "raw": "{\"target\":\"remote\",\"checkout\":\"isolated\",\"os\":\"linux\",\"nodeId\":\"node-1\",\"exclusive\":true}",
+      "valid": true
+    },
+    {
+      "id": "local-shared",
+      "raw": "{\"target\":\"local\",\"checkout\":\"shared\"}",
+      "valid": true
+    },
+    {
+      "id": "null",
+      "raw": "null",
+      "valid": false
+    },
+    {
+      "id": "array",
+      "raw": "[]",
+      "valid": false
+    },
+    {
+      "id": "unknown",
+      "raw": "{\"platform\":\"linux\"}",
+      "valid": false
+    },
+    {
+      "id": "bad-arch",
+      "raw": "{\"arch\":\"amd64\"}",
+      "valid": false
+    },
+    {
+      "id": "unimplemented-os",
+      "raw": "{\"os\":\"windows\"}",
+      "valid": false
+    },
+    {
+      "id": "null-arch",
+      "raw": "{\"arch\":null}",
+      "valid": false
+    },
+    {
+      "id": "remote-shared",
+      "raw": "{\"target\":\"remote\",\"checkout\":\"shared\"}",
+      "valid": false
+    },
+    {
+      "id": "exclusive-local",
+      "raw": "{\"target\":\"local\",\"exclusive\":true}",
+      "valid": false
+    },
+    {
+      "id": "pool-as-location",
+      "raw": "{\"target\":\"static-builders\"}",
+      "valid": false
+    },
+    {
+      "id": "empty-node",
+      "raw": "{\"nodeId\":\"\"}",
+      "valid": false
+    },
+    {
+      "id": "duplicate",
+      "raw": "{\"arch\":\"x86_64\",\"arch\":\"aarch64\"}",
+      "valid": false
+    },
+    {
+      "id": "escaped-duplicate",
+      "raw": "{\"arch\":\"x86_64\",\"\\u0061rch\":\"aarch64\"}",
+      "valid": false
+    },
+    {
+      "id": "invalid-json",
+      "raw": "{\"arch\":\"x86_64\",}",
+      "valid": false
+    }
+  ],
+  "errors": [
+    {
+      "code": -32602,
+      "message": "No capacity for x86_64; available: none; supported: linux/x86_64",
+      "data": {
+        "code": "placement-unavailable",
+        "requested": {
+          "arch": "x86_64"
+        },
+        "reason": "no-capacity",
+        "availablePlatforms": [],
+        "supportedPlatforms": [
+          {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        ],
+        "availableOs": [],
+        "retryable": true,
+        "observedAt": "2026-10-01T00:00:00Z"
+      }
+    },
+    {
+      "code": -32602,
+      "message": "Unsupported macos/x86_64; available: linux/x86_64; supported: linux/x86_64",
+      "data": {
+        "code": "placement-unavailable",
+        "requested": {
+          "os": "macos",
+          "arch": "x86_64"
+        },
+        "reason": "unsupported-platform",
+        "availablePlatforms": [
+          {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        ],
+        "supportedPlatforms": [
+          {
+            "os": "linux",
+            "arch": "x86_64"
+          }
+        ],
+        "availableOs": [
+          "linux"
+        ],
+        "retryable": false,
+        "observedAt": "2026-10-01T00:00:00Z"
+      }
+    }
+  ],
+  "keys": [
+    {
+      "key": "key-1",
+      "task": "task-1",
+      "sha256": "76c57fe02184308cc46c7658732a1a972480fd5e97049ad693014d33954e24df"
+    },
+    {
+      "key": "key-1",
+      "task": "initialAgent",
+      "sha256": "5c8e3c824db494da5077904cdd3e8b62c2eba317167817a96aed00fbc310a5fa"
+    },
+    {
+      "key": "ab",
+      "task": "c",
+      "sha256": "825825018f58e795ae2d3d8df6a879567555c77654e9ca3071df2fe127aa9ebd"
+    },
+    {
+      "key": "a",
+      "task": "bc",
+      "sha256": "42a6f3f44be0aaf23c936b1547dd5e41d2d25ff25f36a31474eb1851639f6751"
+    }
+  ],
+  "runtimeScenarios": [
+    {
+      "id": "concurrent-last-node-slot",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "memory-reservation",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "exclusive-vs-shared-race",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "config-update-during-reservation",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "unknown-prepare-no-fallback",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "lost-create-reply-same-key",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "same-key-changed-intent",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "batch-same-key-classification",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "unkeyed-lost-response-reconcile",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "wake-create-serialization",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "workspace-initial-failure-preserves-workspace",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "real-mcp-string-data",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "real-help-refresh",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "restart-quarantines-pending",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "stop-during-first-message",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "permission-revoked-before-replay",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "old-backend-arch-refused",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "omitted-legacy-cow",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "local-isolation-capability-absent",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "ledger-full-no-effects",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "native-requirement-exceeds-memory",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "failed-state-not-cleanup",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "ambiguous-configuration-no-first-node-selection",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "admin-inventory-hidden",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    },
+    {
+      "id": "definite-rejection-no-other-node",
+      "executed": false,
+      "requires": "actual consumer implementation and owned runtime verification"
+    }
+  ],
+  "node": {
+    "nodeId": "node-1",
+    "name": "intent1 Linux Box",
+    "os": "linux",
+    "arch": "x86_64",
+    "maxAgents": 4,
+    "reservedAgents": 0,
+    "memoryBudgetBytes": 8589934592,
+    "usedMemoryBytes": 0,
+    "agentMemoryBytes": 2147483648,
+    "ready": true,
+    "exclusiveReserved": false
+  },
+  "matchingCases": [
+    {
+      "id": "arch-matches",
+      "nodeOverrides": {},
+      "placement": {
+        "arch": "x86_64"
+      },
+      "outcome": "eligible"
+    },
+    {
+      "id": "os-matches",
+      "nodeOverrides": {},
+      "placement": {
+        "os": "linux"
+      },
+      "outcome": "eligible"
+    },
+    {
+      "id": "no-platform",
+      "nodeOverrides": {},
+      "placement": {},
+      "outcome": "eligible"
+    },
+    {
+      "id": "architecture-mismatch",
+      "nodeOverrides": {},
+      "placement": {
+        "arch": "aarch64"
+      },
+      "outcome": "unsupported-platform"
+    },
+    {
+      "id": "full-node",
+      "nodeOverrides": {
+        "reservedAgents": 4
+      },
+      "placement": {},
+      "outcome": "no-capacity"
+    },
+    {
+      "id": "offline-node",
+      "nodeOverrides": {
+        "ready": false
+      },
+      "placement": {},
+      "outcome": "no-capacity"
+    },
+    {
+      "id": "memory-full",
+      "nodeOverrides": {
+        "usedMemoryBytes": 8589934592
+      },
+      "placement": {},
+      "outcome": "no-capacity"
+    },
+    {
+      "id": "exclusive-held",
+      "nodeOverrides": {
+        "exclusiveReserved": true
+      },
+      "placement": {},
+      "outcome": "no-capacity"
+    },
+    {
+      "id": "exclusive-needs-empty",
+      "nodeOverrides": {
+        "reservedAgents": 1
+      },
+      "placement": {
+        "exclusive": true
+      },
+      "outcome": "no-capacity"
+    },
+    {
+      "id": "multiple-agents-have-room",
+      "nodeOverrides": {
+        "reservedAgents": 2,
+        "usedMemoryBytes": 4294967296
+      },
+      "placement": {},
+      "outcome": "eligible"
+    }
+  ]
+}

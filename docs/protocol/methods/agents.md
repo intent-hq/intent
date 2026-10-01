@@ -1318,3 +1318,13 @@ paths, node/lease/checkpoint fields, new halted/resuming statuses, and replaceme
 hub operations. These fields are not implemented at the pin. Current CoW methods
 and behavior above remain until the separately versioned removal lands; the final
 removal has no alias or live-sandbox migration.
+
+### Prepared model platform routing (11.2)
+
+[Model-directed routing](../model-platform-routing.md) specifies the widened
+placement object on create/delegate/batch and wakeOrCreate.create, optional durable
+idempotency keys, exact batch retry behavior and actual MCP forwarding (including
+the compatible trailing wake options argument). It preserves existing model/provider
+resolution and assigned-agent wake semantics. Architecture-only inputs require
+agentPlatformRouting 1, not merely agentNodes 1. Discovery/errors must render safe
+correlated platform pairs through the model-visible String boundary.

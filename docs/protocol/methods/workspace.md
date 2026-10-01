@@ -2503,3 +2503,9 @@ script's exit code (§5.1).
 (null clears), and `workspace.create.initialAgent.placement`. It does not change
 workspace `checkoutMode`, its CoW/reflink implementation, or current creation
 behavior before the node capabilities are advertised.
+
+The [11.2 platform extension](../model-platform-routing.md) widens that whole
+object with optional os/arch under agentPlatformRouting 1. An initial agent uses
+the outer workspace idempotency key and a derived initial-agent identity; no
+second independent workspace retry is created. Omission retains legacy behavior unless
+an existing specialist/workspace default applies; no manual dialog is required.
