@@ -13,7 +13,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | primitive.addCli | noteId (req), command (req), description (req), workingDirectory? | { ok, primitiveId, noteId } |
 | primitive.addPatch | noteId (req), filePath (req), diff (req), description (req) | { ok, primitiveId, noteId } |
 | primitive.addAgentAction | noteId (req), agentId (req), goal (req), description (req) | { ok, primitiveId, noteId } |
-| specialist.list | provider?, workspaceId? | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[] } (user files override bundled) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
+| specialist.list | provider?, workspaceId?, includeProject?: boolean | { specialists: SpecialistDef[], importDiagnostics?: ImportDiagnostic[] } (user files override bundled; explicit project scope overrides user) — each entry may carry the additive `resolvedModel`/`resolvedProvider` preview fields (below); unknown `provider` → -32602 |
 | specialist.get | id (req), workspacePath?, provider?, workspaceId? | { specialist: SpecialistDef } — resolved view, with the `resolvedModel`/`resolvedProvider` preview fields when applicable; -32602 if not found; unknown `provider` → -32602 |
 | specialist.create | id (req), spec (req): SpecialistDef, workspacePath?, scope?: "project"\|"user" (default "user"), workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
 | specialist.edit | id (req), spec (req): SpecialistDef, workspacePath?, scope (req): "project"\|"user", workspaceId? (routing for explicit project scope only) | { specialist: SpecialistDef } |
@@ -36,9 +36,15 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 `get` / `create` / `edit` / `delete`. Definitions resolve in **3 tiers** — **project**
 (`.intent/specialists/`) overrides **user** (`~/.intent/specialists/`) overrides **bundled** — and
 `scope` selects which tier a write targets (`bundled` is read-only). On the wire,
-`specialist.list` resolves user/bundled definitions only; `specialist.get` can
-resolve the project tier when given `workspacePath`. Routing-only `workspaceId`
-does not infer that path or enable project resolution on list. `create`/`edit`
+`specialist.list` defaults to user/bundled definitions; `specialist.get` can
+resolve the project tier when given `workspacePath`. On list, `workspaceId`
+alone remains routing-only. The additive `includeProject: true` opts into the
+project catalog and requires a valid `workspaceId`: the daemon resolves its stored
+root (`path`, then `worktreePath`, then `repositoryPath`, skipping empty values).
+A workspace without a root adds no project tier. List ignores caller-supplied
+`workspacePath`, including with this opt-in. Absent, `null`, or `false`
+`includeProject` preserves global behavior; other types are `-32602`, as are a
+missing or unknown workspace for `includeProject: true`. `create`/`edit`
 take a full `spec` body. Malformed params → `-32602`; deleting a
 non-existent or `bundled` definition → `-32602`.
 
@@ -75,10 +81,15 @@ never resurrects shipped bundles the operator excluded.
   replaces the user `.claude` root for both agents and skills; it does not change
   the project root. Discovery uses the daemon host's filesystem, not another
   connected desktop's files. Global `specialist.list` includes the user imports;
-  workspace-aware resolution, delegation catalogs, and `specialist.get` with
-  `workspacePath` also include project imports. Routing-only `workspaceId` retains
-  its existing meaning. Intent definitions, including bundled definitions, take
-  precedence over imports; project Claude definitions take precedence over user
+  explicit `specialist.list` with `includeProject: true`, workspace-aware resolution,
+  delegation catalogs, and `specialist.get` with `workspacePath` also include project
+  imports. Routing-only `workspaceId` retains its existing meaning. Intent
+  definitions, including bundled definitions and their effective aliases, take
+  precedence over imports. An import whose id matches an Intent alias is excluded
+  with a `shadowed` diagnostic; listing, lookup, and launch use the same rule.
+  Explicit native canonical ids still win over native aliases. Clearing an alias
+  in a higher Intent tier releases its name for imports in that scope.
+  Project Claude definitions take precedence over user
   Claude definitions. Imports do not supply inherited fields to Intent overrides.
   Files are Markdown with YAML frontmatter; `name` supplies the specialist id and
   name, `description` the description, and the body the prompt. `codingAgent` is
@@ -117,8 +128,11 @@ never resurrects shipped bundles the operator excluded.
   A directory that exceeds the remaining entry budget is skipped as a whole, rather
   than selecting an arbitrary subset from filesystem enumeration. A previously
   visited canonical directory can be revisited with a larger remaining depth budget.
-  Canonical directories and link parents use non-recursive shared watches, so
-  external target edits and link replacements refresh the affected specialist set.
+  Canonical directories and link parents outside the ordinary tier event stream
+  use supplemental non-recursive watches, so external target edits and link
+  replacements refresh the affected specialist set. User targets share one set
+  of subscriptions across workspaces. Project tiers reuse the workspace stream,
+  including creation or replacement of a tier's ancestor folder.
 - **Import diagnostics (additive)** — catalog responses include `importDiagnostics`
   only when non-empty. Each `ImportDiagnostic` is `{ path, source: "user"|"project",
   code, message, isDirectory?: boolean, specialistId?, winnerPath? }`. Codes are `invalid`, `unreadable`,
@@ -150,9 +164,10 @@ never resurrects shipped bundles the operator excluded.
   CLI default — clients render "Provider default". A specialist with no model config
   previews the user's `model.providerDefaults` / `model.default` settings chain (the
   quick-action model settings never participate,
-  [intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)). Over the WSS router, `specialist.list` resolves with no
-  project tier (no `workspacePath` param, matching its live wire signature); `specialist.get`
-  passes its `workspacePath?` through to the resolver.
+  [intent-hq/monorepo#1729](https://github.com/intent-hq/monorepo/issues/1729)). Over the WSS router,
+  `specialist.list` previews the global catalog unless `includeProject: true` selects
+  the stored workspace root as above; `specialist.get` passes its `workspacePath?`
+  through to the resolver.
 - **`hidden?`** — optional boolean sourced from `hidden:` in the specialist file's
   frontmatter and **inherited across tiers**: a definition resolves `hidden: true` when any
   lower tier (down to the embedded bundled floor) sets `hidden: true`, unless a higher tier
