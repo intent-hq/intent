@@ -253,8 +253,18 @@ node_ready() {
   node_version_supported "$version"
 }
 
+python_version() {
+  local line
+  line=$(python3 --version 2>/dev/null) || return 1
+  [[ "$line" =~ ^Python\ ([0-9]+\.[0-9]+\.[0-9]+) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
+}
+
 python_ready() {
-  command -v python3 >/dev/null 2>&1
+  local version
+  version=$(python_version) || return 1
+  # Keep aligned with dev-status.sh, which uses str.removeprefix.
+  version_ge "$version" "3.9.0"
 }
 
 kill_process_tree() {
@@ -655,7 +665,12 @@ check_all() {
   if python_ready; then
     ok "Python: $(python3 --version 2>&1)"
   else
-    missing "Python 3: required to preflight development ports"
+    local python_found
+    if python_found=$(python_version); then
+      missing "Python 3.9+: found Python $python_found; install a newer python3 and put it on PATH"
+    else
+      missing "Python 3.9+: required for workspace status; install a newer python3 and put it on PATH"
+    fi
   fi
 
   if openssl_dev_ready; then
@@ -774,11 +789,11 @@ as_root() {
 
 install_python() {
   if python_ready; then
-    echo "[skip] Python 3 already installed"
+    echo "[skip] Python 3.9+ already installed"
     return
   fi
 
-  echo "[install] Python 3"
+  echo "[install] Python 3.9+"
   case "$(uname -s)" in
     Darwin)
       command -v brew >/dev/null 2>&1 || { echo "ERROR: Homebrew is required to install Python on macOS" >&2; exit 1; }

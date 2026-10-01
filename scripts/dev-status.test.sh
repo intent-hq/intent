@@ -54,6 +54,33 @@ for command in bash cksum date dirname git grep head python3 sed awk; do
   ln -s "$(command -v "$command")" "$bin_dir/$command"
 done
 
+# Exercise the interpreter boundary on every test host, without requiring an
+# old Python installation. The real reporter runs with an injected version;
+# unsupported versions must stop before importing helpers or probing the host.
+python3 - "$script" <<'PYTEST' || fail "unsupported Python did not get actionable guidance"
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+source = Path(sys.argv[1]).read_text()
+code = re.search(r"<<'PY'\n(.*?)\nPY(?:\n|\Z)", source, re.DOTALL).group(1)
+for version in [(3, 8, 20), (3, 7, 17)]:
+    for json_output in ["0", "1"]:
+        result = subprocess.run(
+            [sys.executable, "-c", "import sys; sys.version_info = " + repr(version)
+             + "; exec(compile(" + repr(code) + ", '<status>', 'exec'))",
+             "/nonexistent-status-fixture", json_output],
+            capture_output=True, text=True,
+        )
+        assert result.returncode != 0, result
+        assert result.stdout == "", result.stdout
+        assert "Python 3.9+ required" in result.stderr, result.stderr
+        assert "found " + ".".join(map(str, version)) in result.stderr, result.stderr
+        assert "PATH" in result.stderr, result.stderr
+        assert "Traceback" not in result.stderr, result.stderr
+PYTEST
+
 # Every probe budget in dev-status.sh must come from a knob so the suite can
 # raise it under load; a numeric literal reintroduces a fixed wall-clock budget.
 # The embedded Python is parsed with `ast`, so any spelling of a numeric
