@@ -139,7 +139,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
 - **Resume via `sinceMessageId` (additive within v6.4).** A reconnecting client that already
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
-  **no** `resumed` key at all; a present non-string value is a `-32602` error. When provided,
+  **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
   the daemon reads the **same bounded newest page** as the standard snapshot (still exactly one
   conversation read — resume is a post-filter, never a second fetch; monorepo#958 cost contract)
   and then:
@@ -157,6 +157,17 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   The live-turn slot merge (in-flight or orphaned, below) and the activity-flags overlay apply
   identically in both cases, **after** the filter — a merged partial is never trimmed away.
   Deltas (seq 1, 2, …) are unaffected by resume.
+- **Transcript invalidation.** Editing/regenerating or replacing messages emits
+  `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
+  respond with a fresh bounded snapshot at the next subscription sequence number,
+  carrying `resumed: false`, even when registration had no `sinceMessageId` or its
+  initial resume has already completed. Clients must honor this flag on every
+  snapshot, not only the initial one. Clients discard their cached transcript (including older
+  paged history) and rehydrate from that snapshot using the same reset semantics as
+  a missing resume anchor. The subscription remains open and replacement-turn deltas
+  continue after the snapshot. Lag-recovery snapshots also carry `resumed: false`,
+  since the lost events may have included a transcript invalidation. Ordinary agent
+  metadata updates do not trigger transcript reads or resets.
 - **Incremental delta encoding via `deltaEncoding` (opt-in, within v7.0;
   [intent-hq/intentd#1289](https://github.com/intent-hq/intentd/pull/1289),
   [monorepo#2675](https://github.com/intent-hq/monorepo/issues/2675)).** The optional
