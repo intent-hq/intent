@@ -188,12 +188,12 @@ function tableCells(raw = '') {
 export function collectDocumentedMethods(text) {
   const found = [];
   let inFence = false;
-  let fieldColumns = null;
+  let inFieldTable = false;
   const lines = text.split('\n');
   lines.forEach((raw, i) => {
     const line = i + 1;
     const cells = tableCells(raw);
-    if (!cells) fieldColumns = null;
+    if (!cells) inFieldTable = false;
     if (/^\s*(```|~~~)/.test(raw)) {
       inFence = !inFence;
       return;
@@ -207,12 +207,11 @@ export function collectDocumentedMethods(text) {
     // Only an explicit Field header with a valid, same-width separator opts out.
     // A new table (even an unknown/malformed header) must end the previous opt-out.
     if (cells && (/^field$/i.test(cells[0]) || separator?.some((c) => /^[-:]+$/.test(c)))) {
-      fieldColumns = /^field$/i.test(cells[0]) && cells.every(Boolean)
-        && separator?.length === cells.length && separator.every((c) => /^:?-+:?$/.test(c))
-        ? cells.length : null;
+      inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean)
+        && separator?.length === cells.length && separator.every((c) => /^:?-+:?$/.test(c));
     }
-    if (cells && cells.length !== fieldColumns) fieldColumns = null;
-    if (fieldColumns !== null) return;
+    // Markdown body rows may have fewer or more cells than their header.
+    if (inFieldTable) return;
     const cell = raw.match(FIRST_CELL_RE);
     if (cell) for (const name of methodNamesInFirstCell(cell[1])) found.push({ name, line });
   });

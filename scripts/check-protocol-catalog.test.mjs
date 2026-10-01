@@ -480,6 +480,19 @@ test('collectDocumentedMethods recognizes field headers with alignment and escap
   }
 });
 
+for (const [shape, row] of [
+  ['short', '| details.source |'],
+  ['excess', '| details.source | Known source. | Extra cell. |'],
+]) {
+  test(`collectDocumentedMethods retains field context after ${shape} body rows`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${row}\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    assert.deepEqual(collectDocumentedMethods(`${doc}\n| Method | Result |\n| --- | --- |\n| unknown.method | Result. |`), [
+      { name: 'unknown.method', line: 7 },
+    ]);
+  });
+}
+
 test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
   for (const header of [
     '| Method | Result |\n| --- | --- |',
