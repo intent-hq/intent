@@ -29,27 +29,27 @@ The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The documented surface reserves **418 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **419 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 363 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 364 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 418 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 419 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 418 dispatchable names + 1 notification. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 419 dispatchable names + 1 notification. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.51) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (363 total)
+### Router methods by namespace (364 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
 | accept-changes | 5 | addRemote, execute, getStatus, mergePR, prepare — the "accept the agent's work" pipeline (§5.18; `workspaceId` req) |
-| agent | 51 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.subscribe |
+| agent | 52 | appendMessage, cancelDelete, cancelSubscriptions, completeOnce, create, delegate, delete, diagnostics, dismissQuestions, editAndRegenerate, editQueuedMessage, enhancePrompt, get, getCreationPreferences, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, memoryUsage, pendingPermissions, queueMessage, removeQueuedMessage, rename, replaceMessages, reportToParent, resolveInterrupted, resolveProposal, respondPermission, restore, retire, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update, wakeOrCreate, workers.list, workers.subscribe |
 | client | 1 | list — live hello'd connections grouped by logical `clientId` (§5.17; v9.9, daemon-global result; optional routing-only `workspaceId`). The handshake itself (`client.hello`) is a fast-path method, below |
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |

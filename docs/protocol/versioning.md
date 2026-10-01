@@ -8,9 +8,25 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.0` — removal of deprecated `git.commit` after the protocol-12 retirements. Prepared
-extensions below remain independently capability-gated; this header does not
-claim a carrying desktop release.
+**Documented version:** `13.1` — implemented explicit queue batch candidate; not a shipped-version claim.
+Prepared extensions below remain independently capability-gated.
+
+**Version 13.1 — explicit queue batch sending (additive, implemented candidate).**
+`agent.sendQueuedMessagesNow` (§5.5) accepts a snapshot of distinct ready message
+IDs, validates the whole selection before preemption, and sends it in queue order
+as one turn. It preserves each entry's author, attachments and transcript row.
+Startup races, quarantine and partial persistence failures retain the batch;
+clients reconcile queue events and do not remove entries for `queued: true`.
+The candidate implements **404 / 349 / 55** (dispatchable / router / fast path);
+the documented surface, including prepared additions, is **419 / 364 / 55**.
+No new event names are added. Older daemons reject the method; clients must not
+fall back to repeated single-entry interrupts. These additive docs land before
+the component PR, with daemon-first component merge ordering and automatic pin
+advancement. The retired batching-setting documentation is removed only after
+the daemon change and its pin advance.
+
+**Version 13.0 — removal of deprecated `git.commit`.** This version follows the
+protocol-12 retirements. It makes no carrying desktop release claim.
 
 **Version 12.0 — unused RPC retirement.** This major version removes exactly ten
 inbound names: `git.diff`, `git.log`, `pr.status`, `file-tracking.getLineStats`,
