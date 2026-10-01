@@ -457,6 +457,89 @@ test('collectDocumentedMethods reads rows, annotated rows, headings, and skips f
   assert.deepEqual(methodNamesInFirstCell('`model.defaultProvider` unset — falls through'), []);
 });
 
+test('Layer 1: explicit field tables do not declare methods or change catalog comparisons', async () => {
+  const doc = `${METHODS_DOC}\n| Field | Qualified response |\n| --- | --- |\n| \`details.source\`, \`details.target\` | Confirmed branch identities. |\n`;
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), []);
+  assert.deepEqual(warningMessages(result), []);
+  assert.equal(result.layer2Ran, true);
+});
+
+test('collectDocumentedMethods recognizes field headers with alignment and escaped pipes', () => {
+  for (const table of [
+    '| Field | Meaning |\n| --- | --- |',
+    '| field | Meaning |\n| :--- | ---: |',
+    '| Field | Meaning |\n| - | -- |',
+    '| FIELD | Meaning | Type |\n| :---: | --- | ---: |',
+    '| Field | Meaning \\| notes |\n| --- | --- |',
+    '| Field | Meaning\n| --- | ---',
+  ]) {
+    const extra = table.includes('| Type |') ? ' text |' : '';
+    const doc = `${table}\n| source | Simple field. |${extra}\n| details.source | Nested field. |${extra}\n| \`details.target\`, details.branch *(v1)* | More fields \\| alternatives. |${extra}`;
+    assert.deepEqual(collectDocumentedMethods(doc), [], table);
+  }
+});
+
+test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
+  for (const header of [
+    '| Method | Result |\n| --- | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field names | Result |\n| --- | --- |',
+    '| Field | Meaning |',
+    '| Field | Meaning |\n\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '| Field | Meaning |\n| invalid | --- |',
+    '| Field | Meaning |\n| ---:--- | --- |',
+    '| Field | Meaning |\n| : | --- |',
+    '| Field | Meaning |\n| --- |',
+    '| Field | Meaning |\n| --- | --- | --- |',
+    '| Field | |\n| --- | --- |',
+    '| Field | Meaning |\nnot a separator',
+  ]) {
+    for (const prefix of ['', '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n']) {
+      const doc = `${prefix}${header}\n| \`unknown.method\`, unknown.other *(v2)* | Result. |`;
+      const line = doc.split('\n').length;
+      assert.deepEqual(collectDocumentedMethods(doc), [
+        { name: 'unknown.method', line }, { name: 'unknown.other', line },
+      ], doc);
+    }
+  }
+});
+
+test('collectDocumentedMethods ends field context at table and non-table boundaries', () => {
+  for (const boundary of [
+    '',
+    'Some prose.',
+    '### Another table',
+    '| Method | Result |\n| --- | --- |',
+    '| Unknown | Result |\n| --- | --- |',
+    '| Field | Meaning |\n| --- | invalid |',
+    '| Unknown | Result |\n| invalid | --- |',
+    '```text\n| Field | Result |\n| --- | --- |\n```',
+    '~~~text\n| ignored.method | Result |\n~~~',
+  ]) {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n${boundary}\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), [
+      { name: 'unknown.method', line: doc.split('\n').length },
+    ], boundary);
+  }
+});
+
+test('collectDocumentedMethods restarts field context for an adjacent field table', () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n| Field | Type | Meaning |\n| --- | --- | --- |\n| details.target | string | Field. |';
+  assert.deepEqual(collectDocumentedMethods(doc), []);
+});
+
+test('Layer 1: field table boundaries preserve heading and row file:line diagnostics', async () => {
+  const doc = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |\n### `unknown.heading`\n| unknown.legacy | Result. |\n| Unknown | Result |\n| --- | --- |\n| unknown.table | Result. |';
+  const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+  assert.deepEqual(messages(result), [
+    'docs/protocol/methods/fields.md:4: error: unknown.heading is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:5: error: unknown.legacy is documented here but missing from docs/protocol/05-method-catalog.md',
+    'docs/protocol/methods/fields.md:8: error: unknown.table is documented here but missing from docs/protocol/05-method-catalog.md',
+  ]);
+});
+
 const PROTOCOL_DIR = new URL('../docs/protocol/', import.meta.url);
 const SUBSCRIPTION_NAMES = ['note', 'task', 'agent', 'workspace', 'comment', 'chat', 'note.presence']
   .flatMap((channel) => [`${channel}.subscribe`, `${channel}.unsubscribe`]);

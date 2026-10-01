@@ -177,12 +177,23 @@ export function methodNamesInFirstCell(cell) {
   }
 }
 
+function tableCells(raw = '') {
+  if (!raw.startsWith('|')) return null;
+  const cells = [...raw.matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
+  if (cells.at(-1) === '') cells.pop(); // Optional trailing pipe, not an extra column.
+  return cells;
+}
+
 /** Collect `{ name, line }` for every method a docs/protocol/methods/*.md file documents. */
 export function collectDocumentedMethods(text) {
   const found = [];
   let inFence = false;
-  text.split('\n').forEach((raw, i) => {
+  let fieldColumns = null;
+  const lines = text.split('\n');
+  lines.forEach((raw, i) => {
     const line = i + 1;
+    const cells = tableCells(raw);
+    if (!cells) fieldColumns = null;
     if (/^\s*(```|~~~)/.test(raw)) {
       inFence = !inFence;
       return;
@@ -192,6 +203,16 @@ export function collectDocumentedMethods(text) {
       for (const m of raw.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
       return;
     }
+    const separator = tableCells(lines[i + 1]);
+    // Only an explicit Field header with a valid, same-width separator opts out.
+    // A new table (even an unknown/malformed header) must end the previous opt-out.
+    if (cells && (/^field$/i.test(cells[0]) || separator?.some((c) => /^[-:]+$/.test(c)))) {
+      fieldColumns = /^field$/i.test(cells[0]) && cells.every(Boolean)
+        && separator?.length === cells.length && separator.every((c) => /^:?-+:?$/.test(c))
+        ? cells.length : null;
+    }
+    if (cells && cells.length !== fieldColumns) fieldColumns = null;
+    if (fieldColumns !== null) return;
     const cell = raw.match(FIRST_CELL_RE);
     if (cell) for (const name of methodNamesInFirstCell(cell[1])) found.push({ name, line });
   });
