@@ -146,8 +146,7 @@ never resurrects shipped bundles the operator excluded.
   entry reports omitted problems when the cap is reached. Correcting a file clears
   its diagnostic on the next discovery; changes to diagnostics participate in the
   `specialists:changed` fingerprint. Skipped files never appear as launchable agents.
-- **`modelTier` is retired** (tolerated-and-ignored, like the retired
-  `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
+- **`modelTier` is retired** (tolerated-and-ignored): a `modelTier` in a `create`/`edit` `spec` or
   in an existing file's frontmatter never errors, but the key is stripped on parse — never
   echoed by `list`/`get`, never written by `create`/`edit` (an existing frontmatter line is
   dropped on the file's next rewrite) — and never participates in model resolution (§5.5).
