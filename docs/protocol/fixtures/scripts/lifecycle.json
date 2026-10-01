@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "prepared-not-executed",
-  "description": "Each case starts from a fresh isolated seed. fixtureControl and barriers are future harness controls, not RPCs. Subsets and postconditions are required assertions for component tests, not measured outcomes. The static test validates fixture consistency only; no daemon, PTY, database or race is exercised. No live workspace IDs or commands are used. A scenario initialScript replaces the same-ID seed definition before its operation; archive transition examples start active.",
+  "description": "Each case starts from a fresh isolated seed. fixtureControl and barriers are future harness controls, not RPCs. Subsets and postconditions are required assertions for component tests, not measured outcomes. The static test validates fixture consistency only; no daemon, PTY, database or race is exercised. No live workspace IDs or commands are used. A scenario initialScript replaces the same-ID seed definition before its operation; archive transition examples start active. Creation-default cases describe the prepared command-default change; they do not claim it is shipped. Legacy hydration keeps saved.",
   "capability": {
     "scriptLifecycle": 1
   },
@@ -527,7 +527,7 @@
       }
     },
     {
-      "id": "new-default-is-saved",
+      "id": "new-command-default-is-one-off",
       "request": {
         "method": "script.create",
         "params": {
@@ -540,12 +540,135 @@
       },
       "expect": {
         "definitionSubset": {
+          "purpose": "oneOff"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "new-service-default-is-saved",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "service"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
           "purpose": "saved"
         },
         "absent": [
           "archivedAt",
           "lastRun"
         ]
+      }
+    },
+    {
+      "id": "new-explicit-saved-command",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "command",
+          "purpose": "saved"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "purpose": "saved"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "new-autostart-explicit-saved-command",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "command",
+          "purpose": "saved",
+          "autoStart": true
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "purpose": "saved"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "new-autostart-default-rejected",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "command",
+          "autoStart": true
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
+      }
+    },
+    {
+      "id": "upsert-retains-saved-purpose",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "command",
+          "scriptId": "legacy"
+        }
+      },
+      "expect": {
+        "definitionSubset": {
+          "purpose": "saved"
+        },
+        "absent": [
+          "archivedAt",
+          "lastRun"
+        ]
+      }
+    },
+    {
+      "id": "upsert-one-off-autostart-rejected",
+      "request": {
+        "method": "script.create",
+        "params": {
+          "workspaceId": "ws-a",
+          "name": "fixture",
+          "command": "true",
+          "mode": "command",
+          "scriptId": "successful",
+          "autoStart": true
+        }
+      },
+      "expect": {
+        "errorCode": -32602,
+        "noMutation": true
       }
     },
     {
@@ -1252,10 +1375,12 @@
         "operation": "legacy-create-and-list",
         "capabilities": {
           "scriptLifecycle": 1
-        }
+        },
+        "mode": "command",
+        "creationDefaults": "prepared-oneOff"
       },
       "expect": {
-        "defaultPurpose": "saved",
+        "defaultPurpose": "oneOff",
         "defaultListArchive": "all",
         "unknownResponseFieldsIgnored": true
       }
@@ -1442,6 +1567,31 @@
           "archive": "active"
         },
         "archivedRowInResponse": false
+      }
+    },
+    {
+      "id": "legacy-hydration-remains-saved",
+      "initialScript": {
+        "id": "legacy",
+        "workspaceId": "ws-a",
+        "name": "legacy",
+        "command": "fixture-command",
+        "mode": "command",
+        "source": "user",
+        "createdAt": "2026-09-30T12:00:00Z",
+        "runtime": {
+          "status": "idle",
+          "restartCount": 0
+        }
+      },
+      "fixtureControl": {
+        "operation": "hydrate",
+        "creationDefaults": "prepared-oneOff"
+      },
+      "expect": {
+        "purpose": "saved",
+        "archived": false,
+        "noReclassification": true
       }
     }
   ]
