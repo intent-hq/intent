@@ -104,6 +104,12 @@ function canonical(value) {
   if (typeof value === 'string') assert.ok(value.isWellFormed());
   return JSON.stringify(value);
 }
+// The pinned AgentId::is_canonical predicate is field-specific. Scope strings
+// remain governed by the existing RequestScope, not this cross-agent selector.
+function canonicalAgentId(s) {
+  assert.equal(typeof s,'string');
+  assert.match(s,/^agent-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/);
+}
 function positive(s) { decimal(s); assert.ok(BigInt(s)>0n); }
 function configuration(c) {
   object(c,['configId','sha256','snapshot']); uuid(c.configId); sha(c.sha256);
@@ -150,7 +156,7 @@ function envelope(e) {
     assert.deepEqual(keys,[...keys].sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b))));
     const m=preparation(p.prepare);assert.equal(m.workspaceId,h.workspaceId);assert.deepEqual(keys,m.repos.map(r=>r.repoKey).sort((a,b)=>Buffer.compare(Buffer.from(a),Buffer.from(b))));
     if(p.assignment.inheritedCheckpointId){uuid(p.assignment.inheritedCheckpointId);assert.equal(p.assignment.inheritedCheckpointId,m.checkpointId);assert.equal(p.assignment.mergeTargetAgentId,m.agentId);}else assert.equal(m.agentId,h.agentId);
-    if(p.assignment.mergeTargetAgentId)text(p.assignment.mergeTargetAgentId);
+    if(p.assignment.mergeTargetAgentId)canonicalAgentId(p.assignment.mergeTargetAgentId);
     sha(p.intentSha256);assert.equal(p.intentSha256,installHash(o,h,p));
     ({preparationId:id,runId:run,assignmentEpoch:epoch}=p.prepare);
   } else {
@@ -212,4 +218,18 @@ test('prepared enrollment errors have exact sanitized JSON-RPC mappings',()=>{
   const codes={'invalid-params':-32602,forbidden:-32003,'stale-assignment':-32003,'enrollment-conflict':-32005,'enrollment-unavailable':-32603,'unsupported-configuration':-32602,'enrollment-outcome-unknown':-32603};
   assert.equal(data.errorExamples.length,Object.keys(codes).length);
   for(const e of data.errorExamples){object(e,['error']);object(e.error,['code','message','data']);object(e.error.data,['code']);assert.equal(e.error.code,codes[e.error.data.code]);assert.equal(e.error.message,e.error.data.code);}
+});
+
+test('canonical optional merge target is distinct from preserved scope IDs',()=>{
+  canonicalAgentId('agent-00000000-0000-4000-8000-000000000021');
+  canonicalAgentId('agent-ABCDEF00-0000-4000-8000-000000000021');
+  for(const s of ['agent-fixture','00000000-0000-4000-8000-000000000021','agent-00000000000040008000000000000021',null])assert.throws(()=>canonicalAgentId(s));
+  envelope(data.examples[0]); // Existing noncanonical fixture scope is still valid.
+});
+test('inherited fixture pins canonical parent and exact changed raw manifest hash',()=>{
+  const e=data.examples.find(x=>x.id==='install-inherited'),p=e.request.payload;
+  canonicalAgentId(p.assignment.mergeTargetAgentId);
+  assert.equal(manifest(p.prepare.sourceMetadata.manifestJson).agentId,p.assignment.mergeTargetAgentId);
+  assert.notEqual(p.assignment.mergeTargetAgentId,e.request.header.agentId);
+  envelope(e);
 });

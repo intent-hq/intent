@@ -181,6 +181,13 @@ tombstoned or owner flags. repoKeys are unique, sorted by their UTF-8 byte order
 complete selected manifest repository closure, including required inherited and
 submodule roots. Inherited checkpoint/merge selectors must exactly match the
 persisted head assignment; parent source identity need not equal the target run.
+Here canonical mergeTargetAgentId means the existing AgentId::is_canonical
+predicate: `agent-` followed by a 36-character hyphenated UUID accepted by the
+UUID parser. This restriction applies to that optional cross-agent selector only.
+RequestScope agentId/workspaceId retain their existing typed-string validation;
+AgentId::new()'s bare UUID does not imply a new scope prefix requirement. Do not
+normalize or invent another agent identity to satisfy source equality.
+
 Memory comes from the trusted admitted head profile, not a model override, and
 must fit actual local per-agent and aggregate capacity.
 

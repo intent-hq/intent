@@ -140,7 +140,7 @@
               "repo-root"
             ],
             "inheritedCheckpointId": "00000000-0000-4000-8000-000000000003",
-            "mergeTargetAgentId": "agent-fixture"
+            "mergeTargetAgentId": "agent-00000000-0000-4000-8000-000000000021"
           },
           "memoryBytes": 268435456,
           "prepare": {
@@ -149,7 +149,7 @@
             "assignmentEpoch": "1",
             "checkpoint": {
               "checkpointId": "00000000-0000-4000-8000-000000000003",
-              "manifestSha256": "1a8ee61063c2fe86a774f925e164da14896d93d2ac4a7568a3a0b3c6088198b4"
+              "manifestSha256": "98b74b587a119cb063bdae1478f5bf3dd610b8df0d0ab7327ebe2882cdd94ff5"
             },
             "configuration": {
               "configId": "00000000-0000-4000-8000-000000000004",
@@ -164,7 +164,7 @@
               }
             },
             "sourceMetadata": {
-              "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000003\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-fixture\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
+              "manifestJson": "{\"formatVersion\":1,\"checkpointId\":\"00000000-0000-4000-8000-000000000003\",\"workspaceId\":\"workspace-fixture\",\"agentId\":\"agent-00000000-0000-4000-8000-000000000021\",\"leaseId\":\"lease-fixture\",\"incarnation\":\"00000000-0000-4000-8000-000000000012\",\"runId\":\"00000000-0000-4000-8000-000000000002\",\"assignmentEpoch\":\"7\",\"captureRevision\":\"2\",\"capturedAt\":\"2026-09-30T00:00:00Z\",\"journalSeq\":\"42\",\"repos\":[{\"repoKey\":\"repo-root\",\"path\":\".\",\"forkBase\":\"1111111111111111111111111111111111111111\",\"objectFormat\":\"sha1\",\"head\":\"2222222222222222222222222222222222222222\",\"index\":\"3333333333333333333333333333333333333333\",\"wip\":\"4444444444444444444444444444444444444444\",\"branch\":\"fixture\",\"submodules\":[]}],\"session\":{\"provider\":\"fixture-static-provider\",\"mode\":\"history\",\"throughSeq\":\"42\",\"files\":[]},\"attachments\":[{\"attachmentId\":\"attachment-fixture\",\"sha256\":\"63933eacee94e6b0d84f9661a6001807432f8203fb86261ba97d09873c6aa795\"}]}",
               "attachments": [
                 {
                   "id": "attachment-fixture",
@@ -174,7 +174,7 @@
               ]
             }
           },
-          "intentSha256": "aa679b917d4850489ea76dbb94086fc08b6c4fa7937d2ba320289dd492485409"
+          "intentSha256": "787b2dabfd0609d447c06888b2c8e369e7aca49c0fcb785b626c92a41cb0090d"
         }
       },
       "response": {
@@ -183,7 +183,7 @@
           "runId": "00000000-0000-4000-8000-000000000099",
           "assignmentEpoch": "1",
           "originGeneration": "3",
-          "intentSha256": "aa679b917d4850489ea76dbb94086fc08b6c4fa7937d2ba320289dd492485409",
+          "intentSha256": "787b2dabfd0609d447c06888b2c8e369e7aca49c0fcb785b626c92a41cb0090d",
           "revision": "2",
           "state": "installed",
           "ownership": "held"
