@@ -1,6 +1,6 @@
 > Part of the [Intent JSON-RPC protocol docs](../README.md) — §5.15 `search.*` · §5.16 `drafts.*`.
 
-Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged.
+Routing-only `workspaceId?` additions below are [prepared contract fields](../workspace-routing.md), optional on direct daemons and required for future forwarded workspace calls; existing scope and results are unchanged. The optional `workspaceId` on `search.notes`, `search.messages` and `search.events` is instead a real search filter; never inject the focused workspace into a global query.
 
 ### 5.15 `search.*`
 
@@ -14,7 +14,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | search.fileNames | workspaceId (req), pattern (req), limit?, requestId? | { requestId, files: string[], truncated } — path/glob search |
 | search.messages | query (req), workspaceId?, preferWorkspaceId?, agentId?, role?, limit?, requestId? | { requestId, matches: MessageMatch[] } — **FTS5/bm25-ranked** full-text search over persisted agent transcripts (BE owns session storage). `workspaceId` is **optional**: absent → **global** search across all workspaces; present → hard scope filter. `preferWorkspaceId` is a **soft ranking boost** — matches from that workspace outrank equally-relevant matches from other workspaces, but results stay global (nothing is excluded). Matches from **archived** workspaces carry a fixed soft rank penalty, giving the default tier order preferred workspace → other active → archived (relevance can still override). `agentId`/`role` narrow further (hard filters); `limit` caps the match count (absent → no cap). Semantics block below |
 | search.events | query (req), workspaceId?, limit?, requestId? | { requestId, matches: EventMatch[] } — over the BE event log |
-| search.notes | query (req), requestId? | { requestId, matches: NoteMatch[] } — over the BE notes store (global; no workspaceId) |
+| search.notes | query (req), workspaceId?, preferWorkspaceId?, limit?, includeArchived?, requestId? | { requestId, matches: NoteMatch[], indexed: true } — **FTS5/bm25-ranked** title, body and tag search across accessible workspaces; always inline. `workspaceId` hard-filters; `preferWorkspaceId` softly boosts. `limit` absent → no cap; `includeArchived` absent → true (individual note archives). Indexed contract and compatibility below |
 | search.codebase | workspaceId (req), query (req), requestId? | { requestId, matches: CodebaseMatch[] } — **ripgrep/symbol-backed** search. auggie exposes no structured codebase-retrieval CLI, so `AuggieContextEngine::retrieve()` returns `Unavailable` instantly and ripgrep is the backing; the `ContextEngine` trait is retained as forward-looking infra |
 | search.cancel | requestId (req), workspaceId? | { ok: true } — aborts an in-flight search by its `requestId` |
 
@@ -39,9 +39,20 @@ interface SearchMatch {
   after?: string[];    // optional context lines after
   score?: number;      // relevance (semantic/codebase results)
 }
-// EventMatch / MemoryMatch / NoteMatch / CodebaseMatch are store-specific:
-// each carries its entity id (eventId / memoryId / noteId / symbol),
+// EventMatch / MemoryMatch / CodebaseMatch are store-specific:
+// each carries its entity id (eventId / memoryId / symbol),
 // a `preview` snippet, and an optional `score`.
+
+interface NoteMatch {
+  noteId: string;
+  preview: string;          // plain-text display snippet, never trusted HTML
+  score?: number;           // indexed hits always emit -adjustedRank; higher = better
+  workspaceId: string;      // identity/navigation key is (workspaceId, noteId)
+  title: string;
+  updatedAt: string;        // persisted note updated_at, RFC 3339
+  isArchived: boolean;     // the note's own archive state
+  workspaceArchived: boolean; // independently, its workspace's archive state
+}
 
 interface MessageMatch {
   agentId: string;
@@ -75,7 +86,100 @@ yields empty `matches`, not an error. The enriched `MessageMatch` fields (`works
 `agentName`, `role`, `timestamp`) are additive — pre-existing consumers of
 `agentId`/`messageId`/`preview`/`score` are unaffected.
 
-**Result delivery — direct or streamed.** Small result sets are returned inline in the method
+**`search.notes` semantics (indexed contract).** The request and result fields are additive;
+the matching behavior deliberately changes from a case-insensitive literal substring scan to
+token-based full-text search. Index the note's title, raw Markdown body and tags, not comments,
+version history or attachments. Reuse the transcript query sanitizer: split on non-alphanumeric
+characters, quote each token, join tokens with `AND`, and match the final token as either a
+whole token or a prefix. Use the same case-insensitive `porter unicode61` tokenizer as
+transcripts. Quotes and punctuation are separators; typed words such as `OR` are literal
+tokens, never FTS operators. Empty, whitespace-only and punctuation-only queries succeed with
+empty `matches`. Multiword matches need not be adjacent and may span title/body/tags; arbitrary
+middle-of-word substrings, regex and exact-phrase search are not supported.
+
+**Scope, archive defaults and limits.** Omit `workspaceId` to search all workspaces the caller
+can access on the contacted daemon. An explicit `workspaceId` is a hard filter and requires
+the same workspace access as other scoped searches. `preferWorkspaceId` changes ranking only:
+it neither filters nor grants access, and an unknown/inaccessible preference has no effect.
+Apply visibility, workspace and note-archive filters **before** selecting the final top-N;
+inaccessible hits must neither appear nor displace accessible results. Return at most one hit
+per `(workspaceId, noteId)`, since note IDs such as `spec` repeat across workspaces.
+
+`includeArchived` defaults to `true` to preserve legacy API inclusion of individually archived
+notes. Explicit `false` removes individually archived notes. This does **not** exclude archived
+workspaces: accessible, non-archived notes in those workspaces remain eligible, with a soft rank
+penalty and `workspaceArchived: true`. `limit` is a nonnegative integer: omitted means no cap,
+`0` means no matches, and a positive value caps the final ranked result. Optional `null` values
+act as omission for all parameters. There is no implicit default or maximum result cap; clients
+should request a limit for interactive search. The palette sends `limit: 10`,
+`includeArchived: false`, and the active workspace as `preferWorkspaceId`, leaving `workspaceId`
+absent. It retains its five-row display cap in ordinary, unfiltered search.
+
+**Ranking and previews.** Use weighted bm25 with title/body/tags weights **5/1/2**. Adjust its
+rank (lower is better) by subtracting **1.0** for the preferred workspace and adding **1.0** for
+an archived workspace; both adjustments compose, including when the preferred workspace is
+archived. These are soft adjustments, not mandatory tiers: a sufficiently relevant result
+elsewhere can win. Sort by adjusted rank ascending, then `updatedAt` descending, then
+`workspaceId` and `noteId` ascending (binary string order) for deterministic ties. The emitted
+`score` is the negated adjusted rank, always present on indexed hits; its optional type preserves
+the legacy shape. Clients preserve the server's indexed order, rather than re-filtering body-only
+hits by title or tags. Scores are not normalized or comparable across different queries.
+
+`preview` uses the transcript-style bounded, whitespace-collapsed window around the first query
+token occurring literally in the text, falling back to the beginning when stemming finds no
+literal occurrence. It may contain Markdown source punctuation and must be rendered as plain
+text, never injected as HTML. It supplies display context, not editor offsets or a promise of
+exact-passage scrolling/highlighting. The result carries note title and archive context without
+fetching the note body; workspace display names resolve through accessible workspace metadata.
+
+**Delivery, errors and compatibility.** Indexed note searches always return the complete
+result inline, even with an explicit `workspaceId` or more than 25 matches. No `search:result`
+or `search:done` event is required. `requestId` is echoed when supplied and minted otherwise;
+the ordinary `search.cancel` request-ID contract remains, including no-op cancellation after
+completion. An existing `truncated: false` result member may remain for compatibility; reaching
+the requested limit does not promise a total-count or truncation signal.
+
+Every successful indexed response includes the literal capability marker **`indexed: true`**,
+including an empty result, a punctuation-only query and `limit: 0`. Detect support from this
+marker, never from match count or an enriched field on the first hit. Old daemons ignore the new
+parameters and return legacy rows without the marker. When the marker is absent (or the method
+is unavailable), the palette retains local fuzzy title/tag discovery and empty-query browsing;
+it must not interpret legacy global rows as belonging to the current workspace. On supported
+daemons it merges local discovery and indexed hits by composite identity, retaining body-only
+hits. A failed request is not proof of an empty result; clients must clear stale indexed hits
+and preserve local discovery. Debounce/cancellation and query/workspace generation checks must
+prevent late responses after typing, closing or changing workspace from replacing current hits.
+
+Missing/non-string `query`, non-null optional parameters with the wrong type, empty
+`workspaceId`/`preferWorkspaceId`, or a negative, fractional or out-of-range signed 64-bit
+`limit` yield `-32602` with `error.data.code: "invalid-params"`. An inaccessible or nonexistent
+hard-scoped workspace uses the existing non-disclosing `-32602` / `"not-found"` convention.
+Tokenless queries are not errors. Store/index failures propagate through the ordinary §9 error
+contract; they must not silently masquerade as successful empty indexed results.
+
+Example palette request and indexed response (illustrative score):
+
+```json
+{"jsonrpc":"2.0","id":92,"method":"search.notes","params":{"query":"release che","preferWorkspaceId":"ws-current","limit":10,"includeArchived":false,"requestId":"notes-1"}}
+```
+
+```json
+{"jsonrpc":"2.0","id":92,"result":{"requestId":"notes-1","indexed":true,"matches":[{"noteId":"spec","workspaceId":"ws-other","title":"Release checklist","preview":"Verify the release checklist before promotion.","score":0.8,"updatedAt":"2026-10-01T00:00:00Z","isArchived":false,"workspaceArchived":true}]}}
+```
+
+Empty indexed response (also valid for punctuation-only input or `limit: 0`):
+
+```json
+{"jsonrpc":"2.0","id":93,"result":{"requestId":"notes-2","indexed":true,"matches":[]}}
+```
+
+Legacy response fixture: no marker or workspace identity, so retain local palette discovery:
+
+```json
+{"jsonrpc":"2.0","id":94,"result":{"requestId":"notes-old","matches":[{"noteId":"spec","preview":"Release checklist"}],"truncated":false}}
+```
+
+**Result delivery — direct or streamed.** Except for `search.notes` (always inline above), small result sets are returned inline in the method
 result (`matches`/`files` + `truncated`). Large or long-running searches are **streamed**: the
 method returns `{ requestId }` promptly and the daemon pushes incremental `search:result`
 batches followed by a terminal `search:done` (§6.5), correlated by `requestId`. Either way the
@@ -174,4 +278,3 @@ affordance without leaking content, and lets the owning client's *other* connect
 **Errors.** Missing `workspaceId` / `agentId` (all three methods) or `text` (`drafts.set`) →
 `-32602`. `drafts.get` for a non-existent draft returns `null` (not an error); `drafts.clear`
 on a non-existent draft is a no-op success.
-
