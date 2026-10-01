@@ -269,6 +269,73 @@ WSS tests must cover create/status/list/state-event envelopes, authorization,
 validation errors and capability negotiation. Persistence tests use isolated DBs.
 Run the daemon gates and consumer checks before advertising support.
 
+#### Command creation defaults (prepared breaking change)
+
+This change leads implementation; it does not claim released or installed support.
+It changes the 10.11 creation default described by the original lifecycle candidate.
+Recommend protocol **11.0** against the reviewed 10.11 baseline: an omitted-purpose
+command changes retention, and a previously valid new autostart command now fails
+validation. No method, field, enum value or event is added or removed. Confirm the
+version against daemon main before implementation lands; see [versioning](../versioning.md).
+
+| Creation input | Resulting purpose |
+| --- | --- |
+| New `mode: "command"`, purpose omitted | `oneOff` |
+| New `mode: "service"`, purpose omitted | `saved` |
+| Explicit `purpose: "saved"` | `saved`, including reusable/autostart commands |
+| Existing `scriptId`, purpose omitted | Preserve the stored purpose |
+| Hydrated/imported/repository-config definition, purpose absent | `saved`; no reclassification |
+
+The new-ID rule also applies when a caller supplies a `scriptId` that does not
+exist. Resolve omitted purpose from the stored definition before validation on
+an upsert; use the mode default only for a genuinely new definition. Validate the
+resolved purpose before persistence or stopping an existing process. An omitted
+purpose on an existing one-off does not silently promote it when changing to a
+service or setting `autoStart: true`: either change requires explicit `saved`.
+A new command with omitted purpose and `autoStart: true` is invalid (`-32602`),
+just like explicit `oneOff` with autostart. Explicit null and unknown values remain
+invalid. There is no schema migration, backfill, archive sweep, or change to the
+legacy deserialization default. Existing saved rows stay saved; existing one-offs
+stay one-off. Completion, output, hooks, manual archive and restore are unchanged.
+
+**Caller migration.** Audit reusable command creators, boot/setup commands and
+any command using autostart: send `purpose: "saved"` explicitly. Apply this to raw
+JSON-RPC, CLI JSON requests, MCP helpers and frontend creation forms. Do not make
+an omission into `saved` in a forwarding wrapper; preserve omission for the daemon
+to distinguish new creation from upsert. Do not apply creation defaults while
+hydrating a legacy response. Services continue to default to saved.
+
+`scriptLifecycle: 1` proves lifecycle support, not which creation default applies:
+it is also advertised by the earlier saved-default daemon. Explicit purpose is
+the portable choice across lifecycle-capable generations. On a daemon without
+that capability, absent purpose still hydrates as saved and one-off retirement
+cannot be promised; unknown request fields may be ignored. An old client that
+omits purpose on a new command receives the new one-off behavior after a daemon
+upgrade. Its unfiltered list still returns archived definitions and its known-ID
+status/output reads still work; this does not preserve the old creation default.
+
+Prepared examples (execute only against a daemon supporting lifecycle):
+
+```javascript
+// Explicit retention works across old and new lifecycle-capable defaults.
+const reusable = await ws.script.create("Check", "make check", "command", { purpose: "saved" });
+const disposable = await ws.script.create("Once", "make check", "command", { purpose: "oneOff" });
+// With the new default, a new command can omit purpose; services remain saved.
+const once = await ws.script.create("Once", "make check", "command");
+const service = await ws.script.create("Dev", "make dev", "service");
+```
+
+The monorepo CLI probe forwards the same JSON contract; replace the workspace ID:
+
+```bash
+make rpc METHOD=script.create PARAMS='{"workspaceId":"<workspace-id>","name":"Check","command":"make check","mode":"command","purpose":"saved"}'
+```
+
+For a command with `autoStart: true`, keep that explicit saved purpose. For an
+upsert, add the existing `scriptId` and omit purpose only to retain its stored
+classification. These examples create definitions, not a successful test result.
+The generated MCP index remains pin-owned and is not edited for this preparation.
+
 #### Saved scripts and one-off history (10.11 implemented candidate)
 
 The complete extension is implemented and independently verified in intentd
@@ -293,11 +360,13 @@ of retained definitions and their latest result, **not a per-run log archive**.
 persisted command result described below; it is absent if no result is known.
 These fields belong to the definition, not `ScriptRuntimeState`.
 
-- New definitions default to `saved` when `purpose` is omitted. Every pre-existing,
+- Under the prepared [creation default change](#command-creation-defaults-prepared-breaking-change),
+  new commands default to `oneOff` and services to `saved` when purpose is omitted.
+  The original 10.11 candidate defaulted both to `saved`. Every pre-existing,
   imported or repository-config definition without explicit purpose stays `saved`.
   Never infer one-off purpose from source (including `source=user`), name, command,
   category, age, idle status, agent ownership, or lack of output.
-- `oneOff` is an explicit retention choice for `mode: "command"`; `mode` still
+- `oneOff` is a retention choice for `mode: "command"`; `mode` still
   controls execution. Reject `oneOff` with `mode: "service"` or `autoStart: true`
   as `-32602` invalid params, without mutation. Unknown purpose/archive-filter
   values and explicit `null` are invalid params too. Services are never retired
@@ -307,8 +376,10 @@ These fields belong to the definition, not `ScriptRuntimeState`.
   controls and do not send lifecycle fields, filters or mutations. Old parsers
   can silently ignore unknown fields: a successful create is **not** proof that
   one-off retirement is supported. Never fall back to `script.remove`.
-- Old clients on a supporting daemon keep creating saved definitions and can
-  start/status/output known IDs as before. They ignore additive fields and
+- Old clients on a supporting daemon can start/status/output known IDs as before.
+  With the prepared default change, omitted-purpose new commands become one-off;
+  earlier lifecycle daemons create saved definitions. Old clients ignore additive
+  fields and
   continue receiving **all definitions when the wire filter is omitted**, even
   after `script:changed` triggers a refetch. This preserves their existing row
   maps, selected output and runtime failure state. They cannot show the new
@@ -376,7 +447,7 @@ workspace, with the same member/owner permissions as script definition edits.
 Non-members cannot discover the workspace or scripts through this extension;
 connection allowlists and service-level scope checks both cover the new methods.
 
-**Completion, failure and cancellation.** An explicitly one-off command moves
+**Completion, failure and cancellation.** A one-off command moves
 to history after its admitted run has **settled**, whether it succeeded, failed,
 was cancelled, timed out, or was interrupted. Settlement requires that its
 process and launch/run reservation have ended and no restart is pending. Never
@@ -471,7 +542,8 @@ including `restarting`. Do not schedule a second launch to restore an already
 live entry. Restore-only leaves terminal status/output untouched. A
 `script.create` upsert with the same ID intentionally replaces the definition
 and restores it, preserving existing source/creation identity behavior. Omitted
-purpose preserves the existing purpose (new IDs alone default to `saved`);
+purpose preserves the existing purpose (the prepared default change applies only
+to new IDs: commands default to `oneOff`, services to `saved`);
 explicit purpose replaces it, subject to mode validation. Changing an existing
 one-off to service therefore requires explicit `purpose: "saved"`. Existing
 upsert teardown behavior is unchanged: unlike archive, replacement can stop the
@@ -525,8 +597,10 @@ omit the wire filter continue receiving all definitions. Archive/restore return
 the RPC batch result.
 Workspace scope is injected by the host as for existing helpers; no
 caller-supplied cross-workspace escape is added. Existing no-argument `list()`
-and create/start/status/output signatures remain valid. Teach callers to opt into `purpose: "oneOff"` for
-throwaway checks, retain `saved` for reusable commands/services, and never use
+and create/start/status/output signatures remain valid. Send explicit `purpose: "saved"`
+for reusable/autostart commands; explicit `oneOff` gives throwaway checks the same
+retention on both lifecycle-capable default generations. New commands may omit
+purpose once the prepared default change is implemented. Never use
 remove as automatic cleanup. The generated MCP binding index reflects the
 monorepo pin, not necessarily the installed daemon. Automatic pin advancement
 regenerates it; this candidate documentation does not manually advance it. Use

@@ -4,6 +4,24 @@
 
 **Documented version:** `10.11` — implemented script lifecycle candidate; not a shipped-version claim.
 
+**Prepared command-default change — recommended 11.0, not shipped.**
+[Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+change omission on a new command from `saved` to `oneOff`; new services remain
+saved. Upserts preserve stored purpose when omitted, and legacy hydration/import
+still defaults to saved. Reusable and autostart command creators must send
+explicit `saved`; omitted-purpose new autostart commands now fail validation.
+This breaks an existing request's retention/acceptance behavior, so recommend the
+next major under the compatibility policy, despite unchanged methods and fields.
+Allocate against daemon main before merge. `scriptLifecycle: 1` alone cannot
+identify the default generation; explicit purpose is portable across supporting
+daemons. No capability or version claim here establishes release or deployment.
+
+Land the prepared contract first so reviewers can verify component expectations;
+there are no catalog additions/removals requiring count changes. Then land the
+daemon change before the frontend change, with human authorization for every
+merge. Automation owns subsequent pins and the generated MCP index. This change
+neither upgrades clients nor reclassifies existing workspace definitions.
+
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
 [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
 adds two router methods (`script.archive`, `script.restore`) and additive
@@ -16,8 +34,9 @@ after main's `10.10` and advertises `scriptLifecycle: 1` for complete support:
 manual archive/restore, atomic last-result/one-off retirement, durable admission
 recovery, concurrency protection and MCP helpers. Omitted wire `archive` still
 means `all`; lifecycle-aware frontend lists and candidate MCP defaults explicitly
-select `active`. Legacy definitions/new callers without purpose remain saved;
-omitting purpose on an upsert preserves the existing purpose. Unknown fields on
+select `active`. In that original 10.11 contract, legacy definitions and new
+callers without purpose remain saved; omitting purpose on an upsert preserves
+the existing purpose. Unknown fields on
 an older daemon are not proof of support.
 
 **Rollout baseline (2026-09-30).** Monorepo `76c6c4dd172dc71e845eb76072718e9f57d01a31`

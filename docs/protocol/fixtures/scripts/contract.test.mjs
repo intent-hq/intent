@@ -130,3 +130,39 @@ test('selected-output examples exercise an archive transition and both client ge
     assert.equal(c?.expect.wireParams.archive, 'active', id);
   }
 });
+
+test('creation examples separate new command defaults from persistence and hydration', () => {
+  const cases = new Map(fixture.cases.map(c => [c.id, c]));
+  for (const [id, mode, purpose] of [
+    ['new-command-default-is-one-off', 'command', 'oneOff'],
+    ['new-service-default-is-saved', 'service', 'saved'],
+    ['new-explicit-saved-command', 'command', 'saved'],
+    ['new-autostart-explicit-saved-command', 'command', 'saved'],
+    ['upsert-retains-saved-purpose', 'command', 'saved'],
+    ['upsert-retains-explicit-purpose', 'command', 'oneOff'],
+  ]) {
+    const c = cases.get(id);
+    assert.ok(c, id);
+    assert.equal(c.request.params.mode, mode, id);
+    assert.equal(c.expect.definitionSubset.purpose, purpose, id);
+    if (id.includes('default') || id.startsWith('upsert-retains')) {
+      assert.equal(c.request.params.purpose, undefined, id);
+    } else assert.equal(c.request.params.purpose, 'saved', id);
+  }
+  for (const id of ['new-autostart-default-rejected', 'upsert-one-off-autostart-rejected']) {
+    const c = cases.get(id);
+    assert.ok(c, id);
+    assert.equal(c.request.params.purpose, undefined, id);
+    assert.equal(c.request.params.autoStart, true, id);
+    assert.equal(c.expect.errorCode, -32602, id);
+    assert.equal(c.expect.noMutation, true, id);
+  }
+  assert.equal(cases.get('new-autostart-explicit-saved-command').request.params.autoStart, true);
+  const legacy = fixture.scenarios.find(c => c.id === 'legacy-hydration-remains-saved');
+  assert.ok(legacy);
+  assert.equal(legacy.initialScript.purpose, undefined);
+  assert.equal(legacy.expect.purpose, 'saved');
+  assert.equal(legacy.expect.archived, false);
+  assert.equal(fixture.scenarios.find(c => c.id === 'old-client-new-daemon').expect.defaultPurpose, 'oneOff');
+  assert.equal(fixture.scenarios.find(c => c.id === 'old-daemon-no-capability').expect.defaultPurpose, 'saved');
+});
