@@ -205,14 +205,11 @@ export function collectDocumentedMethods(text) {
     }
     const separator = tableCells(lines[i + 1]);
     const validSeparator = separator?.length > 0 && separator.every((c) => /^:?-+:?$/.test(c));
-    // A partial separator can signal a malformed header, but a hyphen description
-    // after a separator row or a dotted field row is still ordinary table data.
-    const headerLike = cells && !cells.every((c) => /^[-:]+$/.test(c))
-      && methodNamesInFirstCell(cells[0]).length === 0;
-    // Only an explicit Field header with a valid, same-width separator opts out.
-    // A new table (even an unknown/malformed header) must end the previous opt-out.
-    if (cells && (/^field$/i.test(cells[0]) || validSeparator
-      || (headerLike && separator?.some((c) => /^[-:]+$/.test(c))))) {
+    // Explicit headers and complete adjacent tables are checker conventions.
+    // Partial separator-like body cells do not end an established Field table.
+    const completeHeader = validSeparator && separator.length === cells?.length
+      && cells.every(Boolean) && cells.some((c) => !/^:?-+:?$/.test(c));
+    if (cells && (/^(field|method)$/i.test(cells[0]) || completeHeader)) {
       inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean)
         && separator?.length === cells.length && validSeparator;
     }

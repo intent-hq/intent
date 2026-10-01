@@ -507,9 +507,35 @@ for (const [position, prefix] of [
   });
 }
 
+for (const target of ['details.target', 'target']) {
+  test(`collectDocumentedMethods retains mixed field names before a hyphen on ${target}`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n| source | Source. |\n| ${target} | - |\n| details.id | Id. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+  });
+}
+
+test('collectDocumentedMethods field-body combinations preserve data and later method boundaries', () => {
+  for (const name of ['target', 'details.target']) {
+    for (const prefix of ['', '| source | Source. |\n', '| details.source | Source. |\n']) {
+      for (const cells of ['', ' - |', ' - | Extra cell. |']) {
+        const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| ${name} |${cells}\n| details.id | Id. |`;
+        assert.deepEqual(collectDocumentedMethods(doc), [], doc);
+        for (const boundary of ['\n', '| Method | Result |\n| --- | --- |\n', '| Unknown | Result |\n| --- | --- |\n']) {
+          const next = `${doc}\n${boundary}| unknown.method | Result. |`;
+          assert.deepEqual(collectDocumentedMethods(next), [
+            { name: 'unknown.method', line: next.split('\n').length },
+          ], next);
+        }
+      }
+    }
+  }
+});
+
 test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
   for (const header of [
     '| Method | Result |\n| --- | --- |',
+    '| Method | Result |',
+    '| Method | Result |\n| invalid | --- |',
     '| Unknown | Result |\n| --- | --- |',
     '| Field names | Result |\n| --- | --- |',
     '| Field | Meaning |',
@@ -541,7 +567,7 @@ test('collectDocumentedMethods ends field context at table and non-table boundar
     '| Method | Result |\n| --- | --- |',
     '| Unknown | Result |\n| --- | --- |',
     '| Field | Meaning |\n| --- | invalid |',
-    '| Unknown | Result |\n| invalid | --- |',
+    '\n| Unknown | Result |\n| invalid | --- |',
     '```text\n| Field | Result |\n| --- | --- |\n```',
     '~~~text\n| ignored.method | Result |\n~~~',
   ]) {
@@ -549,6 +575,18 @@ test('collectDocumentedMethods ends field context at table and non-table boundar
     assert.deepEqual(collectDocumentedMethods(doc), [
       { name: 'unknown.method', line: doc.split('\n').length },
     ], boundary);
+  }
+});
+
+test('collectDocumentedMethods needs a boundary before an ambiguous malformed unknown table', async () => {
+  const fields = '| Field | Meaning |\n| --- | --- |\n| details.source | Field. |';
+  const rows = '| Unknown | Result |\n| invalid | --- |\n| unknown.method | Result. |';
+  assert.deepEqual(collectDocumentedMethods(`${fields}\n${rows}`), []);
+  for (const [doc, line] of [[rows, 3], [`${fields}\n\n${rows}`, 7]]) {
+    const result = await runChecks(await makeRoot({ methods: { 'fields.md': doc } }));
+    assert.deepEqual(messages(result), [
+      `docs/protocol/methods/fields.md:${line}: error: unknown.method is documented here but missing from docs/protocol/05-method-catalog.md`,
+    ]);
   }
 });
 
