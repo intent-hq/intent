@@ -84,6 +84,31 @@ Prebuilt sitter archives for macOS, Linux, and Windows are published on the
 public intentd-releases repo's
 [`sitter-latest` release](https://github.com/intent-hq/intentd-releases/releases/tag/sitter-latest).
 
+### Network ports and separate installations
+
+Network access is disabled by default. Local-only installations use their local
+socket and do not allocate a TCP port. On the first WSS start, an installation
+without a configured `server.wsApi.port` tries `5181` and then consecutive ports
+through `65535`, advancing only when an address is already in use. It saves the
+first port that binds on every required address in `<data_dir>/config.toml`
+before announcing readiness. Separate per-user installations select and save
+their own ports; clients should use `intentd pair` or the pairing payload to
+discover the actual listening port.
+
+The saved port stays fixed across restarts. Existing numeric port settings and
+nonzero `INTENTD_TCP_PORT` overrides are also fixed choices. If enabled WSS
+cannot bind at daemon startup, the daemon exits with an error; sitter retries
+do not choose another port. Release the occupied port, or stop the daemon and
+set a different `port` under `[server.wsApi]` in its config. Deliberately
+removing that entry requests a new selection at the next WSS start. Check for
+an environment override before editing the file, since it takes precedence.
+
+Installer and sitter readiness checks remain based on the per-user local
+socket; they do not allocate or probe a WSS port. See the
+[transport contract](docs/protocol/01-transport.md) and
+[port setting semantics](docs/protocol/methods/settings.md#wss-port-assignment)
+for runtime enable failures and reset behavior.
+
 ## Build from source
 
 ```sh
