@@ -49,8 +49,10 @@ pairing. Hydrate hello capabilities and `principal.me` from the selected host on
 every connection before enabling management; workspace controls use `canManage`
 together with the operation's host-role and transport limits, never fake ownership
 or a cached connection category. Honor an explicit false even when `myRole` is
-owner. A retained guest workspace owner gains no host creation/administration,
-guest-denied script RPCs, or permission-event access from a true value (§8).
+owner. A retained guest workspace owner receives permission request/resolved events
+only for workspaces they currently manage, matching snapshot/answer authority (§8).
+That grant does not admit host creation/administration, guest-denied script RPCs,
+or unrelated management events.
 Host provider/model/repository
 reads and pairing requests must remain routed to that host when a different local
 daemon exists. Reconcile live membership changes with a fresh bounded snapshot.
