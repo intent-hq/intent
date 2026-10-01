@@ -378,9 +378,13 @@ There is no Automatic/Fixed mode field or separate remembered-port cache.
 
 The daemon must bind every required address and retain those sockets while
 atomically persisting the selected number to `<data_dir>/config.toml`. The
-assignment changes the origin to `"file"`, preserves unrelated configuration
-and comments, and must not overwrite a concurrent explicit edit. Persistence
-failure releases the new listeners and fails the start; no uncommitted port is
+assignment changes the origin to `"file"` and preserves unrelated configuration
+and comments. Assignment and settings-API writes are serialized; a stale
+settings snapshot or external edit detected by the final on-disk byte check
+rejects assignment. External editors do not share that lock: a write between
+the final check and atomic rename can still race, with the last writer winning.
+This is not a filesystem compare-and-swap guarantee. Persistence failure
+releases the new listeners and fails the start; no uncommitted port is
 advertised. Every later restart or disable/enable cycle uses the saved number.
 Existing numeric configurations, including generated `5181` values from older
 versions, remain fixed without migration or guessing how the value was chosen.
