@@ -161,12 +161,19 @@ function launchReply(method,r) {
   object(r,['jsonrpc','id'],['error','result']);assert.equal(r.jsonrpc,'2.0');
   assert.notEqual(own(r,'error'),own(r,'result'));
   if(method==='agent.delegate.batch') {
-    object(r.result,['ok','tasks','startedTaskIds','summary','unlockPlan','warning']);assert.equal(r.result.ok,true);
+    if(own(r,'error')) {
+      object(r.error,['code','message','data']);assert.equal(r.error.code,-32603);
+      object(r.error.data,['code','idempotencyKey','retryable']);
+      one(r.error.data.code,['batch-launch-pending','batch-launch-outcome-unknown']);
+      str(r.error.data.idempotencyKey,128);assert.equal(r.error.data.retryable,true);return;
+    }
+    object(r.result,['ok','idempotencyKey','tasks','startedTaskIds','summary','unlockPlan','warning']);assert.equal(r.result.ok,true);str(r.result.idempotencyKey,128);
     assert.ok(r.result.tasks.length);assert.deepEqual(r.result.startedTaskIds,[]);
     assert.deepEqual(r.result.summary,{started:0,held:0,skipped:0,errors:r.result.tasks.length});
     for(const row of r.result.tasks) {
       object(row,['taskNoteId','title','disposition','reason','error','launch']);
       assert.equal(row.disposition,'error');assert.deepEqual(row.launch,row.error.data.launch);
+      assert.equal(row.launch.idempotencyKey,createHash('sha256').update(JSON.stringify([r.result.idempotencyKey,row.taskNoteId])).digest('hex'));
       launchReply('agent.delegate',{jsonrpc:'2.0',id:r.id,error:row.error});
     }
     return;

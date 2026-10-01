@@ -896,16 +896,16 @@
                 "message": "Reconcile this launch using the same key",
                 "data": {
                   "code": "launch-pending",
-                  "idempotencyKey": "launch-1",
+                  "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                   "launch": {
-                    "idempotencyKey": "launch-1",
+                    "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                     "state": "pending"
                   },
                   "retryable": true
                 }
               },
               "launch": {
-                "idempotencyKey": "launch-1",
+                "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                 "state": "pending"
               }
             }
@@ -921,7 +921,8 @@
           "unlockPlan": {
             "unlockedBySettlement": [],
             "message": "Reconcile pending launch"
-          }
+          },
+          "idempotencyKey": "batch-key"
         }
       }
     },
@@ -945,16 +946,16 @@
                 "message": "Reconcile this launch using the same key",
                 "data": {
                   "code": "launch-pending",
-                  "idempotencyKey": "launch-1",
+                  "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                   "launch": {
-                    "idempotencyKey": "launch-1",
+                    "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                     "state": "pending"
                   },
                   "retryable": true
                 }
               },
               "launch": {
-                "idempotencyKey": "launch-1",
+                "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                 "state": "pending"
               }
             }
@@ -972,7 +973,8 @@
           "unlockPlan": {
             "unlockedBySettlement": [],
             "message": "Reconcile pending launch"
-          }
+          },
+          "idempotencyKey": "batch-key"
         }
       }
     },
@@ -996,9 +998,9 @@
                 "message": "Reconcile this launch using the same key",
                 "data": {
                   "code": "launch-pending",
-                  "idempotencyKey": "launch-1",
+                  "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                   "launch": {
-                    "idempotencyKey": "launch-1",
+                    "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
                     "state": "pending"
                   },
                   "retryable": true
@@ -1021,6 +1023,142 @@
           "unlockPlan": {
             "unlockedBySettlement": [],
             "message": "Reconcile pending launch"
+          },
+          "idempotencyKey": "batch-key"
+        }
+      }
+    },
+    {
+      "id": "batch-missing-parent",
+      "method": "agent.delegate.batch",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "tasks": [
+            {
+              "taskNoteId": "task-1",
+              "title": "Work",
+              "disposition": "error",
+              "reason": "Pending; reconcile the same key",
+              "error": {
+                "code": -32603,
+                "message": "Reconcile this launch using the same key",
+                "data": {
+                  "code": "launch-pending",
+                  "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                  "launch": {
+                    "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                    "state": "pending"
+                  },
+                  "retryable": true
+                }
+              },
+              "launch": {
+                "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                "state": "pending"
+              }
+            }
+          ],
+          "startedTaskIds": [],
+          "summary": {
+            "started": 0,
+            "held": 0,
+            "skipped": 0,
+            "errors": 1
+          },
+          "warning": "NO TASKS STARTED \u2014 pending; reconcile the same key",
+          "unlockPlan": {
+            "unlockedBySettlement": [],
+            "message": "Reconcile pending launch"
+          }
+        }
+      }
+    },
+    {
+      "id": "batch-wrong-parent",
+      "method": "agent.delegate.batch",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "tasks": [
+            {
+              "taskNoteId": "task-1",
+              "title": "Work",
+              "disposition": "error",
+              "reason": "Pending; reconcile the same key",
+              "error": {
+                "code": -32603,
+                "message": "Reconcile this launch using the same key",
+                "data": {
+                  "code": "launch-pending",
+                  "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                  "launch": {
+                    "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                    "state": "pending"
+                  },
+                  "retryable": true
+                }
+              },
+              "launch": {
+                "idempotencyKey": "6996dd8549db77719173b557ff9ef0c6aa64aff3d6847fb7d9580d0be90e810e",
+                "state": "pending"
+              }
+            }
+          ],
+          "startedTaskIds": [],
+          "summary": {
+            "started": 0,
+            "held": 0,
+            "skipped": 0,
+            "errors": 1
+          },
+          "warning": "NO TASKS STARTED \u2014 pending; reconcile the same key",
+          "unlockPlan": {
+            "unlockedBySettlement": [],
+            "message": "Reconcile pending launch"
+          },
+          "idempotencyKey": "different-parent"
+        }
+      }
+    },
+    {
+      "id": "batch-launch-pending",
+      "method": "agent.delegate.batch",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile the same batch",
+          "data": {
+            "code": "batch-launch-pending",
+            "idempotencyKey": "batch-key",
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "batch-launch-outcome-unknown",
+      "method": "agent.delegate.batch",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile the same batch",
+          "data": {
+            "code": "batch-launch-outcome-unknown",
+            "idempotencyKey": "batch-key",
+            "retryable": true
           }
         }
       }

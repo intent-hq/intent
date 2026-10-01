@@ -233,7 +233,7 @@ A reserved future ID without its session is not a real agent result.
 | agent.delegate, single | Existing `{ ok: true, agentId, name, ... }`, after actual session/task binding and required delegation bookkeeping | result.launch; its agentId equals result.agentId |
 | agent.wakeOrCreate, create branch | Existing required ok/agentId/agentName/created/action/taskTitle/result and applicable watch fields; created true, action created_new; actual binding and durable context delivery ownership | result.launch; its agentId equals result.agentId |
 | agent.wakeOrCreate, existing branch | Existing wake/queue result, after its actual durable delivery/decision boundary | No new launch required; never invent a create result |
-| agent.delegate, batch | Existing ok/tasks/startedTaskIds/summary/unlockPlan/warning envelope | Each started row gets launch only after single-delegate success, with equal agentId |
+| agent.delegate, batch | Existing ok/tasks/startedTaskIds/summary/unlockPlan/warning envelope | result.idempotencyKey is the parent batch key; each started row gets launch only after single-delegate success, with equal agentId |
 | workspace.create with initialAgent | Existing `{ workspace: Workspace, initialAgent: AgentLite }`, both actually persisted | result.initialAgentLaunch; its agentId equals initialAgent.id |
 
 Success launch.state is pending or running. No result contains an absent/null/fake
@@ -294,6 +294,20 @@ Without an explicit parent key, persist a generated one before provisioning and
 return it in error data (and result.idempotencyKey on success); loss of that reply
 requires existing workspace/task reconciliation, not blind resubmission. Generated
 keys and compact parent tombstones obey the same finite ledger accounting.
+
+For every admitted batch, result.idempotencyKey is REQUIRED and is the original
+supplied or head-generated **parent batch key**, including zero-started, entirely
+held/skipped and pending/error aggregates. A child row's launch.idempotencyKey
+(and error.data.idempotencyKey) is SHA-256 of [parentKey, taskNoteId] under the
+canonical tuple rule, never the parent key itself. The parent cannot be recovered
+from a child hash. Return it even when no child launch exists; retries use the
+parent key and the original complete batch intent. Before an aggregate is available,
+an admitted parent may return -32603 with closed data
+{ code: "batch-launch-pending" | "batch-launch-outcome-unknown", idempotencyKey,
+retryable: true }; idempotencyKey is again the parent key, and no child launch is
+invented. Malformed pre-admission rejection has no allocated parent key. Persist
+parent identity before any task dispatch; parent error/aggregate observations
+reconcile the same owned batch and never admit a second one.
 
 For a batch, retain existing held/skipped dispositions and required aggregate
 fields. A start-attempt without a successful single-delegate result is an existing
