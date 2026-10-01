@@ -72,7 +72,8 @@ Propagate the same validated object through:
 - `workspace.create.initialAgent.placement`. Workspace creation without an initial
   agent does not schedule one. Validate the initial placement before workspace
   effects; a later capacity failure preserves the created workspace and reports
-  initial-agent failure explicitly, without silently spawning locally.
+  initial-agent failure explicitly in the post-creation error envelope below,
+  without silently spawning locally or returning invalid-params after creation.
 - Specialist `runsOn` and `Workspace.defaultAgentPlacement`. The latter retains
   manager-only workspace.update authority; null clears the stored default.
 
@@ -194,8 +195,9 @@ For a batch, derive per-task keys by SHA-256 of the canonical JSON array
 `[parentKey, taskNoteId]` (UTF-8, no whitespace, JSON string escapes as ECMAScript JSON.stringify,
 no Unicode normalization); duplicate task IDs reject before
 admission. The complete ordered batch intent is bound to parentKey. Existing
-held/skipped classification remains; retrying the same batch returns its stored
-classification/results, not a fresh attempt to start newly unblocked tasks. A new
+held/skipped classification remains; retrying the same batch preserves stored
+classification while reconciling owned pending rows as defined below, not a fresh
+attempt to start newly unblocked tasks. A new
 intent/key is needed after inspecting those results. Force cannot duplicate an
 unresolved launch. Wake's decision and task occupancy are serialized with creation;
 the same key must not take the create branch twice or deliver the context twice.
@@ -203,9 +205,10 @@ Workspace initial-agent key is SHA-256 of `[workspaceKey,"initialAgent"]` under
 the same canonical-array rule and participates in the parent workspace transaction.
 
 When old callers omit a key, allocate it once at admission and include
-`launch: { idempotencyKey, state, agentId? }` in create-producing operation results;
+`launch: { idempotencyKey, state, agentId? }` in the method-specific result or error below;
 state is `pending`, `running`, `failed` or `uncertain`. Batch entries carry their
-own launch projection. Workspace results attach it to the initial-agent result.
+own launch projection. Successful workspace results use the separate
+initialAgentLaunch member; AgentLite itself gains no launch member.
 Never start another agent as a consequence of a lost response. A keyed retry uses
 the same operation; without the lost generated key, reconcile the existing task
 assignment/agent inventory first. If that cannot identify the operation, report
@@ -213,12 +216,99 @@ unknown outcome and require explicit resolution, not blind automatic resubmissio
 This cannot deduplicate unrelated legacy unkeyed calls that the client submits as
 new intents; do not claim exactly-once delivery for those calls.
 
-Unknown outcomes return -32603 with `data: { code: "launch-outcome-unknown",
-idempotencyKey, agentId?, retryable: true }`; retryable means reconcile/retry the
-**same key**, not start elsewhere. Pending keyed retries return the same launch
-projection. Successful/failed results are durable and do not reissue provider work.
-A retained failed attempt does not free native resources merely because its public
-state is failed. Terminal evidence must satisfy existing cleanup owners.
+### Per-method launch responses
+
+These prepared responses apply on a daemon implementing agentPlatformRouting 1
+when an effective placement object selects this routing contract (including a
+stored default). Clients must gate widened requests/new retry options as above;
+old unplaced calls retain their existing response/error contract. Additive success
+members never replace required legacy fields. A persisted session is distinct from
+a started provider: pending preparation may return a real AgentLite/agentId, with
+launch.state pending, but not claim a delivered prompt or running provider.
+A reserved future ID without its session is not a real agent result.
+
+| Operation | Success requires | Additive launch location |
+| --- | --- | --- |
+| agent.create | Existing `{ agent: AgentLite }`, with an actual persisted session | result.launch; launch.agentId equals agent.id |
+| agent.delegate, single | Existing `{ ok: true, agentId, name, ... }`, after actual session/task binding and required delegation bookkeeping | result.launch; its agentId equals result.agentId |
+| agent.wakeOrCreate, create branch | Existing required ok/agentId/agentName/created/action/taskTitle/result and applicable watch fields; created true, action created_new; actual binding and durable context delivery ownership | result.launch; its agentId equals result.agentId |
+| agent.wakeOrCreate, existing branch | Existing wake/queue result, after its actual durable delivery/decision boundary | No new launch required; never invent a create result |
+| agent.delegate, batch | Existing ok/tasks/startedTaskIds/summary/unlockPlan/warning envelope | Each started row gets launch only after single-delegate success, with equal agentId |
+| workspace.create with initialAgent | Existing `{ workspace: Workspace, initialAgent: AgentLite }`, both actually persisted | result.initialAgentLaunch; its agentId equals initialAgent.id |
+
+Success launch.state is pending or running. No result contains an absent/null/fake
+agent, a successful created_new action without an agent, or failed/uncertain as a
+successful launch. Optional legacy success fields retain their original rules.
+Workspace creation without initialAgent retains its original result, with no
+initialAgentLaunch. No new public method or client handshake field is required.
+
+When no success boundary exists yet, return a JSON-RPC **error**, not a partial
+success. It has code -32603, a safe message, and closed data:
+`{ code, idempotencyKey, launch, retryable, cause? }`.
+For agent operations idempotencyKey equals launch.idempotencyKey. launch is the
+closed object defined above; agentId is present only if that real session exists.
+The exact cases are:
+
+- code launch-pending, launch.state pending, retryable true: the owned operation
+  is still in progress. A keyed retry observes/joins it; it does not start another.
+- code launch-outcome-unknown, launch.state uncertain, retryable true: an effect
+  may have happened. Retry means reconcile the same retained key/owner, not launch
+  elsewhere or reissue an uncertain effect.
+- code launch-failed, launch.state failed, retryable false: the logical launch
+  definitively failed. The terminal failure is stored and replayed. It is not
+  proof that native resources/charges were released.
+
+cause, when present, is a safe `{ code, message, data? }` error object. For a
+placement cause it uses the paired-platform error shape below, including its
+original code -32602, nested only as diagnostic data. It is not the enclosing
+RPC error code and does not imply a pre-side-effect workspace rejection. No paths,
+credentials or raw internal errors are included. MCP rendering must preserve the
+outer launch code/key/state plus workspace identity when present and safe cause
+alternatives; it must not render a pending/uncertain batch as safe to start again.
+
+For workspace.create **after the workspace has committed**, the same error data
+additionally REQUIRES workspaceId identifying the actual created workspace.
+idempotencyKey is the **outer workspace key**; launch.idempotencyKey is its derived
+initial-agent key. There is no result alongside error, no fabricated initialAgent,
+and no post-creation -32602. The caller can fetch the workspace by that identity.
+Before any workspace effects, malformed/unsupported validation remains -32602
+under the existing pre-side-effect guarantee; a later platform/capacity race
+instead uses the post-creation envelope (possibly a nested placement cause).
+If the workspace itself is not yet committed, an in-progress parent retry uses
+-32603 data `{ code: "workspace-create-pending", idempotencyKey, retryable: true }`,
+without workspaceId/launch; uncertain workspace provisioning uses code
+workspace-create-outcome-unknown. Neither permits another workspace creation.
+
+Keep workspace idempotency in its existing **global create scope** (empty-workspace sentinel, not the not-yet-created workspace ID); retain existing caller authorization
+checks and prevent another caller learning the stored result. Bind the full parent
+request/default snapshot, actual workspace identity and derived initial-agent key
+before child dispatch. A same-key retry does not repeat clone/checkout/spec/events,
+recreate the workspace, or independently retry the initial-agent prompt. Pending
+and uncertain errors are observations of the retained operation and may advance
+to its terminal result after actual reconciliation. Once success or definitive
+failure is recorded, replay that same terminal envelope; no re-evaluation of later
+capacity/configuration and no second initial agent. A failed initial agent leaves
+the workspace usable; an explicit new agent operation can be requested after old
+ownership settles, rather than replaying workspace.create with a fresh key.
+Without an explicit parent key, persist a generated one before provisioning and
+return it in error data (and result.idempotencyKey on success); loss of that reply
+requires existing workspace/task reconciliation, not blind resubmission. Generated
+keys and compact parent tombstones obey the same finite ledger accounting.
+
+For a batch, retain existing held/skipped dispositions and required aggregate
+fields. A start-attempt without a successful single-delegate result is an existing
+`disposition: "error"` row with required taskNoteId/title/reason and additive
+`error: { code, message, data }`, plus launch equal to error.data.launch when a
+launch was reserved. An early pre-effect failure has no launch. The row must not
+carry agentId/agentName as if started; any real retained identity is in launch.
+Such rows count in summary.errors, never startedTaskIds; pending/uncertain reasons
+explicitly require same-key reconciliation. Other rows may already have effects;
+never turn their failure into a top-level post-effect invalid-params rejection.
+Same-key batch retries retain initial held/skipped classification, reconcile only
+owned pending rows, and recompute summary/startedTaskIds from the durable row
+results; they never admit formerly held tasks. Terminal rows replay unchanged.
+This scoped keyed behavior supersedes the old stateless reclassification text only
+for these placed operations. It adds no auto-start or new disposition enum.
 
 Finite launch ledger: at most 16,384 records and 256 MiB aggregate per head;
 at most 1,024 unresolved records. Reserve the full intent/response accounting
@@ -252,7 +342,8 @@ unsupported-platform; a matching known pair without capacity is no-capacity. Do
 not infer a Cartesian product or advertise a second node. Configuration ambiguity,
 invalid capacity/profile and unknown outcomes are separate errors.
 
-Definite no match creates no agent and returns -32602:
+Definite no match before operation effects creates no agent and returns -32602
+(the workspace post-creation and batch per-row wrappers above take precedence):
 
 ```json
 {"code":-32602,"message":"No capacity for x86_64; available: none; supported: linux/x86_64","data":{"code":"placement-unavailable","requested":{"arch":"x86_64"},"reason":"no-capacity","availablePlatforms":[],"supportedPlatforms":[{"os":"linux","arch":"x86_64"}],"availableOs":[],"retryable":true,"observedAt":"2026-10-01T00:00:00Z"}}

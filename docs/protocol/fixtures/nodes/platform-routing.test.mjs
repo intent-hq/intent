@@ -150,3 +150,53 @@ test('capability dependency and exact generation',()=>{
   assert.equal(ok({agentNodes:1,agentPlatformRouting:1}),true);
   for(const c of [{},{agentNodes:1},{agentPlatformRouting:1},{agentNodes:1,agentPlatformRouting:true},{agentNodes:1,agentPlatformRouting:2}])assert.equal(ok(c),false);
 });
+
+// Response-only examples. These assert no runtime persistence or AgentLite hydration.
+function launchProjection(l) {
+  object(l,['idempotencyKey','state'],['agentId']); str(l.idempotencyKey,128);
+  one(l.state,['pending','running','failed','uncertain']);
+  if(own(l,'agentId')) assert.match(l.agentId,/^agent-[0-9a-f-]{36}$/);
+}
+function launchReply(method,r) {
+  object(r,['jsonrpc','id'],['error','result']);assert.equal(r.jsonrpc,'2.0');
+  assert.notEqual(own(r,'error'),own(r,'result'));
+  if(method==='agent.delegate.batch') {
+    object(r.result,['ok','tasks','startedTaskIds','summary','unlockPlan','warning']);assert.equal(r.result.ok,true);
+    assert.ok(r.result.tasks.length);assert.deepEqual(r.result.startedTaskIds,[]);
+    assert.deepEqual(r.result.summary,{started:0,held:0,skipped:0,errors:r.result.tasks.length});
+    for(const row of r.result.tasks) {
+      object(row,['taskNoteId','title','disposition','reason','error','launch']);
+      assert.equal(row.disposition,'error');assert.deepEqual(row.launch,row.error.data.launch);
+      launchReply('agent.delegate',{jsonrpc:'2.0',id:r.id,error:row.error});
+    }
+    return;
+  }
+  if(own(r,'result')) {
+    // The corpus uses the single-delegate success projection; full AgentLite stays unchanged.
+    assert.equal(method,'agent.delegate');
+    object(r.result,['ok','agentId','name','launch']);assert.equal(r.result.ok,true);
+    str(r.result.name,128);launchProjection(r.result.launch);
+    assert.equal(r.result.agentId,r.result.launch.agentId);
+    assert.ok(r.result.agentId);one(r.result.launch.state,['pending','running']);return;
+  }
+  object(r.error,['code','message','data']);assert.equal(r.error.code,-32603);str(r.error.message,4096);
+  const d=r.error.data;
+  if(method==='workspace.create' && ['workspace-create-pending','workspace-create-outcome-unknown'].includes(d.code)) {
+    object(d,['code','idempotencyKey','retryable']);str(d.idempotencyKey,128);assert.equal(d.retryable,true);return;
+  }
+  object(d,['code','idempotencyKey','launch','retryable'],method==='workspace.create'?['workspaceId','cause']:['cause']);
+  launchProjection(d.launch);str(d.idempotencyKey,128);
+  assert.equal(d.code,({pending:'launch-pending',failed:'launch-failed',uncertain:'launch-outcome-unknown'})[d.launch.state]);
+  assert.ok(d.code);assert.equal(d.retryable,d.launch.state!=='failed');
+  if(method==='workspace.create') {str(d.workspaceId,128);assert.equal(d.launch.idempotencyKey,createHash('sha256').update(JSON.stringify([d.idempotencyKey,'initialAgent'])).digest('hex'));}
+  else assert.equal(d.idempotencyKey,d.launch.idempotencyKey);
+  if(d.cause)unavailable(d.cause);
+}
+for(const c of corpus.responseCases) test(`launch envelope: ${c.id}`,()=>{
+  if(c.valid)launchReply(c.method,c.reply);else assert.throws(()=>launchReply(c.method,c.reply));
+});
+test('canonical response rules preserve required success fields and workspace failure identity',()=>{
+  const doc=readFileSync(new URL('../../model-platform-routing.md',import.meta.url),'utf8');
+  assert.ok(doc.includes('### Per-method launch responses'));
+  for(const token of ['launch-pending','initialAgentLaunch','empty-workspace sentinel','post-creation -32602'])assert.ok(doc.includes(token),token);
+});

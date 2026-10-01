@@ -1328,3 +1328,12 @@ the compatible trailing wake options argument). It preserves existing model/prov
 resolution and assigned-agent wake semantics. Architecture-only inputs require
 agentPlatformRouting 1, not merely agentNodes 1. Discovery/errors must render safe
 correlated platform pairs through the model-visible String boundary.
+
+For effective placed operations under agentPlatformRouting 1, the exact
+[per-method launch responses](../model-platform-routing.md#per-method-launch-responses)
+retain all required success fields in the tables above. Without a real persisted
+agent, pending/failed/uncertain is a structured -32603 error, never an invented
+agent or partial success. Batch error rows carry typed launch correlation; keyed
+retries preserve held/skipped classification and only reconcile already owned
+pending rows, overriding stateless batch reclassification for that scoped path.
+Legacy unplaced calls retain their existing envelopes and retry behavior.

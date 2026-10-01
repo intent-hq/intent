@@ -398,5 +398,632 @@
       "placement": {},
       "outcome": "eligible"
     }
+  ],
+  "responseCases": [
+    {
+      "id": "agent.create-pending",
+      "method": "agent.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-pending",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "pending"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.create-uncertain",
+      "method": "agent.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-outcome-unknown",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "uncertain"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.create-failed",
+      "method": "agent.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "failed"
+            },
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.delegate-pending",
+      "method": "agent.delegate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-pending",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "pending"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.delegate-uncertain",
+      "method": "agent.delegate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-outcome-unknown",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "uncertain"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.delegate-failed",
+      "method": "agent.delegate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "failed"
+            },
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.wakeOrCreate-pending",
+      "method": "agent.wakeOrCreate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-pending",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "pending"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.wakeOrCreate-uncertain",
+      "method": "agent.wakeOrCreate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-outcome-unknown",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "uncertain"
+            },
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "agent.wakeOrCreate-failed",
+      "method": "agent.wakeOrCreate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "launch-1",
+            "launch": {
+              "idempotencyKey": "launch-1",
+              "state": "failed"
+            },
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace.create-pending",
+      "method": "workspace.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-pending",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "pending"
+            },
+            "retryable": true,
+            "workspaceId": "workspace-created-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace.create-uncertain",
+      "method": "workspace.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile this launch using the same key",
+          "data": {
+            "code": "launch-outcome-unknown",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "uncertain"
+            },
+            "retryable": true,
+            "workspaceId": "workspace-created-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace.create-failed",
+      "method": "workspace.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": false,
+            "workspaceId": "workspace-created-1",
+            "cause": {
+              "code": -32602,
+              "message": "No capacity for x86_64; available: none; supported: linux/x86_64",
+              "data": {
+                "code": "placement-unavailable",
+                "requested": {
+                  "arch": "x86_64"
+                },
+                "reason": "no-capacity",
+                "availablePlatforms": [],
+                "supportedPlatforms": [
+                  {
+                    "os": "linux",
+                    "arch": "x86_64"
+                  }
+                ],
+                "availableOs": [],
+                "retryable": true,
+                "observedAt": "2026-10-01T00:00:00Z"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "delegate-real-session-pending",
+      "method": "agent.delegate",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "agentId": "agent-00000000-0000-4000-8000-000000000001",
+          "name": "Worker",
+          "launch": {
+            "idempotencyKey": "launch-1",
+            "state": "pending",
+            "agentId": "agent-00000000-0000-4000-8000-000000000001"
+          }
+        }
+      }
+    },
+    {
+      "id": "post-workspace-invalid-params",
+      "method": "workspace.create",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32602,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": false,
+            "workspaceId": "workspace-created-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "lost-workspace-id",
+      "method": "workspace.create",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "id": "wrong-parent-key",
+      "method": "workspace.create",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": false,
+            "workspaceId": "workspace-created-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "invented-agent-result",
+      "method": "workspace.create",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": false,
+            "workspaceId": "workspace-created-1"
+          }
+        },
+        "result": {
+          "agent": null
+        }
+      }
+    },
+    {
+      "id": "failed-retryable",
+      "method": "workspace.create",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Initial launch failed",
+          "data": {
+            "code": "launch-failed",
+            "idempotencyKey": "workspace-key",
+            "launch": {
+              "idempotencyKey": "4716b80ef0e591a9b9cfe9d14507c9cf1777d74ff955882546596423dc3db896",
+              "state": "failed"
+            },
+            "retryable": true,
+            "workspaceId": "workspace-created-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "delegate-missing-session-success",
+      "method": "agent.delegate",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "launch": {
+            "idempotencyKey": "launch-1",
+            "state": "pending"
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace-create-pending",
+      "method": "workspace.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile the existing workspace operation",
+          "data": {
+            "code": "workspace-create-pending",
+            "idempotencyKey": "workspace-key",
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "workspace-create-outcome-unknown",
+      "method": "workspace.create",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "error": {
+          "code": -32603,
+          "message": "Reconcile the existing workspace operation",
+          "data": {
+            "code": "workspace-create-outcome-unknown",
+            "idempotencyKey": "workspace-key",
+            "retryable": true
+          }
+        }
+      }
+    },
+    {
+      "id": "batch-pending-error-row",
+      "method": "agent.delegate.batch",
+      "valid": true,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "tasks": [
+            {
+              "taskNoteId": "task-1",
+              "title": "Work",
+              "disposition": "error",
+              "reason": "Pending; reconcile the same key",
+              "error": {
+                "code": -32603,
+                "message": "Reconcile this launch using the same key",
+                "data": {
+                  "code": "launch-pending",
+                  "idempotencyKey": "launch-1",
+                  "launch": {
+                    "idempotencyKey": "launch-1",
+                    "state": "pending"
+                  },
+                  "retryable": true
+                }
+              },
+              "launch": {
+                "idempotencyKey": "launch-1",
+                "state": "pending"
+              }
+            }
+          ],
+          "startedTaskIds": [],
+          "summary": {
+            "started": 0,
+            "held": 0,
+            "skipped": 0,
+            "errors": 1
+          },
+          "warning": "NO TASKS STARTED \u2014 pending; reconcile the same key",
+          "unlockPlan": {
+            "unlockedBySettlement": [],
+            "message": "Reconcile pending launch"
+          }
+        }
+      }
+    },
+    {
+      "id": "batch-pending-not-started",
+      "method": "agent.delegate.batch",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "tasks": [
+            {
+              "taskNoteId": "task-1",
+              "title": "Work",
+              "disposition": "error",
+              "reason": "Pending; reconcile the same key",
+              "error": {
+                "code": -32603,
+                "message": "Reconcile this launch using the same key",
+                "data": {
+                  "code": "launch-pending",
+                  "idempotencyKey": "launch-1",
+                  "launch": {
+                    "idempotencyKey": "launch-1",
+                    "state": "pending"
+                  },
+                  "retryable": true
+                }
+              },
+              "launch": {
+                "idempotencyKey": "launch-1",
+                "state": "pending"
+              }
+            }
+          ],
+          "startedTaskIds": [
+            "task-1"
+          ],
+          "summary": {
+            "started": 0,
+            "held": 0,
+            "skipped": 0,
+            "errors": 1
+          },
+          "warning": "NO TASKS STARTED \u2014 pending; reconcile the same key",
+          "unlockPlan": {
+            "unlockedBySettlement": [],
+            "message": "Reconcile pending launch"
+          }
+        }
+      }
+    },
+    {
+      "id": "batch-correlation-mismatch",
+      "method": "agent.delegate.batch",
+      "valid": false,
+      "reply": {
+        "jsonrpc": "2.0",
+        "id": "rpc-1",
+        "result": {
+          "ok": true,
+          "tasks": [
+            {
+              "taskNoteId": "task-1",
+              "title": "Work",
+              "disposition": "error",
+              "reason": "Pending; reconcile the same key",
+              "error": {
+                "code": -32603,
+                "message": "Reconcile this launch using the same key",
+                "data": {
+                  "code": "launch-pending",
+                  "idempotencyKey": "launch-1",
+                  "launch": {
+                    "idempotencyKey": "launch-1",
+                    "state": "pending"
+                  },
+                  "retryable": true
+                }
+              },
+              "launch": {
+                "idempotencyKey": "different",
+                "state": "pending"
+              }
+            }
+          ],
+          "startedTaskIds": [],
+          "summary": {
+            "started": 0,
+            "held": 0,
+            "skipped": 0,
+            "errors": 1
+          },
+          "warning": "NO TASKS STARTED \u2014 pending; reconcile the same key",
+          "unlockPlan": {
+            "unlockedBySettlement": [],
+            "message": "Reconcile pending launch"
+          }
+        }
+      }
+    }
   ]
 }

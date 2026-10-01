@@ -2509,3 +2509,15 @@ object with optional os/arch under agentPlatformRouting 1. An initial agent uses
 the outer workspace idempotency key and a derived initial-agent identity; no
 second independent workspace retry is created. Omission retains legacy behavior unless
 an existing specialist/workspace default applies; no manual dialog is required.
+
+For an effective placed initial agent under agentPlatformRouting 1, the
+[per-method launch response contract](../model-platform-routing.md#per-method-launch-responses)
+is the precise extension to initial-agent orchestration above: successful replies
+still require the real initialAgent and add a sibling initialAgentLaunch.
+If initial-agent admission is pending, uncertain or fails after workspace commit,
+return -32603 with the real workspaceId, outer idempotencyKey and derived child
+launch in error.data; never a post-effect -32602 or a fabricated AgentLite.
+The existing global workspace-create idempotency scope remains: parent retries
+reconcile the same workspace/initial-agent owner and never re-provision or resend.
+Terminal responses replay unchanged. All -32602 workspace rejections remain
+pre-side-effect; later capacity failure is diagnostic data inside the -32603.
