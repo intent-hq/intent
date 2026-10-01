@@ -40,7 +40,7 @@ Existing semantic fields take precedence over generic injection:
 
 - `crossWorkspace.readNote` and `crossWorkspace.listNotes` route by
   **`targetWorkspaceId`**, never the caller's workspace.
-- `search.messages`, `search.events` and `events.subscribe` use `workspaceId` as
+- `search.notes`, `search.messages`, `search.events` and `events.subscribe` use `workspaceId` as
   an actual filter. Only their already-scoped variants are prepared; a global
   query cannot acquire the focused workspace as a filter. `preferWorkspaceId`
   is only a ranking hint, never a routing field.
@@ -130,7 +130,7 @@ into wire methods.
 | `file.getAttachmentInfo` | Propagate | `workspaceId` | Required with `idempotencyKey`; also carry alongside `attachmentId` for workspace calls without changing that selector's lookup. |
 | `terminal.create`, `terminal.list`, `terminal.readOutput` | Propagate | `workspaceId` | Existing workspace terminal operations. |
 | `search.inFiles`, `search.fileNames`, `search.codebase` | Propagate | `workspaceId` | Existing scoped searches; preserve it for progress and cancellation. |
-| `search.messages`, `search.events`, `events.subscribe` | Propagate | `workspaceId` | Only the variant already filtered to one workspace; never inject a filter into a global query. |
+| `search.notes`, `search.messages`, `search.events`, `events.subscribe` | Propagate | `workspaceId` | Only the variant already filtered to one workspace; never inject a filter into a global query. `search.notes` scoping requires its indexed contract (§5.15); legacy daemons ignore that filter. |
 | `rules.list`, `rules.get`, `mcp.servers.list` | Propagate | `workspaceId` | Workspace reads, preserving current rule/configuration scope. Global settings flows stay direct-only. |
 | `mcp.servers.toggle` | Propagate | `workspaceId` | Workspace override variant only. |
 | `repoConfig.get`, `repoConfig.save`, `repoConfig.has`, `repoConfig.ensureDir`, `skill.list` | Propagate | `workspaceId` | Existing repository configuration and skill operations. |
@@ -159,8 +159,8 @@ into wire methods.
 | `mcp.servers.toggle` | Exclude | — | Global variant without `workspaceId`; never inject a workspace override. |
 | `rules.list`, `rules.get`, `mcp.servers.list` | Exclude | — | Global settings variants, including the frontend rules `"global"` placeholder. |
 | `unsloth.status`, `unsloth.stop` | Exclude | — | Shared daemon process management. |
-| `workspace.list`, `workspace.subscribe`, `workspace.unsubscribe`, `agent.listActive`, `agent.listInterrupted`, `agent.memoryUsage`, `agent.resolveInterrupted`, `metrics.getAllWorkspaceStats`, `stats.getUsage`, `stats.getRateHistory`, `search.notes`, `crossWorkspace.listSiblings` | Exclude | — | Global discovery, combined views or cross-backend batch operations require aggregation policy. |
-| `search.messages`, `search.events`, `events.subscribe`, `events.unsubscribe`, `search.cancel` | Exclude | — | Global/unscoped search or event registration and its teardown/cancellation. |
+| `workspace.list`, `workspace.subscribe`, `workspace.unsubscribe`, `agent.listActive`, `agent.listInterrupted`, `agent.memoryUsage`, `agent.resolveInterrupted`, `metrics.getAllWorkspaceStats`, `stats.getUsage`, `stats.getRateHistory`, `crossWorkspace.listSiblings` | Exclude | — | Global discovery, combined views or cross-backend batch operations require aggregation policy. |
+| `search.notes`, `search.messages`, `search.events`, `events.subscribe`, `events.unsubscribe`, `search.cancel` | Exclude | — | Global/unscoped search or event registration and its teardown/cancellation. |
 | `workspace.create`, `workspace.import.begin`, `workspace.import.chunk`, `workspace.import.commit`, `workspace.import.abort`, `workspace.findRepositories`, `workspace.initializeRepository`, `repo.list`, `repo.remove`, `repo.warmCache`, `git.clone`, `host.listDirectory`, `host.createDirectory`, `host.directoryStatus` | Exclude | — | Creation/provisioning/import needs a destination decision; no import routing or end-to-end transfer orchestration. |
 | `git.getBranches`, `git.pull`, `git.getRemoteUrl`, `git.branchStatus` | Exclude | — | Pre-workspace path operations without an originating workspace require destination selection. |
 | `client.hello`, `forward.create`, `forward.list`, `forward.close` | Exclude | — | Aggregator connection handshake, capabilities and port-forwarding/multiplexing contract are future work. |
