@@ -17,6 +17,11 @@ The 10.11 [script lifecycle candidate (§5.8)](./methods/scripts.md#saved-script
 implements archive/restore ahead of the monorepo pin; `scriptLifecycle: 1`
 advertises complete support, not catalog presence or a numeric version alone.
 
+The prepared [command creation default change (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
+changes omitted purpose for new commands to `oneOff`, retaining stored upsert and
+legacy hydration defaults. It changes no catalog names or counts and makes no
+shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
+
 The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a read-only list and subscription; `agentWorkers: 1` gates support.
 
