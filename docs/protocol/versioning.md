@@ -2,7 +2,7 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `10.11` — implemented script lifecycle candidate; not a shipped-version claim.
+**Documented version:** `11.1` — registered-root file reads, additive prepared contract; not a shipped-version claim.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
@@ -315,6 +315,19 @@ The protocol version is advertised in two places (10.11 candidate examples):
 
 - `client.hello` response: `{ protocolVersion: "10.11", server: { protocolVersion: "10.11", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
 - `system.status` response: `{ protocolVersion: "10.11", ... }`
+
+Version 11.1 is an **additive** minor bump over daemon 11.0: `file.read` and
+`file.readChunk` (§5.9) accept optional `gitRootId` to read working-tree content,
+including untracked files, from a root registered to `workspaceId`. Both methods
+reuse Git read-root ownership and blank-selector rules and existing lexical and
+canonical path confinement; unknown and foreign-workspace roots return the same
+`-32602` error. Unscoped workspace/agent reads and both response shapes are
+unchanged, including chunk offsets, lengths, EOF behavior and the 16 MiB decoded
+chunk limit. No write API gains root support, and no method or event is added.
+This contract is prepared against daemon main
+`2983c9afd`, which advertises 11.0; its documentation does not establish runtime
+support or a carrying release. Unrelated prepared extensions retain their own
+implementation status and capability gates.
 
 ### Compatibility Policy
 

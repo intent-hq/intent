@@ -11,8 +11,8 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | browser.docs | topic (req) | docs string — **not exposed**: no router arm; see the `browser.docs — not exposed` block below |
 | terminal.list | workspaceId (req) | `{ terminals: [{ id, name, cwd, isExecutingCommand }], daemonBootId }` (v4.0 envelope — the pre-4.0 bare terminals array is retired; monorepo#1334). `daemonBootId` is the daemon's per-boot identifier (UUID v4, minted once per daemon process; never persisted): stable within one daemon lifetime and fresh after a restart, so equal values across responses prove the same daemon lifetime and an **empty `terminals` list is authoritative** for that lifetime (not a restarted daemon that lost its PTYs). `name` is **always present** on each entry: the PTY's daemon-tracked display name when one was assigned at spawn (e.g. **"Setup Script"** for the workspace setup terminal, §5.1/§5.25), else the constant `"Terminal"`. The underlying PTY display name is optional spawn metadata (§5.13); the `name` field is not (clients may still fall back to `"Terminal"` defensively). The agent-facing MCP `ws.terminal.list` binding unwraps the envelope internally — agents still see the bare terminals array (§6.8) |
 | terminal.readOutput | workspaceId (req), terminalId (req), maxLines? | output buffer text |
-| file.read | path (req), gitRootId? (registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
-| file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the workspace rejected (-32603); missing file → -32603 per the file-op convention |
+| file.read | path (req), gitRootId? (v11.1 registered-root selector; see below) | file contents as a bare UTF-8 string — paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602) |
+| file.readChunk *(v6.18)* | path (req), offset (req; 0-based byte offset), length (req; positive, ≤ 16 MiB decoded), gitRootId? (v11.1; see below) | { content (base64), bytesRead, size } — one offset-windowed slice of the file's raw bytes (the binary counterpart of the UTF-8-only `file.read`; monorepo#2458). `size` is the file's total byte length; a window at/past EOF is `{ content: "", bytesRead: 0, size }` (never an error) and a window crossing EOF returns just the remaining bytes. Zero/over-cap `length` and directory paths are -32602 naming the cause; paths outside the selected root rejected (-32603); unknown/foreign gitRootId rejected (-32602); missing file → -32603 per the file-op convention |
 | file.write | path (req), content (req) | { ok, path, size } |
 | file.list | path? (default .) | [{ name, type }] |
 | file.delete | path (req) | { ok, path, deleted } |
@@ -25,10 +25,10 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | file.attachmentUpload.commit *(v6.16)* | uploadId (req), workspaceId? | { ok, path, fileName, size, attachmentId, mimeType?, uploadedAt, replayed? } — byte-shape-identical to a successful file.placeAttachment result: verifies staged bytes = sizeBytes with gap-free seqs from 0 and a matching SHA-256, then places through the same collision-safe placement + attachment-registry path. A failed commit leaves the session alive for retry or abort (and refreshes the idle clock, monorepo#2275); incomplete/gapped/mismatched payloads are -32602. A commit on an idle-expired session is -32602 ("expired … — begin a new upload"), and a commit racing an in-flight chunk (the pipelined chunk+commit race) is -32602 advising to wait for the chunk call to return and retry — the reserved-but-unwritten guise was formerly -32603 Internal; the partially-written guise was already -32602 and gains the retry advice (monorepo#2275). A session opened with an `idempotencyKey` (v9.13) binds the key to the committed attachment in the same store transaction as the registry row, so a lost commit reply is recovered through `file.getAttachmentInfo { workspaceId, idempotencyKey }` (the session itself is retired, so a second commit stays the pre-9.13 unknown-uploadId -32602). The commit runs the same keyed replay/conflict check as `file.placeAttachment`: when the key was meanwhile bound on another surface with a matching fingerprint (a same-key single-shot placement that landed first), the commit places nothing, retires the session, and answers that original placement's result plus the presence-detected `replayed: true`; a mismatched fingerprint is the `-32602` conflict and leaves the session alive |
 | file.attachmentUpload.abort *(v6.16)* | uploadId (req), workspaceId? | { uploadId, aborted } — drops the session and its staging directory; idempotent (an unknown id returns `aborted: false` instead of erroring) |
 
-**Reading a file in a registered Git root (additive prepared contract).**
+**Reading a file in a registered Git root (v11.1, additive prepared contract).**
 
-`file.read` accepts an additive optional `gitRootId` request field. With a
-nonblank selector, the daemon resolves the root registered to `workspaceId`
+`file.read` and `file.readChunk` accept an additive optional `gitRootId` request
+field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
 using the same ownership rules as the [Git read-root convention](./git.md).
 The selected root can be nested inside the primary workspace or registered
 outside it. `path` is relative to that root, and the read returns its current
@@ -42,15 +42,18 @@ and read behavior. A nonblank selector chooses the registered root instead
 of the agent root; it never falls back to the primary workspace on failure.
 
 The existing lexical and canonical path checks apply within the selected root:
-parent traversal that escapes it or an absolute path outside it is rejected, and a symlink
-whose resolved target escapes it is rejected (`-32603`). An absolute path
+parent traversal that escapes it or an absolute path outside it is rejected,
+and a symlink whose resolved target escapes it is rejected (`-32603`). An absolute path
 already inside the selected root remains subject to both checks. Selecting a
 registered external root does not grant access outside that root.
 
-The response is unchanged: a bare UTF-8 string, with no wrapper or root metadata.
-Existing size, binary, encoding and I/O-error handling is unchanged; this does
-not add a binary or chunked reader. Only `file.read` gains this selector:
-`file.readChunk` and file write/mutation APIs retain their existing scope.
+Both response shapes are unchanged: `file.read` returns a bare UTF-8 string;
+`file.readChunk` returns `{ content, bytesRead, size }`, with base64 `content`.
+Neither adds root metadata. Existing size, binary, encoding and I/O-error
+handling is unchanged. Chunk reads retain the 0-based byte `offset`, positive
+`length` capped at 16 MiB decoded, empty content and zero bytes at/past EOF,
+and a shortened final chunk when the window crosses EOF. No file write/mutation
+API gains root support; all other file APIs retain their existing scope.
 
 ```json
 // → request (read an untracked working-tree file)
