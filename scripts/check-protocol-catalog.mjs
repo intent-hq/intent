@@ -177,12 +177,23 @@ export function methodNamesInFirstCell(cell) {
   }
 }
 
+function tableCells(raw = '') {
+  if (!raw.startsWith('|')) return null;
+  const cells = [...raw.matchAll(/\|((?:[^|\\]|\\.)*)/g)].map((m) => m[1].trim());
+  if (cells.at(-1) === '') cells.pop(); // Optional trailing pipe, not an extra column.
+  return cells;
+}
+
 /** Collect `{ name, line }` for every method a docs/protocol/methods/*.md file documents. */
 export function collectDocumentedMethods(text) {
   const found = [];
   let inFence = false;
-  text.split('\n').forEach((raw, i) => {
+  let inFieldTable = false;
+  const lines = text.split('\n');
+  lines.forEach((raw, i) => {
     const line = i + 1;
+    const cells = tableCells(raw);
+    if (!cells) inFieldTable = false;
     if (/^\s*(```|~~~)/.test(raw)) {
       inFence = !inFence;
       return;
@@ -192,6 +203,18 @@ export function collectDocumentedMethods(text) {
       for (const m of raw.matchAll(HEADING_NAME_RE)) found.push({ name: m[1], line });
       return;
     }
+    const separator = tableCells(lines[i + 1]);
+    const validSeparator = separator?.length > 0 && separator.every((c) => /^:?-+:?$/.test(c));
+    // Explicit headers and complete adjacent tables are checker conventions.
+    // Partial separator-like body cells do not end an established Field table.
+    const completeHeader = validSeparator && separator.length === cells?.length
+      && cells.every(Boolean) && cells.some((c) => !/^:?-+:?$/.test(c));
+    if (cells && (/^(field|method)$/i.test(cells[0]) || completeHeader)) {
+      inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean)
+        && separator?.length === cells.length && validSeparator;
+    }
+    // Markdown body rows may have fewer or more cells than their header.
+    if (inFieldTable) return;
     const cell = raw.match(FIRST_CELL_RE);
     if (cell) for (const name of methodNamesInFirstCell(cell[1])) found.push({ name, line });
   });

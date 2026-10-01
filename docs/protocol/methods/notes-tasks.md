@@ -322,6 +322,14 @@ new clients accept their absence from old hosts and legacy rows, keep the label,
 and show qualified identity as unknown. This adds no RPC, capability or authority
 flag. Component conformance cases are in [§5.49](./shared-host-membership.md#required-behavioral-conformance).
 
+**Deletion notifications.** A successful `comment.delete` removes only a comment
+belonging to the supplied workspace and note, then emits durable
+`comment:deleted { noteId, commentId, threadId }` (§6.5). Failed deletion emits
+nothing. The comment channel re-reads a surviving thread, including its count,
+latest-author summary and remaining comments, or emits `removedIds: [threadId]`
+when the final comment is gone (§6.9). Deleting a root while replies remain keeps
+the original thread ID. Authorship on surviving comments is preserved.
+
 #### Anchoring and updates
 
 **Anchor resilience on note edits (Audit D H1+M1).** `comment.add` embeds
