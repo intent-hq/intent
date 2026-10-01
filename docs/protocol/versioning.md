@@ -4,6 +4,16 @@
 
 **Documented version:** `10.11` — implemented script lifecycle candidate; not a shipped-version claim.
 
+**Private nodeProtocol 3 — prepared capture contract.** This is separate from the
+public documented version above. The [private capture agreement](./node-link.md#private-checkpoint-capture)
+adds bounded checkpoint registration and exact commit requests using unchanged
+checkpointFormat 1, journalFormat 1 and Git Stage framing. Existing private version-2
+lifecycle/read semantics carry forward under explicit supported `{2,3}` gates;
+new capture RPCs require exactly 3. Unsupported/future versions fail closed. These
+docs do not advertise runtime support, broaden public catalogs or qualify a
+listener. Additive docs precede consumer merges/acceptance; authorized local work
+and draft preparation may proceed in parallel.
+
 **Version 10.11 — script lifecycle (additive, implemented candidate).** The
 [script lifecycle extension (§5.8)](./methods/scripts.md#saved-scripts-and-one-off-history-1011-implemented-candidate)
 adds two router methods (`script.archive`, `script.restore`) and additive

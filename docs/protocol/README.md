@@ -32,6 +32,14 @@ capabilities. Its [JSON lifecycle scenarios](./fixtures/nodes/lifecycle.json) ar
 prepared request/result/error and state assertions, not an executed adapter,
 native test result or listener qualification. Runtime acceptance requires separate
 component implementation and verification.
+The [private capture agreement](./node-link.md#private-checkpoint-capture) adds
+nodeProtocol 3 registration/Stage/commit semantics with bounded current Store
+attachment reuse. Version 2 lifecycle/read behavior carries forward explicitly;
+new capture methods require exactly 3. Public protocol and checkpoint/journal
+formats stay unchanged. [Capture fixtures](./fixtures/nodes/checkpoint-capture.json)
+and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
+structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
+`node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.
 
 ### §5.x subsections (`methods/`)
 
