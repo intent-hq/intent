@@ -493,6 +493,20 @@ for (const [shape, row] of [
   });
 }
 
+for (const [position, prefix] of [
+  ['first', ''],
+  ['later', '| details.branch | Known branch. |\n'],
+]) {
+  test(`collectDocumentedMethods retains field context with a hyphen in the ${position} body row`, () => {
+    const doc = `| Field | Meaning |\n| --- | --- |\n${prefix}| details.source | - |\n| details.target | Known target. |`;
+    assert.deepEqual(collectDocumentedMethods(doc), []);
+    const next = `${doc}\n| Unknown | Result |\n| --- | --- |\n| unknown.method | Result. |`;
+    assert.deepEqual(collectDocumentedMethods(next), [
+      { name: 'unknown.method', line: next.split('\n').length },
+    ]);
+  });
+}
+
 test('collectDocumentedMethods preserves unknown methods under unknown or malformed headers', () => {
   for (const header of [
     '| Method | Result |\n| --- | --- |',

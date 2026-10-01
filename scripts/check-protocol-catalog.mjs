@@ -204,11 +204,17 @@ export function collectDocumentedMethods(text) {
       return;
     }
     const separator = tableCells(lines[i + 1]);
+    const validSeparator = separator?.length > 0 && separator.every((c) => /^:?-+:?$/.test(c));
+    // A partial separator can signal a malformed header, but a hyphen description
+    // after a separator row or a dotted field row is still ordinary table data.
+    const headerLike = cells && !cells.every((c) => /^[-:]+$/.test(c))
+      && methodNamesInFirstCell(cells[0]).length === 0;
     // Only an explicit Field header with a valid, same-width separator opts out.
     // A new table (even an unknown/malformed header) must end the previous opt-out.
-    if (cells && (/^field$/i.test(cells[0]) || separator?.some((c) => /^[-:]+$/.test(c)))) {
+    if (cells && (/^field$/i.test(cells[0]) || validSeparator
+      || (headerLike && separator?.some((c) => /^[-:]+$/.test(c))))) {
       inFieldTable = /^field$/i.test(cells[0]) && cells.every(Boolean)
-        && separator?.length === cells.length && separator.every((c) => /^:?-+:?$/.test(c));
+        && separator?.length === cells.length && validSeparator;
     }
     // Markdown body rows may have fewer or more cells than their header.
     if (inFieldTable) return;
