@@ -8,21 +8,32 @@ at implementation time. Documentation and synthetic fixtures do not claim shipme
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
+**Documented version:** `11.3` — workspace specialist memory, additive implementation candidate; not a shipped-version claim.
 
-**Prepared self-contained script changes — additive, not shipped.**
+**Version 11.3 — manual specialist memory.** `agent.getCreationPreferences`
+returns the last explicitly remembered specialist for one workspace, with absence
+and explicit General distinguished. `agent.create.rememberSpecialist` and
+`agent.update.changes.rememberSpecialist` opt successful manual changes into atomic
+persistence. No provider/model/effort memory is added. Older clients omit the flag;
+new clients tolerate older daemons lacking the read method. See [manual specialist
+memory](./methods/agents.md#manual-specialist-memory). The platform launch
+below remains prepared, independently capability-gated; advertising 11.3
+does not claim platform scheduling or any other prepared feature is implemented.
+
+**Version 11.2 — self-contained script changes.**
 [`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
 adds optional `data.script` as a complete list-row snapshot on create/update,
 including runtime, archive metadata and latest result. Removal keeps its existing
 ID-only shape. Consumers presence-detect each valid snapshot and apply it without
 refetching; older ID-only create/update events retain invalidation fallback.
 Omitted fields inside a present row clear previous values, unlike absence of the
-row itself. No new methods, event names, capability or wire revision are allocated;
-`scriptLifecycle: 1` alone does not identify this extension. Allocate the next
-minor against daemon main during implementation. Docs lead both consumers, daemon
-lands before frontend, and initial/reconnect reconciliation remains necessary.
+row itself. Daemon main implements this additive extension at public version 11.2;
+no new methods, event names, or capability are allocated. `scriptLifecycle: 1` alone
+does not identify this extension. Initial/reconnect reconciliation remains necessary.
 
-**Prepared 11.2 — single-node platform launch.** The
+**Prepared single-node platform launch — reallocate before implementation.** Its
+earlier 11.2 reservation was superseded by implemented script lifecycle snapshots;
+it does not claim platform support at that version. The
 [platform contract](./model-platform-routing.md) widens placement with independent
 optional OS/architecture, defines one named node with multi-agent capacity and
 atomic launch identity, and adds safe model discovery/errors. Complete
