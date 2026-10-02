@@ -775,6 +775,18 @@ it must not consume the retained prefix/suffix or reset the editor's identity.
 Clients keep the exact local unsaved draft stable when a queue snapshot changes.
 Finishing the edit with `editing: false` keeps the existing self-drain behavior.
 
+When retained prefix/suffix contributions exist, an `editing: true` acquisition
+or reaffirmation must supply the exact represented held draft baseline: the
+canonical content excluding those tracked surrounding contributions. A combined
+queue snapshot or a changed draft is not a replacement baseline. A mismatch
+returns the `-32602` queued-edit conflict described below without changing the
+entry, hold or retained contributions. Existing editors can still save or cancel
+their draft; an update omitting `editing` preserves the hold bookkeeping. Text
+occurrences are never deduplicated: separately submitted identical text remains
+distinct input. A rejected acquisition retains the client's draft/input and
+shows a recoverable error, without reporting a successful hold or allowing an
+unsafe save.
+
 **Authoritative editor mapping (additive; docs lead implementation).**
 `QueuedMessage.editingMessageId?: string` identifies the original held editor
 message, not a second queue row. It is a non-empty string on every
@@ -817,7 +829,8 @@ this does not make them freely editable. Deleting a row likewise never retargets
 its draft to an unrelated same-author row.
 
 Multiple same-principal clients editing an **unchanged canonical identity** retain
-the existing shared hold and last-save-wins semantics. A migrated identity has a
+the existing compatible shared hold and last-save-wins semantics, subject to the
+baseline check above when surrounding contributions exist. A migrated identity has a
 narrower lifetime: after one client releases its hold, another client's save via
 the old migrated alias conflicts instead of replacing the full combined content.
 That client retains its draft and refreshes before a deliberate reapply. There is
@@ -914,6 +927,8 @@ evidence.
 | Hold A2, restore undelivered A1 into it, append A3, save/cancel using A2 | One A1 row maps `editingMessageId: A2`; exact local draft survives; A1/A3 contributions remain once; authorization checks A1's real author |
 | Two distinct held rows combine while their editors contain unsaved text | Oldest held identity remains mapped; unmapped local draft is recoverable under its original ID; unsafe save is blocked by client and daemon, even for its author |
 | Same principal, two clients editing the same unchanged canonical identity | Shared hold and existing last-save-wins behavior; repeated holds do not consume surrounding text |
+| Client A holds `one`, `two` appends, client B acquires using combined `one\n\ntwo`; repeat with stale B snapshot after `three` appends | B receives `-32602` queued-edit conflict without mutation; B's input stays recoverable and no successful hold is reported; A can still save/cancel while preserving each append once |
+| Reaffirm a held baseline after identical text appends more than once; also update with `editing` omitted | Exact baseline reaffirmation remains valid and bookkeeping survives omitted `editing`; save/cancel retains every distinct identical contribution without occurrence deduplication |
 | Two clients share migrated A2 alias; first client releases, second saves | Alias field is absent after release; second save returns the stale-edit conflict without mutation and keeps the local draft recoverable |
 | New client sees a migrated held row without an existing mapped draft | New edit initiation is disabled until release; existing correctly mapped local editors continue |
 | Restart while a migrated edit hold exists | Editing hold and editor alias reset together; an old absorbed edit alias cannot overwrite the combined canonical entry |
