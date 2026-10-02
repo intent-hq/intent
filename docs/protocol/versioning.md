@@ -2,7 +2,19 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `10.11` — implemented script lifecycle candidate; not a shipped-version claim.
+**Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
+
+**Prepared 11.2 — single-node platform launch.** The
+[platform contract](./model-platform-routing.md) widens placement with independent
+optional OS/architecture, defines one named node with multi-agent capacity and
+atomic launch identity, and adds safe model discovery/errors. Complete
+old placement objects and no-policy omission remain valid. Advertise
+`agentPlatformRouting: 1` only with `agentNodes: 1` and complete implementation;
+clients cannot infer support from the numeric version. No new methods/events or
+private node/checkpoint/journal versions are allocated. The prior prepared 11.1
+registered-root file-read contract remains independent and unchanged. Additive
+docs precede consumer merges; recheck allocations against main before implementation
+merge, and land daemon protocol consumers before frontend consumers.
 
 **Private nodeProtocol 4 — prepared assignment enrollment.** This is separate from
 public protocol versioning. [Trusted enrollment](./node-link.md#trusted-assignment-enrollment)
@@ -328,6 +340,19 @@ The protocol version is advertised in two places (10.11 candidate examples):
 
 - `client.hello` response: `{ protocolVersion: "10.11", server: { protocolVersion: "10.11", ... }, ... }` — the top-level `protocolVersion` is an explicit copy of `server.protocolVersion` so clients can version-check without digging into the `server` block (§5.17).
 - `system.status` response: `{ protocolVersion: "10.11", ... }`
+
+Version 11.1 is an **additive** minor bump over daemon 11.0: `file.read` and
+`file.readChunk` (§5.9) accept optional `gitRootId` to read working-tree content,
+including untracked files, from a root registered to `workspaceId`. Both methods
+reuse Git read-root ownership and blank-selector rules and existing lexical and
+canonical path confinement; unknown and foreign-workspace roots return the same
+`-32602` error. Unscoped workspace/agent reads and both response shapes are
+unchanged, including chunk offsets, lengths, EOF behavior and the 16 MiB decoded
+chunk limit. No write API gains root support, and no method or event is added.
+This contract is prepared against daemon main
+`2983c9afd`, which advertises 11.0; its documentation does not establish runtime
+support or a carrying release. Unrelated prepared extensions retain their own
+implementation status and capability gates.
 
 ### Compatibility Policy
 
