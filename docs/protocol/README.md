@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `11.3` (workspace specialist memory: additive implementation candidate; not a shipped-version claim). The 11.2 single-node platform launch remains prepared and capability-gated. Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `11.3` (workspace specialist memory: additive implementation candidate; not a shipped-version claim). The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -62,6 +62,7 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
+| §5.8a Script run monitors (prepared) | [methods/script-monitors.md](./methods/script-monitors.md) |
 | §5.9 `browser.*`, `terminal.*`, `file.*` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.10 `event.*` (query/aggregation) | [methods/events-query.md](./methods/events-query.md) |
 | §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` | [methods/misc-namespaces.md](./methods/misc-namespaces.md) |
@@ -104,6 +105,7 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.48 Multiplayer — `principal.*` / `workspace.invite.*` / `invite.*` / `workspace.members.*` (principals, invite links, the `/invite` proof join, membership, the collaborator allowlists) | [methods/multiplayer.md](./methods/multiplayer.md) |
 | §5.49 Shared host membership, scoped invitations, collaboration identity and personal pairing | [methods/shared-host-membership.md](./methods/shared-host-membership.md) |
 | §5.50 Static/local nodes, placement, hub merge/discard/publish and CoW retirement (prepared) | [methods/nodes.md](./methods/nodes.md) |
+| §5.51 Desktop control (prepared) | [methods/desktop.md](./methods/desktop.md) |
 | MCP `ws.*` binding signature index (generated; not wire-routable) | [methods/mcp-bindings.md](./methods/mcp-bindings.md) |
 
 `make check-protocol-catalog` (run by CI's `docs-check` job) enforces that the [05-method-catalog.md](./05-method-catalog.md) tables, the method tables in `methods/*.md`, and intentd's `intent-transport` catalog stay in sync (read from the `packages/intentd` checkout; like `check-event-catalog` and `check-protocol-field-parity`, the run names the checkout and the recorded pin on stdout and warns on stderr when they differ): every method documented in a `methods/*.md` table must appear in the catalog, and every method the pinned intentd catalog dispatches must have a catalog entry. The docs lead the pin: document a new method here first — a `methods/*.md` table row plus its catalog entry in one monorepo change; the checker only warns while the pinned `catalog.rs` does not carry it yet — then merge the intentd PR, and the automatic submodule bump passes once both exist. The reverse order fails: a pinned method with no docs row is a CI error, and once the `CI Gate` check is required it holds the rolling bump PR at the merge queue until the docs row lands. The same checks also run upstream: every intentd and cloudlands-fe PR calls the monorepo's reusable `.github/workflows/consumer-checks.yml` (`monorepo-consumer-checks`) with its own head in place of the pin, so a missing docs row is red on that PR before it merges, not on the bump afterwards.
@@ -290,3 +292,10 @@ The protocol version is a `major.minor` pair: **additive** changes (new methods,
 - **Browser-tab action-result contract** (§5.9) is mirrored on three surfaces: the `errorCode` bullet list in [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) (canonical), the cloudlands-fe executor's `errorCode` union (`browser-action-executor.ts` / `embedded-browser-cdp-service.ts`), and intentd's `ws.browser.docs("overview")` text (`bindings/browser_docs/overview.md`). `make docs-check` cross-checks the tokens and the `displayed` field across all three. The docs lead the pin for additions: add the canonical bullet first — the check only warns while a pinned component does not carry the token yet — then land the component PRs; an FE union/alias token absent from the canonical documentation is an error; the intentd overview is checked only for documented tokens it lacks. For a removal the order reverses: drop the token from the components first (the check warns about the now-extra bullet) and remove the bullet after the bump. A rename is an addition: document the new token first (keep the old bullet), rename in the components, then drop the old bullet after the bump.
 
 The shared-host extension is [§5.49 Shared host membership](./methods/shared-host-membership.md): roles, scoped invitations, collaboration credential purpose, personal pairing, authenticated devices and client compatibility. Its behavioral conformance table is the implementation test contract for desktop, daemon and iOS consumers.
+
+### Prepared desktop control
+
+[§5.51 Desktop control](./methods/desktop.md) defines capability-gated macOS and
+Windows sessions, agent startControl/endControl, local Stop, consent and native
+execution. Its [static fixtures](./fixtures/desktop-control/contract.test.mjs)
+are contract checks, not proof of packaged native support.
