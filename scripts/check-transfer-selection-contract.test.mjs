@@ -16,6 +16,7 @@ import {
   resolveFixtureRoot,
 } from './check-transfer-selection-contract.mjs';
 import { cleanNodeEnv } from './test-env.mjs';
+import * as shared from './check-transfer-selection-contract.mjs';
 
 const root = fileURLToPath(new URL('../docs/protocol/fixtures/transfer-selection/', import.meta.url));
 const script = fileURLToPath(new URL('./check-transfer-selection-contract.mjs', import.meta.url));
@@ -66,6 +67,45 @@ async function fixture(t, generated = syntheticGenerated()) {
   if (generated) await fs.writeFile(path.join(dir, 'public-sessions.json'), JSON.stringify(generated));
   return dir;
 }
+
+test('golden selection comes from a strict source declaration, never response contents', async (t) => {
+  const dir = await fixture(t);
+  const component = path.join(dir, 'daemon');
+  await fs.mkdir(path.join(component, 'scripts'), { recursive: true });
+  const marker = path.join(component, 'scripts/transfer-selection-expectation.json');
+  const select = () => shared.resolveGoldenPath({ fixtureRoot: dir, intentdRoot: component });
+  assert.equal(await select(), path.join(dir, 'public-sessions.json'));
+  await fs.writeFile(marker, JSON.stringify({ version: 'desktop-control-v1' }));
+  assert.equal(await select(), path.join(dir, 'public-sessions.desktop-control-v1.json'));
+  for (const value of ['{', '{}', 'null', '{"version":1}', '{"version":"unknown"}', '{"version":"../public-sessions"}', '{"version":"desktop-control-v1","file":"public-sessions.json"}']) {
+    await fs.writeFile(marker, value);
+    await assert.rejects(select(), /expectation|version|JSON/);
+  }
+  await fs.rm(marker);
+  await fs.symlink(path.join(dir, 'missing-declaration'), marker);
+  await assert.rejects(select(), /expectation must be a regular file/);
+});
+
+test('selected desktop golden cannot fall back to legacy or accept rehashed schema drift', async (t) => {
+  const dir = await fixture(t);
+  const desktop = syntheticGenerated();
+  for (const row of desktop.cases) row.session.harnessFeatures.desktopControl = true;
+  rehash(desktop);
+  const selected = path.join(dir, 'public-sessions.desktop-control-v1.json');
+  const fresh = path.join(dir, 'fresh.json');
+  await fs.writeFile(fresh, JSON.stringify(desktop));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh }), /required fixture/);
+  await fs.writeFile(selected, JSON.stringify(desktop));
+  await inspectFixtures({ fixtureRoot: dir, generated: selected, fresh });
+  await fs.writeFile(fresh, JSON.stringify(syntheticGenerated()));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh }), /stale/);
+  await fs.writeFile(fresh, JSON.stringify(desktop));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh, intentdRevision: 'b'.repeat(40) }), /intentdRevision/);
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh, generatorSha256: 'b'.repeat(64) }), /generatorSha256/);
+  desktop.cases[0].session.extraField = true;
+  await fs.writeFile(fresh, JSON.stringify(rehash(desktop)));
+  await assert.rejects(inspectFixtures({ fixtureRoot: dir, generated: selected, fresh }), /stale/);
+});
 
 test('the maintained inputs cover all 32 stable cases', () => {
   assertContract(contract);
@@ -277,10 +317,17 @@ test('CLI rejects empty output paths and inputs-only options supplied with empty
 
 test('CLI works outside the monorepo and never silently accepts a missing or malformed file', async (t) => {
   const dir = await fixture(t);
+  await fs.copyFile(path.join(dir, 'public-sessions.json'), path.join(dir, 'public-sessions.desktop-control-v1.json'));
   const env = { ...cleanNodeEnv(), TRANSFER_SELECTION_FIXTURE_ROOT: dir };
   const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: os.tmpdir(), env, encoding: 'utf8' });
   assert.equal(run().status, 0);
   assert.match(run().stdout, /freshness not checked/);
+  const desktopPath = path.join(dir, 'public-sessions.desktop-control-v1.json');
+  await fs.rm(desktopPath);
+  assert.match(run().stderr, /required fixture.*desktop-control-v1/);
+  await fs.writeFile(desktopPath, '{');
+  assert.match(run().stderr, /invalid JSON.*desktop-control-v1/);
+  await fs.copyFile(path.join(dir, 'public-sessions.json'), desktopPath);
   await fs.writeFile(path.join(dir, 'fresh.json'), JSON.stringify(syntheticGenerated()));
   assert.equal(run('--fresh', path.join(dir, 'fresh.json')).status, 0);
   assert.match(run('--fresh', path.join(dir, 'missing.json')).stderr, /required fixture.*missing.json/);
