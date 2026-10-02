@@ -141,7 +141,7 @@ test('capture and click fixtures exercise mixed DPI, negative origins, right cli
   const { displays, layoutId } = capture.result;
   assert.equal(new Set(displays.map(d => d.displayId)).size, displays.length);
   assert.ok(displays.some(d => d.originX < 0));
-  assert.ok(new Set(displays.map(d => d.scaleFactor)).size > 1);
+  assert.ok(new Set(fixture.displaySelection.lists.at(-1).result.displays.map(d => d.scaleFactor)).size > 1);
   for (const d of displays) {
     assert.ok(Number.isInteger(d.width) && d.width > 0);
     assert.ok(Number.isInteger(d.height) && d.height > 0);
@@ -394,7 +394,7 @@ test('disabled desktop denies every acquisition and action while cleanup remains
   const { disabled } = fixture.agentFeature;
   assert.equal(disabled.namespaceAdvertised, false);
   assert.equal(disabled.operationalHelpAvailable, false);
-  for (const method of ['startControl', 'screenshot', 'click', 'type', 'keypress', 'scroll', 'drag']) {
+  for (const method of ['startControl', 'listDisplay', 'screenshot', 'click', 'type', 'keypress', 'scroll', 'drag']) {
     const c = disabled.calls.find(c => c.method === method);
     assert.ok(c, method);
     assert.equal(c.forgedDispatchDenied, true);
@@ -468,4 +468,69 @@ test('primary sidebar selection remains discoverable while machine labels follow
     assert.equal(c.expectLabelVisible, Boolean(c.activeClient || c.agentTabHost), c.id);
     assert.equal(c.expectLabelClient, c.activeClient ?? c.agentTabHost ?? null, c.id);
   }
+});
+
+test('display enumeration is a gated metadata-only binding and screenshots no longer capture every display', () => {
+  assert.ok(doc.includes('ws.desktop.listDisplay()'));
+  assert.ok(!doc.includes('Capture every attached supported display'));
+  const { lists, gateFailures } = fixture.displaySelection;
+  assert.deepEqual(lists.map(c => c.result.displays.length), [0, 1, 2]);
+  for (const c of lists) {
+    assert.equal(typeof c.result.layoutId, 'string');
+    assert.equal(new Set(c.result.displays.map(d => d.displayId)).size, c.result.displays.length);
+    for (const d of c.result.displays) {
+      assert.ok(Number.isInteger(d.width) && d.width > 0);
+      assert.ok(Number.isInteger(d.height) && d.height > 0);
+      assert.ok(Number.isFinite(d.originX) && Number.isFinite(d.originY));
+      assert.ok(Number.isFinite(d.scaleFactor) && d.scaleFactor > 0);
+      for (const key of ['assetId', 'url', 'mimeType', 'image']) assert.equal(Object.hasOwn(d, key), false);
+    }
+    assert.deepEqual(c.expectEffects, { capture: 0, input: 0, assets: 0, pulse: 0 });
+  }
+  for (const c of gateFailures) {
+    assert.equal(c.expectMetadataDispatch, 0, c.id);
+    assert.equal(c.expectAutoStart, false, c.id);
+  }
+});
+
+test('all display-coordinate actions require explicit selection on multiple monitors and reject before effects', () => {
+  const { selectionError } = fixture.displaySelection;
+  const cases = fixture.displaySelection.cases.flatMap(c => c.actions.map(action => ({ ...c, action })));
+  assert.equal(selectionError.code, -32602);
+  assert.equal(selectionError.data.code, 'desktop-display-selection-required');
+  assert.equal(selectionError.data.execution, 'not_started');
+  assert.ok(selectionError.data.detail.includes('ws.desktop.listDisplay()'));
+  assert.ok(selectionError.data.detail.includes('ask the user'));
+  for (const c of cases) {
+    const available = c.displays;
+    const layoutStale = c.suppliedLayout && c.suppliedLayout !== c.layout;
+    const code = layoutStale ? 'desktop-stale-layout'
+      : available.length === 0 ? 'desktop-display-unavailable'
+      : c.displayId === undefined && available.length > 1 ? 'desktop-display-selection-required'
+      : c.displayId !== undefined && !available.includes(c.displayId) ? 'desktop-display-unavailable'
+      : c.changedBeforeExecute ? 'desktop-stale-layout' : undefined;
+    assert.equal(c.expectError, code, c.id);
+    if (code) {
+      assert.deepEqual(c.expectEffects, { capture: 0, input: 0, assets: 0, pulse: 0 }, c.id);
+      assert.equal(c.expectFallback, false, c.id);
+    } else {
+      assert.equal(c.expectSelectedId, c.displayId ?? available[0], c.id);
+      assert.equal(c.expectSelectedOnly, true, c.id);
+    }
+  }
+  for (const action of ['screenshot', 'click', 'scroll', 'drag']) {
+    assert.ok(cases.some(c => c.action === action && c.expectError === 'desktop-display-selection-required'));
+    assert.ok(cases.some(c => c.action === action && c.expectSelectedId && c.displayId === undefined));
+  }
+});
+
+test('explicit screenshots capture one selected monitor while mixed-DPI metadata describes the whole layout', () => {
+  const c = byId('mixed-dpi-screenshot');
+  assert.equal(c.call.args.displayId, 'display-left');
+  assert.deepEqual(c.expect.result.displays.map(d => d.displayId), ['display-left']);
+  const { displays, layoutId } = fixture.displaySelection.lists.at(-1).result;
+  assert.equal(c.expect.result.layoutId, layoutId);
+  assert.ok(new Set(displays.map(d => d.scaleFactor)).size > 1);
+  assert.ok(displays.some(d => d.displayId === 'display-main'));
+  assert.ok(displays.some(d => d.originX < 0));
 });
