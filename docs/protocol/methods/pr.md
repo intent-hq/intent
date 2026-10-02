@@ -185,11 +185,11 @@ or revisions. Missing `ancestry` in an older payload/baseline decodes to unknown
 not zero; missing `branchUpdateRequired` decodes to unknown, not false. Both
 fields are carried unchanged in the full `MergeRequirements` and reduced
 `PrMonitor.lastSnapshot` shapes returned by snapshot/registration and list
-reads. The `prMonitor:*` lifecycle event shapes remain unchanged (§6.9): events
-identify the monitor, and `prMonitor:changed` carries change-summary text.
-Clients refetch `prMonitor.list` after those notifications to obtain the updated
-checklist. These fields are not added to lifecycle events, `pr.status` or
-`GithubPullRequest`.
+reads. The `prMonitor:*` lifecycle event shapes remain unchanged (§6.5): events
+carry monitor identity and lifecycle state, and `prMonitor:changed` also carries
+change-summary text. Clients refetch `prMonitor.list` after those notifications
+to obtain the updated reduced `lastSnapshot`, including these fields. These
+fields are not added to lifecycle events, `pr.status` or `GithubPullRequest`.
 
 **Forge provenance.** `branchUpdateRequired: true` follows the same positive
 BEHIND evidence as the legacy boolean. False requires a positive merge-state
