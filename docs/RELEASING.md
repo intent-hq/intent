@@ -28,7 +28,8 @@ manual-dispatch overrides. Release automation does not refresh the PR branch;
 release-plz or release-please owns that content.
 
 The workflow uses the classifier from its trusted workflow revision, never a
-script from the PR head, to inspect the diff. Only release metadata qualifies:
+script from the PR head, to inspect the diff. Scheduled and main-push runs use
+`main`; manual dispatch uses the selected workflow ref. Only release metadata qualifies:
 intentd permits independent crate version changes, matching local dependency
 requirements and workspace-package lockfile versions, plus harmless TOML
 formatting/comments; cloudlands-fe permits the package version and matching
