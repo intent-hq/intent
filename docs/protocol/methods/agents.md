@@ -704,6 +704,30 @@ human attribution. Legacy unstamped entries use the existing safe authorship
 fallback; an unresolved or imported human never becomes automatic merely because
 its current-local principal cannot be established.
 
+**Archive wake eligibility.** The surviving entry's `queuedAt` remains its original
+enqueue time, including when a fresh human submission is appended after archival.
+The daemon persists an optional latest trusted human-submission timestamp
+(`latest_human_submission_at` internally; no new wire field) separately from the
+original enqueue time. A fresh human entry may use its server-assigned `queuedAt`
+without a separate timestamp until a merge needs a distinct time. When the optional
+timestamp is absent, including on legacy entries, `queuedAt` is the effective
+human-submission time; a present but malformed timestamp fails the eligibility
+check instead of falling back. Append and handback coalescing retain the latest
+valid submission time across the combined human contributions. Automatic input
+cannot advance or supply this signal. Queue persistence, restart, edits and
+failure/interrupt handbacks preserve it rather than replacing it with recovery
+time. Replaying a pending submission's existing message ID is deduplicated before
+a new timestamp is assigned, so a duplicate cannot mint fresh archive eligibility.
+
+The archived-workspace gate compares that effective human-submission time with
+`archivedAt`, while still requiring a ready user-origin entry and the other drain
+gates (§5.1). Thus A1 queued before archive plus same-author A2 submitted after
+archive remains one entry with A1's identity and `queuedAt`, yet qualifies to wake
+the workspace through A2's fresh human action. A pre-archive entry restored or
+appended to by automatic activity alone does not qualify. This signal controls
+archive eligibility only; it does not change delivery position, the original
+queue-wait timestamp, arrival-order barriers or held/imported-entry restrictions.
+
 **Attachments and metadata.** Append `imageBlocks` and `fileBlocks` in submission
 order, keeping each reference/block intact and preserving the original author's
 principal stamp. A different interrupt priority does not move the surviving entry
@@ -893,6 +917,12 @@ evidence.
 | Two clients share migrated A2 alias; first client releases, second saves | Alias field is absent after release; second save returns the stale-edit conflict without mutation and keeps the local draft recoverable |
 | New client sees a migrated held row without an existing mapped draft | New edit initiation is disabled until release; existing correctly mapped local editors continue |
 | Restart while a migrated edit hold exists | Editing hold and editor alias reset together; an old absorbed edit alias cannot overwrite the combined canonical entry |
+| A1 queued, workspace archived, same-author A2 appended | One entry keeps A1 identity/queuedAt but its latest-human-submission time qualifies it for archive wake once ready |
+| Post-archive human append followed by handback, failure recovery or restart | Latest human signal survives coalescing and durable recovery; recovery does not replace it with the current time |
+| Only pre-archive human input plus post-archive automatic activity, including forged metadata | Automatic input neither supplies nor advances the human signal; workspace remains parked |
+| Fresh or legacy user entry without the optional latest-human-submission timestamp | Original queuedAt is the effective submission time; no implicit fresh submission is minted on restart |
+| Edit or duplicate retry of a pre-archive pending message ID | Original human signal remains unchanged; no fresh archive eligibility is minted |
+| Present malformed latest-human-submission timestamp | Entry does not qualify; a valid queuedAt cannot override the malformed present timestamp |
 | Foreign caller, displaced alias, removed survivor, or deleted original editor row | No unauthorized mutation, draft resurrection or guessed migration; a stale alias never targets an unrelated row |
 | Persisted failed-turn row restored beside fresh human input | Delivered history stays immutable and cannot become a merge target or a skipped human barrier |
 
@@ -1265,10 +1295,14 @@ the pending-questions derivation, and queue persistence/rehydration are all unto
 - **Archived workspace.** The §5.1 archived gate is the one origin-aware drain gate
   ([intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587); fixes
   intent-hq/intent#3883): while the workspace is archived the drain proceeds only when a
-  ready **user-origin** entry queued at or after the archive (`queuedAt >= archivedAt`)
-  exists — a user send made INTO the archived workspace is the explicit resurrection
-  signal; a pre-archive parked user entry does not qualify, and with no qualifying entry
-  everything stays parked (no regression on the intentd#1293 archive/auto-unarchive
+  ready **user-origin** entry carries a trusted human submission at or after the
+  archive. Compare its durable latest-human-submission time with `archivedAt`,
+  falling back to original `queuedAt` when the optional timestamp is absent
+  ([archive wake eligibility](#shared-pending-human-queue), above). A fresh human
+  append qualifies even when the survivor's original `queuedAt` predates archival.
+  A user send made INTO the archived workspace is the explicit resurrection signal;
+  a pre-archive entry with no new human submission does not qualify, and without a
+  qualifying entry everything stays parked (no regression on the intentd#1293 archive/auto-unarchive
   loop fix). In `"all"` mode the flush then carries EVERY ready entry — parked
   consolidated `workspace_archive_wake` notice for cancelled hooks / PR monitors
   included (§5.1 archive active-work teardown) — FIFO in the user-led combined turn, whose claim
