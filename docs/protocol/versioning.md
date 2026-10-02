@@ -20,10 +20,11 @@ clients reconcile queue events and do not remove entries for `queued: true`.
 The candidate implements **404 / 349 / 55** (dispatchable / router / fast path);
 the documented surface, including prepared additions, is **419 / 364 / 55**.
 No new event names are added. Older daemons reject the method; clients must not
-fall back to repeated single-entry interrupts. These additive docs land before
-the component PR, with daemon-first component merge ordering and automatic pin
-advancement. The retired batching-setting documentation is removed only after
-the daemon change and its pin advance.
+fall back to repeated single-entry interrupts. Ready queued messages now always
+batch under the ordinary eligibility rules. The retired `agents.flushQueuedMessages`
+setting is absent from the catalog; legacy config values and older client writes
+are tolerated without changing delivery. Script-monitor wakes retain individual
+admission and lifecycle fencing (§5.5).
 
 **Version 13.0 — removal of deprecated `git.commit`.** This version follows the
 protocol-12 retirements. It makes no carrying desktop release claim.
