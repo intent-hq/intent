@@ -695,17 +695,18 @@ or reorder the entries around it. Captured interrupt carry-over remains separate
 from newly appended text so already persisted content is not written again.
 
 Per-message metadata differences do not split otherwise mergeable human input.
-The survivor keeps its top-level `messageMetadata`. When the captured metadata
-values differ, the additive `messageMetadata.mergedMessageMetadata` array records
-the original survivor metadata followed by appended metadata in arrival order.
-Equal metadata may stay represented by the survivor's single object, with no
-aggregate; this array is not a submission counter. Each element is a captured
-metadata object or JSON `null` for absent metadata. Repeated appends extend one
+The survivor keeps its top-level `messageMetadata`. On append, the additive
+`messageMetadata.mergedMessageMetadata` array records the original survivor
+metadata followed by every appended submission's metadata in arrival order,
+including identical values. Each element is a captured metadata object or JSON
+`null` for absent metadata (verified principal stamps normally make both
+contributions objects). Repeated appends extend one
 flat array rather than nesting aggregates. This member is daemon-owned: ordinary
 caller ingress strips a supplied `mergedMessageMetadata` before stamping live
 authorship, so copying an aggregate cannot manufacture additional semantic actions
 or principals. Existing trusted queue persistence retains the daemon-produced
-aggregate; arbitrary nested objects are not recursively interpreted as metadata.
+aggregate, and authorized edits retain it. Arbitrary nested objects are not
+recursively interpreted as metadata.
 
 For example, two same-author submissions with `messageMetadata.topic` values
 `"first"` and `"second"` keep `topic: "first"` at the top level and preserve both
@@ -753,7 +754,8 @@ stable ID again returns that entry without appending its content or attachments
 twice, including after queue rehydration. This is a pending-entry guarantee,
 not a global exactly-once delivery promise. `agent.queueMessage` has no
 client-supplied message ID, so repeating that RPC is a new submission; identical
-text alone is never a deduplication key.
+text alone is never a deduplication key. The JSON-RPC request `id` is only
+request/response correlation and does not provide this retry identity.
 
 **Shared reads and separate mutation authority.** All authorized workspace
 participants can read every queued entry, including owner-authored, foreign-human
