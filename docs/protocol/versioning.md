@@ -2,7 +2,17 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
+**Documented version:** `11.3` — workspace specialist memory, additive implementation candidate; not a shipped-version claim.
+
+**Version 11.3 — manual specialist memory.** `agent.getCreationPreferences`
+returns the last explicitly remembered specialist for one workspace, with absence
+and explicit General distinguished. `agent.create.rememberSpecialist` and
+`agent.update.changes.rememberSpecialist` opt successful manual changes into atomic
+persistence. No provider/model/effort memory is added. Older clients omit the flag;
+new clients tolerate older daemons lacking the read method. See [manual specialist
+memory](./methods/agents.md#manual-specialist-memory). The reserved 11.2 platform
+launch below remains prepared, independently capability-gated; advertising 11.3
+does not claim platform scheduling or any other prepared feature is implemented.
 
 **Prepared self-contained script changes — additive, not shipped.**
 [`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
