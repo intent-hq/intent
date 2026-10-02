@@ -14,7 +14,7 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
-| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; prepared event-authority extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
@@ -454,8 +454,9 @@ process and launch/run reservation have ended and no restart is pending. Never
 retire a never-run `idle` definition or a transient idle/exit during restart.
 Saved commands and services never auto-archive. Publish the final runtime state
 where the existing path emits `script:state` before the archive change event;
-all prior output chunks keep their existing ordering. A stop path that already
-resets to idle without a state event need not invent one; its archive change event
+all prior output chunks keep their existing ordering. Under the prepared
+event-authority extension below, a stop that resets a finished script from
+`exited` to `idle` publishes that runtime transition. Any archive change event
 still follows settlement. Do not hide a run before final output/state can be read.
 
 Failure must not disappear silently: History renders the recorded result and
@@ -467,7 +468,7 @@ Automatic archive write failure keeps the row active, logs the persistence
 error, and leaves the real terminal state intact; it must not turn a successful
 command into a failed command or lose its output.
 
-Manual-stop behavior is **unchanged**, including `idle` after stopping a launch
+Manual-stop result semantics are **unchanged**, including `idle` after stopping a launch
 before spawn or resetting a settled script. Archive itself never clears or
 rewrites that state. Stopping an admitted one-off records a `cancelled` result
 once teardown settles, even if the terminated child reports 0; stopping a
@@ -677,7 +678,21 @@ a failed partial batch can still have events for earlier committed IDs.
 Keep existing output/state ordering. The final runtime event, where the path
 emits one, precedes the settled change snapshot. A stop that settles at `idle`
 may publish a changed row with `runtime.status: "idle"` and cancelled `lastRun`;
-do not require an extra state event or invent an exit code. Restore-before-launch
+do not invent an exit code or duplicate a state event already published for that
+transition. A stop that resets an already finished script from `exited` to `idle`
+must publish a complete `script:state` snapshot, even when no result or archive
+mutation remains to publish. This reset changes runtime status only: retain the
+preceding terminal fields, `lastRun`, archive membership and addressable output.
+It is not a new cancellation or an implicit restore. Marker dismissal remains
+distinct: remove a service's `previouslyRunning`; dismissing a command's hydrated
+`lost` reading resets its runtime to plain `idle` (clearing terminal fields),
+without clearing its durable result/archive metadata. Both dismissals publish
+the cleared runtime snapshot. An already idle, unmarked script with no pending
+run is a no-op and emits no state event. Consumers replace runtime from these
+snapshots without a stop-triggered list refresh; initial/reconnect and legacy
+reconciliation remain as described below.
+
+Restore-before-launch
 publishes the restored snapshot before the successor's first live state event;
 restore alone retains previous runtime/result/output. Upsert clears prior archive
 and result metadata and publishes the replacement's fresh runtime.

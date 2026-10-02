@@ -326,6 +326,27 @@ test('snapshot fixtures detect shallow-merge clearing and unfenced-list regressi
   assert.deepEqual(state.result().row, changes.rows.complete);
 });
 
+test('stop fixtures distinguish a finished transition, marker dismissal and idle no-op', () => {
+  const finished = changes.cases.find(c => c.id === 'finished-stop-preserves-archive-and-result');
+  const lost = changes.cases.find(c => c.id === 'dismiss-lost-preserves-history');
+  const service = changes.cases.find(c => c.id === 'dismiss-service-clears-marker');
+  const noop = changes.cases.find(c => c.id === 'idle-stop-no-op');
+  // A silent reset leaves the client exited: the stop event is essential.
+  assert.notDeepEqual(client(changes.rows[finished.initial]).result().row.runtime,
+    finished.expect.runtime);
+  assert.deepEqual(finished.expect.runtime, { ...changes.rows.complete.runtime, status: 'idle' });
+  // Lost dismissal clears terminal metadata; a runtime patch would retain it.
+  assert.deepEqual(lost.expect.runtime, { status: 'idle', restartCount: 0 });
+  assert.notDeepEqual({ ...changes.rows.interrupted.runtime, ...lost.expect.runtime },
+    lost.expect.runtime);
+  assert.equal(changes.rows[service.initial].runtime.previouslyRunning, true);
+  assert.equal(service.expect.runtime.previouslyRunning, undefined);
+  // No-op is an empty event stream, not an invented idle notification.
+  assert.deepEqual(noop.steps, []);
+  assert.equal(changes.rows[noop.initial].runtime.status, 'idle');
+  assert.equal(changes.rows[noop.initial].runtime.previouslyRunning, undefined);
+});
+
 
 test('unknown additive fields are tolerated and explicit false/zero values survive', () => {
   const state = client(changes.rows.old);

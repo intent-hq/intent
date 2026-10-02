@@ -178,6 +178,10 @@ row clear old values; absent `script` retains legacy invalidation/refetch.
 `removed` stays `{ scriptId, action: "removed" }` and is directly applicable.
 New snapshot consumers make no event-triggered list call, preserve archived output
 views, and fence pending list responses against newer changes/runtime/removals.
+Stopping a finished script publishes its `exited` to `idle` transition as a
+complete `script:state`, preserving result/archive/output; existing marker
+dismissals also publish cleared runtime. An already idle, unmarked no-op emits
+no state event. See §5.8 for the distinct reset and dismissal clearing rules.
 Initial/reconnect reconciliation remains required. Per-ID publication must prevent
 stale predecessor events; timestamps/UUIDs are not row revisions. The script
 contract defines validation, persistence-failure and connection-generation rules.
