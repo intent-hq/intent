@@ -700,13 +700,18 @@ The survivor keeps its top-level `messageMetadata`. On append, the additive
 metadata followed by every appended submission's metadata in arrival order,
 including identical values. Each element is a captured metadata object or JSON
 `null` for absent metadata (verified principal stamps normally make both
-contributions objects). Repeated appends extend one
-flat array rather than nesting aggregates. This member is daemon-owned: ordinary
-caller ingress strips a supplied `mergedMessageMetadata` before stamping live
-authorship, so copying an aggregate cannot manufacture additional semantic actions
-or principals. Existing trusted queue persistence retains the daemon-produced
-aggregate, and authorized edits retain it. Arbitrary nested objects are not
-recursively interpreted as metadata.
+contributions objects). Repeated appends extend one flat array rather than
+nesting aggregates. A retry may resubmit the canonical `mergedMessageMetadata`
+array: ingress accepts only an array whose elements are metadata objects or
+JSON `null`, rejecting malformed shapes before queue mutation. Every object is
+sanitized with the same authenticated-caller attribution rules as the root
+metadata, preserving its question-answer tags and custom fields while preventing
+copied attribution from impersonating another principal. Nested
+`mergedMessageMetadata` keys are removed from contribution objects; arbitrary
+nested objects are not recursively interpreted as metadata. Append flattens the
+accepted contributions into the survivor's aggregate. Queue persistence and
+authorized edits retain that aggregate, so retrying a merged message preserves
+all of its structured answers.
 
 For example, two same-author submissions with `messageMetadata.topic` values
 `"first"` and `"second"` keep `topic: "first"` at the top level and preserve both
