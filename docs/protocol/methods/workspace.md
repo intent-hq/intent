@@ -2217,15 +2217,17 @@ import guarantees.
 **Imported human queues.** Actual-human queued records with a trusted snapshot
 and no current-local binding remain durable but are **not automatically ready**.
 Drain, idle, startup, restart and recovery paths cannot deliver them automatically.
-Their privacy/authorization classification is `UnknownHuman`, independently of
+Their authorship/authorization classification is `UnknownHuman`, independently of
 the preserved safe author profile. Strip or quarantine foreign `fromPrincipalId`
-stamps; never resolve them locally or fall back to the receiving owner. Existing
-Member/Guest visibility and per-entry mutation restrictions remain; unknown human
-entries do not become public or editable because they lack a local principal.
+stamps; never resolve them locally or fall back to the receiving owner. The
+[shared queue read policy](./agents.md#shared-pending-human-queue) makes these
+entries visible to authorized workspace participants. Missing local authorship
+grants no edit or merge authority and does not release their delivery hold.
 
 The current destination host owner may explicitly send the unchanged captured
-content with `agent.sendQueuedMessageNow`, or remove it with
-`agent.removeQueuedMessage`. Existing author-only editing restrictions remain.
+content with `agent.sendQueuedMessageNow`. Removal with
+`agent.removeQueuedMessage` follows the shared queue's workspace-owner or
+host-owner moderation rule. Existing author-only editing restrictions remain.
 An explicit send requires affirmative current destination-owner authorization
 **inside the existing atomic queue pop**, alongside normal admission and current
 role/credential revalidation. Absence of a per-entry gate is not authorization:
