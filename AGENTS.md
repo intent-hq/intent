@@ -2,6 +2,12 @@
 
 Instructions for AI agents working in this monorepo.
 
+**Assistant app guide:** When adding, changing, moving, renaming, or removing a
+user-facing feature, update the affected section of
+[`packages/intentd/crates/intent-services/resources/assistant-app-guide.md`](packages/intentd/crates/intent-services/resources/assistant-app-guide.md)
+in the same change (coordinate the companion intentd change for frontend work).
+Keep this single bundled guide concise; replace obsolete paths, labels, and prerequisites.
+
 ## Repository Structure
 
 This monorepo references the Intent component repositories as git
