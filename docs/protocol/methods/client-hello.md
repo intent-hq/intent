@@ -46,6 +46,14 @@ of `scriptLifecycle`. Without it, clients must not send readiness options or
 interpret successful creation/URL detection as proof of readiness. Scripts
 without a contract omit `ready` and `readiness` even when support is advertised.
 
+**Desktop control (prepared additive extension).**
+`server.capabilities.desktopControl: 1` and the execution connection’s
+`capabilities.desktopControl: 1` gate [§5.51](./desktop.md) independently.
+Resolve the existing workspace primary before testing this capability; never
+choose another computer because the primary lacks support. The flag grants no
+permission and does not assert current native readiness. Current browser-only
+capability behavior below remains unchanged until this extension is implemented.
+
 **Script run monitoring (prepared additive extension).**
 `server.capabilities.scriptMonitors: 1` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot

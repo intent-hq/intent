@@ -107,3 +107,11 @@ Demotion or removal ends the corresponding scoped event/read/answer authority; e
 credential revocation independently prevents admission even if a durable owner
 row remains. These changes do not cancel another person's running agent. Existing
 outcome shapes, timeout and first-resolution behavior are unchanged.
+
+### Prepared desktop consent
+
+[Desktop control (§5.51)](./methods/desktop.md#consent-and-lifecycle) defines a
+separate asynchronous consent flow. ACP AllowAll/bypass policies and generic Q&A
+answers never authorize desktop control. Its dedicated request IDs, authenticated
+primary-client decisions, remembered permission and grant-after-readiness wakes
+do not change the existing ACP permission methods or their pending snapshots.
