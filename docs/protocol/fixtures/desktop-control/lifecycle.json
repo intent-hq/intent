@@ -1,0 +1,1549 @@
+{
+  "status": "prepared-not-executed",
+  "platforms": [
+    "macos",
+    "windows"
+  ],
+  "capability": {
+    "desktopControl": 1
+  },
+  "releaseHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+  "routerMethods": [
+    "desktop.getState",
+    "desktop.respondPermission",
+    "desktop.revoke",
+    "desktop.setPermission"
+  ],
+  "reverseMethods": [
+    "desktop.control"
+  ],
+  "eventTypes": [
+    "desktop:permission-changed",
+    "desktop:permission-requested",
+    "desktop:permission-resolved",
+    "desktop:session-changed"
+  ],
+  "cases": [
+    {
+      "id": "start-unremembered",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "status": "pending_permission",
+          "requestId": "request-a",
+          "message": "End this turn and wait for the desktop control permission outcome."
+        },
+        "promptCount": 1,
+        "executionAllowed": false
+      }
+    },
+    {
+      "id": "start-pending-again",
+      "before": "pending_permission",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "status": "pending_permission",
+          "requestId": "request-a",
+          "message": "End this turn and wait for the desktop control permission outcome."
+        },
+        "promptCount": 0,
+        "executionAllowed": false
+      }
+    },
+    {
+      "id": "start-remembered",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "status": "active",
+          "sessionId": "session-a",
+          "alreadyGranted": false,
+          "computerName": "Studio",
+          "message": "Desktop control is active",
+          "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+        },
+        "remembered": true,
+        "localReady": true,
+        "startToastCount": 1
+      }
+    },
+    {
+      "id": "start-active-again",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "status": "active",
+          "sessionId": "session-a",
+          "alreadyGranted": true,
+          "computerName": "Studio",
+          "message": "Control is already granted",
+          "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+        },
+        "localReady": true,
+        "startToastCount": 0
+      }
+    },
+    {
+      "id": "end-active",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.endControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "ended": true,
+          "withdrawn": false
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "localTeardownConfirmed": true
+      }
+    },
+    {
+      "id": "end-inactive",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.endControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "ended": false,
+          "withdrawn": false
+        },
+        "after": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "withdraw-pending",
+      "before": "pending_permission",
+      "call": {
+        "binding": "ws.desktop.endControl",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "ended": false,
+          "withdrawn": true
+        },
+        "after": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "end-failed",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.endControl",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-execution-failed",
+            "detail": "execution failed"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "primary-offline",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-offline",
+            "detail": "offline"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "fallbackClientSelected": false
+      }
+    },
+    {
+      "id": "primary-incapable",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-unsupported",
+            "detail": "unsupported"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "fallbackClientSelected": false
+      }
+    },
+    {
+      "id": "desktop-owned-by-other-backend",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-busy",
+            "detail": "busy"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "fallbackClientSelected": false
+      }
+    },
+    {
+      "id": "native-not-ready",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-os-permission-required",
+            "detail": "os permission required"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "fallbackClientSelected": false
+      }
+    },
+    {
+      "id": "forged-agent-id",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.startControl",
+        "args": {
+          "agentId": "other-agent"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "invalid-params",
+            "detail": "invalid params"
+          }
+        }
+      }
+    },
+    {
+      "id": "stale-approval-after-withdrawal",
+      "before": "inactive",
+      "call": {
+        "method": "desktop.respondPermission",
+        "params": {
+          "workspaceId": "ws-a",
+          "requestId": "request-a",
+          "decision": "allow_future"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "desktop-stale-request",
+            "detail": "stale request"
+          }
+        },
+        "remembered": false,
+        "after": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "foreign-primary-approval",
+      "before": "pending_permission",
+      "call": {
+        "method": "desktop.respondPermission",
+        "params": {
+          "workspaceId": "ws-a",
+          "requestId": "request-a",
+          "decision": "allow_once"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32003,
+          "data": {
+            "code": "forbidden",
+            "detail": "forbidden"
+          }
+        },
+        "remembered": false
+      }
+    },
+    {
+      "id": "screenshot-after-stop",
+      "before": "inactive",
+      "call": {
+        "binding": "ws.desktop.screenshot",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "desktop-not-active",
+            "detail": "not active",
+            "execution": "not_started"
+          }
+        }
+      }
+    },
+    {
+      "id": "right-double-click",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.click",
+        "args": {
+          "displayId": "display-left",
+          "layoutId": "layout-a",
+          "x": 100,
+          "y": 75,
+          "button": "right",
+          "clickCount": 2
+        }
+      },
+      "expect": {
+        "result": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "id": "stale-layout",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.click",
+        "args": {
+          "displayId": "display-left",
+          "layoutId": "layout-old",
+          "x": 100,
+          "y": 75
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32602,
+          "data": {
+            "code": "desktop-stale-layout",
+            "detail": "stale layout",
+            "execution": "not_started"
+          }
+        }
+      }
+    },
+    {
+      "id": "input-transport-timeout",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.type",
+        "args": {
+          "text": "hello"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-outcome-unknown",
+            "detail": "outcome unknown",
+            "execution": "unknown"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        },
+        "retry": false
+      }
+    },
+    {
+      "id": "windows-secure-desktop",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.keypress",
+        "args": {
+          "key": "Enter"
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-unsupported-operation",
+            "detail": "unsupported operation",
+            "execution": "not_started"
+          }
+        },
+        "after": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "partial-drag",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.drag",
+        "args": {
+          "displayId": "display-left",
+          "layoutId": "layout-a",
+          "from": {
+            "x": 10,
+            "y": 10
+          },
+          "to": {
+            "x": 200,
+            "y": 250
+          }
+        }
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-execution-failed",
+            "detail": "execution failed",
+            "execution": "partial"
+          }
+        },
+        "heldInputReleased": true
+      }
+    },
+    {
+      "id": "mixed-dpi-screenshot",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.screenshot",
+        "args": {}
+      },
+      "expect": {
+        "result": {
+          "capturedAt": "2026-10-02T08:30:00Z",
+          "layoutId": "layout-a",
+          "displays": [
+            {
+              "displayId": "display-left",
+              "width": 1920,
+              "height": 1080,
+              "originX": -1920,
+              "originY": 0,
+              "scaleFactor": 1,
+              "assetId": "asset-a",
+              "url": "workspace-asset://ws-a/asset-a",
+              "mimeType": "image/png"
+            },
+            {
+              "displayId": "display-main",
+              "width": 3840,
+              "height": 2160,
+              "originX": 0,
+              "originY": 0,
+              "scaleFactor": 2,
+              "assetId": "asset-b",
+              "url": "workspace-asset://ws-a/asset-b",
+              "mimeType": "image/png"
+            }
+          ]
+        },
+        "overlayExcluded": true,
+        "pulseCount": 1
+      }
+    },
+    {
+      "id": "screenshot-save-failure",
+      "before": "active",
+      "call": {
+        "binding": "ws.desktop.screenshot",
+        "args": {}
+      },
+      "expect": {
+        "error": {
+          "code": -32603,
+          "data": {
+            "code": "desktop-execution-failed",
+            "detail": "execution failed",
+            "execution": "partial"
+          }
+        },
+        "pulseCount": 0
+      }
+    }
+  ],
+  "races": [
+    {
+      "id": "grant-before-turn-end",
+      "steps": [
+        "start-pending",
+        "approve",
+        "local-ready",
+        "queue-grant",
+        "end-turn",
+        "deliver-grant"
+      ],
+      "expect": {
+        "wakeCount": 1,
+        "concurrentTurns": false,
+        "state": {
+          "status": "active",
+          "sessionId": "session-a",
+          "computerName": "Studio",
+          "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+        }
+      }
+    },
+    {
+      "id": "stop-before-grant-delivery",
+      "steps": [
+        "start-pending",
+        "approve",
+        "local-ready",
+        "queue-grant",
+        "user-stop",
+        "end-turn",
+        "deliver-revocation"
+      ],
+      "expect": {
+        "activeGrantDelivered": false,
+        "state": {
+          "status": "inactive"
+        },
+        "automaticRestart": false
+      }
+    },
+    {
+      "id": "withdraw-before-ready",
+      "steps": [
+        "start-pending",
+        "approve",
+        "withdraw",
+        "late-ready"
+      ],
+      "expect": {
+        "activationAccepted": false,
+        "localSessionEnded": true,
+        "state": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "stop-offline",
+      "steps": [
+        "remembered-start",
+        "network-partition",
+        "queue-input",
+        "local-stop",
+        "reconnect",
+        "authenticate-original-principal",
+        "reconcile-terminal-report",
+        "deliver-user-stop"
+      ],
+      "expect": {
+        "queuedInputExecuted": false,
+        "overlayVisible": false,
+        "heldInputReleased": true,
+        "remembered": true,
+        "state": {
+          "status": "inactive"
+        },
+        "automaticRestart": false,
+        "reconciliationAuthenticated": true,
+        "wake": {
+          "type": "desktop_control",
+          "sessionId": "session-a",
+          "reportId": "report-a",
+          "outcome": "revoked",
+          "state": {
+            "status": "inactive"
+          },
+          "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+        },
+        "result": {
+          "revoked": false,
+          "reported": true
+        }
+      }
+    },
+    {
+      "id": "lease-expiry",
+      "steps": [
+        "remembered-start",
+        "network-partition",
+        "lease-expired",
+        "late-renew",
+        "late-input"
+      ],
+      "expect": {
+        "queuedInputExecuted": false,
+        "state": {
+          "status": "inactive"
+        },
+        "automaticRestart": false
+      }
+    },
+    {
+      "id": "primary-change",
+      "steps": [
+        "start-pending",
+        "primary-changed",
+        "late-approval"
+      ],
+      "expect": {
+        "activationAccepted": false,
+        "remembered": false,
+        "state": {
+          "status": "inactive"
+        }
+      }
+    },
+    {
+      "id": "ordinary-turn-boundary",
+      "steps": [
+        "remembered-start",
+        "end-turn",
+        "next-turn"
+      ],
+      "expect": {
+        "state": {
+          "status": "active",
+          "sessionId": "session-a",
+          "computerName": "Studio",
+          "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+        }
+      }
+    },
+    {
+      "id": "agent-termination",
+      "steps": [
+        "remembered-start",
+        "agent-completed"
+      ],
+      "expect": {
+        "state": {
+          "status": "inactive"
+        },
+        "localSessionEnded": true
+      }
+    },
+    {
+      "id": "permission-off-while-active",
+      "steps": [
+        "remembered-start",
+        "menu-disable"
+      ],
+      "expect": {
+        "remembered": false,
+        "state": {
+          "status": "active",
+          "sessionId": "session-a",
+          "computerName": "Studio",
+          "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+        }
+      }
+    }
+  ],
+  "deadlines": {
+    "wire": {
+      "prepare": {
+        "jsonrpc": "2.0",
+        "id": "rev-1",
+        "method": "desktop.control",
+        "params": {
+          "workspaceId": "ws-a",
+          "agentId": "agent-a",
+          "principalId": "principal-a",
+          "connectionEpoch": "epoch-a",
+          "computerId": "computer-a",
+          "sessionId": "session-a",
+          "commandId": "command-a",
+          "sequence": 1,
+          "operation": "prepareCommand",
+          "action": {
+            "kind": "keypress",
+            "key": "Enter"
+          }
+        }
+      },
+      "prepared": {
+        "jsonrpc": "2.0",
+        "id": "rev-1",
+        "result": {
+          "commandId": "command-a",
+          "sequence": 1,
+          "deadlineId": "deadline-a",
+          "expiresInMs": 10000
+        }
+      },
+      "execute": {
+        "jsonrpc": "2.0",
+        "id": "rev-2",
+        "method": "desktop.control",
+        "params": {
+          "workspaceId": "ws-a",
+          "agentId": "agent-a",
+          "principalId": "principal-a",
+          "connectionEpoch": "epoch-a",
+          "computerId": "computer-a",
+          "sessionId": "session-a",
+          "commandId": "command-a",
+          "sequence": 1,
+          "operation": "execute",
+          "deadlineId": "deadline-a"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "opposite-clock-skew",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "daemonWallMs": 1700000000000,
+        "executorWallMs": 1800000000000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "wall-clock-jump",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "daemonWallMs": 1900000000000,
+        "executorWallMs": 1000000000000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "response-and-transit-latency",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 59999,
+        "responseLatencyMs": 6000,
+        "executeTransitMs": 3999,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "exact-expiry",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 60000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-command-expired",
+        "execution": "not_started"
+      },
+      {
+        "id": "queued-too-long",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 61000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-command-expired",
+        "execution": "not_started"
+      },
+      {
+        "id": "expiry-between-drag-steps",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 60001,
+        "knownTicket": true,
+        "stepsCompleted": 1,
+        "expect": "desktop-command-expired",
+        "execution": "partial"
+      },
+      {
+        "id": "unprepared-ticket",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "consumed-ticket-replay",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "consumed": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "connection-replaced",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "bindingMatches": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "monotonic-regression",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 49999,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-deadline-unavailable",
+        "execution": "not_started"
+      },
+      {
+        "id": "resume-without-safe-clock",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "clockSafe": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-deadline-unavailable",
+        "execution": "not_started"
+      }
+    ]
+  },
+  "stopReports": {
+    "rescissionMessage": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control.",
+    "retained": {
+      "workspaceId": "ws-a",
+      "agentId": "agent-a",
+      "principalId": "principal-a",
+      "computerId": "computer-a",
+      "sessionId": "session-a",
+      "connectionEpoch": "epoch-old",
+      "stopReportToken": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "desktop.revoke",
+      "params": {
+        "workspaceId": "ws-a",
+        "sessionId": "session-a",
+        "reason": "user_stop",
+        "stopReport": {
+          "reportId": "report-a",
+          "computerId": "computer-a",
+          "connectionEpoch": "epoch-old",
+          "stopReportToken": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "reconnect-after-disconnected",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "previousWake": "queued-disconnected",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "replacesUndelivered": true,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "reconnect-after-lease-expired-delivered",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "previousWake": "delivered-lease-expired",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "replacesUndelivered": false,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "retry-after-lost-ack",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-newer",
+        "sessionAlreadyEnded": true,
+        "alreadyReported": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": false
+          },
+          "newWakeCount": 0,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "duplicate-with-different-report-id",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-newer",
+        "reportId": "report-b",
+        "sessionAlreadyEnded": true,
+        "alreadyReported": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": false
+          },
+          "newWakeCount": 0,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "old-stop-with-successor",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "successor": "session-b",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control. This report concerns ended session session-a; newer explicit session session-b is unchanged."
+          },
+          "currentState": {
+            "status": "active",
+            "sessionId": "session-b",
+            "computerName": "Studio",
+            "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "wrong-principal",
+        "principalId": "principal-other",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "expect": {
+          "error": {
+            "code": -32003,
+            "data": {
+              "code": "forbidden",
+              "detail": "terminal report authority mismatch"
+            }
+          },
+          "newWakeCount": 0,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "wrong-token",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "tokenMatches": false,
+        "sessionAlreadyEnded": true,
+        "expect": {
+          "error": {
+            "code": -32003,
+            "data": {
+              "code": "forbidden",
+              "detail": "terminal report authority mismatch"
+            }
+          },
+          "newWakeCount": 0,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "restart-keeps-report-only",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "daemonRestarted": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "terminal-agent-not-restarted",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "agentCompleted": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 0,
+          "conversationNotification": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      }
+    ]
+  },
+  "stopReportRetention": {
+    "ambiguousResponse": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "error": {
+        "code": -32602,
+        "data": {
+          "code": "not-found",
+          "detail": "not found"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "access-lost-then-restored",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "hidden",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "forbidden",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "ack-first",
+            "accessRestored": true,
+            "expectQueued": false,
+            "expectWakeCount": 1
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectRemembered": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "deleted-target-stays-ambiguous",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "deleted",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "not-found",
+            "reconnected": true,
+            "expectQueued": true,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "deleted-target-explicit-local-cleanup",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "deleted",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "localAction": "discard-undelivered-notification",
+            "userInitiated": true,
+            "expectQueued": false,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectDeliveryAcknowledged": false,
+        "expectSuccessorUnchanged": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "lost-ack-then-duplicate-ack",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "neither",
+        "steps": [
+          {
+            "response": "timeout",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "ack-duplicate",
+            "expectQueued": false,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectDeliveryAcknowledged": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "auth-failure-and-signout-retain",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "hidden",
+        "steps": [
+          {
+            "response": "auth-failure",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "localAction": "sign-out",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "malformed",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectSessionResurrected": false
+      }
+    ]
+  },
+  "desktopOwners": {
+    "source": "workspace.owner_principal_id",
+    "cases": [
+      {
+        "id": "workspace-owner-primary",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-a",
+        "messageSender": "principal-other",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-a",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "delegate-uses-own-workspace-owner",
+        "delegated": true,
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-a",
+        "parentCaller": "principal-other",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-a",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "manager-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-manager",
+        "workspaceManager": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "administrator-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-admin",
+        "hostAdministrator": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "message-sender-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-sender",
+        "messageSender": "principal-sender",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "missing-persisted-owner",
+        "workspaceOwner": null,
+        "connectionPrincipal": "principal-admin",
+        "hostAdministrator": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "owner-changed-before-decision",
+        "stage": "decision",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "requestInvalidated": true,
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "owner-changed-before-renew",
+        "stage": "renew",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "state": {
+            "status": "inactive"
+          },
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "owner-changed-before-action",
+        "stage": "execute",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "state": {
+            "status": "inactive"
+          },
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "new-owner-needs-own-consent",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-b",
+        "rememberedGrantPrincipal": "principal-a",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-b",
+          "fallbackSelected": false,
+          "rememberedConsentApplies": false,
+          "status": "pending_permission"
+        }
+      }
+    ]
+  },
+  "agentFeature": {
+    "path": "agentFeatures.desktopControl",
+    "label": "Desktop control",
+    "defaultValue": true,
+    "capabilityGrantsConsent": false,
+    "defaultGrantsConsent": false,
+    "sessions": [
+      {
+        "id": "omitted-settings",
+        "atCreation": {},
+        "currentSettings": {},
+        "expectEffective": true,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "explicit-off",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {},
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "existing-on-after-disable",
+        "atCreation": {
+          "desktopControl": true
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": true,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "existing-off-after-enable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": true
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "new-session-after-disable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "delegate-after-disable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false,
+        "isDelegate": true,
+        "parentEffective": true
+      },
+      {
+        "id": "recreated-bridge-preserves-off",
+        "atCreation": {
+          "desktopControl": true
+        },
+        "currentSettings": {
+          "desktopControl": true
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false,
+        "persisted": {
+          "desktopControl": false
+        }
+      },
+      {
+        "id": "legacy-snapshot-missing-key",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": true,
+        "expectConsentGranted": false,
+        "persisted": {}
+      }
+    ],
+    "disabled": {
+      "namespaceAdvertised": false,
+      "operationalHelpAvailable": false,
+      "calls": [
+        {
+          "method": "startControl",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "screenshot",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "click",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "type",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "keypress",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "scroll",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "drag",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        }
+      ],
+      "cleanup": [
+        "endControl",
+        "desktop.revoke",
+        "terminal-stop-report",
+        "native-stop",
+        "lease-teardown"
+      ],
+      "cleanupBypassesCallerAuthority": false,
+      "settingChangeRevokesExistingSession": false,
+      "rememberedConsentOverridesFeature": false
+    },
+    "independence": [
+      {
+        "id": "top-level-without-questions-or-injection",
+        "isDelegate": false,
+        "structuredQuestions": false,
+        "stateSnapshot": false,
+        "expectDesktopConsentAvailable": true,
+        "expectAutomaticSnapshot": false,
+        "startHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "grantHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "helpHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "explicitSnapshotHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+      },
+      {
+        "id": "delegate-without-questions-or-injection",
+        "isDelegate": true,
+        "structuredQuestions": false,
+        "stateSnapshot": false,
+        "expectDesktopConsentAvailable": true,
+        "expectAutomaticSnapshot": false,
+        "startHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "grantHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "helpHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "explicitSnapshotHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+      }
+    ]
+  }
+}
