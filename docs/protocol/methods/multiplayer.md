@@ -140,7 +140,7 @@ A connection bound to a **non-administrator** principal may only *attempt* the m
 
 | Namespace | Allowed methods |
 | --- | --- |
-| agent (35) | appendMessage, cancelSubscriptions, dismissQuestions, editAndRegenerate, editQueuedMessage, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, resolveInterrupted, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update |
+| agent (36) | appendMessage, cancelSubscriptions, dismissQuestions, editAndRegenerate, editQueuedMessage, get, getConversation, getMessageBlock, getModels, getQueue, getSession, getSessionStats, getSubscriptions, list, listActive, listInterrupted, listUserMessages, markSeen, pendingPermissions, queueMessage, removeQueuedMessage, rename, resolveInterrupted, respondPermission, restore, retry, sendMessage, sendQueuedMessageNow, sendQueuedMessagesNow, sendToTask, setModel, stop, subscribe, summary, unsubscribe, update |
 | chat (2) | subscribe, unsubscribe |
 | client (1) | hello |
 | comment (8) | add, delete, getThread, list, resolveThread, respond, subscribe, unsubscribe |
