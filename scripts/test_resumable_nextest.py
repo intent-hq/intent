@@ -315,7 +315,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertIn("binary_id(/^binary$/)", profile["default-filter"])
             self.assertEqual(profile["junit"]["path"], "junit.xml")
 
-    def test_complete_marker_fast_path_does_not_invoke_cargo(self):
+    def test_complete_marker_fast_path_does_not_invoke_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "intentd").mkdir()
@@ -329,8 +329,8 @@ class ResumableNextestTests(unittest.TestCase):
             args = make_args(
                 root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None
             )
-            with mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
                 self.assertEqual(gate.run_nextest(args), 0)
             self.assertEqual(
@@ -581,8 +581,8 @@ class ResumableNextestTests(unittest.TestCase):
             (record_dir / "run.json").write_text(
                 json.dumps({"passed": 2, "skipped_resumed": 1}), encoding="utf-8"
             )
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -727,7 +727,7 @@ class ResumableNextestTests(unittest.TestCase):
             root = Path(temporary)
             (root / "intentd").mkdir()
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -741,7 +741,7 @@ class ResumableNextestTests(unittest.TestCase):
                 "(tests already passed for this tree)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines(), [summary, f"[test-changed] record: {record_dir}"]
+                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {record_dir}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
             self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
@@ -837,7 +837,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertFalse((record_dir / "complete").exists())
             self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
 
-    def test_ignored_only_completed_plan_resumes_without_cargo(self):
+    def test_ignored_only_completed_plan_resumes_without_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
@@ -846,8 +846,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
             self.assertEqual(gate.load_passed(root / "cache" / KEY / "passed.jsonl"), set())
 
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -869,7 +869,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
 
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -899,7 +899,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 time.sleep(5)
                 raise AssertionError("SIGTERM handler did not interrupt the list step")
 
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=terminated_list
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -929,7 +929,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             )
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
             args = make_args(root, resume="1", force="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -1288,6 +1288,71 @@ class IsolatedOutputTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "invalid target_directory"):
                     gate.isolated_output_args(Path.cwd(), [], {})
+
+
+class EffectiveOutputResumeTests(unittest.TestCase):
+    def test_metadata_failure_cannot_accept_complete_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            failure = subprocess.CalledProcessError(101, ["cargo", "metadata"])
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "isolated_output_args", side_effect=failure
+            ), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 101)
+            self.assertIn("resolving Cargo outputs", stderr.getvalue())
+
+    def test_resolved_output_changes_cannot_reuse_completed_record(self):
+        if not shutil.which("cargo"):
+            self.skipTest("real output resolution requires Cargo")
+        for mode in ("cargo-home-template", "retargeted-output-symlink"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)] * 2)
+                source = root / "intentd"
+                (source / "src").mkdir()
+                (source / "Cargo.toml").write_text('[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\n')
+                (source / "src/lib.rs").write_text("")
+                first, second = root / "first", root / "second"
+                first.mkdir()
+                second.mkdir()
+                alias = root / "output"
+                alias.symlink_to(first, target_is_directory=True)
+                env = {k: v for k, v in os.environ.items()
+                       if not k.startswith(("CARGO_", "RUST", "NEXTEST_")) and k != "COMPACT"}
+                env.update(CARGO_HOME=str(first), RUSTUP_AUTO_INSTALL="0")
+                if mode == "cargo-home-template":
+                    env["CARGO_BUILD_BUILD_DIR"] = "{cargo-cache-home}/build"
+                else:
+                    env["CARGO_TARGET_DIR"] = str(alias)
+                real_popen = subprocess.Popen
+                def run(command, cwd, env=None):
+                    if command[:2] == ["cargo", "metadata"]:
+                        with mock.patch.object(subprocess, "Popen", real_popen):
+                            return subprocess.check_output(command, cwd=cwd, env=env, text=True, timeout=30)
+                    if command[:3] == ["cargo", "nextest", "list"]:
+                        return harness.fake_run(command, cwd, env)
+                    return "stable tool version"
+                with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                    gate, "worktree_tree", return_value="stable source"
+                ), mock.patch.object(gate, "submodule_heads", return_value="stable pins"), mock.patch.object(
+                    gate, "required_hash", return_value="stable file"
+                ), mock.patch.object(gate, "build_settings", return_value={}), mock.patch.object(
+                    gate, "run", side_effect=run
+                ), mock.patch.object(gate.subprocess, "Popen", side_effect=harness.fake_popen), contextlib.redirect_stdout(harness.stdout):
+                    # Metadata must remain real even while nextest execution is stubbed.
+                    with mock.patch.object(gate, "isolated_output_args", wraps=gate.isolated_output_args):
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                        self.assertEqual(len(harness.run_commands), 1)
+                        if mode == "cargo-home-template":
+                            os.environ["CARGO_HOME"] = str(second)
+                        else:
+                            alias.unlink()
+                            alias.symlink_to(second, target_is_directory=True)
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                self.assertEqual(len(harness.run_commands), 2, "changed effective outputs reused a completed record")
 
 
 class SharedTargetInventoryTests(unittest.TestCase):

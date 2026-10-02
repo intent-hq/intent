@@ -124,7 +124,7 @@ make build   # cargo build --workspace
 `make test` and `make test-changed` isolate Cargo target and build outputs in
 stable `intent-gates/<checkout-id>` children of the configured directories.
 Repeated runs of the same canonical checkout reuse those outputs; another
-checkout sharing `CARGO_TARGET_DIR` cannot replace its test executables. The
+checkout sharing the configured target directory cannot replace its test executables. The
 runner prints the chosen paths and retains them in `cargo-outputs.json` beside
 its test record. The first run uses a new build cache. Coverage targets and
 custom bare-Cargo scripts do not use this runner and still need distinct output

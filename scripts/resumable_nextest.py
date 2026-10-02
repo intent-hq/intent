@@ -186,10 +186,11 @@ def build_settings(cwd: Path) -> dict[str, object]:
     }
 
 
-def tree_key(repo_root: Path, intentd_dir: Path) -> str:
+def tree_key(repo_root: Path, intentd_dir: Path, output_args: list[str] | None = None) -> str:
     intentd_dir = intentd_dir.resolve()
     inputs = {
         "source-root": str(intentd_dir),
+        "cargo-outputs": output_args,
         "schema": SCHEMA_VERSION,
         "root-tree": worktree_tree(repo_root),
         "intentd-tree": worktree_tree(intentd_dir),
@@ -546,7 +547,19 @@ def run_nextest(args: argparse.Namespace) -> int:
     cargo_config = compact_config(intentd_dir)
     announce_compact()
     prune(cache_dir)
-    key = tree_key(repo_root, intentd_dir)
+    env = nextest_env()
+    if cargo_config:
+        env["CARGO_INCREMENTAL"] = "0"
+    # Resolve before accepting resume evidence: unchanged config text can expand
+    # to different paths (Cargo home templates or retargeted output symlinks).
+    try:
+        with terminate_on_signal():
+            output_args = isolated_output_args(intentd_dir, cargo_config, env)
+    except (OSError, RuntimeError, ValueError, subprocess.CalledProcessError,
+            KeyboardInterrupt, Terminated) as error:
+        print(f"[{label}] ERROR: resolving Cargo outputs: {error}", file=sys.stderr, flush=True)
+        return failure_exit_code(error)
+    key = tree_key(repo_root, intentd_dir, output_args)
     run_dir = cache_dir / key
     run_dir.mkdir(parents=True, exist_ok=True)
     os.utime(run_dir)
@@ -584,12 +597,8 @@ def run_nextest(args: argparse.Namespace) -> int:
     # Invalidate the previous marker before nextest is invoked so a failed or
     # interrupted list step cannot leave a stale `complete` behind.
     complete.unlink(missing_ok=True)
-    env = nextest_env()
-    if cargo_config:
-        env["CARGO_INCREMENTAL"] = "0"
     started_at = utc_now()
     results: list[dict[str, object]] = []
-    output_args: list[str] = []
 
     def finalize(status: int | None) -> None:
         totals = {"passed": 0, "failed": 0, "ignored": 0}
@@ -628,7 +637,6 @@ def run_nextest(args: argparse.Namespace) -> int:
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
     try:
         with terminate_on_signal():
-            output_args = isolated_output_args(intentd_dir, cargo_config, env)
             print(f"[{label}] isolated Cargo outputs: {shlex.join(output_args)}", flush=True)
             write_atomic(record_dir / "cargo-outputs.json", json.dumps({
                 "source_root": str(intentd_dir), "args": output_args,
