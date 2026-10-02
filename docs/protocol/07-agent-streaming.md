@@ -124,12 +124,13 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   [intent-hq/intentd#1314](https://github.com/intent-hq/intentd/pull/1314)): the seq-0 and
   lag-recovery snapshots reuse the `agent.getConversation` read, so a snapshot page is bounded
   at `SLIM_PAGE_BUDGET_BYTES` (512 KiB) total serialized message bytes and may carry fewer than
-  `limit` messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
+  five messages, with `nextToken` re-minted at the first excluded row (§5.5) — the client
   pages older history exactly as before, just in more round-trips. The budget covers the
   live-turn merge too: after the in-flight message is appended it anchors as the newest row
   (always served, even alone over budget — the §5.5 one-message floor), and oldest persisted
-  rows are evicted until the merged page fits, with `truncated`/`nextToken` re-minted at the
-  eviction boundary so the evicted rows stay reachable via `agent.getConversation`. Since v10.0
+  rows are evicted until the merged page fits both the five-message count and byte budget,
+  with `truncated`/`nextToken` re-minted at the eviction boundary so the evicted rows stay
+  reachable via `agent.getConversation`. Since v10.0
   every frame also inherits the `agent.getConversation` legacy-inline-file-block projection
   (§5.5): a persisted pre-10.0 `{ type: "file", data, … }` block with no non-empty
   `attachmentId` is served as `{ type: "text", text: "Attached file: <fileName>" }` (`"Attached
@@ -140,8 +141,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   holds the transcript up to a known message id may pass it as the optional `sinceMessageId`
   (string). Absent / `null` / `""` all mean "no resume" — the standard snapshot below, carrying
   **no** `resumed` key on the initial snapshot; a present non-string value is a `-32602` error. When provided,
-  the daemon reads the **same bounded newest page** as the standard snapshot (still exactly one
-  conversation read — resume is a post-filter, never a second fetch; monorepo#958 cost contract)
+  the daemon reads the **same newest page of at most five persisted messages** as the standard
+  snapshot (still exactly one conversation read — resume is a post-filter, never a second
+  fetch; monorepo#958 cost contract)
   and then:
   - **Id found in the page** → the seq-0 snapshot's `messages[]` carries only the messages
     **after** that id (possibly empty when the id is the newest row), with `resumed: true`,
@@ -159,8 +161,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   Deltas (seq 1, 2, …) are unaffected by resume.
 - **Transcript invalidation.** Editing/regenerating or replacing messages emits
   `agent:updated` with `truncatedCount` or `replacedCount`. Standing chat subscriptions
-  respond with a fresh bounded snapshot at the next subscription sequence number,
-  carrying `resumed: false`, even when registration had no `sinceMessageId` or its
+  respond with a fresh snapshot of at most five messages (including any live row) at the next
+  subscription sequence number, carrying `resumed: false`, even when registration had no
+  `sinceMessageId` or its
   initial resume has already completed. Clients must honor this flag on every
   snapshot, not only the initial one. Clients discard their cached transcript (including older
   paged history) and rehydrate from that snapshot using the same reset semantics as
@@ -208,9 +211,21 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   preserved — the client simply applies more appends). Tool calls, terminal reconciles, and
   message-row deltas are conflation barriers in both modes, so a conflated fragment run never
   crosses an authoritative frame.
-- **Snapshot granularity = messages; delta granularity = blocks.** The seq-0 snapshot is the newest
-  `agent.getConversation` page as the `messages[]` object (the same read shape, reused verbatim).
-  Each subsequent delta upserts individual **content blocks** within a message.
+- **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
+  invalidation and lag-recovery snapshots contain the newest **at most five messages**, including
+  any merged live-turn row. This is a chat-specific default: the daemon requests
+  `agent.getConversation` with `limit: 5`, then counts a merged live row inside that same window.
+  No subscription count parameter is added, and unrelated paginated methods retain their defaults.
+  The response keeps the conversation `messages[]` object shape and transcript-wide
+  `totalMessages` (including a newly merged live row). If the live row displaces persisted rows,
+  `truncated: true` and `nextToken` point older continuation at the eviction boundary, so every
+  displaced row remains reachable. Clients fetch history through `agent.getConversation` with
+  `limit: 5` and the returned cursor; existing directional cursors and inclusive
+  `aroundMessageId` / `aroundIndex` seeks are unchanged. Slim byte budgeting may shorten the
+  window further, retaining the existing one-message floor; five messages is not a strict
+  wire-byte ceiling. Initial snapshots use one bounded conversation read; recovery retries at
+  most once on read failure, without walking history. Each subsequent delta upserts individual
+  **content blocks** within a message.
 - **`thinking` blocks (streamed reasoning; additive within v6.0,
   [intent-hq/intentd#973](https://github.com/intent-hq/intentd/pull/973)).** ACP
   `agent_thought_chunk` updates accumulate into `{ type: "thinking", id, text }` content blocks —
