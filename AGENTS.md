@@ -236,14 +236,15 @@ with no rollback.
   merge queue — in this repo or any submodule repo — without explicit permission from
   a human**. Approved + green checks is not enough. Repo-owned automation is exempt
   (auto-bump-submodules, auto-pin-intentd, auto-cut-alpha, and the release PR
-  workflows merge their own rolling PRs). All three repos (monorepo, intentd,
-  cloudlands-fe) route `main` merges through a **merge queue**: once a human has
-  given permission, `gh pr merge --squash` adds the PR to the queue, and the PR lands
-  when the queue's gate passes — no update-branch/re-check treadmill. The expected
-  `main` rules of all three repos (required `CI Gate` check, thread resolution,
-  merge-queue settings) are the committed contract in `.github/rulesets/*.main.json`,
-  and their allowed bypass actors (none by default) in `.github/rulesets/*.bypass.json`,
-  compared with the live rules by the `ruleset-check` CI job and daily by
+  workflows merge their own rolling PRs). Ordinary `main` PRs in all three repos
+  use a **merge queue**: after human permission, `gh pr merge --squash` enqueues
+  them until the queue's gate passes. Component auto-cut may directly merge
+  validated release metadata under the approved CI exemption and existing
+  readiness guards ([details](docs/RELEASING.md#guarded-direct-release-merges)).
+  Main rules are committed in `.github/rulesets/*.main.json`; the bypass contract
+  in `.github/rulesets/*.bypass.json` allows `intent-hq-ci` on the two component
+  Default rulesets only (none for the monorepo or organization). Rules are
+  compared with the live configuration by `ruleset-check` CI and daily by
   `ruleset-drift.yml`; after an intended ruleset change, run
   `make check-rulesets UPDATE=1` and commit the result in the same PR. The bypass
   half needs the `RULESET_ADMIN_TOKEN` secret (a fine-grained PAT with administration
