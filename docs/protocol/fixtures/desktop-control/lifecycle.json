@@ -1103,5 +1103,132 @@
         }
       }
     ]
+  },
+  "stopReportRetention": {
+    "ambiguousResponse": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "error": {
+        "code": -32602,
+        "data": {
+          "code": "not-found",
+          "detail": "not found"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "access-lost-then-restored",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "hidden",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "forbidden",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "ack-first",
+            "accessRestored": true,
+            "expectQueued": false,
+            "expectWakeCount": 1
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectRemembered": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "deleted-target-stays-ambiguous",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "deleted",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "not-found",
+            "reconnected": true,
+            "expectQueued": true,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "deleted-target-explicit-local-cleanup",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "deleted",
+        "steps": [
+          {
+            "response": "not-found",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "localAction": "discard-undelivered-notification",
+            "userInitiated": true,
+            "expectQueued": false,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectDeliveryAcknowledged": false,
+        "expectSuccessorUnchanged": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "lost-ack-then-duplicate-ack",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "neither",
+        "steps": [
+          {
+            "response": "timeout",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "ack-duplicate",
+            "expectQueued": false,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectDeliveryAcknowledged": true,
+        "expectSessionResurrected": false
+      },
+      {
+        "id": "auth-failure-and-signout-retain",
+        "initialReportId": "report-a",
+        "hiddenOrDeleted": "hidden",
+        "steps": [
+          {
+            "response": "auth-failure",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "localAction": "sign-out",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          },
+          {
+            "response": "malformed",
+            "expectQueued": true,
+            "expectWakeCount": 0
+          }
+        ],
+        "expectReportId": "report-a",
+        "expectSessionResurrected": false
+      }
+    ]
   }
 }

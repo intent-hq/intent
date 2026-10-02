@@ -285,3 +285,46 @@ test('terminal Stop wire examples preserve the old authenticated tuple on a new 
   assert.equal(byReportId('restart-keeps-report-only').expect.currentState.status, 'inactive');
   assert.ok(byReportId('terminal-agent-not-restarted').expect.conversationNotification);
 });
+
+test('ambiguous not-found retains terminal Stop reports until authenticated acknowledgement or explicit local discard', () => {
+  assert.ok(doc.includes('An ambiguous `not-found` response never authorizes local deletion'));
+  assert.ok(!doc.includes('discards the orphaned report'));
+});
+
+test('retention examples cannot distinguish hidden from deleted targets or lose reports during access loss', () => {
+  const { ambiguousResponse, cases } = fixture.stopReportRetention;
+  assert.equal(ambiguousResponse.error.code, -32602);
+  assert.equal(ambiguousResponse.error.data.code, 'not-found');
+  assert.equal(new Set(cases.map(c => c.id)).size, cases.length);
+  for (const c of cases) {
+    let queued = true;
+    for (const step of c.steps) {
+      const acknowledged = ['ack-first', 'ack-duplicate'].includes(step.response);
+      const explicitDiscard = step.localAction === 'discard-undelivered-notification' && step.userInitiated === true;
+      if (acknowledged || explicitDiscard) queued = false;
+      assert.equal(step.expectQueued, queued, `${c.id}: ${step.response ?? step.localAction}`);
+      assert.equal(step.expectWakeCount, step.response === 'ack-first' ? 1 : 0, c.id);
+      if (step.response === 'not-found') {
+        assert.equal(step.expectQueued, true, c.id);
+        assert.equal(Object.hasOwn(step, 'deletionAcknowledged'), false, c.id);
+      }
+    }
+    assert.equal(c.expectReportId, c.initialReportId, c.id);
+    assert.equal(c.expectSessionResurrected, false, c.id);
+  }
+  const select = id => {
+    const c = cases.find(c => c.id === id);
+    assert.ok(c, id);
+    return c;
+  };
+  const restored = select('access-lost-then-restored');
+  assert.equal(restored.steps.at(-1).accessRestored, true);
+  assert.equal(restored.steps.at(-1).expectWakeCount, 1);
+  assert.equal(restored.expectRemembered, true);
+  assert.deepEqual(restored.steps[0], select('deleted-target-stays-ambiguous').steps[0]);
+  const cleanup = select('deleted-target-explicit-local-cleanup');
+  assert.equal(cleanup.expectDeliveryAcknowledged, false);
+  assert.equal(cleanup.expectSuccessorUnchanged, true);
+  assert.equal(select('lost-ack-then-duplicate-ack').expectDeliveryAcknowledged, true);
+  assert.equal(select('auth-failure-and-signout-retain').steps.at(-1).expectQueued, true);
+});

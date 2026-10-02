@@ -256,13 +256,33 @@ renew, relabel or clear snapshot state for any successor session.
 
 Retry only this terminal report after lost ACK/reconnect; this is explicitly
 **not** replay of consent, activation or input. The executor removes a queued
-report after either successful acknowledgement (`reported` true or false).
-It never silently drops a pending report on transport failure. Both ends retain
-the terminal credential/deduplication record through reconnects and restarts
-until the agent or workspace is deleted; deletion yields not-found and the client
-discards the orphaned report. Credentials are local protected storage, not
-workspace files or repository content. Denied access leaves the report queued
-for the same principal to regain access; never try another principal/backend.
+report only after a successful authenticated, correlated acknowledgement
+(`reported` true or false), or an explicit local user discard as defined below.
+For user_stop, `reported: false` acknowledges a retained, previously accepted
+Stop outcome after checking the same report authority; it must never mean an
+unknown/deleted session, missing credential record or rejected report.
+
+An ambiguous `not-found` response never authorizes local deletion: absent,
+deleted and hidden targets remain indistinguishable on the wire. Retain the same
+report ID, original tuple and credential on not-found, forbidden, authentication
+failure, malformed response, timeout or transport loss. Park retries until a
+same-backend reconnect, access refresh or explicit local retry; do not spin on
+denials. If access is restored, resend the original report as the same principal;
+an existing retained session can then acknowledge and deliver its Stop outcome.
+Never try another principal/backend or reinterpret failed delivery as success.
+
+Both ends persist terminal records through reconnects and restarts. The daemon
+may remove its credential/deduplication record when the agent or workspace is
+deleted, but still returns the ordinary indistinguishable not-found response;
+there is no deletion-discovery API or special acknowledgement for hidden targets.
+The client therefore keeps even a permanently orphaned report until an explicit
+local user discard, such as removing that stored backend connection and its
+pending notifications. Explain that this abandons an **undelivered** Stop
+notification; never describe it as acknowledged or as proof of target deletion.
+An automatic age limit, backend sign-out, lost workspace access or an inferred
+target deletion must not purge pending reports. A local discard affects only
+that local notification queue, not session/permission state or any successor.
+Credentials remain in protected local storage, never workspace/repository files.
 
 `user_stop` takes precedence over an earlier `disconnected`, `lease_expired` or
 other terminal reason for the **same session**. Replace any undelivered grant or
@@ -274,7 +294,8 @@ also identifies that old session and says the newer explicit session is unchange
 The current snapshot remains authoritative and retains the successor's active
 hint. Never revive a completed/retired/deleted agent to deliver the report: retain
 the notification for its existing conversation when available, without starting
-a new turn; deletion removes the report with the agent.
+a new turn; deletion removes the server record with the agent, while the client
+retains an unacknowledged report under the ambiguous-response rule above.
 
 ## Client-served reverse RPC
 
