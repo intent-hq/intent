@@ -184,8 +184,12 @@ means that many base commits are absent from the head. Unknown carries no count
 or revisions. Missing `ancestry` in an older payload/baseline decodes to unknown,
 not zero; missing `branchUpdateRequired` decodes to unknown, not false. Both
 fields are carried unchanged in the full `MergeRequirements` and reduced
-`PrMonitor.lastSnapshot` shapes, including snapshot/registration, list and event
-projections. They do not add fields to `pr.status` or `GithubPullRequest`.
+`PrMonitor.lastSnapshot` shapes returned by snapshot/registration and list
+reads. The `prMonitor:*` lifecycle event shapes remain unchanged (§6.9): events
+identify the monitor, and `prMonitor:changed` carries change-summary text.
+Clients refetch `prMonitor.list` after those notifications to obtain the updated
+checklist. These fields are not added to lifecycle events, `pr.status` or
+`GithubPullRequest`.
 
 **Forge provenance.** `branchUpdateRequired: true` follows the same positive
 BEHIND evidence as the legacy boolean. False requires a positive merge-state
@@ -342,4 +346,3 @@ Lifecycle is observable via the `prMonitor:*` event category (§6.5), and each a
 // ← response — nothing changed vs. the emit baseline: no wake
 { "jsonrpc":"2.0","id":101,"result":{ "ok":true,"flushed":false } }
 ```
-
