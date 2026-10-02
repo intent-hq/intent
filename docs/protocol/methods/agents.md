@@ -701,8 +701,9 @@ metadata followed by every appended submission's metadata in arrival order,
 including identical values. Each element is a captured metadata object or JSON
 `null` for absent metadata (verified principal stamps normally make both
 contributions objects). Repeated appends extend one flat array rather than
-nesting aggregates. A retry may resubmit the canonical `mergedMessageMetadata`
-array: ingress accepts only an array whose elements are metadata objects or
+nesting aggregates. A human-origin retry may resubmit the canonical
+`mergedMessageMetadata` array: human ingress accepts only an array whose elements
+are metadata objects or
 JSON `null`, rejecting malformed shapes before queue mutation. Every object is
 sanitized with the same authenticated-caller attribution rules as the root
 metadata, preserving its question-answer tags and custom fields while preventing
@@ -711,7 +712,8 @@ copied attribution from impersonating another principal. Nested
 nested objects are not recursively interpreted as metadata. Append flattens the
 accepted contributions into the survivor's aggregate. Queue persistence and
 authorized edits retain that aggregate, so retrying a merged message preserves
-all of its structured answers.
+all of its structured answers. Non-user-origin ingress removes the aggregate
+entirely; this semantic answer round trip is restricted to human input.
 
 For example, two same-author submissions with `messageMetadata.topic` values
 `"first"` and `"second"` keep `topic: "first"` at the top level and preserve both
