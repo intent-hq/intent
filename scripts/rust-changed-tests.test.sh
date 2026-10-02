@@ -264,6 +264,10 @@ else
 printf '%s: %s\n' "$PWD" "$*" >>"$CARGO_TEST_LOG"
 printf '%s: incremental=%s flags=%s encoded=%s\n' "$*" "${CARGO_INCREMENTAL-}" "${RUSTFLAGS-}" "${CARGO_ENCODED_RUSTFLAGS-}" >>"$CARGO_COMPACT_LOG"
 if [[ "$1" == -V ]]; then echo "cargo 1.99.0 (stub)"; exit 0; fi
+if [[ "$1" == metadata ]]; then
+  python3 -c 'import json, os; print(json.dumps({"target_directory": os.path.join(os.getcwd(), "target")}))'
+  exit 0
+fi
 [[ "$1" == nextest ]] || { echo "cargo stub: unexpected argv: $*" >&2; exit 99; }
 case "$2" in
   --version) echo "cargo-nextest 0.9.99 (stub)" ;;
@@ -313,7 +317,10 @@ SH
     [[ "$stdout" == *$'\n'"$summary_line"$'\n'"[test-changed] record: $cache/"* ]] || fail "$case_name: summary/record lines missing: $stdout"
     record_dir=${stdout##*"[test-changed] record: "}
     [[ "$record_dir" == "$cache"/*/changed/* && -d "$record_dir" ]] || fail "$case_name: record dir '$record_dir' is not <cache>/<tree-key>/changed/<plan-key>"
-    [[ "$cargo_log" == *"$repo: nextest list -p alpha --test one --build-jobs 2 --message-format json"$'\n'"$repo: nextest run -p alpha --test one --build-jobs 2 --test-threads 1 --tool-config-file intent-gate:$record_dir/nextest-1.toml --profile "*" --message-format libtest-json-plus --message-format-version 0.1"* ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"
+    cargo_output_args=$("$python3" -c 'import json, sys; print(" ".join(json.load(open(sys.argv[1]))["args"]))' "$record_dir/cargo-outputs.json")
+    [[ "$cargo_output_args" == "--target-dir $repo/target/intent-gates/"* ]] || fail "$case_name: missing isolated Cargo output: $cargo_output_args"
+    [[ "$cargo_log" == *"$repo: metadata --no-deps --format-version 1"* ]] || fail "$case_name: Cargo metadata was not queried"
+    [[ "$cargo_log" == *"$repo: nextest list -p alpha --test one --build-jobs 2 --message-format json $cargo_output_args"$'\n'"$repo: nextest run -p alpha --test one --build-jobs 2 --test-threads 1 --tool-config-file intent-gate:$record_dir/nextest-1.toml --profile "*" --message-format libtest-json-plus --message-format-version 0.1 $cargo_output_args"* ]] || fail "$case_name: cargo argv was"$'\n'"$cargo_log"
   }
 
   case_name="end to end: first run writes the plan record"
@@ -358,8 +365,8 @@ SH
   expect_ok
   [[ "$stdout" == *"COMPACT=1"* && "$stdout" == *"no passed-test record"* ]] || fail "$case_name: $stdout"
   [[ "$cargo_log" == *"nextest list -p alpha --test one"* && "$cargo_log" == *"nextest run -p alpha --test one"* ]] || fail "$case_name: $cargo_log"
-  [[ "$(grep -c -- '--config profile.dev.debug=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing profile overrides"
-  [[ "$(grep -c 'incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
+  [[ "$(grep -c -- '^nextest .*--config profile.dev.debug=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing profile overrides"
+  [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: list/run missing incremental override"
   compact_record=${stdout##*"[test-changed] record: "}
   [[ "$compact_record" != "$changed_record" ]] || fail "$case_name: default/compact records collide"
 
@@ -392,7 +399,7 @@ SH
   [[ "$status" -eq 0 && "$stderr" == *"build-wide change(s)"* ]] || fail "$case_name: $stdout $stderr"
   [[ "$stdout" == *"falling back to the full 'make test'"* ]] || fail "$case_name: $stdout"
   [[ "$cargo_log" == *"nextest list --workspace"* && "$cargo_log" == *"nextest run --workspace"* && "$cargo_log" == *"--config profile.test.debug=0"* ]] || fail "$case_name: $cargo_log"
-  [[ "$(grep -c 'incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: recursive make lost compact settings"
+  [[ "$(grep -c '^nextest .*incremental=0' "$temp_dir/compact.log")" -eq 2 ]] || fail "$case_name: recursive make lost compact settings"
 
   for goal in test test-intentd gate; do
     case_name="compact $goal runs the full suite (gate recursively invokes test)"
