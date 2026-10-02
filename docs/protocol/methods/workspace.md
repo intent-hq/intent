@@ -863,16 +863,27 @@ workspace's guests and open invites, which archive removes:
   (the common empty-queue direct send is untouched), under `"systemOnly"`/`"off"`
   (no combined turn exists to carry the parked entries), and for a session parked
   in `Error` (whose documented recovery is the direct fresh send). **The drain-gate
-  exemption is time-tightened**: only a ready user-origin entry queued at or after
-  the archive (`queuedAt >= archivedAt`) releases the archived gate — a user entry
-  parked by a busy race BEFORE archival is not a post-archive user action and stays
-  parked with everything else (without the cut, the interrupted worker's end-of-turn
-  re-kick would find that older entry and immediately unarchive a freshly archived
-  workspace); pre-archive parked entries flush only on manual `workspace.unarchive`
-  or by riding the combined turn of a NEW post-archive user message. An entry with
-  an unparseable `queuedAt` never matches; a row missing or with an unparseable
-  `archivedAt` (legacy data) fails open to the untimed user-origin check. The parked
-  send's internal result carries the additive `archivedParked: true` marker alongside
+  exemption is time-tightened**: only a ready user-origin entry carrying a trusted
+  human submission at or after the archive releases the archived gate. The daemon
+  compares the entry's durable **latest human-submission time** against `archivedAt`;
+  it uses original `queuedAt` when the optional separate timestamp is absent,
+  including on fresh unmerged and legacy entries. A present malformed timestamp
+  never falls back. The signal is server-assigned on fresh human enqueue, advances
+  on human append, and
+  survives coalescing, failure/interrupt handback and restart without being refreshed
+  by automatic recovery. Edits and duplicate pending-message retries preserve it;
+  automatic input cannot supply or advance it. See
+  [§5.5 shared pending human queue](./agents.md#shared-pending-human-queue).
+  A1 queued before archival and same-author A2 appended afterward remain one entry
+  with A1's original identity and `queuedAt`; A2's durable human-submission time lets
+  that entry release the archive gate once ready. An entry with only pre-archive
+  human input stays parked even after automatic activity or recovery (without that
+  cut, the interrupted worker's end-of-turn re-kick could immediately unarchive a
+  freshly archived workspace). Such entries flush on manual `workspace.unarchive`
+  or ride the combined turn of fresh post-archive human input. An unparseable
+  effective human-submission timestamp never matches; a row missing or with an
+  unparseable `archivedAt` (legacy data) fails open to the untimed user-origin check.
+  The parked send's internal result carries the additive `archivedParked: true` marker alongside
   `queued: true` (surfaced through the MCP send bindings, so an agent can tell an
   archived park from an ordinary busy-queue fallback). The virtual chief workspace
   skips the row read (never archived), and a row-lookup error fails open so a transient
@@ -2217,15 +2228,17 @@ import guarantees.
 **Imported human queues.** Actual-human queued records with a trusted snapshot
 and no current-local binding remain durable but are **not automatically ready**.
 Drain, idle, startup, restart and recovery paths cannot deliver them automatically.
-Their privacy/authorization classification is `UnknownHuman`, independently of
+Their authorship/authorization classification is `UnknownHuman`, independently of
 the preserved safe author profile. Strip or quarantine foreign `fromPrincipalId`
-stamps; never resolve them locally or fall back to the receiving owner. Existing
-Member/Guest visibility and per-entry mutation restrictions remain; unknown human
-entries do not become public or editable because they lack a local principal.
+stamps; never resolve them locally or fall back to the receiving owner. The
+[shared queue read policy](./agents.md#shared-pending-human-queue) makes these
+entries visible to authorized workspace participants. Missing local authorship
+grants no edit or merge authority and does not release their delivery hold.
 
 The current destination host owner may explicitly send the unchanged captured
-content with `agent.sendQueuedMessageNow`, or remove it with
-`agent.removeQueuedMessage`. Existing author-only editing restrictions remain.
+content with `agent.sendQueuedMessageNow`. Removal with
+`agent.removeQueuedMessage` follows the shared queue's workspace-owner or
+host-owner moderation rule. Existing author-only editing restrictions remain.
 An explicit send requires affirmative current destination-owner authorization
 **inside the existing atomic queue pop**, alongside normal admission and current
 role/credential revalidation. Absence of a per-entry gate is not authorization:
