@@ -1741,7 +1741,11 @@ When true, successful manual foreground creation atomically stores the canonical
 `specialistId` (or null for General) with the new session. `agent.update` accepts
 `changes.rememberSpecialist: boolean` alongside an explicitly supplied
 `changes.specialist: string | null`, for the welcome-screen specialist picker.
-The update and remembered preference commit together. Non-boolean values are
+The update and remembered preference commit together. For an opted-in welcome
+selection, a generated non-explicit placeholder name follows the selected
+specialist display name (General becomes `Agent`); explicit names, intentional
+custom/task names, and names supplied in the same update are preserved. The
+existing `agent:updated` event includes a changed generated name. Non-boolean values are
 rejected with `-32602`; update opt-in without `changes.specialist` is also rejected.
 Omitted/null/false flags leave memory unchanged.
 
