@@ -233,3 +233,14 @@ test('omission and compact schema assertions detect forbidden outputs and invent
   assert.throws(() => assertRow({ ...good, result: { ...good.result, exitCode: 2 } }));
   assert.throws(() => assertRow({ ...good, state: 'expired' }));
 });
+
+test('successor completion cannot supply an older bound monitor result', () => {
+  const m = ready();
+  m.s.runs.set(JSON.stringify(['ws-a', 'check']), { workspaceId: 'ws-a', scriptId: 'check', mode: 'command', runId: 'run-b' });
+  m.step({ ...finish, runId: 'run-b' });
+  assert.equal(m.s.monitors[0].state, 'active');
+  assert.equal(m.s.pending.size, 0);
+  const response = m.step({ op: 'cancelRun' });
+  assert.equal(response.monitor.result.outcome, 'interrupted');
+  assert.equal(response.runStopped, false);
+});

@@ -24,7 +24,8 @@ export function model() {
   const complete = (r, result) => {
     if (r.result) return;
     r.result = result;
-    settle(active(r.workspaceId, r.scriptId), 'completed', 'finished', result);
+    const monitor = active(r.workspaceId, r.scriptId);
+    if (monitor?.runId === r.runId) settle(monitor, 'completed', 'finished', result);
   };
   const prune = capacity => {
     const removable = () => s.monitors.filter(m => m.state !== 'active' && !s.pending.has(m.monitorId)).sort((a, b) => a.settledAt.localeCompare(b.settledAt) || a.monitorId.localeCompare(b.monitorId));
