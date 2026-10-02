@@ -14,10 +14,11 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | git.getRemoteUrl | repoPath (req), remoteName? (default `origin`), workspaceId? | { url } — reads the named remote from the same path-selected repository; preserves membership/path validation |
 
 **Legacy commit RPC removed in protocol 12.0.** The deprecated wire method
-`git.commit` is no longer dispatched. Authorized direct callers receive
-`-32601` (Method not found), without a Git operation or a new idempotency receipt.
-Guest collaborator connections retain the authorization gate before dispatch and
-receive `-32003` (Forbidden). Existing stored receipts are not replayed through the
+`git.commit` is no longer dispatched. Local daemon-control and administrator
+connections receive `-32601` (Method not found). Host-member and guest collaborator
+connections retain the authorization gate before dispatch and receive `-32003`
+(Forbidden). Neither rejection performs a Git operation or writes a new
+idempotency receipt. Existing stored receipts are not replayed through the
 removed method; their presence does not restore it.
 
 Human clients can use `git.agentCommit` with `message` and `userRequested: true`
@@ -69,7 +70,7 @@ Workspace-originated `git.getBranches`, `git.pull`, `git.getRemoteUrl` and the `
 
 **Per-workspace auto-commit resolution.** The auto-commit gate (`git.agentCommit`, the idle wrap-up path below, and system-prompt assembly) resolves auto-commit **per workspace**: the persisted workspace override (§5.1 `workspace.getAutoCommit` / `workspace.setAutoCommit`) when set, else the global `git.autoCommit` setting (§5.12). `workspace.create` and `workspace.duplicate` seed the override from the effective value at creation time (mirror-at-creation), so later global changes never retroactively flip existing workspaces; pre-migration rows have no override and keep following the global.
 
-**Wrap-up semantics (what the auto-commit state means).** Auto-commit is an **end-of-turn wrap-up** model, not a prohibition on agent commits. **ON:** when the agent's turn ends, the daemon commits the agent's remaining attributed changes — the paths the attribution pipeline credits to that agent, per commit-set rule 3 above, not the whole worktree (the idle wrap-up path below), and agents are also free to commit mid-turn themselves via `git.commit` / `git.agentCommit` (the agent-facing MCP `ws.git.commit`). **OFF:** no wrap-up runs, and agent-initiated commits are **rejected by the gate** (`-32603`) — the rejection message tells the agent the user has turned off agent commits for this workspace, not to work around the gate (no raw `git commit` or other means), and to retry with `userRequested: true` only when the user has explicitly asked for a commit. `userRequested: true` is that explicit-user-ask bypass: it is the only way an agent-initiated commit lands while auto-commit is OFF.
+**Wrap-up semantics (what the auto-commit state means).** Auto-commit is an **end-of-turn wrap-up** model, not a prohibition on agent commits. **ON:** when the agent's turn ends, the daemon commits the agent's remaining attributed changes — the paths the attribution pipeline credits to that agent, per commit-set rule 3 above, not the whole worktree (the idle wrap-up path below), and agents are also free to commit mid-turn themselves via the `git.agentCommit` wire method or the agent-facing MCP `ws.git.commit`. **OFF:** no wrap-up runs, and agent-initiated commits are **rejected by the gate** (`-32603`) — the rejection message tells the agent the user has turned off agent commits for this workspace, not to work around the gate (no raw `git commit` or other means), and to retry with `userRequested: true` only when the user has explicitly asked for a commit. `userRequested: true` is that explicit-user-ask bypass: it is the only way an agent-initiated commit lands while auto-commit is OFF.
 
 **Commit-policy prompt layer (status-neutral).** The system prompt's commit-policy layer does **not** branch on the auto-commit state (and ignores the session `skipAutoCommit` flag): every agent receives the same single clause in both states — commit through `ws.git.commit` (never raw `git commit` unless the user explicitly asks for a git workflow it cannot express), commit when it makes sense for the work, and the system may automatically commit any remaining changes when the turn ends. Enforcement of the OFF state lives entirely in the gate above, not in the prompt; the effective state (per-workspace resolution, provided the session has not opted out via `skipAutoCommit`) still drives the top-level-agent suggested-prompts footer. A user who wants zero agent commits expresses that through rules/`AGENTS.md`, not this layer.
 
