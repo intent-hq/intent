@@ -30,14 +30,17 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 **Client support gate.** Before sending either reader with a nonblank
 `gitRootId`, clients must establish support from the **connected daemon's**
 advertised `client.hello.protocolVersion`: a well-formed, supported protocol
-version at least `11.1`. Missing, malformed, older, or otherwise unknown support
+version: `11.1` or later within major 11, or known major 12. Missing, malformed, older, or otherwise unknown support
 must fail closed before sending the scoped text or chunk request. Re-establish
 support after reconnecting or switching daemons; a previous daemon's result is
 not evidence for the current connection. Documentation version headers and
 unrelated capability flags do not establish support. Older daemons can ignore
 the unknown selector and successfully return a same-named primary-workspace
 file, so neither a trial scoped read nor retrying without `gitRootId` is a safe
-fallback. Ordinary reads without a selector keep their existing behavior.
+fallback. Ordinary reads without a selector keep their existing behavior. Older
+installed frontends with an exact-major-11 guard reject scoped reads against
+protocol 12 and need the corrected frontend; see the [v12.0 compatibility
+notice](../versioning.md#protocol-version--compatibility).
 
 `file.read` and `file.readChunk` accept an additive optional `gitRootId` request
 field. With a nonblank selector, the daemon resolves the root registered to `workspaceId`
