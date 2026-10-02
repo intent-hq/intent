@@ -11,6 +11,57 @@ each triggered by a manual workflow dispatch (`promote-beta.yml` /
 `promote-stable.yml` on intentd, `promote-beta.yml` / `release-stable.yml` on
 cloudlands-fe).
 
+## Guarded direct release merges
+
+Both components' `auto-cut-alpha.yml` workflows can squash-merge a verified
+release metadata PR directly, avoiding a second CI run in the merge queue.
+Ordinary PRs, frontend sidecar pin PRs, and monorepo submodule bump PRs continue
+through the queue. A release PR whose diff does not match the metadata shape
+uses the ordinary guarded queue path too.
+
+Direct merging requires the existing release guards to pass: the expected
+same-repository release branch and author, no draft or `hold-release`, acceptable
+mergeability and freshness, a successful `CI Gate` on the assessed head, and no
+blocking human review threads. Existing throttle, dry-run, frontend daemon
+freshness and in-flight sidecar checks still apply, including their documented
+manual-dispatch overrides. Release automation does not refresh the PR branch;
+release-plz or release-please owns that content.
+
+The workflow uses the classifier from its trusted workflow revision, never a
+script from the PR head, to inspect the diff. Scheduled and main-push runs use
+`main`; manual dispatch uses the selected workflow ref. Only release metadata qualifies:
+intentd permits independent crate version changes, matching local dependency
+requirements and workspace-package lockfile versions, plus harmless TOML
+formatting/comments; cloudlands-fe permits the package version and matching
+release-please manifest update. Source, workflow, external dependency and sidecar
+pin changes do not qualify. A classification failure cannot enable direct merging.
+The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
+head match prevents a refreshed, unchecked PR head from being merged using the
+earlier decision. Queue submission is not evidence of a completed merge or a
+published alpha; confirm the PR's merged state and the release artifacts.
+
+The direct path uses the existing `intent-hq-ci` account exemption: User
+`335379076`, mode `always`, on the repository **Default** ruleset in intentd and
+cloudlands-fe only. The committed allowlists are
+`.github/rulesets/intentd.bypass.json` and
+`.github/rulesets/cloudlands-fe.bypass.json`. The organization **Default Branch**
+ruleset has no exemption and continues enforcing its PR and thread-resolution
+requirements; the monorepo intent ruleset has no exemption either. The live
+repository exemption applies to the account, while the workflow's metadata
+check limits when release automation exercises it. Main-branch rules and other
+actors are unchanged.
+
+The merge credentials must authenticate as that CI account: `RELEASE_PLZ_TOKEN`
+for intentd and `RELEASE_PAT` for cloudlands-fe. Their identity is also checked
+against the release PR author. Read-only CI and PR queries use the workflow's
+`GITHUB_TOKEN`; the merge uses the PAT so its push triggers the downstream
+release workflows. Rotating either PAT must preserve the intended identity and
+repository permissions; a token with a similar name does not inherit the user's
+exemption. `RULESET_ADMIN_TOKEN` is a separate administration-read credential
+for drift inspection, not a release-merge credential. To record an intentional
+ruleset change, run `make check-rulesets UPDATE=1` with that credential and review
+the generated diff; this reads live rules and writes local snapshots only.
+
 ## intentd
 
 - release-plz maintains a release PR on `main`. Merging it cuts the `vX.Y.Z` tag,

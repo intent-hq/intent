@@ -146,8 +146,7 @@ never resurrects shipped bundles the operator excluded.
   entry reports omitted problems when the cap is reached. Correcting a file clears
   its diagnostic on the next discovery; changes to diagnostics participate in the
   `specialists:changed` fingerprint. Skipped files never appear as launchable agents.
-- **`modelTier` is retired** (tolerated-and-ignored, like the retired
-  `model.workspaceOverrides` setting in §5.12): a `modelTier` in a `create`/`edit` `spec` or
+- **`modelTier` is retired** (tolerated-and-ignored): a `modelTier` in a `create`/`edit` `spec` or
   in an existing file's frontmatter never errors, but the key is stripped on parse — never
   echoed by `list`/`get`, never written by `create`/`edit` (an existing frontmatter line is
   dropped on the file's next rewrite) — and never participates in model resolution (§5.5).
@@ -437,3 +436,12 @@ The `defaultAutoCommit` field mentioned in early drafts was **not implemented** 
 // ← response
 { "jsonrpc":"2.0","id":93,"result":{ "ok":true } }
 ```
+
+### Prepared specialist platform default (11.2)
+
+The [platform contract](../model-platform-routing.md#placement-input-and-propagation)
+defines optional structured runsOn on specialist create/edit/list/get and the
+single-line JSON-object frontmatter encoding, whole-object tier inheritance and
+clear semantics. This execution constraint is separate from codingAgent/model
+provider selection. Validation and propagation require agentPlatformRouting 1;
+an ignored unknown frontmatter key is not support.
