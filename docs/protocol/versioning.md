@@ -1,14 +1,65 @@
 > Part of the [Intent JSON-RPC protocol docs](./README.md) — Protocol Version & Compatibility.
 
-The prepared [script run monitor extension](./methods/script-monitors.md) reserves
-three router methods and five events, plus additive runId and agent waiting
-projections, optional regex/line-count OR triggers and required one-shot TTL.
-`scriptMonitors: 1` gates the full contract; allocate the next minor
-at implementation time. Documentation and synthetic fixtures do not claim shipment.
+The [script run monitor extension](./methods/script-monitors.md), added in protocol
+12.1, provides three router methods and five events, plus additive runId and agent
+waiting projections, optional regex/line-count OR triggers and required one-shot
+TTL. `scriptMonitors: 1` gates the full contract. Protocol 13.0 retains this
+capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `11.3` — workspace specialist memory, additive implementation candidate; not a shipped-version claim.
+**Documented version:** `13.1` — implemented explicit queue batch candidate; not a shipped-version claim.
+Prepared extensions below remain independently capability-gated.
+
+**Version 13.1 — explicit queue batch sending (additive, implemented candidate).**
+`agent.sendQueuedMessagesNow` (§5.5) accepts a snapshot of distinct ready message
+IDs, validates the whole selection before preemption, and sends it in queue order
+as one turn. It preserves each entry's author, attachments and transcript row.
+Startup races, quarantine and partial persistence failures retain the batch;
+clients reconcile queue events and do not remove entries for `queued: true`.
+The candidate implements **404 / 349 / 55** (dispatchable / router / fast path);
+the documented surface, including prepared additions, is **419 / 364 / 55**.
+No new event names are added. Older daemons reject the method; clients must not
+fall back to repeated single-entry interrupts. Ready queued messages now always
+batch under the ordinary eligibility rules. The retired `agents.flushQueuedMessages`
+setting is absent from the catalog; legacy config values and older client writes
+are tolerated without changing delivery. Script-monitor wakes retain individual
+admission and lifecycle fencing (§5.5).
+
+**Version 13.0 — removal of deprecated `git.commit`.** This version follows the
+protocol-12 retirements. It makes no carrying desktop release claim.
+
+**Version 12.0 — unused RPC retirement.** This major version removes exactly ten
+inbound names: `git.diff`, `git.log`, `pr.status`, `file-tracking.getLineStats`,
+`metrics.getWorkspaceStats`, `metrics.getAllWorkspaceStats`,
+`metrics.clearAgentStats`, `forward.create`, `forward.list`, and `forward.close`.
+Owner/local callers receive `-32601` (Method not found); collaborator authorization
+still runs first and returns `-32003` (Forbidden) for these unlisted names.
+Generic CLI RPC invocation of these names is also retired. Built-in CLI commands
+and all MCP operations remain available: canonical `git.diffs` / `git.commits`,
+`pr.refresh`, `metrics.getAgentStats`, and shared internal services are retained.
+The authenticated binary `/tunnel`, frontend local relay, browser reverse RPCs,
+and local-daemon forwarding behavior are unchanged. `git.commit` is not part
+of this retirement.
+
+**Installed frontend compatibility.** Registered-root `file.read` and
+`file.readChunk` retain their v11.1 contract in protocol 12 and 13. The updated
+frontend guard in [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114)
+accepts known 11.1+ versions within major 11 and known majors 12 and 13. It rejects
+missing, malformed, older, and unknown future-major support (including 14) before
+sending a scoped read.
+
+Installed frontends with the original exact-major-11 guard reject scoped reads
+against protocol 12 or 13. Versions with only the earlier major-12 allowance still
+reject protocol 13. Both require a frontend carrying the updated major-13 guard;
+the PR link and daemon documentation do not establish that the installed desktop
+contains it. Unscoped reads keep their existing behavior. See the
+[registered-root support gate](./methods/files-terminal-browser.md).
+
+The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
+The automated monorepo pin update [intent PR #6582](https://github.com/intent-hq/intent/pull/6582)
+carries that daemon change. The corrected desktop release must carry both component
+changes; daemon support alone does not establish installed-frontend compatibility.
 
 **Version 11.3 — manual specialist memory.** `agent.getCreationPreferences`
 returns the last explicitly remembered specialist for one workspace, with absence
@@ -382,6 +433,23 @@ This contract is prepared against daemon main
 `2983c9afd`, which advertises 11.0; its documentation does not establish runtime
 support or a carrying release. Unrelated prepared extensions retain their own
 implementation status and capability gates.
+
+Version 13.0 is a **breaking** major bump: the deprecated `git.commit` RPC is
+removed from dispatch, the method catalog, and the guest collaborator allowlist.
+The supported `git.agentCommit` method keeps its existing staged-index/explicit-file
+selection, human-request bypass, and host-member/administrator permissions.
+It does not replace the removed method's keyed retries or guest collaborator access.
+See the [commit migration notes](./methods/git.md#56-git) before updating a legacy
+client. MCP `ws.git.commit`, desktop commits, native auto-commit, and `git:commit`
+events are unchanged. Unknown external callers are a compatibility cutoff, not
+proof that the old API had no users.
+
+The removal follows the additive 11.2 daemon change in
+[intentd PR2233](https://github.com/intent-hq/intentd/pull/2233) and preserves its
+event fields. The backend removal must land before this canonical catalog deletion;
+the automatic submodule bump must then carry that backend before these docs land.
+No manual pin advance is part of the migration. Historical 10.3 replay semantics
+above describe the former method, not a durability guarantee for current commits.
 
 ### Compatibility Policy
 

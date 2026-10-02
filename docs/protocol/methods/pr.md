@@ -2,7 +2,7 @@
 
 ### 5.7 `pr.*`
 
-The namespace holds the **two** workspace/active-PR-scoped methods that survived the v5.0 removal: `pr.status` (requires an active pull request on the workspace — otherwise the underlying service throws → `-32603`) and `pr.refresh` (exists to establish/repair the link and works without one — see its semantics note below).
+The namespace holds the workspace-scoped `pr.refresh` method, which establishes or repairs the PR link and works without an active PR. The former status read was retired in v12.0; explicit-addressing reads remain on `github.*` and the agent MCP `ws.pr.snapshot` binding.
 
 > Host-agnostic naming. `pr.*` is the canonical wire name. Conceptually it is host-agnostic — "PR" covers pull request / merge request / change request — and in v1 it is backed by GitHub (selected via the sourceControl.activeProvider setting, §5.12). Future forges (GitLab, Bitbucket) plug in behind the same pr.* surface.
 
@@ -10,10 +10,9 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 
 | Method | Params | Result |
 | --- | --- | --- |
-| pr.status | — | { prNumber, title, url, state, mergeable, mergeableState, hasConflicts, isDraft, isMerged, isClosed, summary } |
 | pr.refresh | — | { outcome: "skipped" \| "unchanged" \| "linked" \| "updated" \| "unlinked", prNumber: number \| null, prUrl: string \| null, prStatus: string \| null, pullRequests: PullRequestInfo[] } — the post-refresh linkage state. Forces the same PR discovery/refresh the daemon's background sweep runs for one workspace, on demand |
 
-> **`pr.refresh` semantics.** Unlike `pr.status`, `pr.refresh` does **not** require an
+> **`pr.refresh` semantics.** `pr.refresh` does **not** require an
 > active PR — it exists to establish/repair the link. It runs the shared refresh path
 > (discovery, status update, stale-link clearing, relink-after-merge), so any
 > resulting `pr:linked` / `pr:updated` / `pr:unlinked` events (§6.5) are emitted **once** by
@@ -40,13 +39,11 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > `workspaceId` → `-32602 "Workspace not found"`.
 
 ```json
-// → request — the active PR's status
-{ "jsonrpc":"2.0","id":40,"method":"pr.status","params":{ "workspaceId":"ws-abc" } }
-// ← response
-{ "jsonrpc":"2.0","id":40,"result":{ "prNumber":12,"title":"Add review wire surface",
-  "url":"https://github.com/octo/repo/pull/12","state":"open","mergeable":true,
-  "mergeableState":"clean","hasConflicts":false,"isDraft":false,"isMerged":false,
-  "isClosed":false,"summary":"..." } }
+// → request — refresh the workspace's PR linkage
+{ "jsonrpc":"2.0","id":40,"method":"pr.refresh","params":{ "workspaceId":"ws-abc" } }
+// ← response — no matching PR found
+{ "jsonrpc":"2.0","id":40,"result":{ "outcome":"unchanged","prNumber":null,
+  "prUrl":null,"prStatus":null,"pullRequests":[] } }
 ```
 
 > **`ws.pr.snapshot(prNumber, { repo? })` — agent MCP binding *(new in intentd,
@@ -63,7 +60,7 @@ The namespace holds the **two** workspace/active-PR-scoped methods that survived
 > (§5.40): a hook calls it each run, compares the result against the previous run's
 > carry-over `hookState`, and dispatches only on meaningful change. There is **no wire
 > method** (MCP-only, per the §6.8 principle — PR watching is agent-authored background
-> work; FE clients keep using `pr.status` and the explicit-addressing `github.*` reads, §5.27).
+> work; FE clients use `pr.refresh` for linkage and the explicit-addressing `github.*` reads, §5.27).
 > `prNumber` is **required** (a positive number —
 > missing, non-numeric, or `<= 0` values are rejected with a validation error) and
 > there is **no active-PR fallback**: the snapshot is scoped to the workspace's
@@ -189,7 +186,7 @@ reads. The `prMonitor:*` lifecycle event shapes remain unchanged (§6.5): events
 carry monitor identity and lifecycle state, and `prMonitor:changed` also carries
 change-summary text. Clients refetch `prMonitor.list` after those notifications
 to obtain the updated reduced `lastSnapshot`, including these fields. These
-fields are not added to lifecycle events, `pr.status` or `GithubPullRequest`.
+fields are not added to lifecycle events or `GithubPullRequest`.
 
 **Forge provenance.** `branchUpdateRequired: true` follows the same positive
 BEHIND evidence as the legacy boolean. False requires a positive merge-state

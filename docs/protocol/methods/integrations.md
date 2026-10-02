@@ -28,9 +28,8 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 >
 > **Namespace split.** Local git operations stay on `git.*` (§5.6). Everything
 > that hits `api.github.com` — repo/PR/issue browse, PR review comments + threads — plus GitHub
-> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.*` methods (§5.7 —
-> `pr.status` / `pr.refresh` since the v5.0 removal) are deliberately **workspace/active-PR scoped**
-> (`ws` → owner/repo/number) and are left **untouched**;
+> **auth** and GitHub-**derived identity** live on `github.*`. The surviving `pr.refresh` method (§5.7) is deliberately **workspace scoped**
+> and discovers or repairs the workspace’s PR link;
 > `github.*` is the **explicit-addressing** surface — every data method takes `(owner, repo[, number])`
 > rather than resolving from the workspace.
 >

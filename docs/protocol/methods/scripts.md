@@ -34,8 +34,8 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 > a script and a terminal can interact (shared env, signals, attaching to a running script's
 > terminal). Live output/state stream as the `script:output` / `script:state` events (§6.5);
 > `script.output` / `script.status` remain the historical poll reads. Service/command modes,
-> auto-restart, and URL/port detection are preserved — a detected dev-server URL feeds the
-> `forward.*` hook when the connection is remote (§5.14).
+> auto-restart, and URL/port detection are preserved — remote dev-server URLs open through
+> the client’s local relay and authenticated binary `/tunnel` transport (§5.14).
 >
 > **Runtime status values.** The `ScriptRuntimeState` served by `script.status` (and as the
 > runtime part of `script.list` entries) and carried on `script:state` events reports one of
