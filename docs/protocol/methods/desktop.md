@@ -16,6 +16,52 @@ send desktop reverse calls to an old client. The UI gates its controls on both
 ends' support. Do not modify browser routing or infer desktop support from
 `browserExec`, host display availability, or a protocol version number.
 
+## Agent feature availability (prepared)
+
+`agentFeatures.desktopControl` is a boolean Agent Feature labelled **Desktop
+control**, default **true**, including when omitted from settings or an older
+persisted feature snapshot. It is separate from protocol
+`capabilities.desktopControl`, native OS readiness, remembered consent and active
+session authority. Default-on exposes the API; it never grants permission.
+See [settings](./settings.md) for the prepared setting definition.
+
+Capture the effective feature at each new agent-session creation, including
+creation/delegation of child agents, and use that same captured value for the
+prompt, MCP bridge, help and dispatch checks. Persist the feature snapshot and
+reuse it when recreating that session's bridge; an explicit persisted `false`
+must not become `true` after a settings change or restart. A missing desktop key
+in a legacy snapshot defaults to `true`. New sessions use their own creation-time
+settings, not a parent's older snapshot. Changing the setting applies to **new
+sessions only**: it neither changes an existing session's effective feature nor
+revokes its active desktop authority or erases remembered consent. Use Stop or
+revoke for immediate interruption; the feature toggle is not a live kill switch.
+
+When the effective feature is off, omit the desktop namespace from discovery and
+omit operational desktop prompt/help guidance. Reject startControl and every
+screenshot/input action at the dispatch/service boundary as disabled by
+`agentFeatures.desktopControl`, including forged direct dispatch and generic RPC
+attempts. Denial occurs before consent prompts, preparation, native dispatch or
+asset creation; remembered approval cannot override it. Use the existing
+feature-disabled tool-failure convention rather than inventing a public router
+method or advertising an unsupported capability.
+
+Cleanup is an explicit exception to the feature gate: authenticated endControl
+cleanup, user revoke, terminal Stop reconciliation, native Stop and lease teardown
+remain available. Hiding operational discovery must not disable cleanup dispatch
+from a retained binding or teardown path. This exception only releases or reports
+old authority; it cannot acquire, renew or execute actions, and never bypasses
+caller identity, workspace access or the terminal-report checks below. A session
+with no authority can still perform the normal idempotent endControl cleanup.
+
+Desktop consent **does not depend on structuredQuestions**. Its dedicated
+permission request/decision protocol works with that feature off, including for
+delegated agents whose structured questions are unavailable. When
+`agentFeatures.stateSnapshot` is off, suppress automatic snapshot injection only:
+the required release-control hint in active start results, grant wakes and enabled
+desktop API help remains unchanged. Explicit agent snapshot calls remain available
+and truthfully describe active control, including its hint. None of these feature
+combinations weakens owner checks or user-only consent decisions.
+
 ## Identity, primary selection and authority
 
 Agent calls use the prepared MCP-only desktop namespace shown below; they are

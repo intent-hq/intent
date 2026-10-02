@@ -1364,5 +1364,186 @@
         }
       }
     ]
+  },
+  "agentFeature": {
+    "path": "agentFeatures.desktopControl",
+    "label": "Desktop control",
+    "defaultValue": true,
+    "capabilityGrantsConsent": false,
+    "defaultGrantsConsent": false,
+    "sessions": [
+      {
+        "id": "omitted-settings",
+        "atCreation": {},
+        "currentSettings": {},
+        "expectEffective": true,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "explicit-off",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {},
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "existing-on-after-disable",
+        "atCreation": {
+          "desktopControl": true
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": true,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "existing-off-after-enable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": true
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "new-session-after-disable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false
+      },
+      {
+        "id": "delegate-after-disable",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false,
+        "isDelegate": true,
+        "parentEffective": true
+      },
+      {
+        "id": "recreated-bridge-preserves-off",
+        "atCreation": {
+          "desktopControl": true
+        },
+        "currentSettings": {
+          "desktopControl": true
+        },
+        "expectEffective": false,
+        "expectConsentGranted": false,
+        "persisted": {
+          "desktopControl": false
+        }
+      },
+      {
+        "id": "legacy-snapshot-missing-key",
+        "atCreation": {
+          "desktopControl": false
+        },
+        "currentSettings": {
+          "desktopControl": false
+        },
+        "expectEffective": true,
+        "expectConsentGranted": false,
+        "persisted": {}
+      }
+    ],
+    "disabled": {
+      "namespaceAdvertised": false,
+      "operationalHelpAvailable": false,
+      "calls": [
+        {
+          "method": "startControl",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "screenshot",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "click",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "type",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "keypress",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "scroll",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        },
+        {
+          "method": "drag",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
+        }
+      ],
+      "cleanup": [
+        "endControl",
+        "desktop.revoke",
+        "terminal-stop-report",
+        "native-stop",
+        "lease-teardown"
+      ],
+      "cleanupBypassesCallerAuthority": false,
+      "settingChangeRevokesExistingSession": false,
+      "rememberedConsentOverridesFeature": false
+    },
+    "independence": [
+      {
+        "id": "top-level-without-questions-or-injection",
+        "isDelegate": false,
+        "structuredQuestions": false,
+        "stateSnapshot": false,
+        "expectDesktopConsentAvailable": true,
+        "expectAutomaticSnapshot": false,
+        "startHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "grantHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "helpHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "explicitSnapshotHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+      },
+      {
+        "id": "delegate-without-questions-or-injection",
+        "isDelegate": true,
+        "structuredQuestions": false,
+        "stateSnapshot": false,
+        "expectDesktopConsentAvailable": true,
+        "expectAutomaticSnapshot": false,
+        "startHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "grantHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "helpHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished.",
+        "explicitSnapshotHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+      }
+    ]
   }
 }

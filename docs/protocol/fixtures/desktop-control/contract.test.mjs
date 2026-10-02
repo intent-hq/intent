@@ -365,3 +365,57 @@ test('ownership boundary examples reject every identity fallback and invalidate 
     assert.ok(cases.some(c => c.id === id), id);
   }
 });
+
+test('desktop feature is explicitly prepared, default on and independent of consent and capabilities', async () => {
+  const settings = await read('../../methods/settings.md');
+  assert.ok(doc.includes('agentFeatures.desktopControl'));
+  assert.ok(settings.includes('**Desktop control agent feature (prepared addition)**'));
+  const feature = fixture.agentFeature;
+  assert.equal(feature.path, 'agentFeatures.desktopControl');
+  assert.equal(feature.defaultValue, true);
+  assert.equal(feature.label, 'Desktop control');
+  assert.equal(feature.capabilityGrantsConsent, false);
+  assert.equal(feature.defaultGrantsConsent, false);
+});
+
+test('new sessions and delegates capture defaults while persisted feature snapshots survive setting changes', () => {
+  const cases = fixture.agentFeature.sessions;
+  for (const c of cases) {
+    const captured = (c.persisted ?? c.atCreation).desktopControl ?? true;
+    assert.equal(c.expectEffective, captured, c.id);
+    assert.equal(c.expectConsentGranted, false, c.id);
+  }
+  for (const id of ['omitted-settings', 'explicit-off', 'existing-on-after-disable', 'existing-off-after-enable', 'new-session-after-disable', 'delegate-after-disable', 'recreated-bridge-preserves-off', 'legacy-snapshot-missing-key']) {
+    assert.ok(cases.some(c => c.id === id), id);
+  }
+});
+
+test('disabled desktop denies every acquisition and action while cleanup remains authorized', () => {
+  const { disabled } = fixture.agentFeature;
+  assert.equal(disabled.namespaceAdvertised, false);
+  assert.equal(disabled.operationalHelpAvailable, false);
+  for (const method of ['startControl', 'screenshot', 'click', 'type', 'keypress', 'scroll', 'drag']) {
+    const c = disabled.calls.find(c => c.method === method);
+    assert.ok(c, method);
+    assert.equal(c.forgedDispatchDenied, true);
+    assert.equal(c.expectNativeDispatchCount, 0);
+    assert.equal(c.expectPromptCount, 0);
+  }
+  assert.deepEqual(disabled.cleanup, ['endControl', 'desktop.revoke', 'terminal-stop-report', 'native-stop', 'lease-teardown']);
+  assert.equal(disabled.cleanupBypassesCallerAuthority, false);
+  assert.equal(disabled.settingChangeRevokesExistingSession, false);
+  assert.equal(disabled.rememberedConsentOverridesFeature, false);
+});
+
+test('desktop consent and release hints survive unrelated feature toggles', () => {
+  for (const c of fixture.agentFeature.independence) {
+    assert.equal(c.structuredQuestions, false);
+    assert.equal(c.stateSnapshot, false);
+    assert.equal(c.expectDesktopConsentAvailable, true, c.id);
+    assert.equal(c.expectAutomaticSnapshot, false);
+    for (const surface of ['startHint', 'grantHint', 'helpHint', 'explicitSnapshotHint']) {
+      assert.equal(c[surface], fixture.releaseHint, `${c.id}: ${surface}`);
+    }
+  }
+  assert.ok(fixture.agentFeature.independence.some(c => c.isDelegate));
+});
