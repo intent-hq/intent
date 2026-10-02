@@ -668,25 +668,41 @@ agent's live work for both direct user retirement and MCP self-retirement:
 #### Shared pending human queue
 
 **Same-author append (additive metadata; docs lead implementation).** `agent.queueMessage` and user-origin `agent.sendMessage`
-queue fallbacks select the last pending human entry for that agent. When its
+queue fallbacks select the latest pending human submission for that agent by
+**arrival order**, independently of drain position or interrupt priority. When its
 resolved authenticated principal matches the new submission, append the new text
 as `oldContent + "\n\n" + newContent`, retaining the original entry's `id`,
 `turnId`, `queuedAt` and queue position. The separator is exactly two newline
 characters; existing text is not trimmed. A later human entry from another
 principal blocks the append. Automatic/system and agent-sent entries are skipped
-when finding the last human entry, remain separate, and retain their own order.
+when finding the latest human submission, remain separate, and retain their own
+order. A successful append records the new human arrival while retaining the
+survivor's delivery position; priority reordering never permits skipping a later
+human author. Arrival order is unambiguous under concurrent submissions and
+survives restart without depending on timestamp ties.
 
 | Pending entries before submission | New submission | Pending entries after submission |
 |---|---|---|
 | A: first | A: second | A: `first\n\nsecond` |
 | A: first, B: reply | A: second | A: first, B: reply, A: second |
 | A: first, system: notice | A: second | A: `first\n\nsecond`, system: notice |
+| A: first normal, then B: reply interrupt (B drains first) | A: second normal | Three entries; B remains a human barrier despite its earlier drain position |
 
 These examples concern pending entries only. Already delivered transcript rows
 are never rewritten by append. The author comparison uses a trusted principal
 identity, not a display name, forge handle, client-supplied attribution, or an
 imported historical author's identity. Unknown humans never match a current
 principal just because their author projection is missing or null.
+
+**Trusted human classification.** Authenticated human identity and server-known
+origin take precedence over caller-provided metadata labels. A human submission
+with `type: "custom"` is still human, and a human B's `source: "system"` cannot
+hide B's entry, make it editable by A, or allow A to merge across it. Custom
+semantic metadata is preserved without granting it authorship or ordering
+control. Genuine daemon/agent input remains nonhuman even if it supplies forged
+human attribution. Legacy unstamped entries use the existing safe authorship
+fallback; an unresolved or imported human never becomes automatic merely because
+its current-local principal cannot be established.
 
 **Attachments and metadata.** Append `imageBlocks` and `fileBlocks` in submission
 order, keeping each reference/block intact and preserving the original author's
@@ -703,8 +719,7 @@ including identical values. Each element is a captured metadata object or JSON
 contributions objects). Repeated appends extend one flat array rather than
 nesting aggregates. A human-origin retry may resubmit the canonical
 `mergedMessageMetadata` array: human ingress accepts only an array whose elements
-are metadata objects or
-JSON `null`, rejecting malformed shapes before queue mutation. Every object is
+are metadata objects or JSON `null`, rejecting malformed shapes before queue mutation. Every object is
 sanitized with the same authenticated-caller attribution rules as the root
 metadata, preserving its question-answer tags and custom fields while preventing
 copied attribution from impersonating another principal. Nested
@@ -753,7 +768,14 @@ still apply (§6.5).
 **Atomicity and recovery.** Selection and append are one queue mutation, serialized
 with concurrent enqueue, edit, remove and drain. Concurrent accepted submissions
 retain all text in their serialized order. If drain wins, append cannot rewrite the
-popped entry or its transcript row. The merged queue payload is durable and
+popped entry or its transcript row. A provisionally popped human entry remains
+an arrival-order barrier until delivery or restoration settles: A1 still pending,
+B2 provisionally popped, then A3 arriving must not combine A3 with A1 across B2.
+If an undelivered provisional pop is returned to the queue, restoration normalizes
+same-author pending contributions atomically using their original arrival order,
+without bypassing another human or already-persisted history. For A1 popped, A2
+queued, then A1 returned, the result is one entry with A1's surviving identity and
+`A1\n\nA2` content, not two adjacent entries. The merged queue payload is durable and
 rehydrates as one entry; append does not alter the existing restart rules for
 editing holds or imported-human delivery holds. Absorbed submission IDs are kept
 with the surviving pending entry for retry deduplication: enqueueing the same
@@ -798,6 +820,21 @@ to satisfy another person's per-entry author gate.
 
 This table covers human entries only. Workspace access is a prerequisite for every
 row. Agent/daemon and genuinely nonhuman entry rules are unchanged.
+
+**Required contract scenarios.** Backend and frontend regression fixtures must
+cover these observations; passing documentation checks alone is not runtime
+evidence.
+
+| Fixture | Required observation |
+|---|---|
+| Same human, arbitrary `type: "custom"` metadata | One appended human entry; author identity and custom metadata survive |
+| A, authenticated B with `source: "system"`, A | Three human contributions remain separated by B; all participants see B |
+| Genuine automatic/agent input with spoofed human fields | Trusted origin stays nonhuman; forged attribution grants no edit/merge rights |
+| A1 normal, B1 interrupt, A2 normal; repeat after restart | B1 remains the human barrier even when priority places it first to drain |
+| A1 pending, B2 provisionally popped, A3 arrives, B2 restored | A3 cannot merge across B2 during the pop window or restoration |
+| Undelivered A1 popped, same-author A2 queued, A1 restored | One survivor with A1 identity and arrival-ordered text/attachments/metadata; no loss or duplicate delivery |
+| Repeated `editing: true` while more input appends | Repeating the hold does not consume preserved text; later save/cancel keeps every append exactly once |
+| Persisted failed-turn row restored beside fresh human input | Delivered history stays immutable and cannot become a merge target or a skipped human barrier |
 
 **Agent-facing queue visibility & sender hygiene *(new in intentd, [intentd#816](https://github.com/intent-hq/intentd/pull/816))*.**
 Agents get visibility into pending message queues plus a guard against queue-flooding on A2A
