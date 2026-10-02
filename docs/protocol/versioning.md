@@ -1,10 +1,10 @@
 > Part of the [Intent JSON-RPC protocol docs](./README.md) — Protocol Version & Compatibility.
 
-The prepared [script run monitor extension](./methods/script-monitors.md) reserves
-three router methods and five events, plus additive runId and agent waiting
-projections, optional regex/line-count OR triggers and required one-shot TTL.
-`scriptMonitors: 1` gates the full contract; allocate the next minor
-at implementation time. Documentation and synthetic fixtures do not claim shipment.
+The [script run monitor extension](./methods/script-monitors.md), added in protocol
+12.1, provides three router methods and five events, plus additive runId and agent
+waiting projections, optional regex/line-count OR triggers and required one-shot
+TTL. `scriptMonitors: 1` gates the full contract. Protocol 13.0 retains this
+capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
@@ -26,15 +26,18 @@ and local-daemon forwarding behavior are unchanged. `git.commit` is not part
 of this retirement.
 
 **Installed frontend compatibility.** Registered-root `file.read` and
-`file.readChunk` retain their v11.1 contract in 12.0. The corrected frontend
-accepts known 11.1+ versions within major 11 and known major 12 while rejecting
-missing, malformed, older, or unknown future-major support before sending a
-scoped read. Older installed frontends with an exact-major-11 support guard
-reject those scoped reads against a protocol-12 daemon; they require the
-corrected frontend from [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114).
-Updating daemon documentation cannot change that installed-client behavior.
-Unscoped reads keep their existing behavior. See the [registered-root support
-gate](./methods/files-terminal-browser.md).
+`file.readChunk` retain their v11.1 contract in protocol 12 and 13. The updated
+frontend guard in [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114)
+accepts known 11.1+ versions within major 11 and known majors 12 and 13. It rejects
+missing, malformed, older, and unknown future-major support (including 14) before
+sending a scoped read.
+
+Installed frontends with the original exact-major-11 guard reject scoped reads
+against protocol 12 or 13. Versions with only the earlier major-12 allowance still
+reject protocol 13. Both require a frontend carrying the updated major-13 guard;
+the PR link and daemon documentation do not establish that the installed desktop
+contains it. Unscoped reads keep their existing behavior. See the
+[registered-root support gate](./methods/files-terminal-browser.md).
 
 The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
 The automated monorepo pin update [intent PR #6582](https://github.com/intent-hq/intent/pull/6582)
