@@ -39,9 +39,10 @@ native test result or listener qualification. Runtime acceptance requires separa
 component implementation and verification.
 The [private capture agreement](./node-link.md#private-checkpoint-capture) adds
 nodeProtocol 3 registration/Stage/commit semantics with bounded current Store
-attachment reuse. Version 2 lifecycle/read behavior carries forward explicitly;
-new capture methods require exactly 3. Public protocol and checkpoint/journal
-formats stay unchanged. [Capture fixtures](./fixtures/nodes/checkpoint-capture.json)
+attachment reuse. Lifecycle/read supports exactly `{2,3,4}` and capture supports exactly `{3,4}`;
+[assignment enrollment](./node-link.md#trusted-assignment-enrollment) requires
+exactly `4`. Each requires its installed feature policy and actual authority.
+Public protocol and checkpoint/journal formats stay unchanged. [Capture fixtures](./fixtures/nodes/checkpoint-capture.json)
 and [their static tests](./fixtures/nodes/checkpoint-capture.test.mjs) establish
 structural integrity only, not executed native capture or durable ACK acceptance. Run the standalone prepared-data checks with
 `node --test docs/protocol/fixtures/nodes/checkpoint-capture.test.mjs`.

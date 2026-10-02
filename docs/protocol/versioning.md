@@ -16,15 +16,18 @@ registered-root file-read contract remains independent and unchanged. Additive
 docs precede consumer merges; recheck allocations against main before implementation
 merge, and land daemon protocol consumers before frontend consumers.
 
-**Private nodeProtocol 3 — prepared capture contract.** This is separate from the
-public documented version above. The [private capture agreement](./node-link.md#private-checkpoint-capture)
-adds bounded checkpoint registration and exact commit requests using unchanged
-checkpointFormat 1, journalFormat 1 and Git Stage framing. Existing private version-2
-lifecycle/read semantics carry forward under explicit supported `{2,3}` gates;
-new capture RPCs require exactly 3. Unsupported/future versions fail closed. These
-docs do not advertise runtime support, broaden public catalogs or qualify a
-listener. Additive docs precede consumer merges/acceptance; authorized local work
-and draft preparation may proceed in parallel.
+**Private nodeProtocol 4 — prepared assignment enrollment.** This is separate from
+public protocol versioning. [Trusted enrollment](./node-link.md#trusted-assignment-enrollment)
+adds a closed head-to-node install/close RPC before a fresh agent grant exists.
+It retains the version-3 [capture contract](./node-link.md#private-checkpoint-capture),
+checkpointFormat 1, journalFormat 1 and Git Stage framing. Explicit supported sets
+are lifecycle/read `{2,3,4}`, capture `{3,4}`, and enrollment exactly `4`;
+unsupported/future versions fail closed. Each family still requires its installed
+feature policies and actual authority; version negotiation is not runtime support.
+Enrollment is private, excluded from public method and workspace-routing catalogs.
+These additive docs precede consumer merges/contract acceptance; authorized local
+development and draft preparation may proceed in parallel. Static fixtures do not
+qualify a listener, fresh-workspace source, provider or ready/ACK behavior.
 
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
