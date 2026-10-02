@@ -76,7 +76,6 @@ the **UI-invoked reads** are wire methods; the attribution writer `trackChange` 
 | --- | --- | --- |
 | file-tracking.getChanges | workspaceId (req), filter?: { stage?, agentId?, sessionId?, turnNumber?, filePattern?, since?, until? } | { changes: TrackedChange[], truncated, totalCount } |
 | file-tracking.loadCommits | workspaceId (req), limit?: number (default 50, ≤200), nextToken?, includeOlder?: boolean (default false) | { commits: CommitWithAttribution[], boundarySha, nextToken } — **metadata-only** entries (see the CommitWithAttribution schema, §5.18): the bounded walk skips per-commit tree diffs; clients fetch per-file data on demand via `git.commitDetails` (§5.6). Boundary semantics below |
-| file-tracking.getLineStats | workspaceId (req) | { additions, deletions } — real-time totals across unstaged + staged + local commits |
 | file-tracking.getAgentLocks | workspaceId (req) | { autoCommitEnabled, lockedAgentIds: string[], lockedFilePaths: string[] } — the daemon-computed **agent-lock snapshot**; hydration read for the `changes:agent-locks` event (§6.5). Lock semantics below |
 | file-tracking.stage | workspaceId (req), paths (req): string[] | { ok: true } — stages the referenced files |
 | file-tracking.unstage | workspaceId (req), paths (req): string[] | { ok: true } — unstages the referenced files |
@@ -130,16 +129,12 @@ Metrics are durable (the `workspace_metrics` / `agent_metrics` tables).
 
 | Method | Params | Result |
 | --- | --- | --- |
-| metrics.getWorkspaceStats | workspaceId (req) | Metrics \| null — `{ additions, deletions, filesChanged, byAgent }` for the workspace |
 | metrics.getAgentStats | agentId (req), workspaceId? | Metrics \| null — `{ additions, deletions, filesChanged }` for one agent (`byAgent` omitted) |
-| metrics.getAllWorkspaceStats | — | { [workspaceId]: Metrics } — all workspaces |
-| metrics.clearAgentStats | agentId (req), workspaceId? | { success: boolean } — resets one agent's counters |
 
 ```json
 // → request
-{ "jsonrpc":"2.0","id":52,"method":"metrics.getWorkspaceStats","params":{ "workspaceId":"ws-abc" } }
+{ "jsonrpc":"2.0","id":52,"method":"metrics.getAgentStats","params":{ "agentId":"agent-123", "workspaceId":"ws-abc" } }
 // ← response
-{ "jsonrpc":"2.0","id":52,"result":{ "additions":140,"deletions":12,"filesChanged":3,
-  "byAgent":{ "agent-123":{ "additions":140,"deletions":12,"filesChanged":3 } } } }
+{ "jsonrpc":"2.0","id":52,"result":{ "additions":140,"deletions":12,"filesChanged":3 } }
 ```
 

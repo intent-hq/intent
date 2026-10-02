@@ -81,8 +81,7 @@ absence means unavailable, not permission to infer support from version numbers.
   several windows of one app).
 - **Disambiguation key.** `clientId` is the key that disambiguates `drafts.*` (§5.16) and is the
   foundation for **future per-viewer read cursors** (the `attention` extension noted in §5.1). It
-  also lets FE-served intents (`host.openExternal`, §5.14) and `forward.*` target the right
-  client.
+  also lets FE-served intents (`host.openExternal`, §5.14) target the right client.
 - **`server` block.** The result advertises daemon capabilities so a client can gate UI right
   after the handshake (mirrors `host.status`, §5.14): `locality` (`local` | `remote`),
   `hasDisplay` (GUI present on the daemon host), `osArch` (e.g. `darwin/arm64`), `version`

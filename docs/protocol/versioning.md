@@ -8,7 +8,38 @@ at implementation time. Documentation and synthetic fixtures do not claim shipme
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `11.3` — workspace specialist memory, additive implementation candidate; not a shipped-version claim.
+**Documented version:** `12.0` — retirement of ten unused RPC names. Prepared
+extensions below remain independently capability-gated; this header does not
+claim a carrying desktop release.
+
+**Version 12.0 — unused RPC retirement.** This major version removes exactly ten
+inbound names: `git.diff`, `git.log`, `pr.status`, `file-tracking.getLineStats`,
+`metrics.getWorkspaceStats`, `metrics.getAllWorkspaceStats`,
+`metrics.clearAgentStats`, `forward.create`, `forward.list`, and `forward.close`.
+Owner/local callers receive `-32601` (Method not found); collaborator authorization
+still runs first and returns `-32003` (Forbidden) for these unlisted names.
+Generic CLI RPC invocation of these names is also retired. Built-in CLI commands
+and all MCP operations remain available: canonical `git.diffs` / `git.commits`,
+`pr.refresh`, `metrics.getAgentStats`, and shared internal services are retained.
+The authenticated binary `/tunnel`, frontend local relay, browser reverse RPCs,
+and local-daemon forwarding behavior are unchanged. `git.commit` is not part
+of this retirement.
+
+**Installed frontend compatibility.** Registered-root `file.read` and
+`file.readChunk` retain their v11.1 contract in 12.0. The corrected frontend
+accepts known 11.1+ versions within major 11 and known major 12 while rejecting
+missing, malformed, older, or unknown future-major support before sending a
+scoped read. Older installed frontends with an exact-major-11 support guard
+reject those scoped reads against a protocol-12 daemon; they require the
+corrected frontend from [cloudlands-fe PR #3114](https://github.com/intent-hq/cloudlands-fe/pull/3114).
+Updating daemon documentation cannot change that installed-client behavior.
+Unscoped reads keep their existing behavior. See the [registered-root support
+gate](./methods/files-terminal-browser.md).
+
+The daemon removal landed in [intentd PR #2240](https://github.com/intent-hq/intentd/pull/2240).
+The automated monorepo pin update [intent PR #6582](https://github.com/intent-hq/intent/pull/6582)
+carries that daemon change. The corrected desktop release must carry both component
+changes; daemon support alone does not establish installed-frontend compatibility.
 
 **Version 11.3 — manual specialist memory.** `agent.getCreationPreferences`
 returns the last explicitly remembered specialist for one workspace, with absence
