@@ -7,7 +7,7 @@ import { existsSync, readFileSync, realpathSync, mkdtempSync, rmSync } from 'nod
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inspectFixtures } from './check-transfer-selection-contract.mjs';
+import { GOLDEN_FILES, inspectFixtures, resolveGoldenPath } from './check-transfer-selection-contract.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const GENERATOR = 'crates/intent-services/src/transfer_selection_contract.rs';
@@ -61,7 +61,8 @@ export async function preflight(root = ROOT, env = process.env) {
     assert.equal(realpathSync(env.TRANSFER_SELECTION_FIXTURE_ROOT), realpathSync(fixtureRoot), 'fixtures and validator must belong to this monorepo checkout');
   }
   assert.equal(env.TRANSFER_SELECTION_GENERATED, undefined, 'connected gate generates its own fresh input; unset TRANSFER_SELECTION_GENERATED');
-  await inspectFixtures({ fixtureRoot });
+  for (const file of GOLDEN_FILES) await inspectFixtures({ fixtureRoot, generated: path.join(fixtureRoot, file) });
+  sources.golden = path.basename(await resolveGoldenPath({ fixtureRoot, intentdRoot: path.join(root, 'packages/intentd') }));
   sources.generatorSha256 = sha256(path.join(root, 'packages/intentd', GENERATOR));
   return { sources, fixtureRoot };
 }
@@ -89,8 +90,8 @@ function run(command, args, cwd, env, signal) {
 export async function runContract({ root = ROOT, env = process.env, log = console.log, signal = new AbortController().signal } = {}) {
   const { sources, fixtureRoot } = await preflight(root, env);
   log(`transfer-selection sources: ${JSON.stringify(sources)}`);
-  const golden = path.join(fixtureRoot, 'public-sessions.json');
-  const goldenHash = sha256(golden);
+  const golden = path.join(fixtureRoot, sources.golden);
+  const goldenHashes = GOLDEN_FILES.map((file) => sha256(path.join(fixtureRoot, file)));
   const scratch = mkdtempSync(path.join(env.TMPDIR || os.tmpdir(), 'transfer-selection-'));
   log(`transfer-selection temporary directory: ${scratch}`);
   try {
@@ -100,7 +101,7 @@ export async function runContract({ root = ROOT, env = process.env, log = consol
     for (const fresh of freshFiles) {
       await run('bash', [EXPORTER, '--output', fresh], path.join(root, 'packages/intentd'), childEnv, signal);
       // A caller cannot turn the gate green with a no-op/missing exporter.
-      log(await inspectFixtures({ fixtureRoot, fresh, intentdRevision: sources.components.intentd.head, generatorSha256: sources.generatorSha256 }));
+      log(await inspectFixtures({ fixtureRoot, generated: golden, fresh, intentdRevision: sources.components.intentd.head, generatorSha256: sources.generatorSha256 }));
     }
     const artifact = JSON.parse(readFileSync(freshFiles[0], 'utf8'));
     const second = JSON.parse(readFileSync(freshFiles[1], 'utf8'));
@@ -109,7 +110,7 @@ export async function runContract({ root = ROOT, env = process.env, log = consol
     log(`transfer-selection renderer input: ${JSON.stringify(consumed)}`);
     await run('corepack', ['pnpm', 'run', 'test:unit', RENDERER], path.join(root, 'packages/cloudlands-fe'), { ...childEnv, TRANSFER_SELECTION_GENERATED: freshFiles[0] }, signal);
     assert.equal(sha256(freshFiles[0]), consumed.sha256, 'renderer modified the generated input');
-    assert.equal(sha256(golden), goldenHash, 'connected proof must not rewrite the golden');
+    assert.deepEqual(GOLDEN_FILES.map((file) => sha256(path.join(fixtureRoot, file))), goldenHashes, 'connected proof must not rewrite either golden');
     assert.deepEqual(await preflight(root, env), { sources, fixtureRoot }, 'source checkouts changed during the connected proof');
     log(`transfer-selection passed: ${JSON.stringify({ sources, consumed })}`);
     return { sources, consumed };

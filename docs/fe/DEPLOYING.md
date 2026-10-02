@@ -43,18 +43,23 @@ version number by hand.
    that bumps `package.json` and regenerates `CHANGELOG.md` from the
    conventional commits since the last `v*` tag.
 2. The Release PR is auto-merged by `auto-cut-alpha.yml` when it is green —
-   that is the release timing gate. The workflow is event-chained with an
-   hourly cron backstop: a sidecar pin-bump squash merge (a push to `main`
-   touching `intentd.version`) chains straight into a cut run that polls
-   (30s interval, up to 15 min) for release-please to refresh the Release PR
-   and for CI Gate to go green, then merges — so a new intentd ships in the
-   same fe alpha cycle. The hourly cron at :30 is the backstop and the normal
-   path for fe-only changes (check-once-and-exit, no polling); every run type
-   defers the cut while an intentd release build is in flight (a semver tag on
+   that is the release timing gate. Any push to `main` starts an attempt
+   (except the cut's own release merge), and a ten-minute cron retries.
+   Push, cron, and manual runs check readiness once and exit without sleeps
+   or polling. No open Release PR means no cut. All automated attempts,
+   including sidecar-pin updates, defer while the latest frontend release
+   tag is less than 60 minutes old; manual `workflow_dispatch` retains its
+   throttle override. Existing tag/date lookup fail-open behavior is unchanged.
+   Scheduled retries also require the Release PR to carry main's current pin
+   and a head no older than the newest unshipped releasable commit. Release PR
+   freshness, pin checks, CI Gate, and other readiness guards must still pass.
+   Every run type defers the cut while an intentd release
+   build is in flight (a semver tag on
    `intent-hq/intentd` newer than the published alpha manifest and younger
    than 90 minutes; fails open on any lookup error). The `hold-release`
    label on the Release PR pauses the auto-cut; a human can still merge
-   early.
+   early. See the canonical [frontend release guards](../RELEASING.md#cloudlands-fe)
+   for the full eligibility checks and manual overrides.
 3. On the merge, release-please creates the `v{version}` tag and a GitHub
    Release on `cloudlands-fe`. The workflow authenticates with `RELEASE_PAT`
    (not the default `GITHUB_TOKEN`) so the pushed tag triggers downstream

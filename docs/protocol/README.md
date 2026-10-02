@@ -1,6 +1,6 @@
 # Intent Backend — JSON-RPC Protocol
 
-**Documented Protocol Version:** `11.2` (single-node platform launch: additive prepared contract; not a shipped-version claim). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
+**Documented Protocol Version:** `11.3` (workspace specialist memory: additive implementation candidate; not a shipped-version claim). The single-node platform launch remains prepared and capability-gated; its earlier 11.2 reservation does not imply implementation (daemon 11.2 carries script lifecycle snapshots). Other prepared extensions retain their own rollout status and capability gates, including the [shared-host capability contract](./methods/shared-host-membership.md#authority-and-discovery).
 
 This directory is the canonical wire contract between Intent clients (desktop, iOS, CLI, and agent developers building clients) and the Intent backend daemon (`intentd`): transport, JSON-RPC envelope, the full method catalog, events, agent streaming, the permission flow, error codes, and thin-client guidance. It is a **living specification**: changes land through the compatibility policy (see below), and the method surface is enforced by golden tests in the `intent-transport` crate.
 
@@ -257,6 +257,30 @@ selectors and isolated state/transport: explicit Auggie label or Auto (`Default
 model` tooltip), with no warning, fallback action, model mutation or toast.
 
 ### Gate rollout
+
+During the desktop-control rollout, retain the original `public-sessions.json`
+byte-for-byte for daemon harnesses without a version declaration. The feature
+harness commits `scripts/transfer-selection-expectation.json` containing exactly
+`{"version":"desktop-control-v1"}` and uses the shared validator's
+`resolveGoldenPath({ fixtureRoot, intentdRoot })` to select
+`public-sessions.desktop-control-v1.json`. The declaration selects a fixed known
+filename; malformed or unknown versions fail. There is no environment/path
+override, payload-based selection, or fallback when a selected artifact is missing.
+Both artifacts must be real clean-source generator output; neither may be edited
+by hand. Regenerate the selected artifact using the daemon harness's
+`scripts/test-transfer-selection-contract.sh --regenerate`, then export again
+with `--output <absolute-separate-path>` to verify repeatability and provenance.
+
+The connected runner independently resolves the expectation from the checked-out
+daemon, compares every fresh case against that exact golden, and checks that
+neither golden changed during the run. The default compilation-free CLI validates
+both maintained artifacts. The four-field normalizer and complete-payload
+freshness checks are unchanged. Old daemon heads/pins keep using the legacy
+artifact with either renderer; new daemon heads/pins use the desktop artifact
+with either renderer. Standalone renderer tests retain the legacy golden, while
+connected tests always consume the actual freshly generated response. Land these
+shared fixtures and selection helpers before the declaring daemon harness; let
+the normal automated workflow advance pins afterward.
 
 `make check-transfer-selection-contract` validates the complete matrix, golden and
 provenance envelope without compiling Rust or installing the frontend. It is a
