@@ -58,8 +58,11 @@ not a claim that the pinned daemon or an installed release already serves it.
   remain eligible while they remain in `expectedAgentIds`. Row order is
   unspecified; consumers join by `id`, never by array position.
 - **Missing and retired participants:** a missing session row (including a
-  hard-deleted agent) is omitted without removing its references from watches or
-  groups. Existing `completedAgentIds` and `deletedAgentIds` retain their meaning.
+  hard-deleted agent), or a session summary that cannot be decoded, is omitted
+  without removing its references from watches or groups. An existing decodable
+  row with stored status `Deleted` is not separately excluded; it uses the
+  canonical list projection, including any runtime pending-delete overlay.
+  Existing `completedAgentIds` and `deletedAgentIds` retain their meaning.
   A soft-retired participant whose session still exists is included with
   `retiredAt`, using the same row projection as an `agent.list` read that includes
   retired sessions. Absence from `agents` is not a deletion event and must not
