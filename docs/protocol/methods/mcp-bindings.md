@@ -227,14 +227,17 @@ ws.primitive.addReference(noteId, semanticId, description, snapshot?) → { ok, 
 ws.script.archive(scriptIds) → { archived, skipped }
 ws.script.create(name, command, mode, { cwd?, env?, category?, autoStart?, scriptId?, purpose? }) → { id }
 ws.script.list({ archive? }?) → [scripts]
+ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor?, ...ownerRefusal }
+ws.script.monitors() → ScriptMonitor[]
 ws.script.output(scriptId, maxLines?) → string
 ws.script.remove(scriptId) → { ok, scriptId }
-ws.script.restart(scriptId) → { ok, scriptId }
+ws.script.restart(scriptId) → { ok, scriptId, runId? }
 ws.script.restore(scriptIds) → { restored, skipped }
 ws.script.run(scriptId, { maxLines?, timeoutSeconds? }) → { exitCode?, output, timedOut?, warning? }
-ws.script.start(scriptId) → { ok, scriptId }
+ws.script.start(scriptId) → { ok, scriptId, runId? }
 ws.script.status(scriptId) → status
 ws.script.stop(scriptId) → { ok, scriptId }
+ws.script.unmonitor(monitorId) → { ok, monitor }
 ```
 
 ### ws.task
