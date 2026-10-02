@@ -113,5 +113,6 @@ outcome shapes, timeout and first-resolution behavior are unchanged.
 [Desktop control (§5.51)](./methods/desktop.md#consent-and-lifecycle) defines a
 separate asynchronous consent flow. ACP AllowAll/bypass policies and generic Q&A
 answers never authorize desktop control. Its dedicated request IDs, authenticated
-primary-client decisions, remembered permission and grant-after-readiness wakes
+assigned-primary or same-owner candidate decisions, remembered permission and
+grant-after-readiness wakes
 do not change the existing ACP permission methods or their pending snapshots.

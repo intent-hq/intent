@@ -192,7 +192,7 @@ contract defines validation, persistence-failure and connection-generation rules
 `desktop:permission-requested`, `desktop:permission-resolved`,
 `desktop:permission-changed` and `desktop:session-changed`. That section defines
 the complete payloads, transition deduplication and restricted principal/primary
-audiences, including durable query/search filtering. These events cannot grant
+or recipient-bound unassigned-candidate audiences, including durable query/search filtering. These events cannot grant
 execution authority; an active transition follows local readiness only.
 Agent wakes are separately queued and revalidated so an early grant is retained
 and a revoked grant cannot later report active control.

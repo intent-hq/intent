@@ -1545,5 +1545,722 @@
         "explicitSnapshotHint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
       }
     ]
+  },
+  "primaryClaims": {
+    "prompt": {
+      "requestId": "claim-request",
+      "workspaceId": "ws-a",
+      "agentId": "agent-a",
+      "agentName": "Agent A",
+      "computerId": "computer-b",
+      "computerName": "Computer B",
+      "claimsPrimary": true,
+      "expiresAt": "2026-10-02T10:05:00Z",
+      "options": [
+        {
+          "id": "allow_once",
+          "label": "Allow once"
+        },
+        {
+          "id": "allow_future",
+          "label": "Allow future sessions for this agent"
+        },
+        {
+          "id": "deny",
+          "label": "Deny"
+        }
+      ]
+    },
+    "agentPending": {
+      "status": "pending_permission",
+      "requestId": "claim-request"
+    },
+    "scenarios": [
+      {
+        "id": "first-connected-is-not-assigned",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": true,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": "b",
+        "expectActivationCount": 1,
+        "expectTakeover": false,
+        "firstConnected": "a"
+      },
+      {
+        "id": "simultaneous-allows",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": true,
+            "expectWinner": true,
+            "expectGrantSaved": true
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": true,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": "b",
+        "expectActivationCount": 1,
+        "expectTakeover": false,
+        "concurrent": true
+      },
+      {
+        "id": "deny-one-allow-other",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "deny",
+            "clientId": "a"
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          },
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": true,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": "b",
+        "expectActivationCount": 1,
+        "expectTakeover": false
+      },
+      {
+        "id": "all-deny",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "deny",
+            "clientId": "a"
+          },
+          {
+            "kind": "deny",
+            "clientId": "b"
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": null,
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false,
+        "expectOutcome": "denied"
+      },
+      {
+        "id": "saved-offline-pin",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "offline",
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false,
+        "initialPin": "offline"
+      },
+      {
+        "id": "agent-hidden-tab-host",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "a",
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false,
+        "agentTabHost": "a",
+        "hidden": true
+      },
+      {
+        "id": "active-desktop",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "a",
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false,
+        "activeClient": "a"
+      },
+      {
+        "id": "foreign-principal",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "b",
+            "principalId": "manager",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": null,
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      },
+      {
+        "id": "owner-changed",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "owner-change"
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": null,
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      },
+      {
+        "id": "explicit-pin-race",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "assignment-change",
+            "clientId": "b"
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      },
+      {
+        "id": "tab-claim-race",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "assignment-change",
+            "clientId": "b"
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      },
+      {
+        "id": "set-clear-aba-race",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "assignment-change",
+            "clientId": "b"
+          },
+          {
+            "kind": "assignment-change",
+            "clientId": null
+          },
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": null,
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      },
+      {
+        "id": "disconnected-candidate",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": false,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": false,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          },
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": true,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": "b",
+        "expectActivationCount": 1,
+        "expectTakeover": false
+      },
+      {
+        "id": "remembered-unassigned-still-prompts",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "b",
+            "remember": false,
+            "expectWinner": true,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": "b",
+        "expectWinner": "b",
+        "expectActivationCount": 1,
+        "expectTakeover": false,
+        "remembered": [
+          "a",
+          "b"
+        ],
+        "expectPromptCount": 2,
+        "expectAutoClaim": false
+      },
+      {
+        "id": "native-failure-keeps-selection",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          },
+          {
+            "clientId": "b",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": true,
+            "expectWinner": true,
+            "expectGrantSaved": true
+          }
+        ],
+        "expectPrimary": "a",
+        "expectWinner": "a",
+        "expectActivationCount": 0,
+        "expectTakeover": false,
+        "nativeFailure": true,
+        "expectFallbackActivation": false
+      },
+      {
+        "id": "claim-transaction-rollback",
+        "owner": "owner",
+        "candidates": [
+          {
+            "clientId": "a",
+            "principalId": "owner",
+            "connected": true,
+            "capable": true
+          }
+        ],
+        "steps": [
+          {
+            "kind": "allow",
+            "clientId": "a",
+            "remember": true,
+            "transactionFails": true,
+            "expectWinner": false,
+            "expectGrantSaved": false
+          }
+        ],
+        "expectPrimary": null,
+        "expectWinner": null,
+        "expectActivationCount": 0,
+        "expectTakeover": false
+      }
+    ],
+    "sidebar": [
+      {
+        "id": "single-idle",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "multiple-idle",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 2,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "saved-offline-idle",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "savedPin": "offline",
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "current-primary-idle",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": true,
+        "clientCount": 1,
+        "savedPin": "a",
+        "expectMenuVisible": true,
+        "expectMenuEnabled": false,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "user-tabs-only",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "userTabs": 2,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "hidden-agent-tab",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "agentTabHost": "b",
+        "hidden": true,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": true,
+        "expectLabelClient": "b"
+      },
+      {
+        "id": "active-single",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "activeClient": "a",
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": true,
+        "expectLabelClient": "a"
+      },
+      {
+        "id": "ended-no-agent-tabs",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "savedPin": "a",
+        "ended": true,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "ended-agent-tabs-remain",
+        "authorized": true,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "agentTabHost": "b",
+        "ended": true,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": true,
+        "expectLabelVisible": true,
+        "expectLabelClient": "b"
+      },
+      {
+        "id": "unauthorized",
+        "authorized": false,
+        "available": true,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": false,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      },
+      {
+        "id": "unavailable",
+        "authorized": true,
+        "available": false,
+        "currentClientSelected": false,
+        "clientCount": 1,
+        "expectMenuVisible": true,
+        "expectMenuEnabled": false,
+        "expectLabelVisible": false,
+        "expectLabelClient": null
+      }
+    ]
   }
 }

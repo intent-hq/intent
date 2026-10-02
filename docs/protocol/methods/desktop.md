@@ -86,15 +86,28 @@ Reject model-supplied `agentId`, `clientId`, `workspaceId`,
 them. Parent agents cannot act on behalf of a child. Agent access to generic RPC,
 reverse RPC, hook or settings paths must not bypass this boundary.
 
-At start, resolve the existing workspace primary using the
-[REV-2 driving-client rules](./files-terminal-browser.md): workspace browser-client
-pin, otherwise oldest claimed-tab host, otherwise first connected eligible browser
-client. Resolve that identity **before** testing desktop capability. A pinned or
-claimed primary that is offline is `desktop-offline`; an existing primary without
-desktop support is `desktop-unsupported`. Neither failure selects another computer.
-There is no separate desktop picker in the model API.
+At start, distinguish an **assigned primary** from an unassigned routing default.
+A saved `browserClientId` is assigned even when offline. Otherwise an active
+workspace desktop session fixes its executor; otherwise the existing oldest
+agent-owned browser-tab host is assigned (including hidden tabs and disconnected
+hosts). User-owned tabs do not assign a primary. The REV-2
+first-connected fallback is not an assignment. Browser calls keep their existing
+[REV-2 driving-client rules](./files-terminal-browser.md); this distinction
+controls desktop consent and the existing primary selector, not browser fallback.
 
-Bind the request/session to `{ workspaceId, agentId, principalId, clientId,
+For an assigned workspace, resolve that identity **before** testing desktop
+capability/principal; offline is `desktop-offline`, incapable is
+`desktop-unsupported`, wrong owner is forbidden. None selects another computer.
+Consent remains bound to that assigned primary. A pin change that conflicts with
+active control invalidates that control before further input. There is no separate
+desktop primary field or model client selector.
+
+For an unassigned workspace, use the candidate consent/claim flow below. Only a
+human's explicit Allow may establish its saved primary; server enumeration order
+and remembered consent alone cannot do so.
+
+Bind each assigned request, unassigned candidate and activated session to
+`{ workspaceId, agentId, principalId, clientId,
 computerId, connectionEpoch }`. `principalId` identifies the granting human;
 `connectionEpoch` is a fresh opaque daemon-issued connection incarnation. The
 executor supplies a stable local `computerId` and `computerName` at preparation
@@ -102,7 +115,8 @@ executor supplies a stable local `computerId` and `computerName` at preparation
 authentication. The selected-primary/granting connection's admitted principal
 must exactly equal that persisted workspace owner. The session's `principalId`
 records this same value; workspace management alone does not grant control of
-another user's desktop. Recheck the persisted owner at consent decisions,
+another user's desktop. Before an unassigned claim, each candidate connection
+must meet that same exact-owner check. Recheck the persisted owner at consent decisions,
 activation, every renewal, preparation and action dispatch. Owner changes invalidate pending requests and active sessions
 with reason `owner_changed`, clear their active snapshot hints and trigger the
 normal native teardown/lease invalidation path. Late approvals/readiness replies
@@ -121,7 +135,8 @@ computer identity must agree across those instances. Contenders get
 the lock: acquire it again at activation. A busy result reveals no other
 workspace's agent identity. Primary changes (including implicit resolution
 changes), identity/capability changes and connection replacement invalidate the
-old pending request/session; never redirect or migrate live control.
+old assigned pending request/session; never redirect or migrate live control.
+Unassigned candidate removal and competing assignments follow the rules below.
 
 ## Agent API and results
 
@@ -180,10 +195,13 @@ this daemon supports the feature. `DesktopState` is one of:
 ```ts
 type DesktopState =
   | { status: "inactive" }
-  | { status: "pending_permission"; requestId: string; computerName: string }
+  | { status: "pending_permission"; requestId: string; computerName?: string }
   | { status: "active"; sessionId: string; computerName: string; hint: string };
 ```
 
+For unassigned candidate consent, the agent projection omits `computerName`
+until a winner is selected; never present the fallback client as a chosen machine.
+A candidate UI projection may include only its own prompt computer name.
 This projection is the calling agent's current state, not remembered permission.
 Ending, denial, withdrawal, expiry or revocation removes the active hint. There is
 no public `agent.snapshot` router addition. A normal turn boundary does not end
@@ -198,8 +216,12 @@ model cannot approve it. Persist remembered consent by the exact
 `{ principalId, workspaceId, agentId, computerId }` tuple. It permits attempting
 a future start, never an action or an active session by itself. Reinstallation or
 another physical primary requires new consent. The agent ellipsis menu reads and
-updates permission for the current primary only, with the label
+updates permission for the current assigned primary, or the caller's own eligible
+candidate while unassigned, with the label
 `Allow desktop control without asking`.
+
+The following steps apply to an assigned primary; an unassigned start first uses
+the candidate flow below and rejoins activation at step 4.
 
 1. Prepare the resolved desktop to learn its stable identity, supported platform
    and name. No capture, input, glow or lock is authorized by preparation.
@@ -229,6 +251,85 @@ updates permission for the current primary only, with the label
    never save permission or activate control. A primary change, withdrawal,
    agent termination or reconnect has the same stale-decision behavior.
 
+### Unassigned workspace: consent claims the primary
+
+1. After caller/owner/effective-feature checks, discover connected execution
+   connections with browser execution and desktop capability version 1, workspace
+   access and an admitted principal exactly equal to the persisted workspace owner.
+   Prepare each candidate to bind its stable computer identity and connection epoch.
+   A failed preparation excludes that candidate; it never chooses another principal.
+   Deduplicate connections for one logical client to its current execution epoch.
+   No candidates yields an offline/unsupported error without permission or a pin.
+2. Create one five-minute request for the requesting agent and a frozen set of
+   prepared candidates, bound to the workspace's current primary-assignment
+   generation. Other clients/principals never receive prompt data. Each targeted
+   `PermissionRequest` has the same request ID but its recipient's computer fields
+   and `claimsPrimary: true`. Recheck current owner, workspace access and candidate
+   epoch before prompt publication and every pending read/replay; owner changes
+   invalidate the cohort. Explain that Allow selects **this computer** as the
+   workspace primary. The existing three decision choices remain unchanged.
+   Return pending promptly and coalesce repeated starts. New connections are not
+   silently added to an existing request; a new explicit start may discover them.
+3. A decision identifies its candidate by the authenticated connection and retained
+   epoch, never a caller-supplied client/computer selector. Recheck workspace access,
+   owner, effective feature, capability, candidate eligibility, expiry and assignment
+   generation. Serialize with explicit `workspace.setBrowserClient`, agent tab
+   ownership/host changes, active desktop transitions and other consent requests.
+   Any intervening assignment-generation change invalidates the request, even if
+   a pin is set and cleared before the reply or selects the same candidate.
+4. The **first valid allow** wins. In the same transaction, compare that the
+   workspace is still unassigned at the captured generation, consume the request,
+   persist the winner's logical client in existing `browserClientId`, and persist
+   only its exact remembered tuple for `allow_future`. A failed transaction leaves
+   all of these unchanged and authorizes no activation. Emit the usual committed
+   `workspace:updated { changes: { browserClientId } }`; no new setter RPC or
+   desktop-only pin is introduced. Invalidate other pending candidate requests in
+   this workspace against the changed generation. Losing concurrent/duplicate
+   replies are `desktop-stale-request`, never grant writes or a takeover.
+5. Activate **only** the winner, under the existing local lock/readiness/lease and
+   owner checks. The selected pin records a successful user choice, not successful
+   native readiness: a later OS/busy/disconnect/activation failure leaves the saved
+   pin (and explicit remembered grant) intact, reports the failure, and never tries
+   another candidate. Recheck the committed selection before accepting readiness;
+   an explicit switch or withdrawal cannot be undone by a delayed ACK.
+
+A deny dismisses only its candidate's prompt, returns the existing accepted
+response, and saves no grant or primary. Repeated decisions from that dismissed
+candidate are stale. Other candidates can still Allow. When all candidates deny,
+resolve the shared request once as denied; with no viable candidates because of
+connection loss/capability loss, resolve once as invalidated instead. Expiry and
+agent withdrawal terminate the entire request. Removing one disconnected candidate
+invalidates its epoch only; its replacement cannot approve the old prompt.
+A denied candidate's subsequent getState omits pending. Candidate denial is not a
+request-wide resolved event/wake; each local UI dismisses after its decision ACK.
+At terminal resolution, notify all original authorized candidate connections so
+other prompts close, and enqueue just the normal single correlated agent outcome.
+
+Remembered consent never silently claims an unassigned workspace. Even when one
+or several candidate tuples are remembered, require the explicit candidate Allow.
+`allow_once` leaves any prior remembered tuple unchanged; `allow_future` writes
+only the winner's tuple. With an assigned primary, the existing remembered-consent
+prompt bypass continues unchanged. Changing remembered permission alone never
+sets a primary or starts control. No candidate flow can take over a saved pin,
+active session or existing agent-browser host, including an offline assignment;
+the user must explicitly switch the existing primary selector first.
+
+### Primary selector and activity label
+
+The workspace sidebar ellipsis always offers **Set primary client**, including
+single-client, no-activity, unassigned and already-selected cases. Reuse the existing
+selector/setBrowserClient flow and tab migration/explicit-switch confirmation.
+Disable only when the local client is already selected or genuinely unavailable
+or unauthorized, with accurate explanatory state. This UI visibility rule does
+not broaden setter authorization or desktop owner checks.
+
+Show the primary machine label only while desktop control is active or agent-owned
+browser tabs exist, including hidden tabs. Active control shows its actual executor
+computer even with only one eligible client; otherwise show the existing agent-tab
+host. User-only tabs, pending consent and an idle saved/offline pin do not show the
+label. Stop hides it when no agent tabs remain and does not clear the saved primary.
+Do not infer active control from a saved pin, candidate prompt or remembered grant.
+
 `endControl()` is idempotent and ownership-scoped: confirmed local teardown of
 the caller's active session returns `{ ended: true, withdrawn: false }`; no
 active or pending request returns `{ ended: false, withdrawn: false }`; withdrawing
@@ -254,7 +355,8 @@ automatically starts a session. Already executed OS actions cannot be undone.
 These are user/executor control-plane methods, **not agent-callable bindings**.
 All require the real `workspaceId` even on direct daemons. `agentId` here is a
 UI selector, scoped to that workspace and its persisted owner principal. Permission reads,
-writes and decisions require the selected primary's authenticated connection;
+writes and decisions require the selected primary's authenticated connection,
+except the explicitly bound same-owner candidates of an unassigned workspace;
 revoke requires the session's bound executor connection, except for the strictly
 terminal Stop reconciliation below. A foreign/missing
 workspace is indistinguishable from not found. Forwarding must preserve the
@@ -268,17 +370,24 @@ original authenticated caller; routing context cannot manufacture authority.
 | desktop.revoke | workspaceId, sessionId, reason, stopReport? | `{ revoked: boolean, reported: boolean }` — revoked means an active session was ended; reported means a new user-Stop outcome was durably recorded |
 
 `PermissionState = { computerId: string, computerName: string, allowed: boolean }`.
-`setPermission` compares its supplied computer ID to the current prepared primary;
+`setPermission` compares its supplied computer ID to the current prepared primary
+(or the authenticated connection's prepared local candidate while unassigned);
 a stale menu cannot grant another computer. `getState` fails offline/unsupported
-instead of projecting a different primary. The matching bound executor may
+instead of projecting a different assigned primary. While unassigned, getState
+returns only the caller's eligible prepared local permission/candidate projection,
+never another candidate's pending prompt. setPermission never claims the primary.
+The matching bound executor may
 report its old session revoked after primary changes; it cannot revoke a successor.
 Allowed report reasons are `user_stop`, `screen_locked`, `os_permission_lost`,
 `lease_expired`, `executor_failed` and `unsupported_environment`.
 
 `PermissionRequest = { requestId, workspaceId, agentId, agentName, computerId,
-computerName, expiresAt, options }`; strings except `options`, the ordered array
+computerName, expiresAt, options, claimsPrimary: boolean }`; fields other than
+`claimsPrimary` and `options` are strings; `options` is the ordered array
 of `{ id, label }` values defined above. `expiresAt` is RFC3339 UTC.
-Only the current bound primary/granting principal receives prompt data. The
+`claimsPrimary` is false for an assigned-primary request and true for an
+unassigned candidate prompt. Only the bound primary or a bound unassigned
+candidate with the exact owner principal receives its own prompt data. The
 existing ACP permission methods cannot resolve these request IDs. A duplicate
 revocation is a benign no-op; a foreign session is forbidden, never a no-op.
 Non-user-Stop reasons omit `stopReport`, require the original bound connection,
@@ -545,7 +654,11 @@ that session's reason; they must not end a different current session. Duplicate
 Stop reports emit nothing. No report credential is included in events.
 
 Permission events (including durable query/search projections) are restricted
-to the granting principal's bound primary; session events are visible only to
+to the granting principal's bound primary, or their targeted candidate connection
+for unassigned consent. Candidate requested/permission-changed projections remain
+recipient-specific on live delivery, replay and reads; terminal resolved events
+close all authorized candidate prompts without exposing another principal's data.
+Session events are visible only to
 that principal with workspace access. Agent wakes address only the requester.
 Use event IDs for replay deduplication. Subscribe before `desktop.getState` to
 recover UI state; reconcile by session/request ID and event order. Events and

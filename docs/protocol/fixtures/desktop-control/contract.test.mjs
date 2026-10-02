@@ -419,3 +419,53 @@ test('desktop consent and release hints survive unrelated feature toggles', () =
   }
   assert.ok(fixture.agentFeature.independence.some(c => c.isDelegate));
 });
+
+test('unassigned desktop consent claims the shared primary atomically, without first-connected authority', () => {
+  assert.ok(doc.includes('first-connected fallback is not an assignment'));
+  assert.ok(doc.includes('claimsPrimary: boolean'));
+  assert.ok(doc.includes('same transaction'));
+  assert.ok(doc.includes('Remembered consent never silently claims an unassigned workspace'));
+});
+
+test('primary-claim examples preserve assignments and permit only one authenticated winning candidate', () => {
+  const { scenarios, prompt, agentPending } = fixture.primaryClaims;
+  assert.equal(prompt.claimsPrimary, true);
+  assert.equal(agentPending.requestId, prompt.requestId);
+  assert.equal(Object.hasOwn(agentPending, 'computerName'), false);
+  validateState(agentPending);
+  for (const c of scenarios) {
+    let primary = c.initialPin ?? c.activeClient ?? c.agentTabHost;
+    let generation = 0;
+    let finished = false;
+    let winner;
+    const denied = new Set();
+    for (const step of c.steps) {
+      if (step.kind === 'assignment-change') { primary = step.clientId; generation++; }
+      if (step.kind === 'owner-change') { generation++; }
+      if (step.kind === 'deny') denied.add(step.clientId);
+      if (step.kind !== 'allow') continue;
+      const candidate = c.candidates.find(x => x.clientId === step.clientId);
+      const authorized = candidate && candidate.principalId === c.owner && candidate.connected && candidate.capable;
+      const wins = Boolean(authorized && !primary && !finished && generation === 0 && !denied.has(step.clientId) && !step.transactionFails);
+      assert.equal(step.expectWinner, wins, c.id);
+      if (wins) { winner = step.clientId; primary = winner; finished = true; }
+      assert.equal(step.expectGrantSaved, wins && step.remember, c.id);
+    }
+    assert.equal(c.expectPrimary, primary ?? null, c.id);
+    assert.equal(c.expectWinner, winner ?? null, c.id);
+    assert.equal(c.expectActivationCount, winner && !c.nativeFailure ? 1 : 0, c.id);
+    assert.equal(c.expectTakeover, false, c.id);
+  }
+  for (const id of ['first-connected-is-not-assigned', 'simultaneous-allows', 'deny-one-allow-other', 'all-deny', 'saved-offline-pin', 'agent-hidden-tab-host', 'active-desktop', 'foreign-principal', 'owner-changed', 'explicit-pin-race', 'tab-claim-race', 'disconnected-candidate', 'remembered-unassigned-still-prompts', 'native-failure-keeps-selection']) {
+    assert.ok(scenarios.some(c => c.id === id), id);
+  }
+});
+
+test('primary sidebar selection remains discoverable while machine labels follow actual activity', () => {
+  for (const c of fixture.primaryClaims.sidebar) {
+    assert.equal(c.expectMenuVisible, true, c.id);
+    assert.equal(c.expectMenuEnabled, c.authorized && c.available && !c.currentClientSelected, c.id);
+    assert.equal(c.expectLabelVisible, Boolean(c.activeClient || c.agentTabHost), c.id);
+    assert.equal(c.expectLabelClient, c.activeClient ?? c.agentTabHost ?? null, c.id);
+  }
+});
