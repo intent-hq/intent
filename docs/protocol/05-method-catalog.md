@@ -25,22 +25,26 @@ shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
 The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a read-only list and subscription; `agentWorkers: 1` gates support.
 
-The documented surface reserves **421 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
+user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
+and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-- **Router methods:** 361 methods dispatched via the main router (`router::dispatch`)
+The documented surface reserves **428 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+
+- **Router methods:** 368 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 421 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 428 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 421 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 428 dispatchable names + 1 notification. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
-The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.50) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
+The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.51) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (361 total)
+### Router methods by namespace (368 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -50,6 +54,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | comment | 6 | add, delete, getThread, list, resolveThread, respond |
 | crossWorkspace | 3 | listNotes, listSiblings, readNote |
 | debug | 1 | sampleStacks — point-in-time sample of the daemon's own thread stacks rendered as a text report (§5.43; v6.3, daemon-global — no `workspaceId`) |
+| desktop | 4 | getState, respondPermission, revoke, setPermission — prepared desktop control (§5.51); user/executor only |
 | event | 3 | agentActivity, query, workspaceSummary |
 | file | 16 | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
 | file-tracking | 6 | getAgentLocks, getChanges, getLineStats, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
@@ -78,6 +83,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
 | script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
+| scriptMonitor | 3 | cancel, cancelRun, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |
@@ -666,11 +672,12 @@ The daemon accepts these 2 alias forms and dispatches them to their canonical co
 - `git.diff` → `git.diffs`
 - `git.log` → `git.commits`
 
-### Client-served reverse RPCs (5 total)
+### Client-served reverse RPCs (6 total)
 
-Of these 5 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication` and `providers.setup.openLogin` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
+Of these 6 method names, `browser.exec` and `host.openInEditor` are **client-callable triggers**: the daemon validates the envelope, then serves the request. `browser.exec`'s real work always happens on the connected frontend via a reverse RPC (synthetic `rev-<n>` request id) whose result is echoed back to the original caller. `host.openInEditor`'s real work happens on the daemon host on a local connection (no reverse RPC is dispatched, §5.14) and on the connected frontend via that same reverse RPC mechanism on a remote connection. These 2 method names are **dual-role**: they appear in the dispatchable method catalog AND are also issued daemon→client as reverse RPCs on remote connections. `host.openExternal`, `host.pickApplication`, `providers.setup.openLogin` and `desktop.control` are **daemon→client-only**: they are never dispatched client→server and do not appear in the dispatchable method catalog. On a remote connection the daemon is always the requester (synthetic `rev-<n>` id) and the connected client returns the result; on a local connection the daemon serves the `host.*` intents directly on the daemon host without a reverse dispatch (§5.14).
 
 - `browser.exec` — browser automation (Chrome DevTools) — §5.9 (dual-role). When the caller is a client connection the reverse RPC goes back on that same connection; when the caller is an **agent** (MCP `ws.browser.exec`) or a tab-addressed `browser.navigateTab` / `browser.closeTab` (§5.45), the daemon selects the target connection under the REV-2 rules in §5.9 (capability gate `capabilities.browserExec`, §5.17; workspace pin `workspace.setBrowserClient`, §5.1)
+- `desktop.control` — typed desktop preparation, startControl/endControl, lease renewal and action execution (§5.51; prepared, daemon→client only)
 - `host.openExternal` — open a URL in the default browser — §5.14 (daemon→client only)
 - `host.openInEditor` — open a file or directory in the user's editor — §5.14 (dual-role)
 - `host.pickApplication` — prompt the user to select an application — §5.14 (daemon→client only)
@@ -688,4 +695,4 @@ Conventions used below: parameters marked **(req)** are required (a missing/`nul
 
 ### §5.x subsection index
 
-The per-namespace subsections (§5.1–§5.50) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).
+The per-namespace subsections (§5.1–§5.51) live in the [methods/](./methods/) directory; the canonical § → file map is the [§5.x subsections table in the README](./README.md#5x-subsections-methods).

@@ -1,5 +1,11 @@
 > Part of the [Intent JSON-RPC protocol docs](./README.md) — Protocol Version & Compatibility.
 
+The prepared [script run monitor extension](./methods/script-monitors.md) reserves
+three router methods and five events, plus additive runId and agent waiting
+projections, optional regex/line-count OR triggers and required one-shot TTL.
+`scriptMonitors: 1` gates the full contract; allocate the next minor
+at implementation time. Documentation and synthetic fixtures do not claim shipment.
+
 ## Protocol Version & Compatibility
 
 **Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
