@@ -270,6 +270,17 @@ for mode in ("0", "1"):
             before = gate.tree_key(self.root, self.repo)
             os.environ["CARGO_INCREMENTAL"] = "1"
             self.assertNotEqual(before, gate.tree_key(self.root, self.repo))
+            for name in ("CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR", "CARGO_BUILD_BUILD_DIR"):
+                before = gate.tree_key(self.root, self.repo)
+                os.environ[name] = "../other-output"
+                self.assertNotEqual(before, gate.tree_key(self.root, self.repo))
+            alias = self.root / "source-alias"
+            alias.symlink_to(self.repo, target_is_directory=True)
+            self.assertEqual(gate.tree_key(self.root, self.repo), gate.tree_key(self.root, alias))
+            other = self.root / "other-source"
+            other.mkdir()
+            shutil.copy(self.repo / "Cargo.toml", other / "Cargo.toml")
+            self.assertNotEqual(gate.tree_key(self.root, self.repo), gate.tree_key(self.root, other))
 
 
 class CompactMakeTests(unittest.TestCase):
