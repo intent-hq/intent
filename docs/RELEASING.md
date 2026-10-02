@@ -27,12 +27,13 @@ freshness and in-flight sidecar checks still apply, including their documented
 manual-dispatch overrides. Release automation does not refresh the PR branch;
 release-plz or release-please owns that content.
 
-The workflow uses its trusted classifier from `main`, never a script from the PR
-head, to inspect the release diff. Only version/changelog metadata qualifies:
-intentd permits uniform crate version changes and matching workspace-package
-lockfile updates; cloudlands-fe permits the package version and matching
-release-please manifest update. Source, workflow, dependency and sidecar pin
-changes do not qualify. A classification failure cannot enable direct merging.
+The workflow uses the classifier from its trusted workflow revision, never a
+script from the PR head, to inspect the diff. Only release metadata qualifies:
+intentd permits independent crate version changes, matching local dependency
+requirements and workspace-package lockfile versions, plus harmless TOML
+formatting/comments; cloudlands-fe permits the package version and matching
+release-please manifest update. Source, workflow, external dependency and sidecar
+pin changes do not qualify. A classification failure cannot enable direct merging.
 The merge uses `--squash --admin --match-head-commit <assessed-head-sha>`; the
 head match prevents a refreshed, unchecked PR head from being merged using the
 earlier decision. Queue submission is not evidence of a completed merge or a
