@@ -753,11 +753,22 @@ workspace provisioning; the resolved effort is persisted before any prompt or at
 starts the first turn and echoed in the response's `initialAgent.reasoningEffort`.
 An unset effort is omitted from that `AgentLite` response. No post-create `agent.update`
 is needed to apply the initial effort.
+Manual workspace initial agents accept optional `initialAgent.rememberSpecialist`
+and `initialAgent.nameExplicitlySet` booleans. Omitted/null values preserve the
+existing defaults: no specialist memory opt-in, and a supplied name is explicit.
+The manual UI sends `rememberSpecialist: true` and `nameExplicitlySet: false` for
+its generated specialist name. A successful initial-agent insertion atomically
+remembers the canonical specialist (null for General) for the new workspace;
+failed preflight validation creates neither a workspace nor preference. Existing
+background/agent-created exclusions apply. An explicit custom name stays protected
+when `nameExplicitlySet` is omitted or true. Non-boolean non-null values are
+rejected before provisioning. See [manual specialist memory](./agents.md#manual-specialist-memory).
+
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
-explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+project > user > bundled — e.g. "Coordinator" for `spec-writer`) and remains a
+generated name eligible for the opening-turn self-rename (same rename-guard
+semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
 resolves to no known id or alias — is rejected with `-32602` naming the id and the
 known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
 while a known specialist whose display-name resolution fails still never fails the
