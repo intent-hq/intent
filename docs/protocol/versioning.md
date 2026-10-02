@@ -4,6 +4,16 @@
 
 **Documented version:** `11.1` — registered-root file reads, additive prepared contract; not a shipped-version claim.
 
+**Private nodeProtocol 3 — prepared capture contract.** This is separate from the
+public documented version above. The [private capture agreement](./node-link.md#private-checkpoint-capture)
+adds bounded checkpoint registration and exact commit requests using unchanged
+checkpointFormat 1, journalFormat 1 and Git Stage framing. Existing private version-2
+lifecycle/read semantics carry forward under explicit supported `{2,3}` gates;
+new capture RPCs require exactly 3. Unsupported/future versions fail closed. These
+docs do not advertise runtime support, broaden public catalogs or qualify a
+listener. Additive docs precede consumer merges/acceptance; authorized local work
+and draft preparation may proceed in parallel.
+
 **Prepared command-default change — recommended 11.0, not shipped.**
 [Script creation defaults (§5.8)](./methods/scripts.md#command-creation-defaults-prepared-breaking-change)
 change omission on a new command from `saved` to `oneOff`; new services remain

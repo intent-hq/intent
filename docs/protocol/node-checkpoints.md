@@ -233,6 +233,43 @@ When that cut cannot be proven, emit `mode: "history"`, `throughSeq: journalSeq`
 session. Do not replay acknowledged tool effects as executable calls. Session
 credentials/caches are never included; static credentials are reissued on resume.
 
+## Capture quiescence and spool ownership
+
+The [private version-3 capture agreement](./node-link.md#private-checkpoint-capture)
+registers exact manifest bytes, complete repository upper bounds and attachment
+lengths before existing Stage uploads, then uses the durable commit below. It
+preserves checkpointFormat 1's numeric formatVersion, RFC3339 capture time and
+optional-field omission. The three-field receipt and freshness rules are unchanged.
+Only supported current Store attachment reuse is included; local-only and
+prior-checkpoint-only bytes fail explicitly, without loss of the prior checkpoint.
+
+Every ACP/tool/script/Git mutation, attachment adapter/delivery/retirement disk
+write and synchronous mkdir/unlink/Drop path must participate in the SAME checkout
+barrier. A retained outer initialization MutationPermit cannot be released just
+because some Disk tasks finished. Prove actual initialization workers settled and
+all later mutating APIs have barrier admission and bounded owned retirement before
+atomic handoff; failed/uncertain writes retain their permit and defer capture.
+A new registry/barrier, provider idle or forced guard drop cannot prove quiescence.
+Provider mutation guards remain effective; immutable data/ledger ownership is
+separate from outstanding mutating work.
+
+Reserve finite local record/spool/temporary capacity and persist the next revision
+before capture. Under the common barrier record the serialized journal cut and
+validate stable HEAD/index/files without changing their real state. Retain the
+immutable spool and its owner before releasing capture ownership. Upload reads
+that spool under separate retained ownership; never hold the exclusive checkout
+barrier across remote waits. A changed tree/cut fails or defers; counters are not
+reused. Head/node budgets cover pending, retained and uncertain data across runs,
+not just successful captures. Restart quarantines uncertain ownership and never
+infers cleanup or authority from expiry/intact files.
+
+Existing Stage framing requires a full bounded retransmission for lost-receipt
+replay, after actual prior settlement and reserved scratch; at most three physical
+attempts total per repo, with no second durable import. Retain/join the SAME Stage
+and commit task/result, process, native policy and spool through dropped waiters.
+The [capture protocol](./node-link.md#stage-upload-and-lost-receipt-replay) defines
+this requirement; current local helper APIs alone do not establish it.
+
 ## Durable commit, visibility and recovery
 
 Capture freshness is independent of journal acknowledgement and wall-clock time.
