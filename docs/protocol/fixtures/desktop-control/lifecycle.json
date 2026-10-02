@@ -464,7 +464,10 @@
       "before": "active",
       "call": {
         "binding": "ws.desktop.screenshot",
-        "args": {}
+        "args": {
+          "displayId": "display-left",
+          "layoutId": "layout-a"
+        }
       },
       "expect": {
         "result": {
@@ -480,17 +483,6 @@
               "scaleFactor": 1,
               "assetId": "asset-a",
               "url": "workspace-asset://ws-a/asset-a",
-              "mimeType": "image/png"
-            },
-            {
-              "displayId": "display-main",
-              "width": 3840,
-              "height": 2160,
-              "originX": 0,
-              "originY": 0,
-              "scaleFactor": 2,
-              "assetId": "asset-b",
-              "url": "workspace-asset://ws-a/asset-b",
               "mimeType": "image/png"
             }
           ]
@@ -1506,6 +1498,12 @@
           "forgedDispatchDenied": true,
           "expectNativeDispatchCount": 0,
           "expectPromptCount": 0
+        },
+        {
+          "method": "listDisplay",
+          "forgedDispatchDenied": true,
+          "expectNativeDispatchCount": 0,
+          "expectPromptCount": 0
         }
       ],
       "cleanup": [
@@ -2260,6 +2258,348 @@
         "expectMenuEnabled": false,
         "expectLabelVisible": false,
         "expectLabelClient": null
+      }
+    ]
+  },
+  "displaySelection": {
+    "lists": [
+      {
+        "id": "zero",
+        "result": {
+          "layoutId": "layout-empty",
+          "displays": []
+        },
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "single",
+        "result": {
+          "layoutId": "layout-single",
+          "displays": [
+            {
+              "displayId": "display-left",
+              "width": 1920,
+              "height": 1080,
+              "originX": -1920,
+              "originY": 0,
+              "scaleFactor": 1
+            }
+          ]
+        },
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "mixed-dpi",
+        "result": {
+          "layoutId": "layout-a",
+          "displays": [
+            {
+              "displayId": "display-left",
+              "width": 1920,
+              "height": 1080,
+              "originX": -1920,
+              "originY": 0,
+              "scaleFactor": 1
+            },
+            {
+              "displayId": "display-main",
+              "width": 3840,
+              "height": 2160,
+              "originX": 0,
+              "originY": 0,
+              "scaleFactor": 2
+            }
+          ]
+        },
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      }
+    ],
+    "gateFailures": [
+      {
+        "id": "feature-off",
+        "expectError": "feature-disabled",
+        "expectMetadataDispatch": 0,
+        "expectAutoStart": false
+      },
+      {
+        "id": "inactive",
+        "expectError": "desktop-not-active",
+        "expectMetadataDispatch": 0,
+        "expectAutoStart": false
+      },
+      {
+        "id": "expired-lease",
+        "expectError": "desktop-not-active",
+        "expectMetadataDispatch": 0,
+        "expectAutoStart": false
+      },
+      {
+        "id": "wrong-owner",
+        "expectError": "forbidden",
+        "expectMetadataDispatch": 0,
+        "expectAutoStart": false
+      },
+      {
+        "id": "replaced-connection",
+        "expectError": "desktop-offline",
+        "expectMetadataDispatch": 0,
+        "expectAutoStart": false
+      }
+    ],
+    "selectionError": {
+      "code": -32602,
+      "data": {
+        "code": "desktop-display-selection-required",
+        "detail": "Multiple displays are available. Call ws.desktop.listDisplay() and ask the user which screen to use, then retry with displayId.",
+        "execution": "not_started"
+      }
+    },
+    "cases": [
+      {
+        "id": "zero",
+        "displays": [],
+        "expectError": "desktop-display-unavailable",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "single-omitted",
+        "displays": [
+          "display-left"
+        ],
+        "expectSelectedId": "display-left",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectSelectedOnly": true
+      },
+      {
+        "id": "single-explicit",
+        "displays": [
+          "display-left"
+        ],
+        "displayId": "display-left",
+        "expectSelectedId": "display-left",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectSelectedOnly": true
+      },
+      {
+        "id": "multi-omitted",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "expectError": "desktop-display-selection-required",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "multi-explicit-secondary",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "displayId": "display-left",
+        "expectSelectedId": "display-left",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectSelectedOnly": true
+      },
+      {
+        "id": "unknown-id",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "displayId": "display-unknown",
+        "expectError": "desktop-display-unavailable",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "stale-layout",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "displayId": "display-left",
+        "suppliedLayout": "layout-old",
+        "expectError": "desktop-stale-layout",
+        "layout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "hotplug-after-preparation",
+        "displays": [
+          "display-left"
+        ],
+        "changedBeforeExecute": true,
+        "expectError": "desktop-stale-layout",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "rotation-dpi-after-preparation",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "displayId": "display-left",
+        "changedBeforeExecute": true,
+        "expectError": "desktop-stale-layout",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "topology-change-and-return",
+        "displays": [
+          "display-left"
+        ],
+        "changedBeforeExecute": true,
+        "expectError": "desktop-stale-layout",
+        "layout": "layout-a",
+        "suppliedLayout": "layout-a",
+        "actions": [
+          "screenshot",
+          "click",
+          "scroll",
+          "drag"
+        ],
+        "expectFallback": false,
+        "expectEffects": {
+          "capture": 0,
+          "input": 0,
+          "assets": 0,
+          "pulse": 0
+        }
+      },
+      {
+        "id": "screenshot-no-layout-token",
+        "layout": "layout-a",
+        "displays": [
+          "display-left",
+          "display-main"
+        ],
+        "displayId": "display-left",
+        "actions": [
+          "screenshot"
+        ],
+        "expectSelectedId": "display-left",
+        "expectSelectedOnly": true,
+        "expectFallback": false
       }
     ]
   }

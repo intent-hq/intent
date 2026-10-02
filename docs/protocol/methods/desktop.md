@@ -38,7 +38,7 @@ revoke for immediate interruption; the feature toggle is not a live kill switch.
 
 When the effective feature is off, omit the desktop namespace from discovery and
 omit operational desktop prompt/help guidance. Reject startControl and every
-screenshot/input action at the dispatch/service boundary as disabled by
+display enumeration or screenshot/input action at the dispatch/service boundary as disabled by
 `agentFeatures.desktopControl`, including forged direct dispatch and generic RPC
 attempts. Denial occurs before consent prompts, preparation, native dispatch or
 asset creation; remembered approval cannot override it. Use the existing
@@ -147,7 +147,8 @@ omitted when absent, never null. Unknown arguments fail validation.
 ```ts
 ws.desktop.startControl()
 ws.desktop.endControl()
-ws.desktop.screenshot()
+ws.desktop.listDisplay()
+ws.desktop.screenshot(args?)
 ws.desktop.click(args)
 ws.desktop.type(args)
 ws.desktop.keypress(args)
@@ -159,12 +160,13 @@ ws.desktop.drag(args)
 | --- | --- | --- |
 | `startControl()` | none | `StartResult` below |
 | `endControl()` | none | `{ ended: boolean, withdrawn: boolean }` |
-| `screenshot()` | none | `ScreenshotResult` below |
-| `click(args)` | `displayId, layoutId, x, y, button?: "left" \| "right", clickCount?: 1 \| 2` | `{ ok: true }` |
+| `listDisplay()` | none | `DisplayListResult` below (metadata only) |
+| `screenshot(args?)` | `displayId?: string, layoutId?: string` | `ScreenshotResult` below (one selected display) |
+| `click(args)` | `displayId?: string, layoutId, x, y, button?: "left" \| "right", clickCount?: 1 \| 2` | `{ ok: true }` |
 | `type(args)` | `text: string` | `{ ok: true }` |
 | `keypress(args)` | `key: string, modifiers?: ("Shift" \| "Control" \| "Alt" \| "Meta")[]` | `{ ok: true }` |
-| `scroll(args)` | `displayId, layoutId, x, y, deltaX, deltaY` | `{ ok: true }` |
-| `drag(args)` | `displayId, layoutId, from: { x, y }, to: { x, y }` | `{ ok: true }` |
+| `scroll(args)` | `displayId?: string, layoutId, x, y, deltaX, deltaY` | `{ ok: true }` |
+| `drag(args)` | `displayId?: string, layoutId, from: { x, y }, to: { x, y }` | `{ ok: true }` |
 
 `StartResult` is exactly one of:
 
@@ -495,9 +497,12 @@ All fields are required, trusted daemon-generated strings. Each operation adds:
 | `prepareCommand` | `computerId, sessionId, commandId, sequence, action` | `{ commandId, sequence, deadlineId, expiresInMs: 10000 }` |
 | `execute` | `computerId, sessionId, commandId, sequence, deadlineId` | `{ commandId, sequence, result }` |
 
-`action` is `{ kind: "screenshot" }` or the matching input name (`click`, `type`,
-`keypress`, `scroll`, `drag`) plus that binding's arguments. No arrays, arbitrary
-scripts, shell commands or raw native function names are accepted. The executor
+`action` is `{ kind: "listDisplay" }`, `{ kind: "screenshot", displayId?, layoutId? }`
+or the matching input name (`click`, `type`, `keypress`, `scroll`, `drag`) plus that
+binding's arguments. `listDisplay` execution returns `DisplayListResult`; screenshot
+returns `ScreenshotResult`; input returns `{ ok: true }`. Listing uses the same
+command ticket and session gates, never an unauthenticated discovery operation.
+No arrays, arbitrary scripts, shell commands or raw native function names are accepted. The executor
 validates every field and operation. `startControl` grants no authority unless
 received on the prepared, authenticated backend connection after daemon consent.
 
@@ -527,7 +532,9 @@ Only notification-only terminal Stop reports may be reconciled as defined above.
 Each action uses two sequential reverse requests on the bound connection:
 `prepareCommand`, then `execute`. No wall-clock deadline or clock calibration is
 used. Preparation validates and retains the exact action, but executes no input
-or capture. At acceptance the executor reads its local monotonic clock `M0`
+or capture. For screenshot and coordinate input it additionally resolves and
+binds the concrete selected display and current layout as described below; this
+normalization cannot be changed at execute time. At acceptance the executor reads its local monotonic clock `M0`
 (milliseconds) and stores a single-use, unpredictable `deadlineId` with deadline
 `M0 + 10000`. The ticket binds the entire session/connection tuple, command ID,
 sequence and retained action. Return `expiresInMs: 10000` as the **original**
@@ -579,25 +586,103 @@ returns `desktop-outcome-unknown`; never retry input automatically.
 
 ## Screenshots, input and native feedback
 
-`ScreenshotResult = { capturedAt, layoutId, displays: DisplayCapture[] }`, with
-RFC3339 UTC `capturedAt`. Capture every attached supported display. Each
-`DisplayCapture` has `{ displayId, width, height, originX, originY, scaleFactor,
-assetId, url, mimeType: "image/png" }`. Width/height are positive integer **image
-pixels**, origins are signed physical virtual-desktop pixel offsets, scaleFactor
-is a positive finite number. IDs are strings scoped to that active session.
-Persist images as workspace assets using the existing asset pipeline; URLs use
-the returned canonical `workspace-asset://<workspaceId>/<assetId>` URL, not a
-worktree file path. Screenshot bytes, typed text and keys are not copied
-into lifecycle events or wake messages. Capture or asset-persistence failure is
-an error; there is no successful partial display list.
+### Display metadata and explicit selection
 
-Coordinates are finite display-local image pixels: `0 <= x < width` and
-`0 <= y < height`, with origin at the image's top-left. `layoutId` identifies
-the captured display layout; reject old IDs after rotation, monitor changes or
-DPI changes with `desktop-stale-layout`. The executor maps image pixels to native
-OS coordinates, including mixed Windows DPI, negative monitor origins and macOS
-points. Never assume one global scale factor. Drag stays on one display in this
-version. Obtain a new screenshot to learn layout/display IDs after activation.
+A display is an attached monitor on the already-authorized workspace primary
+machine. Selecting a display never chooses another computer, grants permission
+or changes the workspace primary. Every listing, capture and input call requires
+the existing effective feature, active control, owner, connection and live lease
+gates. Listing neither starts control nor bypasses consent or OS restrictions.
+
+```ts
+type DisplayMetadata = {
+  displayId: string;
+  width: number; height: number;
+  originX: number; originY: number;
+  scaleFactor: number;
+};
+type DisplayListResult = { layoutId: string; displays: DisplayMetadata[] };
+type ScreenshotResult = {
+  capturedAt: string; // RFC3339 UTC
+  layoutId: string;
+  displays: [DisplayCapture]; // exactly one selected display
+};
+type DisplayCapture = DisplayMetadata & {
+  assetId: string; url: string; mimeType: "image/png";
+};
+```
+
+The exact singular binding `listDisplay()` returns only current metadata at
+execution time, not image bytes, assets or a permission grant. An otherwise valid
+active session with no available displays returns an empty list and a current
+layout token. Width/height are positive integer **image pixels**, origins are
+signed physical virtual-desktop pixel offsets, and scaleFactor is positive and
+finite. IDs are nonempty unique strings scoped to that active session and stable
+for a continuously attached display. Do not recycle a removed display ID for a
+replacement during the session. Listing order has no selection semantics.
+
+`layoutId` is a nonempty opaque token for one coherent display topology, shared by
+list and screenshot results. Change it on attachment/removal, rotation, geometry,
+scaling/DPI or native mapping changes; do not reuse a prior token if topology
+changes and later changes back. The same unchanged layout keeps its token across
+listing and capture. Never combine metadata from different topology generations.
+
+Screenshot accepts no argument or an object with optional `displayId` and
+`layoutId`. Click, scroll and drag retain all existing coordinates and the required
+`layoutId`, but their `displayId` becomes optional. Empty IDs, null fields and
+unknown arguments are invalid params. Validate supplied layout before selection:
+old tokens fail `desktop-stale-layout`. Then apply the same selection rule to all
+four operations:
+
+- No available display: `desktop-display-unavailable`.
+- Explicit ID: select exactly that available display; unknown/disconnected IDs
+  fail `desktop-display-unavailable`. Do not replace them with another display.
+- Omitted ID and exactly one available display: select that display.
+- Omitted ID and multiple available displays: `desktop-display-selection-required`.
+  Do not choose the OS primary monitor, previous capture target or first list item.
+
+All pre-execution selection failures use numeric `-32602` and
+`execution: "not_started"`. For selection-required, `error.data.detail` is this
+model guidance (the MCP failure preserves code/detail):
+
+```text
+Multiple displays are available. Call ws.desktop.listDisplay() and ask the user which screen to use, then retry with displayId.
+```
+
+The model should list metadata and clarify the intended screen with the user,
+then explicitly select it. This guidance is ordinary conversation; it does not
+require the structuredQuestions feature or authorize automatic screenshot retries.
+A refusal performs **zero capture, asset creation, overlay pulse or injected
+input**. No screenshot previews are generated to accompany a selection error.
+
+Resolve and retain the concrete display ID and layout during `prepareCommand`,
+including when screenshot omitted its layout token or the single display was
+inferred. Revalidate the bound topology/ID immediately before native execution;
+any intervening change is `desktop-stale-layout`, even if only one monitor remains.
+The execute request cannot select a different target. Metadata enumeration itself
+returns a coherent current topology at execution and has no inferred target.
+
+An explicit screenshot captures **only the selected display**, never every display
+followed by filtering. Persist exactly that image through the existing asset
+pipeline and return exactly one entry in `ScreenshotResult.displays`, whose ID
+and geometry match the bound selection and whose `layoutId` matches that topology.
+Return the canonical `workspace-asset://<workspaceId>/<assetId>` URL unchanged,
+not a worktree path. Pulse only after successful capture, authority/layout recheck
+and asset save. A capture or persistence failure is an error, never a partial list.
+Recheck topology after native completion: discard stale image/result and suppress
+asset publication/pulse. If topology changes during input after an OS step already
+occurred, report `desktop-stale-layout` with truthful partial/unknown execution,
+release held input and never retry or claim rollback. Pre-execution hotplug
+rejections remain not_started. Screenshot bytes, typed text and keys never appear
+in lifecycle events or wakes.
+
+Coordinates remain finite display-local image pixels: `0 <= x < width` and
+`0 <= y < height`, origin at that image's top-left. The executor maps them to
+native OS coordinates including mixed Windows DPI, negative monitor origins and
+macOS points; never assume one global scale. Drag stays on one selected display.
+Use listDisplay to learn IDs/layout/geometry and a selected screenshot when visual
+content is needed. Type and keypress keep their existing focused-window semantics;
+they accept no display selector and do not move focus to a requested monitor.
 
 Click defaults: left button, one click; right button and double click are
 required. Scroll deltas are signed finite **image pixels**, positive right/down,
@@ -686,7 +771,9 @@ same code/detail as a tool failure, never `{ ok: true }`. Malformed inputs use
 
 | Numeric | `data.code` | Meaning |
 | --- | --- | --- |
-| -32602 | `desktop-not-active`, `desktop-stale-request`, `desktop-stale-command`, `desktop-stale-layout` | Missing current authority or stale request/command/layout; no execution |
+| -32602 | `desktop-not-active`, `desktop-stale-request`, `desktop-stale-command` | Missing current authority or stale request/command; no execution |
+| -32602 | `desktop-stale-layout` | Display topology changed; not_started before native work, partial/unknown if detected after input |
+| -32602 | `desktop-display-selection-required`, `desktop-display-unavailable` | Multiple displays without a choice, or no matching available display; no capture/input or fallback |
 | -32602 | `desktop-command-expired` | Local command deadline reached; execution is not_started before the first step, partial after a step |
 | -32603 | `desktop-offline`, `desktop-unsupported`, `desktop-busy` | Primary absent/incapable or physical desktop locked by another session |
 | -32603 | `desktop-os-permission-required`, `desktop-unsupported-operation`, `desktop-deadline-unavailable` | Local OS/operation/monotonic deadline readiness cannot be established |
@@ -703,7 +790,10 @@ examples, required result distinctions and catalog alignment. Run:
 `make docs-check` and `make consumer-checks`.
 These tests do not implement the session manager or qualify native support.
 Component tests must execute those scenarios against real daemon/WSS and
-Electron code, including forged caller/decision paths, stale grants, simultaneous
+Electron code, including zero/one/multiple-display metadata and selection, selected-only native
+capture, unknown IDs, hotplug/rotation/DPI changes between preparation and execution,
+no capture/assets/pulse/input on selection refusal, forged caller/decision paths,
+stale grants, simultaneous
 starts/Stop, local Stop during network loss, no replay, right click, pulse and
 navigation. Packaged Electron evidence on **both macOS and Windows** must prove
 native capture exclusion, permissions, mixed-DPI/multiple monitors, Unicode and
