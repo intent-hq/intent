@@ -221,3 +221,67 @@ test('deadline examples cover skew, latency, exact expiry, missing tickets and i
   // Changing a peer's UTC clock must never extend the native deadline.
   assert.deepEqual(deadlineOutcome({ ...select('queued-too-long'), daemonWallMs: 0, executorWallMs: 0 }), ['desktop-command-expired', 'not_started']);
 });
+
+test('offline Stop records an authenticated terminal report and the required rescission wake', () => {
+  assert.match(doc, /### Offline Stop reconciliation/);
+  const stopped = expected('stop-offline');
+  assert.equal(stopped.reconciliationAuthenticated, true);
+  assert.equal(stopped.wake.message, 'Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control.');
+  assert.equal(stopped.wake.outcome, 'revoked');
+  assert.deepEqual(stopped.wake.state, { status: 'inactive' });
+  assert.equal(stopped.automaticRestart, false);
+});
+
+test('terminal Stop wire examples preserve the old authenticated tuple on a new connection', () => {
+  const { retained, request, cases } = fixture.stopReports;
+  assert.equal(request.method, 'desktop.revoke');
+  assert.equal(request.params.reason, 'user_stop');
+  assert.equal(request.params.workspaceId, retained.workspaceId);
+  assert.equal(request.params.sessionId, retained.sessionId);
+  for (const key of ['computerId', 'connectionEpoch', 'stopReportToken']) {
+    assert.equal(request.params.stopReport[key], retained[key]);
+  }
+  assert.equal(Buffer.from(retained.stopReportToken, 'base64url').length, 32);
+  assert.match(doc, /leaseMs: 15000, stopReportToken/);
+  assert.equal(new Set(cases.map(c => c.id)).size, cases.length);
+  for (const c of cases) {
+    assert.notEqual(c.transportEpoch, retained.connectionEpoch, c.id);
+    assert.equal(c.expect.resurrected, false, c.id);
+    const authorized = c.principalId === retained.principalId && c.tokenMatches !== false;
+    if (!authorized) {
+      assert.equal(c.expect.error.code, -32003, c.id);
+      assert.equal(Object.hasOwn(c.expect, 'result'), false, c.id);
+      assert.equal(c.expect.newWakeCount, 0, c.id);
+      continue;
+    }
+    assert.equal(c.expect.result.revoked, false, c.id);
+    assert.equal(c.expect.result.reported, !c.alreadyReported, c.id);
+    assert.equal(c.expect.remembered, true, c.id);
+    assert.equal(c.expect.newWakeCount, c.alreadyReported || c.agentCompleted ? 0 : 1, c.id);
+    const notification = c.expect.wake ?? c.expect.conversationNotification;
+    if (notification) {
+      assert.ok(notification.message.startsWith(fixture.stopReports.rescissionMessage), c.id);
+      assert.equal(notification.sessionId, retained.sessionId, c.id);
+      assert.equal(notification.outcome, 'revoked', c.id);
+      assert.deepEqual(notification.state, { status: 'inactive' }, c.id);
+      assert.equal(JSON.stringify(notification).includes(retained.stopReportToken), false, c.id);
+    }
+    validateState(c.expect.currentState);
+    assert.equal(c.expect.currentState.status, c.successor ? 'active' : 'inactive', c.id);
+    if (c.successor) {
+      assert.equal(c.expect.currentState.sessionId, c.successor);
+      assert.ok(notification.message.includes(`newer explicit session ${c.successor} is unchanged`));
+    }
+  }
+  const byReportId = id => {
+    const c = cases.find(c => c.id === id);
+    assert.ok(c, id);
+    return c;
+  };
+  assert.equal(byReportId('reconnect-after-disconnected').expect.replacesUndelivered, true);
+  assert.equal(byReportId('reconnect-after-lease-expired-delivered').expect.replacesUndelivered, false);
+  assert.equal(byReportId('retry-after-lost-ack').expect.newWakeCount, 0);
+  assert.equal(byReportId('duplicate-with-different-report-id').expect.newWakeCount, 0);
+  assert.equal(byReportId('restart-keeps-report-only').expect.currentState.status, 'inactive');
+  assert.ok(byReportId('terminal-agent-not-restarted').expect.conversationNotification);
+});

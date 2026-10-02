@@ -583,7 +583,10 @@
         "network-partition",
         "queue-input",
         "local-stop",
-        "reconnect"
+        "reconnect",
+        "authenticate-original-principal",
+        "reconcile-terminal-report",
+        "deliver-user-stop"
       ],
       "expect": {
         "queuedInputExecuted": false,
@@ -593,7 +596,22 @@
         "state": {
           "status": "inactive"
         },
-        "automaticRestart": false
+        "automaticRestart": false,
+        "reconciliationAuthenticated": true,
+        "wake": {
+          "type": "desktop_control",
+          "sessionId": "session-a",
+          "reportId": "report-a",
+          "outcome": "revoked",
+          "state": {
+            "status": "inactive"
+          },
+          "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+        },
+        "result": {
+          "revoked": false,
+          "reported": true
+        }
       }
     },
     {
@@ -829,6 +847,260 @@
         "stepsCompleted": 0,
         "expect": "desktop-deadline-unavailable",
         "execution": "not_started"
+      }
+    ]
+  },
+  "stopReports": {
+    "rescissionMessage": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control.",
+    "retained": {
+      "workspaceId": "ws-a",
+      "agentId": "agent-a",
+      "principalId": "principal-a",
+      "computerId": "computer-a",
+      "sessionId": "session-a",
+      "connectionEpoch": "epoch-old",
+      "stopReportToken": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "request": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "desktop.revoke",
+      "params": {
+        "workspaceId": "ws-a",
+        "sessionId": "session-a",
+        "reason": "user_stop",
+        "stopReport": {
+          "reportId": "report-a",
+          "computerId": "computer-a",
+          "connectionEpoch": "epoch-old",
+          "stopReportToken": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "reconnect-after-disconnected",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "previousWake": "queued-disconnected",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "replacesUndelivered": true,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "reconnect-after-lease-expired-delivered",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "previousWake": "delivered-lease-expired",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "replacesUndelivered": false,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "retry-after-lost-ack",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-newer",
+        "sessionAlreadyEnded": true,
+        "alreadyReported": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": false
+          },
+          "newWakeCount": 0,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "duplicate-with-different-report-id",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-newer",
+        "reportId": "report-b",
+        "sessionAlreadyEnded": true,
+        "alreadyReported": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": false
+          },
+          "newWakeCount": 0,
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "old-stop-with-successor",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "successor": "session-b",
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control. This report concerns ended session session-a; newer explicit session session-b is unchanged."
+          },
+          "currentState": {
+            "status": "active",
+            "sessionId": "session-b",
+            "computerName": "Studio",
+            "hint": "You are controlling the workspace primary desktop. Call ws.desktop.endControl() as soon as your desktop work is finished."
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "wrong-principal",
+        "principalId": "principal-other",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "expect": {
+          "error": {
+            "code": -32003,
+            "data": {
+              "code": "forbidden",
+              "detail": "terminal report authority mismatch"
+            }
+          },
+          "newWakeCount": 0,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "wrong-token",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "tokenMatches": false,
+        "sessionAlreadyEnded": true,
+        "expect": {
+          "error": {
+            "code": -32003,
+            "data": {
+              "code": "forbidden",
+              "detail": "terminal report authority mismatch"
+            }
+          },
+          "newWakeCount": 0,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "restart-keeps-report-only",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "daemonRestarted": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 1,
+          "wake": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
+      },
+      {
+        "id": "terminal-agent-not-restarted",
+        "principalId": "principal-a",
+        "transportEpoch": "epoch-new",
+        "sessionAlreadyEnded": true,
+        "agentCompleted": true,
+        "expect": {
+          "result": {
+            "revoked": false,
+            "reported": true
+          },
+          "newWakeCount": 0,
+          "conversationNotification": {
+            "type": "desktop_control",
+            "sessionId": "session-a",
+            "reportId": "report-a",
+            "outcome": "revoked",
+            "state": {
+              "status": "inactive"
+            },
+            "message": "Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control."
+          },
+          "currentState": {
+            "status": "inactive"
+          },
+          "remembered": true,
+          "resurrected": false
+        }
       }
     ]
   }

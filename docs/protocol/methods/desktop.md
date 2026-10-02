@@ -170,8 +170,9 @@ when teardown confirmation fails, and let the local lease expire fail-closed.
 
 User Stop acts **locally first**, even while offline: invalidate the session
 generation, reject queued/new commands, release held buttons/keys, remove the
-overlay and release the local lock. Report revocation to the daemon when possible;
-local stopping never waits for a network response. The agent wake must state
+overlay and release the local lock. Record a terminal Stop report for delivery
+now or after reconnect as specified below; local stopping never waits for a
+network response. The agent wake must state
 `Desktop control permission was rescinded by the user. Respect the interruption; do not automatically restart or retry desktop control.`
 Stop preserves remembered consent. Turning the menu permission off affects
 future starts and does not replace current-session Stop. Neither operation
@@ -183,7 +184,8 @@ These are user/executor control-plane methods, **not agent-callable bindings**.
 All require the real `workspaceId` even on direct daemons. `agentId` here is a
 UI selector, scoped to that workspace and the owning principal. Permission reads,
 writes and decisions require the selected primary's authenticated connection;
-revoke requires the session's bound executor connection. A foreign/missing
+revoke requires the session's bound executor connection, except for the strictly
+terminal Stop reconciliation below. A foreign/missing
 workspace is indistinguishable from not found. Forwarding must preserve the
 original authenticated caller; routing context cannot manufacture authority.
 
@@ -192,7 +194,7 @@ original authenticated caller; routing context cannot manufacture authority.
 | desktop.getState | workspaceId, agentId | `{ state: DesktopState, permission: PermissionState, pending?: PermissionRequest }` |
 | desktop.setPermission | workspaceId, agentId, computerId, allowed: boolean | `{ permission: PermissionState }` |
 | desktop.respondPermission | workspaceId, requestId, decision: "allow_once" \| "allow_future" \| "deny" | `{ accepted: true, requestId }` — accepted decision; activation outcome arrives separately |
-| desktop.revoke | workspaceId, sessionId, reason | `{ revoked: boolean }` — local executor reports invalidation; duplicate same-session reports return false |
+| desktop.revoke | workspaceId, sessionId, reason, stopReport? | `{ revoked: boolean, reported: boolean }` — revoked means an active session was ended; reported means a new user-Stop outcome was durably recorded |
 
 `PermissionState = { computerId: string, computerName: string, allowed: boolean }`.
 `setPermission` compares its supplied computer ID to the current prepared primary;
@@ -208,6 +210,71 @@ of `{ id, label }` values defined above. `expiresAt` is RFC3339 UTC.
 Only the current bound primary/granting principal receives prompt data. The
 existing ACP permission methods cannot resolve these request IDs. A duplicate
 revocation is a benign no-op; a foreign session is forbidden, never a no-op.
+Non-user-Stop reasons omit `stopReport`, require the original bound connection,
+and return `reported: false`. User Stop always includes the report below,
+including on the original connection; a retry returns both flags false after
+the first accepted report, without suppressing an undelivered durable wake.
+
+### Offline Stop reconciliation
+
+Before sending reverse `startControl`, the daemon durably records a terminal
+report credential: a fresh unpredictable 256-bit `stopReportToken` (base64url
+without padding) whose stored hash is bound to `{ workspaceId, agentId,
+principalId, computerId, sessionId, connectionEpoch }`. Pass the token only to the
+bound native executor in startControl. It is notification-only: never expose it
+to models, browser renderers, snapshots, event payloads, screenshots or logs; it
+cannot authorize start, input, renewal, permission writes or any other session.
+Persisting this record must succeed before activation; restart invalidates active
+control but retains the terminal record.
+
+The executor stores this credential locally before acknowledging readiness.
+On local Stop it first invalidates execution, then durably queues one report
+with a fresh UUID `reportId`, retaining that ID across retries. Capture the
+session tuple from the Stop control at click time; never substitute the current
+agent, focused workspace or a later session. A local queue persistence failure
+does not undo Stop: surface the notification failure to the user and retain the
+report in memory for immediate retry. Do not claim durable delivery until saved.
+
+The full `stopReport` object is `{ reportId, computerId, connectionEpoch,
+stopReportToken }`, all strings; `reason` must be `user_stop`. On either the
+original or a replacement authenticated connection to the **same backend**, the
+daemon requires the admitting principal to match the retained granting principal,
+current access to the retained workspace, the exact old tuple, and the token
+hash. Reconnect hello IDs or a supplied computerId alone never suffice. Unlike
+new control, this terminal report does not require that computer to remain the
+workspace primary. Missing/mismatched credentials are forbidden, an absent/hidden
+workspace or session is not-found; no failed authentication consumes the report.
+
+An accepted report can only end its own session if still active and record its
+`user_stop` reason. An already-ended session still accepts its **first** valid
+Stop report: `{ revoked: false, reported: true }`. The first connected Stop on an
+active session returns both flags true. Commit the terminal reason, deduplication
+identity and rescission wake/outbox atomically before replying. Deduplicate on
+`{ sessionId, user_stop }` as well as `reportId`; another report ID or reconnect
+cannot create a second wake. Preserve remembered permission. Do not invalidate,
+renew, relabel or clear snapshot state for any successor session.
+
+Retry only this terminal report after lost ACK/reconnect; this is explicitly
+**not** replay of consent, activation or input. The executor removes a queued
+report after either successful acknowledgement (`reported` true or false).
+It never silently drops a pending report on transport failure. Both ends retain
+the terminal credential/deduplication record through reconnects and restarts
+until the agent or workspace is deleted; deletion yields not-found and the client
+discards the orphaned report. Credentials are local protected storage, not
+workspace files or repository content. Denied access leaves the report queued
+for the same principal to regain access; never try another principal/backend.
+
+`user_stop` takes precedence over an earlier `disconnected`, `lease_expired` or
+other terminal reason for the **same session**. Replace any undelivered grant or
+generic revocation wake with the exact rescission instruction above. If a generic
+revocation was already delivered, deliver one additional correlated user-Stop
+notification; retries add none. If a newer explicit session exists, the wake's
+`sessionId`/inactive `state` describe only the stopped session and its message
+also identifies that old session and says the newer explicit session is unchanged.
+The current snapshot remains authoritative and retains the successor's active
+hint. Never revive a completed/retired/deleted agent to deliver the report: retain
+the notification for its existing conversation when available, without starting
+a new turn; deletion removes the report with the agent.
 
 ## Client-served reverse RPC
 
@@ -221,7 +288,7 @@ All fields are required, trusted daemon-generated strings. Each operation adds:
 | Operation | Additional params | Result |
 | --- | --- | --- |
 | `prepare` | none | `{ computerId, computerName, platform: "macos" \| "windows" }` |
-| `startControl` | `computerId, sessionId, agentName, leaseMs: 15000` | `{ ready: true, sessionId, computerId }` |
+| `startControl` | `computerId, sessionId, agentName, leaseMs: 15000, stopReportToken` | `{ ready: true, sessionId, computerId }` |
 | `renew` | `computerId, sessionId, leaseMs: 15000` | `{ renewed: true, sessionId }` |
 | `endControl` | `computerId, sessionId` | `{ ended: boolean, sessionId }` |
 | `prepareCommand` | `computerId, sessionId, commandId, sequence, action` | `{ commandId, sequence, deadlineId, expiresInMs: 10000 }` |
@@ -252,6 +319,7 @@ lock, permission loss or unsupported secure desktop invalidate immediately when
 observed; an undetected partition ends execution no later than lease expiry.
 New connections never resume a session, even with the same logical client ID.
 No command, input, consent decision or activation is replayed after reconnect.
+Only notification-only terminal Stop reports may be reconciled as defined above.
 
 ### Command deadlines without synchronized clocks
 
@@ -370,7 +438,7 @@ New workspace events use the ordinary envelope and these complete data payloads:
 | `desktop:permission-requested` | `PermissionRequest` |
 | `desktop:permission-resolved` | `{ workspaceId, agentId, requestId, outcome, state: DesktopState, error?: DesktopError }` |
 | `desktop:permission-changed` | `{ workspaceId, agentId, permission: PermissionState }` |
-| `desktop:session-changed` | `{ workspaceId, agentId, sessionId, computerId, computerName, status: "active" \| "ended", reason? }` |
+| `desktop:session-changed` | `{ workspaceId, agentId, sessionId, computerId, computerName, status: "active" \| "ended", reason?, reportId? }` |
 
 `outcome` is `granted`, `denied`, `expired`, `withdrawn`, `invalidated` or `failed`.
 Only `granted` carries active state, after readiness; all other outcomes carry
@@ -379,6 +447,10 @@ inactive state. Session `reason` is omitted for active; ended requires one of
 `os_permission_lost`, `lease_expired`, `agent_terminated`, `executor_failed`,
 `unsupported_environment`, `outcome_unknown`. Emit only real transitions;
 repeated start/end and duplicate revoke do not duplicate events/toasts.
+The first accepted terminal Stop report emits an ended/user_stop event with its
+`reportId`, including when correcting an earlier ended reason. Consumers update
+that session's reason; they must not end a different current session. Duplicate
+Stop reports emit nothing. No report credential is included in events.
 
 Permission events (including durable query/search projections) are restricted
 to the granting principal's bound primary; session events are visible only to
@@ -388,14 +460,15 @@ recover UI state; reconcile by session/request ID and event order. Events and
 snapshot reads alone never authorize native input.
 
 The queued agent wake metadata is `{ type: "desktop_control", requestId?,
-sessionId?, outcome, state: DesktopState, message, error? }`. Request outcomes
+sessionId?, reportId?, outcome, state: DesktopState, message, error? }`. Request outcomes
 reuse the values above; active-session loss uses `outcome: "revoked"`. Grant
 includes the exact release hint in `state.hint` and message. Denial/expiry/failure
 messages explicitly say control is not active. User Stop uses the exact
 rescission instruction above, clears active snapshot state, and supersedes any
 undelivered grant wake. Ordinary explicit end needs no extra wake. Restart may
 deliver a saved denial/revocation but cannot restore active state from an old
-grant wake or persisted session. Remembered permission alone may survive.
+grant wake or persisted session. Remembered permission and terminal Stop-report
+credentials/deduplication records may survive; neither is execution authority.
 
 ## Errors and verification
 
