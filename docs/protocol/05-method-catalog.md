@@ -25,22 +25,22 @@ shipped-version claim; `scriptLifecycle: 1` alone does not distinguish defaults.
 The prepared [worker observation contract (§5.5b)](./methods/agent-workers.md)
 adds a read-only list and subscription; `agentWorkers: 1` gates support.
 
-The documented surface reserves **421 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **424 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 361 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 364 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 58 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 2 aliases accepted on the wire (`git.diff` → `git.diffs`, `git.log` → `git.commits`)
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 421 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 5 methods total — 2 are **dual-role** and counted within the 424 dispatchable names (`browser.exec`, `host.openInEditor`), and 3 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 421 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 424 dispatchable names + 1 notification. Of the 5 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 3 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.50) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (361 total)
+### Router methods by namespace (364 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -78,6 +78,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | rules | 3 | get, list, update |
 | sandbox | 2 | cow.discard, cow.merge |
 | script | 11 | archive, create, list, output, remove, restart, restore, run, start, status, stop |
+| scriptMonitor | 3 | cancel, cancelRun, list — prepared script run monitors (§5.8a); registration is MCP-only |
 | search | 7 | cancel, codebase, events, fileNames, inFiles, messages, notes |
 | sentry | 8 | assignIssue, authStatus, getIssue, ignoreIssue, listIssues, listProjects, resolveIssue, searchIssues |
 | settings | 4 | get, list, reset, update |

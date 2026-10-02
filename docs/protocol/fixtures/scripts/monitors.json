@@ -1,0 +1,833 @@
+{
+  "status": "prepared-not-executed",
+  "capability": {
+    "scriptMonitors": 1
+  },
+  "cases": [
+    {
+      "id": "fast-exit-and-retry",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "same-owner-keeps-deadline",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "time",
+          "now": 500
+        },
+        {
+          "op": "register",
+          "ttlMs": 2000
+        }
+      ],
+      "expect": {
+        "states": [
+          "active"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "other-owner-refused",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000,
+          "agentId": "agent-b"
+        }
+      ],
+      "expect": {
+        "states": [
+          "active"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "same-script-other-workspace",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "start",
+          "runId": "run-a",
+          "workspaceId": "ws-b"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000,
+          "workspaceId": "ws-b"
+        }
+      ],
+      "expect": {
+        "states": [
+          "active",
+          "active"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "cancel-before-spawn",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cancelRun"
+        },
+        {
+          "op": "cancelRun"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": [
+          "run-a"
+        ]
+      }
+    },
+    {
+      "id": "unmonitor-is-silent",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cancel"
+        },
+        {
+          "op": "cancelRun"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "cancelled"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "expiry-one-shot",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "time",
+          "now": 1000
+        },
+        {
+          "op": "expire"
+        },
+        {
+          "op": "expire"
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "expired"
+        ],
+        "wakes": [
+          "ttl-expired"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "expiry-rearm",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "time",
+          "now": 1000
+        },
+        {
+          "op": "expire"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "expired",
+          "completed"
+        ],
+        "wakes": [
+          "ttl-expired",
+          "finished"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "completion-wins-expiry",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "time",
+          "now": 1000
+        },
+        {
+          "op": "expire"
+        },
+        {
+          "op": "cancelRun"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "service-respawn-stays-bound",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a",
+          "mode": "service"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "respawn"
+        },
+        {
+          "op": "respawn"
+        }
+      ],
+      "expect": {
+        "states": [
+          "active"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "manual-restart-stale-cancel",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "restart",
+          "runId": "run-b"
+        },
+        {
+          "op": "cancelRun"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "late-predecessor-exit",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "restart",
+          "runId": "run-b"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed",
+          "active"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "owner-deleted-active",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cleanup",
+          "reason": "owner-deleted"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "cancelled"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "owner-deleted-queued",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "cleanup",
+          "reason": "owner-deleted"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "owner-retired-active",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cleanup",
+          "reason": "owner-retired"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "cancelled"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "owner-retired-queued",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "cleanup",
+          "reason": "owner-retired"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "workspace-archived-active",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cleanup",
+          "reason": "workspace-archived"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "cancelled"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "workspace-archived-queued",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "cleanup",
+          "reason": "workspace-archived"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "workspace-deleted-active",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "cleanup",
+          "reason": "workspace-deleted"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "cancelled"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "workspace-deleted-queued",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "cleanup",
+          "reason": "workspace-deleted"
+        },
+        {
+          "op": "restore"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [],
+        "stops": []
+      }
+    },
+    {
+      "id": "recovery-interrupted",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "recovery-deadline-first",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "time",
+          "now": 1000
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "expired"
+        ],
+        "wakes": [
+          "ttl-expired"
+        ],
+        "stops": []
+      }
+    },
+    {
+      "id": "recovery-pending-wake",
+      "steps": [
+        {
+          "op": "start",
+          "runId": "run-a"
+        },
+        {
+          "op": "register",
+          "ttlMs": 1000
+        },
+        {
+          "op": "finish",
+          "runId": "run-a",
+          "result": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "stoppedAt": "2026-10-02T10:00:00.000Z"
+          }
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        },
+        {
+          "op": "recover"
+        },
+        {
+          "op": "deliver"
+        }
+      ],
+      "expect": {
+        "states": [
+          "completed"
+        ],
+        "wakes": [
+          "finished"
+        ],
+        "stops": []
+      }
+    }
+  ]
+}

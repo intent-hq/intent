@@ -25,6 +25,16 @@ export const RENAMED_BINDINGS = new Map([
   ['ws.agent.spawnPeer', 'ws.agent.create({ topLevel: true })'], // renamed in v8.1
 ]);
 
+// Docs-first contract: only this canonical proposal may mention these helpers
+// before they ship. Once help declares one, its real signature takes precedence.
+export const PREPARED_BINDINGS = new Map([
+  ['docs/protocol/methods/script-monitors.md', [
+    '  ws.script.monitor(scriptId, { ttlMs, runId? }) → { ok, monitor? }',
+    '  ws.script.monitors() → [monitors]',
+    '  ws.script.unmonitor(monitorId) → { ok, monitor }',
+  ].join('\n')],
+]);
+
 const IDENT_SRC = '[A-Za-z_$][A-Za-z0-9_$]*';
 // A complete `ws.<segment>(.<segment>)*` name: full JS identifier segments, no partial match of a longer identifier.
 const NAME_SRC = `ws\\.${IDENT_SRC}(?:\\.${IDENT_SRC})*(?![A-Za-z0-9_$])`;
@@ -303,6 +313,7 @@ export function checkIndex(bindings, committed, { indexPath = INDEX_PATH } = {})
 /** Checks 2 + 3 for one doc: stale names and stale options in inline-code signatures. */
 export function checkDoc(file, mentions, bindings, { renamed = RENAMED_BINDINGS } = {}) {
   const errors = [];
+  bindings = mergeBindings(bindings, parseBindings(PREPARED_BINDINGS.get(file) ?? ''));
   const byName = new Map(bindings.map((b) => [b.name, b]));
   const isNamespace = (name) => bindings.some((b) => b.name.startsWith(`${name}.`));
   for (const { name, line } of mentions.names) {
