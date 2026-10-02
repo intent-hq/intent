@@ -8,7 +8,7 @@ at implementation time. Documentation and synthetic fixtures do not claim shipme
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `12.0` — retirement of ten unused RPC names. Prepared
+**Documented version:** `13.0` — removal of deprecated `git.commit` after the protocol-12 retirements. Prepared
 extensions below remain independently capability-gated; this header does not
 claim a carrying desktop release.
 
@@ -414,7 +414,7 @@ This contract is prepared against daemon main
 support or a carrying release. Unrelated prepared extensions retain their own
 implementation status and capability gates.
 
-Version 12.0 is a **breaking** major bump: the deprecated `git.commit` RPC is
+Version 13.0 is a **breaking** major bump: the deprecated `git.commit` RPC is
 removed from dispatch, the method catalog, and the guest collaborator allowlist.
 The supported `git.agentCommit` method keeps its existing staged-index/explicit-file
 selection, human-request bypass, and host-member/administrator permissions.

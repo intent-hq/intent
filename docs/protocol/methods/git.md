@@ -13,7 +13,7 @@ Routing-only `workspaceId?` additions below are [prepared contract fields](../wo
 | git.getBranches | repoPath (req), includeRemote?, workspaceId? | { branches, remoteBranches, currentBranch, defaultBranch } — repoPath must be an existing local git repository (-32602 otherwise; see below) |
 | git.getRemoteUrl | repoPath (req), remoteName? (default `origin`), workspaceId? | { url } — reads the named remote from the same path-selected repository; preserves membership/path validation |
 
-**Legacy commit RPC removed in protocol 12.0.** The deprecated wire method
+**Legacy commit RPC removed in protocol 13.0.** The deprecated wire method
 `git.commit` is no longer dispatched. Local daemon-control and administrator
 connections receive `-32601` (Method not found). Host-member and guest collaborator
 connections retain the authorization gate before dispatch and receive `-32003`
