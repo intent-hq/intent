@@ -364,9 +364,9 @@ test('runChecks separates stale-ignore warnings from errors', async (t) => {
 });
 
 const run = promisify(execFile);
-async function runCli(root) {
+async function runCli(root, ...args) {
   try {
-    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root], { env: cleanNodeEnv() });
+    const { stdout, stderr } = await run(process.execPath, [SCRIPT, root, ...args], { env: cleanNodeEnv() });
     return { code: 0, stdout, stderr };
   } catch (err) {
     return { code: err.code, stdout: err.stdout, stderr: err.stderr };
@@ -536,6 +536,199 @@ async function makeGitRoot(t) {
 }
 
 const bannerOf = (dir, checkout, pin) => `check-protocol-field-parity: ${path.basename(dir)} sources from ${dir} checkout ${checkout.slice(0, 7)} (recorded pin ${pin.slice(0, 7)})`;
+
+// Copy the real entry point and its script dependencies, not a stand-in recipe.
+async function makeRoutingRoot(t) {
+  const setup = await makeGitRoot(t);
+  await fs.mkdir(path.join(setup.root, 'scripts'));
+  for (const file of ['Makefile', 'scripts/check-protocol-field-parity.mjs', 'scripts/submodule-ref.mjs']) {
+    await fs.copyFile(fileURLToPath(new URL(`../${file}`, import.meta.url)), path.join(setup.root, file));
+  }
+  return setup;
+}
+
+async function runMake(root, ...args) {
+  try {
+    const { stdout, stderr } = await run('make', ['--no-print-directory', 'check-protocol-field-parity', ...args], {
+      cwd: root, env: { ...cleanNodeEnv(), MAKEFLAGS: '', MFLAGS: '', MAKEOVERRIDES: '' },
+    });
+    return { code: 0, stdout, stderr };
+  } catch (err) {
+    return { code: err.code, stdout: err.stdout, stderr: err.stderr };
+  }
+}
+
+test('real Makefile routes INTENTD_DIR to the selected daemon worktree', async (t) => {
+  const { root } = await makeRoutingRoot(t);
+  const baseline = await runMake(root);
+  assert.equal(baseline.code, 0, baseline.stderr);
+  assert.match(baseline.stdout, /Protocol field parity holds for 2 pair\(s\)/);
+  const selected = '.intent/worktrees/daemon-candidate';
+  git(path.join(root, 'packages/intentd'), 'worktree', 'add', '--detach', path.join(root, selected), 'HEAD');
+  const rustFile = path.join(selected, path.relative('packages/intentd', PAIRS[0].rust.file));
+  const source = await fs.readFile(path.join(root, rustFile), 'utf8');
+  await fs.writeFile(path.join(root, rustFile), source.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,'));
+  const result = await runMake(root, `INTENTD_DIR=${selected}`);
+  assert.equal(result.code, 2, `selected daemon must fail instead of checking the valid default pair:\n${result.stdout}\n${result.stderr}`);
+  assert.ok(result.stderr.includes(`${rustFile}:4: error:`), result.stderr);
+  assert.match(result.stderr, /emitted field AgentLite\.candidateOnly/);
+});
+
+const COMPONENTS = [
+  { sub: 'packages/intentd', flag: '--intentd-dir', variable: 'INTENTD_DIR', side: 'rust' },
+  { sub: 'packages/cloudlands-fe', flag: '--fe-dir', variable: 'FE_DIR', side: 'ts' },
+];
+
+for (const { sub, flag, side } of COMPONENTS) {
+  for (const absolute of [false, true]) {
+    test(`CLI selects ${absolute ? 'absolute' : 'relative'} ${sub} worktrees with canonical pin provenance`, async (t) => {
+      const { root, pins, staleCount } = await makeGitRoot(t);
+      const relative = `.intent/worktrees/${side}-candidate`;
+      const selected = absolute ? path.join(root, relative) : relative;
+      const worktree = path.resolve(root, selected);
+      git(path.join(root, sub), 'worktree', 'add', '--detach', worktree, 'HEAD');
+      assert.ok((await fs.stat(path.join(worktree, '.git'))).isFile(), 'a genuine git worktree uses a .git file');
+      const expectedBanner = (head, dirty) => `check-protocol-field-parity: ${path.basename(sub)} sources from ${selected} checkout ${head.slice(0, 7)}${dirty ? ' (dirty)' : ''} (recorded pin ${pins[sub].slice(0, 7)})`;
+      const baseline = await runCli(root, flag, selected);
+      assert.equal(baseline.code, 0, baseline.stderr);
+      assert.ok(baseline.stdout.split('\n').includes(expectedBanner(pins[sub], false)), baseline.stdout);
+      assert.equal(baseline.stderr.match(/stale ignore entry/g)?.length, staleCount);
+      assert.doesNotMatch(baseline.stderr, /is off the recorded pin|uncommitted changes/);
+
+      const file = path.join(selected, path.relative(sub, PAIRS[0][side].file));
+      const source = await fs.readFile(path.resolve(root, file), 'utf8');
+      await fs.writeFile(path.resolve(root, file), side === 'rust'
+        ? source.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,')
+        : source.replace('  id: string;\n', ''));
+      const dirty = await runCli(root, flag, selected);
+      assert.equal(dirty.code, 1, dirty.stderr);
+      assert.ok(dirty.stdout.split('\n').includes(expectedBanner(pins[sub], true)), dirty.stdout);
+      const remedy = `Run git submodule update --checkout ${sub} and rerun without component overrides to compare against the pin.`;
+      assert.ok(dirty.stderr.split('\n').includes(`warning: ${selected} checkout ${pins[sub].slice(0, 7)} has uncommitted changes; results reflect the working tree, not the recorded pin ${pins[sub].slice(0, 7)}. ${remedy}`), dirty.stderr);
+      if (side === 'rust') {
+        assert.ok(dirty.stderr.includes(`${file}:4: error: AgentLite → AgentSession: emitted field AgentLite.candidateOnly`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`(${PAIRS[0].ts.file}:1-3)`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`${file}:2: warning: AgentLite → AgentSession: stale ignore entry`), dirty.stderr);
+      } else {
+        assert.ok(dirty.stderr.includes(`${PAIRS[0].rust.file}:3: error: AgentLite → AgentSession: emitted field AgentLite.id`), dirty.stderr);
+        assert.ok(dirty.stderr.includes(`(${file}:1-2)`), dirty.stderr);
+      }
+      assert.doesNotMatch(dirty.stdout, /skipped:/);
+      assert.equal((await runCli(root)).code, 0, 'the valid default pair was not modified');
+
+      git(worktree, 'commit', '-q', '-am', 'candidate sources');
+      const head = git(worktree, 'rev-parse', 'HEAD');
+      assert.notEqual(head, pins[sub]);
+      const committed = await runCli(root, flag, selected);
+      assert.equal(committed.code, 1, committed.stderr);
+      assert.ok(committed.stdout.split('\n').includes(expectedBanner(head, false)), committed.stdout);
+      assert.ok(committed.stderr.split('\n').includes(`warning: ${selected} checkout ${head.slice(0, 7)} is off the recorded pin ${pins[sub].slice(0, 7)}; results reflect the checkout, not the pin. ${remedy}`), committed.stderr);
+      assert.ok(!committed.stderr.includes(`git submodule update --checkout ${selected}`), committed.stderr);
+    });
+  }
+}
+
+test('real Makefile routes FE_DIR and both selected roots, including paths with spaces', async (t) => {
+  const { root } = await makeRoutingRoot(t);
+  const intentd = '.intent/worktrees/daemon candidate';
+  const fe = path.join(root, '.intent/worktrees/frontend candidate');
+  for (const [sub, selected] of [['packages/intentd', intentd], ['packages/cloudlands-fe', fe]]) {
+    git(path.join(root, sub), 'worktree', 'add', '--detach', path.resolve(root, selected), 'HEAD');
+  }
+  const rustFile = path.resolve(root, intentd, path.relative('packages/intentd', PAIRS[0].rust.file));
+  const tsFile = path.join(fe, path.relative('packages/cloudlands-fe', PAIRS[0].ts.file));
+  const rustSource = await fs.readFile(rustFile, 'utf8');
+  const tsSource = await fs.readFile(tsFile, 'utf8');
+  await fs.writeFile(tsFile, tsSource.replace('  id: string;\n', ''));
+  const frontendOnly = await runMake(root, `FE_DIR=${fe}`);
+  assert.equal(frontendOnly.code, 2, frontendOnly.stdout);
+  assert.ok(frontendOnly.stderr.includes(`(${tsFile}:1-2)`), frontendOnly.stderr);
+  await fs.writeFile(rustFile, rustSource.replace('    pub id: String,', '    pub id: String,\n    pub candidate_only: String,'));
+  await fs.writeFile(tsFile, tsSource.replace('  id: string;', '  id: string;\n  candidateOnly: string;'));
+  assert.equal((await runMake(root, `INTENTD_DIR=${intentd}`)).code, 2);
+  const both = await runMake(root, `INTENTD_DIR=${intentd}`, `FE_DIR=${fe}`);
+  assert.equal(both.code, 0, both.stderr);
+  assert.match(both.stdout, /Protocol field parity holds for 2 pair\(s\)/);
+});
+
+for (const { sub, flag, variable, side } of COMPONENTS) {
+  for (const metadata of ['dangling', 'corrupt', 'unborn', 'wrong-root']) {
+    test(`explicit ${sub} rejects ${metadata} Git metadata through CLI and Make`, async (t) => {
+      const { root } = await makeRoutingRoot(t);
+      const selected = `.intent/worktrees/${side}-${metadata}`;
+      const selectedRoot = path.join(root, selected);
+      await fs.mkdir(selectedRoot, { recursive: true });
+      for (const file of new Set(PAIRS.map((pair) => pair[side].file))) {
+        const dest = path.join(selectedRoot, path.relative(sub, file));
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.copyFile(path.join(root, file), dest);
+      }
+      if (metadata === 'unborn') {
+        git(selectedRoot, 'init', '-q', '-b', 'main');
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      } else if (metadata === 'wrong-root') {
+        const canonical = path.join(root, sub);
+        git(canonical, 'config', 'core.worktree', canonical);
+        await fs.writeFile(path.join(selectedRoot, '.git'), `gitdir: ${canonical}/.git\n`);
+        assert.equal(git(selectedRoot, 'rev-parse', '--show-toplevel'), canonical);
+      } else {
+        const marker = metadata === 'dangling' ? `gitdir: ${root}/nonexistent-git-dir\n` : 'not valid Git metadata\n';
+        await fs.writeFile(path.join(selectedRoot, '.git'), marker);
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      }
+      // Run both entry points before asserting so the red evidence covers both.
+      const cli = await runCli(root, flag, selected);
+      const make = await runMake(root, `${variable}=${selected}`);
+      assert.deepEqual([cli.code, make.code], [1, 2], `invalid selected ${sub} must fail both entry points:\n${cli.stdout}\n${make.stdout}`);
+      for (const result of [cli, make]) {
+        assert.ok(result.stderr.includes(`selected ${sub} root ${selected} is not a repository root with a readable HEAD`), result.stderr);
+        assert.doesNotMatch(result.stdout, /skipped:|Protocol field parity holds/);
+      }
+      assert.equal((await runCli(root)).code, 0, 'omitted overrides still check the valid default pair');
+    });
+  }
+
+  test(`explicit invalid or missing ${sub} roots fail instead of skipping or falling back`, async (t) => {
+    const { root } = await makeRoutingRoot(t);
+    const plain = '.intent/not-a-checkout';
+    await fs.mkdir(path.join(root, plain), { recursive: true });
+    const regularFile = '.intent/not-a-directory';
+    await fs.writeFile(path.join(root, regularFile), 'not a directory');
+    for (const selected of ['', '.intent/missing', plain, regularFile]) {
+      const cli = await runCli(root, flag, selected);
+      assert.equal(cli.code, 1, `${flag}=${selected}: ${cli.stdout}`);
+      assert.ok(cli.stderr.includes(`selected ${sub} root`), cli.stderr);
+      assert.doesNotMatch(cli.stdout, /skipped:|Protocol field parity holds/);
+      const make = await runMake(root, `${variable}=${selected}`);
+      assert.equal(make.code, 2, `${variable}=${selected}: ${make.stdout}`);
+      assert.doesNotMatch(make.stdout, /Protocol field parity holds/);
+    }
+    // A chosen checkout can exist while the manifest source is missing or unreadable.
+    const selected = `.intent/worktrees/${side}-incomplete`;
+    git(path.join(root, sub), 'worktree', 'add', '--detach', path.join(root, selected), 'HEAD');
+    const file = path.join(selected, path.relative(sub, PAIRS[0][side].file));
+    await fs.rm(path.join(root, file));
+    const missing = await runCli(root, flag, selected);
+    assert.equal(missing.code, 1);
+    assert.ok(missing.stderr.includes(`${file}:1: error: manifest path ${file} does not exist`), missing.stderr);
+    assert.doesNotMatch(missing.stdout, /skipped:|Protocol field parity holds/);
+    assert.equal((await runMake(root, `${variable}=${selected}`)).code, 2);
+    await fs.mkdir(path.join(root, file));
+    const invalidFile = await runCli(root, flag, selected);
+    assert.equal(invalidFile.code, 1);
+    assert.ok(invalidFile.stderr.includes(`${file}:1: error: cannot read manifest path ${file}: EISDIR`), invalidFile.stderr);
+
+    // Explicitly selecting the absent canonical checkout is an error too; only
+    // omission of the override retains the optional-submodule skip behavior.
+    await fs.rm(path.join(root, sub), { recursive: true });
+    const defaults = await runCli(root);
+    assert.equal(defaults.code, 0, defaults.stderr);
+    assert.match(defaults.stdout, /skipped:.*submodule not initialized/);
+    const explicitDefault = await runCli(root, flag, sub);
+    assert.equal(explicitDefault.code, 1);
+    assert.doesNotMatch(explicitDefault.stdout, /skipped:|Protocol field parity holds/);
+  });
+}
 
 test('fixtures outside any git repository yield unknown refs: no banner, no warning', async (t) => {
   const root = await fixture(t, {

@@ -2,6 +2,10 @@
 
 ### 5.8 `script.*`
 
+The prepared [script monitor extension (§5.8a)](./script-monitors.md) adds
+run identity, one-shot agent monitoring and guarded user cancellation under
+`scriptMonitors: 1`. Existing script controls keep their current semantics.
+
 The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.
@@ -14,7 +18,7 @@ adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 | script.restore | workspaceId (req), scriptIds (req: nonempty string array) | { restored: [scriptId, ...], skipped: [{ scriptId, reason }] } — 10.11 candidate; restores visibility without starting |
 | script.remove | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.start | workspaceId (req), scriptId (req) | { ok, scriptId } — the runtime status is flipped to `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) **before the reply**, atomically with the supervisor's registration and with the previous run's terminal fields (`pid`, `startedAt`, `exitCode`, `stoppedAt`, `error`, `detectedUrl`) cleared, so a `script.status` read after the reply never observes the pre-launch `idle`; the owned launch task publishes the `starting` transition as `script:state` strictly ahead of the spawn's `running` (or `exited` + `error` on a launch failure). A script already `running` or `starting` is a no-op |
-| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — on a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits a `script:state` snapshot (§6.5), and returns ok instead of erroring |
+| script.stop | workspaceId (req), scriptId (req) | { ok, scriptId } — stops an active run; resetting a finished script from `exited` to `idle` emits a `script:state` snapshot (§6.5; prepared event-authority extension below). On a **non-running** script that carries the was-running marker this is the **dismiss** affordance: it clears the marker (`previouslyRunning` on a service row, the hydrated `lost` reading on a command row; in memory plus a best-effort row write), emits the cleared runtime snapshot, and returns ok instead of erroring. Stopping an already idle, unmarked script is a no-op with no state event |
 | script.restart | workspaceId (req), scriptId (req) | { ok, scriptId } |
 | script.output | workspaceId (req), scriptId (req), maxLines? | output buffer text |
 | script.status | workspaceId (req), scriptId (req) | { status, restartCount, pid?, exitCode?, startedAt?, stoppedAt?, error?, detectedUrl?, previouslyRunning?, ready?, readiness? } — the `ScriptRuntimeState` snapshot; `status` and `restartCount` are always present, every other field is **omitted when unset** (never `null` — a cleared `exitCode` is absent, so hooks test `exitCode !== undefined`); `status` is one of `idle \| starting \| running \| restarting \| exited`. `exited` **always** carries `exitCode` (new in intentd, unreleased): when the real status was not observable it is the sentinel `-1` together with an `error` naming the cause — see the total exit contract note below. `starting` (new in intentd, within v9.12 — intent-hq/intent#4858) is the `script.start` launch window: set synchronously before `script.start` replies, with the previous run's terminal fields cleared, and held until the spawn's `running` (or `exited` on a launch failure), so a poll issued right after `start` never reads the pre-launch `idle` or a stale `exitCode`. `restarting` (new in intentd, monorepo#1318) is the transient restart-in-flight state between an exit and the next spawn attempt — the service auto-restart backoff window and the `script.restart` stop→start gap — so a poll taken mid-restart never reads as a final `exited`/`idle`; the respawn flips it back to `running`. `previouslyRunning?: true` (new in intentd, within v5.1) marks a **service** script that was running when the daemon last stopped; a command script in the same situation hydrates as `exited` / `exitCode: -1` / `error` instead — see the was-running marker note below |
@@ -453,9 +457,10 @@ was cancelled, timed out, or was interrupted. Settlement requires that its
 process and launch/run reservation have ended and no restart is pending. Never
 retire a never-run `idle` definition or a transient idle/exit during restart.
 Saved commands and services never auto-archive. Publish the final runtime state
-where the existing path emits `script:state` before the archive invalidation;
-all prior output chunks keep their existing ordering. A stop path that already
-resets to idle without a state event need not invent one; its archive invalidation
+where the existing path emits `script:state` before the archive change event;
+all prior output chunks keep their existing ordering. Under the prepared
+event-authority extension below, a stop that resets a finished script from
+`exited` to `idle` publishes that runtime transition. Any archive change event
 still follows settlement. Do not hide a run before final output/state can be read.
 
 Failure must not disappear silently: History renders the recorded result and
@@ -467,7 +472,7 @@ Automatic archive write failure keeps the row active, logs the persistence
 error, and leaves the real terminal state intact; it must not turn a successful
 command into a failed command or lose its output.
 
-Manual-stop behavior is **unchanged**, including `idle` after stopping a launch
+Manual-stop result semantics are **unchanged**, including `idle` after stopping a launch
 before spawn or resetting a settled script. Archive itself never clears or
 rewrites that state. Stopping an admitted one-off records a `cancelled` result
 once teardown settles, even if the terminated child reports 0; stopping a
@@ -536,7 +541,7 @@ the admitted run.
 **Rerun and replacement.** `start`, `run`, and `restart` of an archived ID
 restore it durably before accepting a launch. They preserve its purpose and ID,
 clear the runtime terminal fields for the new run and publish the restoration
-invalidation before that run's first live state event. Existing duplicate-start
+change before that run's first live state event. Existing duplicate-start
 no-op / already-running warning behavior extends across every live reservation,
 including `restarting`. Do not schedule a second launch to restore an already
 live entry. Restore-only leaves terminal status/output untouched. A
@@ -549,14 +554,13 @@ one-off to service therefore requires explicit `purpose: "saved"`. Existing
 upsert teardown behavior is unchanged: unlike archive, replacement can stop the
 old process. Completion from the replaced run cannot retire its replacement.
 
-**Events and completion hooks.** Reuse `script:changed` with existing payload
-`{ scriptId, action: "updated" }` for real archive/restore transitions and last
-result updates (coalesce result+archive into one invalidation). Do not emit
-`action: "removed"` for archive. No new event type or runtime status is added.
-Consumers invalidate and refetch the selected list, retain direct status/output
-handles, and must not add a hidden row back to the active list merely because a
-`script:state` arrives. New subscribers/reconnects obtain authoritative archive
-state from `script.list`; invalidation events alone are not a row snapshot.
+**Events and completion hooks.** `script:changed` retains `scriptId` and
+`action: "created" | "updated" | "removed"`. The prepared additive
+[self-contained change contract](#self-contained-script-changes-prepared-additive-extension)
+below adds the complete row for create/update, including archive/restore and
+latest results. Legacy ID-only create/update events still invalidate the selected
+list. Archive is never removal; `script:state` alone never proves durable
+retirement. No new event type or runtime status is added.
 
 Archive does **not** cancel completion hooks or subscriptions. After `start`
 returns, hooks keep using direct `status`/`output` by ID even after the row leaves
@@ -614,3 +618,140 @@ Run their static consistency checks with
 exercise the implemented lifecycle with isolated databases and controlled
 launch/completion race barriers. The JSON remains a prepared scenario catalog;
 its static checker does not execute those component tests.
+
+#### Self-contained script changes (prepared additive extension)
+
+This contract is **prepared, not a shipped implementation claim**. It extends
+`script:changed` without adding a method, event type, capability, database field,
+or wire revision counter. Detect support from each event's payload; neither
+`scriptLifecycle: 1` nor a numeric protocol version proves snapshot support.
+Lifecycle controls still require their existing capability. Allocate the additive
+minor against daemon main at implementation time; docs land before consumers.
+
+**Payload.** Keep the §6.3 envelope and workspace authorization unchanged:
+
+| Action | `data` | Meaning |
+| --- | --- | --- |
+| `created` | `{ scriptId, action: "created", script }` | Insert the committed definition and current runtime |
+| `updated` | `{ scriptId, action: "updated", script }` | Replace the complete row after definition edit, archive, restore or result commit |
+| `removed` | `{ scriptId, action: "removed" }` | Delete the definition by ID; omit `script` |
+
+`script` is exactly one **full `script.list` row**, independent of the client's
+active/history filter: all definition fields plus a complete `runtime` object.
+Required fields are `id`, `workspaceId`, `name`, `command`, `mode`, `purpose`,
+`source`, `createdAt`, and `runtime` (with `status` and `restartCount`). Optional
+fields follow the same types and omission rules as list/status, including
+`archivedAt`, `lastRun`, definition options and runtime terminal fields.
+`script.id` equals `data.scriptId`; `script.workspaceId` equals the event's
+`workspaceId`. Never publish another workspace's row or a definition-only object
+under `script`. Unknown additive fields remain tolerable. Output bytes and client
+state (selection, tabs, buffered output) are not part of this row.
+
+**Replacement and clearing.** Presence of a valid `script` means a complete
+snapshot, not a patch. Replace both definition and runtime, removing old optional
+fields absent from the new row; do not shallow-merge it with the cached row.
+Omitted `archivedAt` means active; omitted `lastRun` means no known result (for
+example after upsert); omitted `cwd`, `env`, `category`, `autoStart`, `updatedAt`,
+or supported readiness configuration clears the prior value. Omitted runtime
+`pid`, `exitCode`, `startedAt`, `stoppedAt`, `error`, `detectedUrl`,
+`previouslyRunning`, or supported readiness metadata clears the prior value.
+Unset optional fields are omitted, **never `null`**. An explicit false/zero/empty
+value, when allowed by the field's type, remains a value. `script` absent means
+legacy invalidation, never an empty replacement. Null, partial, invalid or
+identity-mismatched snapshots are not authoritative: use the existing scoped
+reconciliation path without applying the malformed row. An unknown action also
+falls back to reconciliation. Never infer removal from missing/invalid `script`.
+
+**Publication and persistence.** Supporting producers include `script` on every
+created/updated event, not only auto-archive. Publish after the durable mutation
+commits and the runtime registry reflects it, taking definition and runtime from
+one coherent observation. Use the same row projection as list. Completion for
+saved commands publishes the new `lastRun` while remaining active; completion for
+one-offs coalesces result and archive into one updated snapshot. Cover success,
+nonzero exit, spawn failure, cancellation, timeout and interrupted-run recovery.
+Recovery must construct/hydrate the corresponding runtime before publishing a
+full row; it cannot send an empty snapshot while the registry is not populated.
+Skipped/no-op archive/restore operations emit nothing.
+
+A failed durable write must not publish an uncommitted result or archive snapshot.
+The existing terminal state/output remains readable and its state event may
+already have arrived, but the prior committed definition/result stays in force.
+This applies to automatic retirement and explicit edits/archive/restore/removal;
+a failed partial batch can still have events for earlier committed IDs.
+
+Keep existing output/state ordering. The final runtime event, where the path
+emits one, precedes the settled change snapshot. A stop that settles at `idle`
+may publish a changed row with `runtime.status: "idle"` and cancelled `lastRun`;
+do not invent an exit code or duplicate a state event already published for that
+transition. A stop that resets an already finished script from `exited` to `idle`
+must publish a complete `script:state` snapshot, even when no result or archive
+mutation remains to publish. This reset changes runtime status only: retain the
+preceding terminal fields, `lastRun`, archive membership and addressable output.
+It is not a new cancellation or an implicit restore. Marker dismissal remains
+distinct: remove a service's `previouslyRunning`; dismissing a command's hydrated
+`lost` reading resets its runtime to plain `idle` (clearing terminal fields),
+without clearing its durable result/archive metadata. Both dismissals publish
+the cleared runtime snapshot. An already idle, unmarked script with no pending
+run is a no-op and emits no state event. Consumers replace runtime from these
+snapshots without a stop-triggered list refresh; initial/reconnect and legacy
+reconciliation remain as described below.
+
+Restore-before-launch
+publishes the restored snapshot before the successor's first live state event;
+restore alone retains previous runtime/result/output. Upsert clears prior archive
+and result metadata and publishes the replacement's fresh runtime.
+
+For each workspace/script ID, serialize mutation, snapshot capture and change
+publication against replacement/removal and launch admission. An older captured
+change must not publish after its successor. Validate the definition generation
+and admitted run before committing/publishing delayed completion; a stale exit
+must not update, archive or resurrect a replacement or rerun. Runtime publication
+must likewise not let a predecessor state overwrite the successor snapshot.
+There is no cross-script total-order promise. These are producer responsibilities,
+not races clients can solve by comparing `createdAt`, `updatedAt`, `stoppedAt`,
+event timestamps or event UUIDs; none is a monotonic row revision.
+
+**Consumption and reconciliation.** After initial loading, valid create/update
+snapshots directly update known or previously unknown IDs and derive active/history
+membership from `archivedAt`, with **zero event-triggered `script.list` calls**.
+Keep archived rows available to open output viewers; archive must not clear
+selection, tabs, subscriptions or buffered output. `script:state` replaces runtime
+only; it cannot create a definition, change archive membership or resurrect a
+removed ID. Removal directly drops the ID with existing explicit-delete behavior;
+its ID-only shape is already sufficient, on both new and old daemons, and needs
+no list call. Existing rerun/replacement output lifetime rules still apply.
+
+Subscribe before initial/reconnect reconciliation. Lists remain necessary for
+initial loading, reconnect/missed events, explicit reads and legacy invalidations.
+A pending list response must not overwrite script changes or runtime events
+received since that request began, nor resurrect an event-removed row. A local
+per-workspace request fence plus buffering/reapplying those events in receive
+order is sufficient; include full row replacements, removals and runtime-only
+updates, and preserve each list filter's meaning. For example an active-list
+response omitting an archived row must not erase the retained row delivered by a
+completion event. Do not launch a second list solely because a valid snapshot
+arrived during the first one. Protect concurrent list requests from older response
+completion as well; coalescing/serialization or local request tokens suffice.
+
+Scope pending reads, buffers and subscriptions to the workspace **and connection
+/ authority generation**; discard old-connection results and queued events after
+reconnect or an authority switch. Deduplicate overlapping subscriptions by
+`event.id` (§6.3). Receive order is meaningful only within the current live stream;
+replaying historical `event.query` rows onto a current cache is not reconciliation.
+The existing event envelope supplies no resume cursor/snapshot watermark. After
+a missed stream or connection reset, re-list rather than treating historical
+arrival order as fresh state. No general event-versioning framework is required.
+
+Older daemons' create/update events omit `script`: retain the existing coalesced
+list refresh. Older clients ignore the new member and continue their current
+refresh behavior; omitted wire archive filters still mean `all`. Rollback may
+remove the producer extension while this consumer fallback remains. A valid row
+snapshot must never cause a completion refresh, including saved-script results.
+
+Executable synthetic fixtures live in
+[`fixtures/scripts/changed-events.json`](../fixtures/scripts/changed-events.json)
+and run with `node --test docs/protocol/fixtures/scripts/contract.test.mjs`.
+They exercise snapshot application, omission clearing, output retention, legacy
+fallback and in-flight/reconnect races; they are **not** proof of daemon locking,
+persistence or frontend transport behavior. Component unit and WSS/transport
+regressions must execute those guarantees against real implementation code.

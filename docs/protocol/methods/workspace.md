@@ -753,11 +753,22 @@ workspace provisioning; the resolved effort is persisted before any prompt or at
 starts the first turn and echoed in the response's `initialAgent.reasoningEffort`.
 An unset effort is omitted from that `AgentLite` response. No post-create `agent.update`
 is needed to apply the initial effort.
+Manual workspace initial agents accept optional `initialAgent.rememberSpecialist`
+and `initialAgent.nameExplicitlySet` booleans. Omitted/null values preserve the
+existing defaults: no specialist memory opt-in, and a supplied name is explicit.
+The manual UI sends `rememberSpecialist: true` and `nameExplicitlySet: false` for
+its generated specialist name. A successful initial-agent insertion atomically
+remembers the canonical specialist (null for General) for the new workspace;
+failed preflight validation creates neither a workspace nor preference. Existing
+background/agent-created exclusions apply. An explicit custom name stays protected
+when `nameExplicitlySet` is omitted or true. Non-boolean non-null values are
+rejected before provisioning. See [manual specialist memory](./agents.md#manual-specialist-memory).
+
 When `initialAgent.name` is omitted but a `specialist` is supplied, the agent's name
 defaults to the specialist's resolved display name (frontmatter `name`, 3-tier
-project > user > bundled — e.g. "Coordinator" for `spec-writer`) and counts as
-explicitly set (it survives the agent's guarded opening-turn self-rename, same
-rename-guard semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
+project > user > bundled — e.g. "Coordinator" for `spec-writer`) and remains a
+generated name eligible for the opening-turn self-rename (same rename-guard
+semantics as `agent.create` §5.5); an UNKNOWN `specialist` — one that
 resolves to no known id or alias — is rejected with `-32602` naming the id and the
 known catalog ids (monorepo#3497; same strict validation as `agent.create` §5.5),
 while a known specialist whose display-name resolution fails still never fails the
@@ -1329,8 +1340,8 @@ to, written by `workspace.setBrowserClient` and cleared by passing `clientId: nu
 **Omitted** (never `null`) from `Workspace` payloads (`workspace.list` / `workspace.get` / the
 `workspace` subscription snapshot, §6.9) while the workspace is unpinned — the driving client
 is then resolved live (§5.9: the host of the workspace's claimed tabs, else the
-first-connected eligible client). The pin is a persisted row column that only
-`workspace.setBrowserClient` writes: a general `workspace.update` never touches it, and the
+first-connected eligible client). The pin is a persisted row column written by
+`workspace.setBrowserClient`: a general `workspace.update` never touches it, and the
 `workspace:updated { changes }` delta the setter emits carries `browserClientId` as the
 committed string or an explicit `null` for a clear (§6.5). The pin is **daemon-local**: a
 `workspace.duplicate` copy starts unpinned, and although the transfer export carries the
@@ -1339,6 +1350,18 @@ daemon (the `client` table never transfers), so an imported workspace starts unp
 Reading the pin **together with** the live resolution is `workspace.getBrowserClient`; the
 candidates a picker offers are `client.list` (§5.17). The virtual Chief workspace cannot be
 pinned (-32602) and never carries the field.
+
+**Prepared desktop-consent addition:** [desktop control](./desktop.md#unassigned-workspace-consent-claims-the-primary)
+uses the same `browserClientId` column, setter authorization boundaries and committed
+workspace delta. First authenticated same-owner Allow atomically claims it only
+when there is no saved pin, active desktop or agent-owned browser host; the
+first-connected browser fallback alone does not count as assigned. Explicit setter
+and agent-tab ownership changes serialize against the claim and invalidate stale
+candidate requests. A saved/offline pin is never replaced by candidate consent.
+The sidebar always offers Set primary client; its machine label appears only for
+active desktop control or agent-owned tabs (including hidden tabs), not an idle pin
+or user-only tabs. See the desktop contract for exact targeting, consent races and
+activity-label rules. This is a prepared addition, not shipped behavior at the pins.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon

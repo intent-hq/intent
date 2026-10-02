@@ -6,6 +6,7 @@ import io
 from itertools import product
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -92,6 +93,8 @@ class PlannedRunHarness:
         self.stdout = io.StringIO()
 
     def fake_run(self, command, cwd, env=None):
+        if command[:2] == ["cargo", "metadata"]:
+            return json.dumps({"target_directory": str(self.root / "target")})
         assert command[:3] == ["cargo", "nextest", "list"], command
         self.list_commands.append(command)
         return LISTING
@@ -312,7 +315,7 @@ class ResumableNextestTests(unittest.TestCase):
             self.assertIn("binary_id(/^binary$/)", profile["default-filter"])
             self.assertEqual(profile["junit"]["path"], "junit.xml")
 
-    def test_complete_marker_fast_path_does_not_invoke_cargo(self):
+    def test_complete_marker_fast_path_does_not_invoke_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "intentd").mkdir()
@@ -326,8 +329,8 @@ class ResumableNextestTests(unittest.TestCase):
             args = make_args(
                 root, resume="1", label=gate.DEFAULT_LABEL, plan=None, base=None
             )
-            with mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=key), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
                 self.assertEqual(gate.run_nextest(args), 0)
             self.assertEqual(
@@ -578,8 +581,8 @@ class ResumableNextestTests(unittest.TestCase):
             (record_dir / "run.json").write_text(
                 json.dumps({"passed": 2, "skipped_resumed": 1}), encoding="utf-8"
             )
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -724,7 +727,7 @@ class ResumableNextestTests(unittest.TestCase):
             root = Path(temporary)
             (root / "intentd").mkdir()
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -738,7 +741,7 @@ class ResumableNextestTests(unittest.TestCase):
                 "(tests already passed for this tree)"
             )
             self.assertEqual(
-                stdout.getvalue().splitlines(), [summary, f"[test-changed] record: {record_dir}"]
+                stdout.getvalue().splitlines()[1:], [summary, f"[test-changed] record: {record_dir}"]
             )
             self.assertIn("[test-changed] ERROR:", stderr.getvalue())
             self.assertEqual((record_dir / "summary.txt").read_text(), summary + "\n")
@@ -802,6 +805,7 @@ args = SimpleNamespace(repo_root=Path({str(root)!r}), intentd_dir="intentd", cac
     plan=["-p alpha --test one"], base=None)
 with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.object(
     gate, "run", return_value={LISTING!r}
+), mock.patch.object(gate, "isolated_output_args", return_value=[]
 ), mock.patch.object(gate.subprocess, "Popen", side_effect=lambda *a, **k: Proc()):
     raise SystemExit(gate.run_nextest(args))
 """
@@ -833,7 +837,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertFalse((record_dir / "complete").exists())
             self.assertEqual(json.loads((record_dir / "run.json").read_text())["exit_code"], 143)
 
-    def test_ignored_only_completed_plan_resumes_without_cargo(self):
+    def test_ignored_only_completed_plan_resumes_without_nextest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             harness = PlannedRunHarness(root, [([event("ignored", "alpha::one$skipped")], 0)])
@@ -842,8 +846,8 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
             self.assertEqual(gate.load_passed(root / "cache" / KEY / "passed.jsonl"), set())
 
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
-                gate, "run", side_effect=AssertionError("cargo must not run")
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "run", side_effect=AssertionError("nextest must not run")
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("cargo must not run")
             ), contextlib.redirect_stdout(io.StringIO()) as stdout:
@@ -865,7 +869,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertTrue((record_dir / "complete").is_file())
 
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -895,7 +899,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 time.sleep(5)
                 raise AssertionError("SIGTERM handler did not interrupt the list step")
 
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=terminated_list
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -925,7 +929,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             )
             failure = subprocess.CalledProcessError(101, ["cargo", "nextest", "list"])
             args = make_args(root, resume="1", force="1", label=gate.DEFAULT_LABEL, plan=None, base=None)
-            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+            with mock.patch.object(gate, "isolated_output_args", return_value=[]), mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
                 gate, "run", side_effect=failure
             ), mock.patch.object(
                 gate.subprocess, "Popen", side_effect=AssertionError("run must not start")
@@ -1012,7 +1016,7 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
                 "(tests already passed for this tree)"
             )
             self.assertEqual(
-                harness.output_lines,
+                harness.output_lines[1:],
                 [
                     "[test-intentd] no passed-test record for this tree; running the complete suite",
                     event("ok", "alpha::one$passes").rstrip("\n"),
@@ -1247,6 +1251,194 @@ with mock.patch.object(gate, "tree_key", return_value={KEY!r}), mock.patch.objec
             self.assertNotIn("resumed: skipped 2 tests already passed for this tree", resumed.output_lines)
             self.assertFalse((record_b / "complete").exists())
 
+
+class IsolatedOutputTests(unittest.TestCase):
+    def test_stable_checkout_identity_and_separate_storage_roots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first"
+            first.mkdir()
+            alias = root / "alias"
+            alias.symlink_to(first, target_is_directory=True)
+            metadata = {"target_directory": str(root / "target"),
+                        "build_directory": str(root / "build 🚀")}
+            with mock.patch.object(gate, "run", return_value=json.dumps(metadata)) as run:
+                original = gate.isolated_output_args(first, ["--config", "profile.test.debug=0"], {})
+                self.assertEqual(original, gate.isolated_output_args(alias, [], {}))
+                with mock.patch.object(gate, "run", return_value=json.dumps({
+                    "target_directory": original[1],
+                    "build_directory": json.loads(original[3].split("=", 1)[1]),
+                })):
+                    self.assertEqual(original, gate.isolated_output_args(first, [], {}))
+                parsed = tomllib.loads(original[3])
+                self.assertIn("🚀", parsed["build"]["build-dir"])
+                other = gate.isolated_output_args(root / "other", [], {})
+                self.assertNotEqual(original[1], other[1])
+                self.assertNotEqual(original[3], other[3])
+                self.assertTrue(Path(original[1]).is_relative_to(root / "target"))
+                self.assertTrue(Path(json.loads(original[3].split("=", 1)[1])).is_relative_to(root / "build 🚀"))
+                self.assertEqual(run.call_args_list[0].args[0],
+                                 ["cargo", "metadata", "--no-deps", "--format-version", "1",
+                                  "--config", "profile.test.debug=0"])
+
+    def test_invalid_output_metadata_fails_closed(self):
+        for target in (None, 5, "relative"):
+            with self.subTest(target=target), mock.patch.object(
+                gate, "run", return_value=json.dumps({"target_directory": target})
+            ):
+                with self.assertRaisesRegex(RuntimeError, "invalid target_directory"):
+                    gate.isolated_output_args(Path.cwd(), [], {})
+
+
+class EffectiveOutputResumeTests(unittest.TestCase):
+    def test_metadata_failure_cannot_accept_complete_record(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)])
+            self.assertEqual(harness.execute(make_args(root)), 0)
+            failure = subprocess.CalledProcessError(101, ["cargo", "metadata"])
+            with mock.patch.object(gate, "tree_key", return_value=KEY), mock.patch.object(
+                gate, "isolated_output_args", side_effect=failure
+            ), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 101)
+            self.assertIn("resolving Cargo outputs", stderr.getvalue())
+
+    def test_resolved_output_changes_cannot_reuse_completed_record(self):
+        if not shutil.which("cargo"):
+            self.skipTest("real output resolution requires Cargo")
+        for mode in ("cargo-home-template", "retargeted-output-symlink"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                harness = PlannedRunHarness(root, [([event("ok", "alpha::one$passes")], 0)] * 2)
+                source = root / "intentd"
+                (source / "src").mkdir()
+                (source / "Cargo.toml").write_text('[package]\nname="probe"\nversion="0.0.0"\nedition="2021"\n')
+                (source / "src/lib.rs").write_text("")
+                first, second = root / "first", root / "second"
+                first.mkdir()
+                second.mkdir()
+                alias = root / "output"
+                alias.symlink_to(first, target_is_directory=True)
+                env = {k: v for k, v in os.environ.items()
+                       if not k.startswith(("CARGO_", "RUST", "NEXTEST_")) and k != "COMPACT"}
+                env.update(CARGO_HOME=str(first), RUSTUP_AUTO_INSTALL="0")
+                if mode == "cargo-home-template":
+                    env["CARGO_BUILD_BUILD_DIR"] = "{cargo-cache-home}/build"
+                else:
+                    env["CARGO_TARGET_DIR"] = str(alias)
+                real_popen = subprocess.Popen
+                def run(command, cwd, env=None):
+                    if command[:2] == ["cargo", "metadata"]:
+                        with mock.patch.object(subprocess, "Popen", real_popen):
+                            return subprocess.check_output(command, cwd=cwd, env=env, text=True, timeout=30)
+                    if command[:3] == ["cargo", "nextest", "list"]:
+                        return harness.fake_run(command, cwd, env)
+                    return "stable tool version"
+                with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                    gate, "worktree_tree", return_value="stable source"
+                ), mock.patch.object(gate, "submodule_heads", return_value="stable pins"), mock.patch.object(
+                    gate, "required_hash", return_value="stable file"
+                ), mock.patch.object(gate, "build_settings", return_value={}), mock.patch.object(
+                    gate, "run", side_effect=run
+                ), mock.patch.object(gate.subprocess, "Popen", side_effect=harness.fake_popen), contextlib.redirect_stdout(harness.stdout):
+                    # Metadata must remain real even while nextest execution is stubbed.
+                    with mock.patch.object(gate, "isolated_output_args", wraps=gate.isolated_output_args):
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                        self.assertEqual(len(harness.run_commands), 1)
+                        if mode == "cargo-home-template":
+                            os.environ["CARGO_HOME"] = str(second)
+                        else:
+                            alias.unlink()
+                            alias.symlink_to(second, target_is_directory=True)
+                        self.assertEqual(gate.run_nextest(make_args(root, resume="1")), 0)
+                self.assertEqual(len(harness.run_commands), 2, "changed effective outputs reused a completed record")
+
+
+class SharedTargetInventoryTests(unittest.TestCase):
+    def test_other_worktree_build_cannot_replace_listed_gate_inventory(self):
+        """A second Cargo writer runs while nextest waits to list its first binary."""
+        if not shutil.which("cargo") or not shutil.which("rustc"):
+            self.skipTest("real Cargo/nextest control requires installed Rust tools")
+        available = subprocess.run(["cargo", "nextest", "--version"], capture_output=True)
+        if available.returncode:
+            self.skipTest("real Cargo/nextest control requires installed nextest")
+        for mode in ("environment", "config", "separate-build", "relative"):
+            with self.subTest(mode=mode):
+                self.check_other_worktree(mode)
+
+    def check_other_worktree(self, mode):
+        with tempfile.TemporaryDirectory(prefix="intent-gate-inventory-") as temporary:
+            root = Path(temporary)
+            first, second, target = root / "first", root / "second", root / "target"
+            build = root / "build" if mode == "separate-build" else target
+            first.mkdir()
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("CARGO_", "RUST", "NEXTEST_")) and k != "COMPACT"}
+            env["RUSTUP_AUTO_INSTALL"] = "0"
+            if mode in {"environment", "relative"}:
+                env["CARGO_TARGET_DIR"] = "../target" if mode == "relative" else str(target)
+            else:
+                (first / ".cargo").mkdir()
+                (first / ".cargo/config.toml").write_text(
+                    f'[build]\ntarget-dir={json.dumps(str(target))}\n'
+                    f'build-dir={json.dumps(str(build))}\n')
+            def command(args, cwd=first):
+                result = subprocess.run(args, cwd=cwd, env=env, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                return result.stdout
+            command(["git", "init", "-q"])
+            (first / "src").mkdir()
+            (first / "Cargo.toml").write_text(
+                '[package]\nname="inventory-probe"\nversion="0.0.0"\nedition="2021"\n')
+            (first / "src/lib.rs").write_text('#[test] fn first_only() {}\n')
+            command(["git", "add", "."])
+            command(["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                     "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"])
+            command(["git", "worktree", "add", "--detach", str(second), "HEAD"])
+            (second / "src/lib.rs").write_text('#[test] fn second_only() {}\n')
+            host = next(line.split(": ", 1)[1] for line in command(["rustc", "-vV"]).splitlines()
+                        if line.startswith("host: "))
+            runner = root / "runner.py"
+            runner.write_text(
+                "import json, os, subprocess, sys\n"
+                "from pathlib import Path\n"
+                "if '--list' in sys.argv and '--ignored' not in sys.argv:\n"
+                f"    Path({str(second / 'src/lib.rs')!r}).write_text('#[test] fn second_only() {{}}\\n')\n"
+                "    env = {k: v for k, v in os.environ.items() if not k.startswith(('CARGO', 'NEXTEST_', 'RUST'))}\n"
+                f"    env.update(CARGO_TARGET_DIR={str(target)!r}, CARGO_BUILD_BUILD_DIR={str(build)!r}, RUSTUP_AUTO_INSTALL='0', NEXTEST_EXPERIMENTAL_LIBTEST_JSON='1')\n"
+                f"    result = subprocess.run(['cargo', 'nextest', 'list', '--offline', '--lib', '--message-format', 'json'], cwd={str(second)!r}, env=env, check=True, text=True, stdout=subprocess.PIPE, timeout=30)\n"
+                f"    execution = subprocess.run(['cargo', 'nextest', 'run', '--offline', '--lib', '--message-format', 'libtest-json-plus', '--message-format-version', '0.1'], cwd={str(second)!r}, env=env, check=True, text=True, stdout=subprocess.PIPE, timeout=30)\n"
+                "    events = [json.loads(line) for line in execution.stdout.splitlines()]\n"
+                f"    with open({str(root / 'interference')!r}, 'a') as log: log.write(json.dumps([sys.argv, json.loads(result.stdout), events]) + '\\n')\n"
+                "os.execv(sys.argv[1], sys.argv[1:])\n")
+            env['CARGO_TARGET_' + host.upper().replace('-', '_') + '_RUNNER'] = (
+                gate.shlex.join([sys.executable, str(runner)]))
+            args = make_args(root, intentd_dir=first, plan=["--lib"], build_jobs="1")
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                gate, "tree_key", return_value=KEY
+            ):
+                status = gate.run_nextest(args)
+            self.assertEqual(status, 0)
+            self.assertTrue((root / 'interference').is_file(), "second writer never ran")
+            interference = [json.loads(line) for line in (root / 'interference').read_text().splitlines()]
+            for argv, listing, events in interference:
+                other = listing['rust-suites']['inventory-probe']
+                self.assertEqual(set(other['testcases']), {'second_only'})
+                self.assertNotEqual(argv[1], other['binary-path'])
+                passed = [e['name'] for e in events if e.get('type') == 'test' and e.get('event') == 'ok']
+                self.assertEqual(passed, ['inventory-probe::inventory_probe$second_only'])
+            outcomes = gate.load_outcomes(root / "cache" / KEY / "passed.jsonl")
+            self.assertEqual({name for (_, name) in outcomes}, {"first_only"})
+            record = root / "cache" / KEY / "changed" / gate.plan_key([["--lib"]])
+            result = json.loads((record / "run.json").read_text())
+            self.assertEqual(result["passed"], 1)
+            self.assertEqual(result["cargo_output_args"][0], "--target-dir")
+            self.assertTrue((record / "complete").is_file())
+            outputs = json.loads((record / "cargo-outputs.json").read_text())
+            self.assertEqual(outputs["source_root"], str(first.resolve()))
+            self.assertEqual(outputs["args"], result["cargo_output_args"])
 
 
 if __name__ == "__main__":

@@ -166,3 +166,196 @@ test('creation examples separate new command defaults from persistence and hydra
   assert.equal(fixture.scenarios.find(c => c.id === 'old-client-new-daemon').expect.defaultPurpose, 'oneOff');
   assert.equal(fixture.scenarios.find(c => c.id === 'old-daemon-no-capability').expect.defaultPurpose, 'saved');
 });
+
+const changes = JSON.parse(await readFile(new URL('./changed-events.json', import.meta.url), 'utf8'));
+
+// A deliberately small client-side contract model, not the production reducer.
+// Event fixtures are real §6.3 event objects; named rows/steps are harness controls.
+function validChangedRow(event) {
+  const row = event.data.script;
+  if (!row || Array.isArray(row) || typeof row !== 'object') return false;
+  const required = ['id', 'workspaceId', 'name', 'command', 'source', 'createdAt'];
+  return required.every(key => typeof row[key] === 'string')
+    && row.id === event.data.scriptId && row.workspaceId === event.workspaceId
+    && ['command', 'service'].includes(row.mode)
+    && ['saved', 'oneOff'].includes(row.purpose)
+    && ['idle', 'starting', 'running', 'restarting', 'exited'].includes(row.runtime?.status)
+    && Number.isInteger(row.runtime?.restartCount)
+    && ['cwd', 'env', 'category', 'autoStart', 'updatedAt', 'archivedAt', 'lastRun']
+      .every(key => row[key] !== null)
+    && ['pid', 'exitCode', 'startedAt', 'stoppedAt', 'error', 'detectedUrl', 'previouslyRunning']
+      .every(key => row.runtime[key] !== null);
+}
+
+function client(initial) {
+  const rows = new Map(initial ? [[initial.id, structuredClone(initial)]] : []);
+  const pending = new Map();
+  const seen = new Set();
+  let generation = 0;
+  let request = 0;
+  let output = 'retained output\n';
+  let selected = true;
+  let listCalls = 0;
+  function apply(event, replay = false) {
+    const data = event.data;
+    if (event.type === 'script:state') {
+      const row = rows.get(data.scriptId);
+      if (row) {
+        const { scriptId, ...runtime } = data;
+        rows.set(scriptId, { ...row, runtime: structuredClone(runtime) });
+      }
+    } else if (data.action === 'removed' && typeof data.scriptId === 'string') {
+      rows.delete(data.scriptId);
+      selected = false;
+      output = '';
+    } else if (['created', 'updated'].includes(data.action) && validChangedRow(event)) {
+      rows.set(data.scriptId, structuredClone(data.script));
+    } else if (!replay) listCalls++;
+  }
+  return {
+    step(step) {
+      if (step.reconnect) {
+        generation++;
+        seen.clear();
+      } else if (step.beginList) {
+        pending.set(step.beginList, { generation, request: ++request, events: [] });
+        listCalls++;
+      } else if (step.resolveList) {
+        const read = pending.get(step.resolveList);
+        pending.delete(step.resolveList);
+        if (read.generation !== generation || read.request !== request) return;
+        // These fixtures request archive=active. Retain already known history.
+        for (const [id, row] of rows) if (!row.archivedAt) rows.delete(id);
+        for (const name of step.rows) {
+          const row = changes.rows[name];
+          rows.set(row.id, structuredClone(row));
+        }
+        for (const event of read.events) apply(event, true);
+      } else if (step.event) {
+        const event = typeof step.event === 'string' ? changes.events[step.event] : step.event;
+        if ((step.generation ?? generation) !== generation
+            || event.workspaceId !== changes.workspaceId || seen.has(event.id)) return;
+        seen.add(event.id);
+        for (const read of pending.values()) {
+          if (read.generation === generation) read.events.push(event);
+        }
+        apply(event);
+      }
+    },
+    result() {
+      const row = rows.get('check');
+      return { row, active: Boolean(row && !row.archivedAt), listCalls, output, selected };
+    },
+  };
+}
+
+test('changed-event fixtures contain complete wire events and document their limits', () => {
+  assert.equal(changes.status, 'synthetic-contract-model-not-component-proof');
+  assert.match(scriptsDoc, /zero event-triggered `script.list` calls/);
+  assert.match(scriptsDoc, /Optional\nfields follow the same types and omission rules/);
+  assert.equal(new Set(changes.cases.map(c => c.id)).size, changes.cases.length);
+  for (const [name, event] of Object.entries(changes.events)) {
+    assert.deepEqual(Object.keys(event).sort(), ['actor', 'data', 'id', 'timestamp', 'type', 'workspaceId']);
+    assert.ok(Number.isFinite(Date.parse(event.timestamp)), name);
+    if (event.data.script) {
+      assert.ok(validChangedRow(event), name);
+      const row = event.data.script;
+      if (row.purpose === 'oneOff') {
+        assert.equal(row.mode, 'command', name);
+        assert.notEqual(row.autoStart, true, name);
+      }
+      if (row.runtime.status === 'exited') assert.ok(Number.isInteger(row.runtime.exitCode), name);
+      if (row.lastRun?.outcome === 'succeeded') assert.equal(row.lastRun.exitCode, 0, name);
+    }
+  }
+});
+
+for (const c of changes.cases) {
+  test(`self-contained changes: ${c.id}`, () => {
+    const state = client(changes.rows[c.initial]);
+    for (const step of c.steps) state.step(step);
+    const actual = state.result();
+    const expectedRow = c.expect.row ? structuredClone(changes.rows[c.expect.row]) : undefined;
+    if (c.expect.runtime) expectedRow.runtime = c.expect.runtime;
+    assert.deepEqual(actual.row, expectedRow);
+    for (const key of ['active', 'listCalls', 'output', 'selected']) {
+      if (key in c.expect) assert.equal(actual[key], c.expect[key], key);
+    }
+  });
+}
+
+test('absent, null, incomplete and mismatched snapshots reconcile without replacing', () => {
+  const malformed = [undefined, null, {}, { ...changes.rows.complete, runtime: undefined },
+    { ...changes.rows.complete, id: 'foreign' },
+    { ...changes.rows.complete, workspaceId: 'ws-b' },
+    { ...changes.rows.complete, archivedAt: null }];
+  for (const script of malformed) {
+    const state = client(changes.rows.running);
+    state.step({ event: { ...changes.events.complete, data: {
+      scriptId: 'check', action: 'updated', ...(script === undefined ? {} : { script }),
+    } } });
+    assert.deepEqual(state.result().row, changes.rows.running);
+    assert.equal(state.result().listCalls, 1);
+  }
+  const state = client(changes.rows.running);
+  state.step({ event: { ...changes.events.complete, data: {
+    ...changes.events.complete.data, action: 'future-action',
+  } } });
+  assert.deepEqual(state.result().row, changes.rows.running);
+  assert.equal(state.result().listCalls, 1);
+});
+
+test('foreign-workspace events cannot overwrite local state', () => {
+  const state = client(changes.rows.running);
+  state.step({ event: { ...changes.events.removed, workspaceId: 'ws-b' } });
+  assert.deepEqual(state.result().row, changes.rows.running);
+  assert.equal(state.result().listCalls, 0);
+});
+
+test('snapshot fixtures detect shallow-merge clearing and unfenced-list regressions', () => {
+  const merged = { ...changes.rows.old, ...changes.rows.replacement };
+  assert.notDeepEqual(merged, changes.rows.replacement);
+  assert.ok(merged.archivedAt && merged.lastRun && merged.cwd && merged.env);
+  const runtimeMerged = { ...changes.rows.running.runtime, ...changes.events.starting.data };
+  assert.ok(runtimeMerged.pid && runtimeMerged.startedAt);
+  const state = client(changes.rows.running);
+  state.step({ beginList: 'a' });
+  state.step({ event: 'complete' });
+  state.step({ resolveList: 'a', rows: ['running'] });
+  assert.notDeepEqual(state.result().row, changes.rows.running);
+  assert.deepEqual(state.result().row, changes.rows.complete);
+});
+
+test('stop fixtures distinguish a finished transition, marker dismissal and idle no-op', () => {
+  const finished = changes.cases.find(c => c.id === 'finished-stop-preserves-archive-and-result');
+  const lost = changes.cases.find(c => c.id === 'dismiss-lost-preserves-history');
+  const service = changes.cases.find(c => c.id === 'dismiss-service-clears-marker');
+  const noop = changes.cases.find(c => c.id === 'idle-stop-no-op');
+  // A silent reset leaves the client exited: the stop event is essential.
+  assert.notDeepEqual(client(changes.rows[finished.initial]).result().row.runtime,
+    finished.expect.runtime);
+  assert.deepEqual(finished.expect.runtime, { ...changes.rows.complete.runtime, status: 'idle' });
+  // Lost dismissal clears terminal metadata; a runtime patch would retain it.
+  assert.deepEqual(lost.expect.runtime, { status: 'idle', restartCount: 0 });
+  assert.notDeepEqual({ ...changes.rows.interrupted.runtime, ...lost.expect.runtime },
+    lost.expect.runtime);
+  assert.equal(changes.rows[service.initial].runtime.previouslyRunning, true);
+  assert.equal(service.expect.runtime.previouslyRunning, undefined);
+  // No-op is an empty event stream, not an invented idle notification.
+  assert.deepEqual(noop.steps, []);
+  assert.equal(changes.rows[noop.initial].runtime.status, 'idle');
+  assert.equal(changes.rows[noop.initial].runtime.previouslyRunning, undefined);
+});
+
+
+test('unknown additive fields are tolerated and explicit false/zero values survive', () => {
+  const state = client(changes.rows.old);
+  const script = { ...changes.rows.replacement, autoStart: false, env: {}, futureField: null };
+  state.step({ event: { ...changes.events.replacement, data: {
+    ...changes.events.replacement.data, script,
+  } } });
+  assert.deepEqual(state.result().row, script);
+  assert.equal(state.result().listCalls, 0);
+  assert.equal(state.result().row.autoStart, false);
+  assert.equal(state.result().row.runtime.restartCount, 0);
+});

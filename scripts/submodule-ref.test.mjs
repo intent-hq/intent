@@ -104,6 +104,17 @@ test('describeCheckout reads the checkout HEAD and the recorded gitlink; at the 
   assert.match(formatOffPinWarning(ref), new RegExp(`^warning: ${DIR} checkout ${head.slice(0, 7)} is off the recorded pin ${pin.slice(0, 7)};`));
 });
 
+test('describeCheckout separates a selected worktree from its canonical recorded gitlink', async (t) => {
+  const { root, pin, advance } = await makeGitRoot(t);
+  const head = await advance();
+  const dir = path.join(root, '.intent', 'candidate');
+  git(path.join(root, DIR), 'worktree', 'add', '--detach', dir, 'HEAD');
+  await fs.writeFile(path.join(dir, 'file.txt'), 'candidate edits\n');
+  const ref = describeCheckout(root, dir, { pinDir: DIR });
+  assert.deepEqual(ref, { source: 'checkout', dir, checkout: head, pin, pinDir: DIR, dirty: true });
+  assert.equal(formatBanner(ref, { check: 'check-x', what: 'sources' }), `check-x: intentd sources from ${dir} checkout ${head.slice(0, 7)} (dirty) (recorded pin ${pin.slice(0, 7)})`);
+});
+
 // runChecks(root) callers may pass a relative root such as "." — the refs must match the absolute-root read,
 // at the pin and off it, rather than degrading to null because git was handed the submodule path twice.
 test('describeCheckout reads the same refs for a relative root as for the absolute one', async (t) => {

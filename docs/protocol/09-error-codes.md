@@ -94,3 +94,13 @@ The [phase 1 contract](./methods/nodes.md#errors-and-retirement-gates) reserves
 structured `data.code` values for node placement, checkpoints and uncertain RPC
 outcomes using existing numeric codes. No new numeric error is introduced.
 These errors are future contracts; current CoW errors remain until retirement.
+
+### Prepared desktop control errors
+
+[§5.51](./methods/desktop.md#errors-and-verification) reserves typed `desktop-*`
+errors under existing numeric codes: `-32602` for inactive/stale operations and
+`desktop-display-selection-required` / `desktop-display-unavailable` (ambiguous
+selection or missing display, with no capture/input),
+`-32603` for offline, busy, unsupported and native/transport failures, and
+`-32003` for authority refusal. Action failures distinguish not-started, partial
+and unknown execution; an uncertain input outcome must never be replayed.
