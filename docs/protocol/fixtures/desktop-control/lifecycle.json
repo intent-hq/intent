@@ -479,7 +479,7 @@
               "originY": 0,
               "scaleFactor": 1,
               "assetId": "asset-a",
-              "url": "intent://local/file/.intent/assets/a.png",
+              "url": "workspace-asset://ws-a/asset-a",
               "mimeType": "image/png"
             },
             {
@@ -490,7 +490,7 @@
               "originY": 0,
               "scaleFactor": 2,
               "assetId": "asset-b",
-              "url": "intent://local/file/.intent/assets/b.png",
+              "url": "workspace-asset://ws-a/asset-b",
               "mimeType": "image/png"
             }
           ]
@@ -673,5 +673,163 @@
         }
       }
     }
-  ]
+  ],
+  "deadlines": {
+    "wire": {
+      "prepare": {
+        "jsonrpc": "2.0",
+        "id": "rev-1",
+        "method": "desktop.control",
+        "params": {
+          "workspaceId": "ws-a",
+          "agentId": "agent-a",
+          "principalId": "principal-a",
+          "connectionEpoch": "epoch-a",
+          "computerId": "computer-a",
+          "sessionId": "session-a",
+          "commandId": "command-a",
+          "sequence": 1,
+          "operation": "prepareCommand",
+          "action": {
+            "kind": "keypress",
+            "key": "Enter"
+          }
+        }
+      },
+      "prepared": {
+        "jsonrpc": "2.0",
+        "id": "rev-1",
+        "result": {
+          "commandId": "command-a",
+          "sequence": 1,
+          "deadlineId": "deadline-a",
+          "expiresInMs": 10000
+        }
+      },
+      "execute": {
+        "jsonrpc": "2.0",
+        "id": "rev-2",
+        "method": "desktop.control",
+        "params": {
+          "workspaceId": "ws-a",
+          "agentId": "agent-a",
+          "principalId": "principal-a",
+          "connectionEpoch": "epoch-a",
+          "computerId": "computer-a",
+          "sessionId": "session-a",
+          "commandId": "command-a",
+          "sequence": 1,
+          "operation": "execute",
+          "deadlineId": "deadline-a"
+        }
+      }
+    },
+    "cases": [
+      {
+        "id": "opposite-clock-skew",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "daemonWallMs": 1700000000000,
+        "executorWallMs": 1800000000000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "wall-clock-jump",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "daemonWallMs": 1900000000000,
+        "executorWallMs": 1000000000000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "response-and-transit-latency",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 59999,
+        "responseLatencyMs": 6000,
+        "executeTransitMs": 3999,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "execute"
+      },
+      {
+        "id": "exact-expiry",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 60000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-command-expired",
+        "execution": "not_started"
+      },
+      {
+        "id": "queued-too-long",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 61000,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-command-expired",
+        "execution": "not_started"
+      },
+      {
+        "id": "expiry-between-drag-steps",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 60001,
+        "knownTicket": true,
+        "stepsCompleted": 1,
+        "expect": "desktop-command-expired",
+        "execution": "partial"
+      },
+      {
+        "id": "unprepared-ticket",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "consumed-ticket-replay",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "consumed": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "connection-replaced",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "bindingMatches": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-stale-command",
+        "execution": "not_started"
+      },
+      {
+        "id": "monotonic-regression",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 49999,
+        "knownTicket": true,
+        "stepsCompleted": 0,
+        "expect": "desktop-deadline-unavailable",
+        "execution": "not_started"
+      },
+      {
+        "id": "resume-without-safe-clock",
+        "preparedMonoMs": 50000,
+        "executeMonoMs": 50100,
+        "knownTicket": true,
+        "clockSafe": false,
+        "stepsCompleted": 0,
+        "expect": "desktop-deadline-unavailable",
+        "execution": "not_started"
+      }
+    ]
+  }
 }

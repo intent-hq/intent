@@ -224,7 +224,8 @@ All fields are required, trusted daemon-generated strings. Each operation adds:
 | `startControl` | `computerId, sessionId, agentName, leaseMs: 15000` | `{ ready: true, sessionId, computerId }` |
 | `renew` | `computerId, sessionId, leaseMs: 15000` | `{ renewed: true, sessionId }` |
 | `endControl` | `computerId, sessionId` | `{ ended: boolean, sessionId }` |
-| `execute` | `computerId, sessionId, commandId, sequence, expiresAt, action` | `{ commandId, sequence, result }` |
+| `prepareCommand` | `computerId, sessionId, commandId, sequence, action` | `{ commandId, sequence, deadlineId, expiresInMs: 10000 }` |
+| `execute` | `computerId, sessionId, commandId, sequence, deadlineId` | `{ commandId, sequence, result }` |
 
 `action` is `{ kind: "screenshot" }` or the matching input name (`click`, `type`,
 `keypress`, `scroll`, `drag`) plus that binding's arguments. No arrays, arbitrary
@@ -235,9 +236,10 @@ received on the prepared, authenticated backend connection after daemon consent.
 Session IDs are fresh opaque unpredictable strings, never reused across starts
 or restarts. Every action checks the entire binding, local lock and live lease
 immediately before OS execution, not only when queued. Sequence is a positive
-safe integer strictly increasing per session; command IDs are unique per session.
-Duplicate/out-of-order commands fail `desktop-stale-command`, with no second
-execution. Recheck authority after native completion and before returning an
+safe integer strictly increasing per accepted `prepareCommand`; command IDs are
+unique per session. The matching execute consumes that prepared sequence once.
+Duplicate/out-of-order preparation or execution fails `desktop-stale-command`,
+with no second execution. Recheck authority after native completion and before returning an
 image/result or showing a screenshot pulse; a result racing revocation cannot
 claim the session is still active. Execute serially; Stop invalidates queued and in-flight continuation
 steps ahead of all input, including between drag/key down and up. Always attempt
@@ -251,12 +253,56 @@ observed; an undetected partition ends execution no later than lease expiry.
 New connections never resume a session, even with the same logical client ID.
 No command, input, consent decision or activation is replayed after reconnect.
 
-Each command expires within ten seconds of dispatch (`expiresAt`, RFC3339 UTC).
-The native executor checks expiry before execution and during multistep input;
-daemon timeouts are not evidence that no input occurred. Implementations must
-establish a bounded clock offset before interpreting this deadline; if that
-bound cannot be established, reject with `desktop-clock-uncertain`. Use the
-conservative earliest expiry in the bound and a monotonic execution timer.
+### Command deadlines without synchronized clocks
+
+Each action uses two sequential reverse requests on the bound connection:
+`prepareCommand`, then `execute`. No wall-clock deadline or clock calibration is
+used. Preparation validates and retains the exact action, but executes no input
+or capture. At acceptance the executor reads its local monotonic clock `M0`
+(milliseconds) and stores a single-use, unpredictable `deadlineId` with deadline
+`M0 + 10000`. The ticket binds the entire session/connection tuple, command ID,
+sequence and retained action. Return `expiresInMs: 10000` as the **original**
+lifetime, not remaining time; the daemon must never start a new ten-second
+lifetime from receipt of this response.
+
+Only one unconsumed ticket may exist per session. A second preparation while it
+is live fails `desktop-busy`. Duplicate preparation never refreshes its deadline;
+expired, consumed or out-of-order command IDs/sequences cannot be prepared again.
+The daemon cannot change the action at execute time; execute carries only the
+ticket's identifiers. Unknown or foreign tickets fail `desktop-stale-command`
+with `execution: "not_started"`. No preparation/calibration means no executable
+ticket: absence of `deadlineId` is invalid params; an invented ID is stale.
+
+Atomically consume the ticket before native work, only if the complete binding
+matches, the session/lease is live, and local monotonic `Mnow < M0 + 10000`.
+Equality is expired. An expired known ticket yields `desktop-command-expired`
+with `execution: "not_started"`; retain its rejection identity until session end
+(a sequence watermark may compact it). Response latency, execute transit, local
+queue time and multistep work all consume the original local lifetime. Check the
+same deadline before every native continuation step and before returning a
+successful result; expiry after a step yields `desktop-command-expired` with
+`execution: "partial"` and releases held input. Cleanup releases may run after
+expiry; no new user action may. Renewing a session never renews a command ticket.
+
+The ticket starts before the daemon can receive it and dispatch execute, so its
+expiry is no later than ten seconds after execute dispatch without comparing
+peer clocks. Independently, the daemon bounds the whole action call to ten
+seconds on its own monotonic clock starting before sending prepareCommand. It
+subtracts elapsed time before sending execute and does not dispatch if that
+budget has expired. Preparation timeout cannot have executed input; a timeout
+after execute was sent is an uncertain outcome, even if the daemon budget ends
+before the executor's ticket. Invalidate the session and attempt local teardown;
+never interpret that RPC timeout as cancellation confirmation or replay input.
+
+Monotonic clocks must advance across suspend, or the executor must invalidate
+sessions/tickets on suspend/resume before accepting further execution. Clock
+regression, clock-source replacement or inability to establish that property
+ends the session and returns `desktop-deadline-unavailable`. Wall-clock skew,
+NTP adjustments and UTC jumps do not affect these deadlines or local leases.
+No numeric clock origin crosses the wire, and no drift estimate is required.
+An individual uninterruptible OS call may already have occurred when expiry is
+noticed; report partial/unknown execution truthfully, never success or rollback.
+
 Lifecycle/reverse calls also time out after ten seconds. A late readiness ACK
 never activates a withdrawn/expired request; revoke its local session instead.
 Timeout or connection loss with uncertain execution invalidates the session and
@@ -271,7 +317,8 @@ assetId, url, mimeType: "image/png" }`. Width/height are positive integer **imag
 pixels**, origins are signed physical virtual-desktop pixel offsets, scaleFactor
 is a positive finite number. IDs are strings scoped to that active session.
 Persist images as workspace assets using the existing asset pipeline; URLs use
-the canonical asset URL. Screenshot bytes, typed text and keys are not copied
+the returned canonical `workspace-asset://<workspaceId>/<assetId>` URL, not a
+worktree file path. Screenshot bytes, typed text and keys are not copied
 into lifecycle events or wake messages. Capture or asset-persistence failure is
 an error; there is no successful partial display list.
 
@@ -362,8 +409,9 @@ same code/detail as a tool failure, never `{ ok: true }`. Malformed inputs use
 | Numeric | `data.code` | Meaning |
 | --- | --- | --- |
 | -32602 | `desktop-not-active`, `desktop-stale-request`, `desktop-stale-command`, `desktop-stale-layout` | Missing current authority or stale request/command/layout; no execution |
+| -32602 | `desktop-command-expired` | Local command deadline reached; execution is not_started before the first step, partial after a step |
 | -32603 | `desktop-offline`, `desktop-unsupported`, `desktop-busy` | Primary absent/incapable or physical desktop locked by another session |
-| -32603 | `desktop-os-permission-required`, `desktop-unsupported-operation`, `desktop-clock-uncertain` | Local OS/operation/deadline readiness cannot be established |
+| -32603 | `desktop-os-permission-required`, `desktop-unsupported-operation`, `desktop-deadline-unavailable` | Local OS/operation/monotonic deadline readiness cannot be established |
 | -32603 | `desktop-execution-failed`, `desktop-outcome-unknown` | Native/asset/transport failure; action errors require execution classification, never automatic retry |
 
 Pre-execution action refusals set `execution: "not_started"`; partial input sets

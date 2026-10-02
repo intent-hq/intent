@@ -147,6 +147,7 @@ test('capture and click fixtures exercise mixed DPI, negative origins, right cli
     assert.ok(Number.isInteger(d.height) && d.height > 0);
     assert.ok(Number.isFinite(d.scaleFactor) && d.scaleFactor > 0);
     assert.equal(d.mimeType, 'image/png');
+    assert.equal(d.url, `workspace-asset://ws-a/${d.assetId}`);
   }
   const click = byId('right-double-click').call.args;
   const display = displays.find(d => d.displayId === click.displayId);
@@ -155,4 +156,68 @@ test('capture and click fixtures exercise mixed DPI, negative origins, right cli
   assert.ok(click.x >= 0 && click.x < display.width && click.y >= 0 && click.y < display.height);
   assert.equal(click.button, 'right');
   assert.equal(click.clickCount, 2);
+});
+
+test('deadline wire contract supplies a local ticket instead of requiring an undefined clock calibration', () => {
+  assert.match(doc, /\| `prepareCommand` \|/);
+  assert.match(doc, /\| `execute` \| `computerId, sessionId, commandId, sequence, deadlineId`/);
+  assert.match(doc, /expiresInMs: 10000/);
+  assert.doesNotMatch(doc, /desktop-clock-uncertain/);
+});
+
+test('prepared deadline wire exchange correlates a single retained action and ticket', () => {
+  const { prepare, prepared, execute } = fixture.deadlines.wire;
+  assert.equal(prepare.method, 'desktop.control');
+  assert.equal(execute.method, 'desktop.control');
+  assert.equal(prepare.params.operation, 'prepareCommand');
+  assert.equal(execute.params.operation, 'execute');
+  assert.equal(prepared.id, prepare.id);
+  assert.equal(prepared.result.expiresInMs, 10000);
+  assert.equal(execute.params.deadlineId, prepared.result.deadlineId);
+  for (const key of ['workspaceId', 'agentId', 'principalId', 'connectionEpoch', 'computerId', 'sessionId', 'commandId', 'sequence']) {
+    assert.deepEqual(prepare.params[key], execute.params[key], key);
+  }
+  for (const key of ['commandId', 'sequence']) assert.equal(prepared.result[key], execute.params[key]);
+  assert.ok(prepare.params.action);
+  assert.equal(Object.hasOwn(execute.params, 'action'), false);
+  assert.equal(Object.hasOwn(execute.params, 'expiresAt'), false);
+});
+
+// Arithmetic oracle for prepared examples, not a native executor implementation.
+function deadlineOutcome(c) {
+  if (c.clockSafe === false || c.executeMonoMs < c.preparedMonoMs) {
+    return ['desktop-deadline-unavailable', 'not_started'];
+  }
+  if (!c.knownTicket || c.consumed || c.bindingMatches === false) {
+    return ['desktop-stale-command', 'not_started'];
+  }
+  if (c.executeMonoMs - c.preparedMonoMs >= 10000) {
+    return ['desktop-command-expired', c.stepsCompleted > 0 ? 'partial' : 'not_started'];
+  }
+  return ['execute', undefined];
+}
+
+test('deadline examples cover skew, latency, exact expiry, missing tickets and invalid clocks', () => {
+  const cases = fixture.deadlines.cases;
+  assert.equal(new Set(cases.map(c => c.id)).size, cases.length);
+  for (const c of cases) assert.deepEqual(deadlineOutcome(c), [c.expect, c.execution], c.id);
+  const select = id => {
+    const c = cases.find(c => c.id === id);
+    assert.ok(c, id);
+    return c;
+  };
+  assert.equal(select('opposite-clock-skew').expect, 'execute');
+  assert.equal(select('wall-clock-jump').expect, 'execute');
+  const latency = select('response-and-transit-latency');
+  assert.equal(latency.executeMonoMs - latency.preparedMonoMs, latency.responseLatencyMs + latency.executeTransitMs);
+  assert.deepEqual(deadlineOutcome({ ...latency, executeMonoMs: latency.executeMonoMs + 1 }), ['desktop-command-expired', 'not_started']);
+  assert.equal(select('exact-expiry').expect, 'desktop-command-expired');
+  assert.equal(select('expiry-between-drag-steps').execution, 'partial');
+  assert.equal(select('unprepared-ticket').expect, 'desktop-stale-command');
+  assert.equal(select('consumed-ticket-replay').expect, 'desktop-stale-command');
+  assert.equal(select('connection-replaced').expect, 'desktop-stale-command');
+  assert.equal(select('monotonic-regression').expect, 'desktop-deadline-unavailable');
+  assert.equal(select('resume-without-safe-clock').expect, 'desktop-deadline-unavailable');
+  // Changing a peer's UTC clock must never extend the native deadline.
+  assert.deepEqual(deadlineOutcome({ ...select('queued-too-long'), daemonWallMs: 0, executorWallMs: 0 }), ['desktop-command-expired', 'not_started']);
 });
