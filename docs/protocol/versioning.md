@@ -414,6 +414,23 @@ This contract is prepared against daemon main
 support or a carrying release. Unrelated prepared extensions retain their own
 implementation status and capability gates.
 
+Version 12.0 is a **breaking** major bump: the deprecated `git.commit` RPC is
+removed from dispatch, the method catalog, and the guest collaborator allowlist.
+The supported `git.agentCommit` method keeps its existing staged-index/explicit-file
+selection, human-request bypass, and host-member/administrator permissions.
+It does not replace the removed method's keyed retries or guest collaborator access.
+See the [commit migration notes](./methods/git.md#56-git) before updating a legacy
+client. MCP `ws.git.commit`, desktop commits, native auto-commit, and `git:commit`
+events are unchanged. Unknown external callers are a compatibility cutoff, not
+proof that the old API had no users.
+
+The removal follows the additive 11.2 daemon change in
+[intentd PR2233](https://github.com/intent-hq/intentd/pull/2233) and preserves its
+event fields. The backend removal must land before this canonical catalog deletion;
+the automatic submodule bump must then carry that backend before these docs land.
+No manual pin advance is part of the migration. Historical 10.3 replay semantics
+above describe the former method, not a durability guarantee for current commits.
+
 ### Compatibility Policy
 
 - **Additive changes** (new methods, new optional fields, new event types) bump the **minor** version (e.g., 2.0 → 2.1).

@@ -149,7 +149,7 @@ A connection bound to a **non-administrator** principal may only *attempt* the m
 | event (3) | agentActivity, query, workspaceSummary |
 | events (2) | subscribe, unsubscribe |
 | file (16) | attachmentUpload.abort, attachmentUpload.begin, attachmentUpload.chunk, attachmentUpload.commit, delete, exists, getAttachmentInfo, list, mkdir, placeAttachment, read, readChunk, rename, stat, tree, write |
-| git (26) | branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, commit, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
+| git (25) | branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot (1) | list |
 | hook (1) | list |
 | host (2) | status, toolAvailability |
