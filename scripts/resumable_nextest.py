@@ -4,6 +4,10 @@
 `--no-fail-fast 1` forwards `--no-fail-fast` to every `cargo nextest run` and
 keeps running the remaining `--plan` selections after one fails; the exit
 status is then the first non-zero plan status.
+
+Build outputs use stable per-checkout children under Cargo's configured target
+and build directories. This isolates make test/test-changed from other checkout
+builds; coverage and custom bare-Cargo scripts still manage their own output ownership.
 """
 
 from __future__ import annotations
@@ -32,7 +36,8 @@ else:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from _vendor import tomli as cargo_toml
 
-SCHEMA_VERSION = 1
+# Earlier records could credit executables replaced by another checkout (#6496).
+SCHEMA_VERSION = 2
 MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 RUST_FLAG_ENV = {"RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"}
@@ -174,14 +179,17 @@ def build_settings(cwd: Path) -> dict[str, object]:
     return {
         "compact-config": compact_config(cwd),
         "environment": {name: value for name, value in env.items()
-                        if name == "CARGO_INCREMENTAL" or name.startswith("CARGO_PROFILE_")},
+                        if name in {"CARGO_INCREMENTAL", "CARGO_TARGET_DIR", "CARGO_BUILD_TARGET_DIR",
+                                    "CARGO_BUILD_BUILD_DIR"} or name.startswith("CARGO_PROFILE_")},
         "cargo-configs": {str(path): hashlib.sha256(data).hexdigest()
                           for path, data in cargo_configs(cwd).items()},
     }
 
 
 def tree_key(repo_root: Path, intentd_dir: Path) -> str:
+    intentd_dir = intentd_dir.resolve()
     inputs = {
+        "source-root": str(intentd_dir),
         "schema": SCHEMA_VERSION,
         "root-tree": worktree_tree(repo_root),
         "intentd-tree": worktree_tree(intentd_dir),
@@ -502,6 +510,32 @@ def failure_exit_code(error: BaseException) -> int:
     return 1
 
 
+def isolated_output_args(cwd: Path, config: list[str], env: dict[str, str]) -> list[str]:
+    """Keep another checkout's Cargo writer out of this gate's executable paths.
+
+    Resolve both output roots through Cargo so config includes and environment
+    precedence remain Cargo's responsibility. Keep the chosen storage volumes,
+    but use a stable per-checkout child for warm builds across repeated gates.
+    A separate build-dir must be isolated too: it contains the test executables.
+    """
+    metadata = json.loads(run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", *config], cwd, env
+    ))
+    owner = hashlib.sha256(os.fsencode(cwd.resolve())).hexdigest()
+    def owned(key: str) -> str:
+        path = metadata[key]
+        if not isinstance(path, str) or not Path(path).is_absolute():
+            raise RuntimeError(f"Cargo metadata returned an invalid {key}: {path!r}")
+        root = Path(path).resolve()
+        # Reusing a printed output path must not keep nesting intent-gates.
+        if root.parent.name == "intent-gates" and KEY_RE.fullmatch(root.name):
+            root = root.parent.parent
+        return str(root / "intent-gates" / owner)
+    target = owned("target_directory")
+    build = owned("build_directory") if "build_directory" in metadata else target
+    return ["--target-dir", target, "--config", f"build.build-dir={json.dumps(build, ensure_ascii=False)}"]
+
+
 def run_nextest(args: argparse.Namespace) -> int:
     label = args.label
     no_fail_fast = args.no_fail_fast == "1"
@@ -555,6 +589,7 @@ def run_nextest(args: argparse.Namespace) -> int:
         env["CARGO_INCREMENTAL"] = "0"
     started_at = utc_now()
     results: list[dict[str, object]] = []
+    output_args: list[str] = []
 
     def finalize(status: int | None) -> None:
         totals = {"passed": 0, "failed": 0, "ignored": 0}
@@ -576,6 +611,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                 "base": args.base,
                 "plans": [" ".join(plan) for plan in plans],
                 "tree_key": key,
+                "cargo_output_args": output_args,
                 "plan_key": profile,
                 "started_at": started_at,
                 "finished_at": utc_now(),
@@ -592,6 +628,11 @@ def run_nextest(args: argparse.Namespace) -> int:
     # KeyboardInterrupt or SIGTERM — leaves the summary/record lines and files.
     try:
         with terminate_on_signal():
+            output_args = isolated_output_args(intentd_dir, cargo_config, env)
+            print(f"[{label}] isolated Cargo outputs: {shlex.join(output_args)}", flush=True)
+            write_atomic(record_dir / "cargo-outputs.json", json.dumps({
+                "source_root": str(intentd_dir), "args": output_args,
+            }, indent=2) + "\n")
             binary_ids: dict[tuple[str, str], str] = {}
             for selection in selections:
                 list_output = run(
@@ -599,7 +640,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         "cargo", "nextest", "list", *selection,
                         "--build-jobs", args.build_jobs,
                         "--message-format", "json",
-                        *cargo_config,
+                        *cargo_config, *output_args,
                     ],
                     intentd_dir,
                     env,
@@ -656,7 +697,7 @@ def run_nextest(args: argparse.Namespace) -> int:
                         "--profile", profile,
                         "--message-format", "libtest-json-plus",
                         "--message-format-version", "0.1",
-                        *cargo_config,
+                        *cargo_config, *output_args,
                     ]
                     if no_fail_fast:
                         command.append("--no-fail-fast")
