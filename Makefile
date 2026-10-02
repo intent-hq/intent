@@ -195,7 +195,7 @@ check-makefile-targets: ensure-intentd-submodule ## Check Makefile-referenced in
 # present in the cloudlands-fe type that consumes it, or listed in the script's
 # ignore manifest with a reason; a stale ignore entry is a warning, not a failure.
 check-protocol-field-parity: ensure-intentd-submodule ensure-fe-submodule ## Check intentd row struct fields against the cloudlands-fe types that consume them
-	@node scripts/check-protocol-field-parity.mjs
+	@node scripts/check-protocol-field-parity.mjs --intentd-dir "$(INTENTD_DIR)" --fe-dir "$(FE_DIR)"
 
 # The live main-branch rulesets of intent, intentd and cloudlands-fe (required
 # CI Gate check, thread resolution, merge queue) are snapshotted under
