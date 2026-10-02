@@ -1230,5 +1230,139 @@
         "expectSessionResurrected": false
       }
     ]
+  },
+  "desktopOwners": {
+    "source": "workspace.owner_principal_id",
+    "cases": [
+      {
+        "id": "workspace-owner-primary",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-a",
+        "messageSender": "principal-other",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-a",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "delegate-uses-own-workspace-owner",
+        "delegated": true,
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-a",
+        "parentCaller": "principal-other",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-a",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "manager-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-manager",
+        "workspaceManager": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "administrator-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-admin",
+        "hostAdministrator": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "message-sender-is-not-owner",
+        "workspaceOwner": "principal-a",
+        "connectionPrincipal": "principal-sender",
+        "messageSender": "principal-sender",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "missing-persisted-owner",
+        "workspaceOwner": null,
+        "connectionPrincipal": "principal-admin",
+        "hostAdministrator": true,
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false
+        }
+      },
+      {
+        "id": "owner-changed-before-decision",
+        "stage": "decision",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "requestInvalidated": true,
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "owner-changed-before-renew",
+        "stage": "renew",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "state": {
+            "status": "inactive"
+          },
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "owner-changed-before-action",
+        "stage": "execute",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-a",
+        "originalOwner": "principal-a",
+        "expect": {
+          "allowed": false,
+          "errorCode": "forbidden",
+          "fallbackSelected": false,
+          "state": {
+            "status": "inactive"
+          },
+          "reason": "owner_changed",
+          "grantTransferred": false
+        }
+      },
+      {
+        "id": "new-owner-needs-own-consent",
+        "workspaceOwner": "principal-b",
+        "connectionPrincipal": "principal-b",
+        "rememberedGrantPrincipal": "principal-a",
+        "expect": {
+          "allowed": true,
+          "boundPrincipal": "principal-b",
+          "fallbackSelected": false,
+          "rememberedConsentApplies": false,
+          "status": "pending_permission"
+        }
+      }
+    ]
   }
 }

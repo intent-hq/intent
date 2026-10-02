@@ -19,8 +19,23 @@ ends' support. Do not modify browser routing or infer desktop support from
 ## Identity, primary selection and authority
 
 Agent calls use the prepared MCP-only desktop namespace shown below; they are
-**not public router methods**. Derive the agent, workspace and owning user from authenticated agent
-execution context. Reject model-supplied `agentId`, `clientId`, `workspaceId`,
+**not public router methods**. Derive the agent and workspace from authenticated
+agent execution context. For this desktop feature, **agent owner** means the
+persisted `workspace.owner_principal_id` of that resolved workspace, including
+for delegated agents. AgentSession has no independent owner-principal field.
+Read the existing store owner using `get_workspace_owner_principal_id`; the
+general `require_agent_owner` helper checks workspace management and is not
+sufficient for desktop authority. This is a desktop-only authority rule, not a
+change to general agent ownership or workspace management.
+
+There is no fallback to the current message sender, parent agent's caller,
+workspace manager, host administrator or another connected user's principal.
+An absent owner or a selected-primary connection whose admitted principal differs
+fails authority checks without selecting another computer. An inaccessible or
+missing workspace keeps the existing indistinguishable not-found behavior;
+otherwise absent owner/mismatched principal is forbidden. A store lookup failure
+is an error, never permission or an instruction to choose a fallback principal.
+Reject model-supplied `agentId`, `clientId`, `workspaceId`,
 `computerId`, `sessionId` or permission decisions rather than silently honoring
 them. Parent agents cannot act on behalf of a child. Agent access to generic RPC,
 reverse RPC, hook or settings paths must not bypass this boundary.
@@ -38,9 +53,19 @@ computerId, connectionEpoch }`. `principalId` identifies the granting human;
 `connectionEpoch` is a fresh opaque daemon-issued connection incarnation. The
 executor supplies a stable local `computerId` and `computerName` at preparation
 (see reverse RPC). Names and logical hello IDs are display/routing data, not
-authentication. The granting connection must be admitted as that agent owner's
-principal and be the selected primary; workspace management alone does not grant
-control of another user's desktop. Recheck authority at decisions and actions.
+authentication. The selected-primary/granting connection's admitted principal
+must exactly equal that persisted workspace owner. The session's `principalId`
+records this same value; workspace management alone does not grant control of
+another user's desktop. Recheck the persisted owner at consent decisions,
+activation, every renewal, preparation and action dispatch. Owner changes invalidate pending requests and active sessions
+with reason `owner_changed`, clear their active snapshot hints and trigger the
+normal native teardown/lease invalidation path. Late approvals/readiness replies
+cannot reactivate old authority. Remembered grants retain their original
+principal/workspace/agent/computer tuple and never transfer to a new owner;
+the new owner must obtain consent on its exact selected primary. Terminal Stop
+reports are the notification-only exception: validate the retained original
+granting principal and current workspace access under the reconciliation rules,
+not the new owner's execution authority. They cannot control a successor.
 
 One live session per physical interactive desktop, across agents, workspaces,
 backend connections and Intent app instances. The local executor owns an atomic
@@ -182,7 +207,7 @@ automatically starts a session. Already executed OS actions cannot be undone.
 
 These are user/executor control-plane methods, **not agent-callable bindings**.
 All require the real `workspaceId` even on direct daemons. `agentId` here is a
-UI selector, scoped to that workspace and the owning principal. Permission reads,
+UI selector, scoped to that workspace and its persisted owner principal. Permission reads,
 writes and decisions require the selected primary's authenticated connection;
 revoke requires the session's bound executor connection, except for the strictly
 terminal Stop reconciliation below. A foreign/missing
@@ -464,7 +489,7 @@ New workspace events use the ordinary envelope and these complete data payloads:
 `outcome` is `granted`, `denied`, `expired`, `withdrawn`, `invalidated` or `failed`.
 Only `granted` carries active state, after readiness; all other outcomes carry
 inactive state. Session `reason` is omitted for active; ended requires one of
-`agent_end`, `user_stop`, `primary_changed`, `disconnected`, `screen_locked`,
+`agent_end`, `user_stop`, `primary_changed`, `owner_changed`, `disconnected`, `screen_locked`,
 `os_permission_lost`, `lease_expired`, `agent_terminated`, `executor_failed`,
 `unsupported_environment`, `outcome_unknown`. Emit only real transitions;
 repeated start/end and duplicate revoke do not duplicate events/toasts.

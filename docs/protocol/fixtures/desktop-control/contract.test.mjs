@@ -328,3 +328,40 @@ test('retention examples cannot distinguish hidden from deleted targets or lose 
   assert.equal(select('lost-ack-then-duplicate-ack').expectDeliveryAcknowledged, true);
   assert.equal(select('auth-failure-and-signout-retain').steps.at(-1).expectQueued, true);
 });
+
+test('desktop ownership uses the persisted workspace owner rather than a manager or message sender', () => {
+  assert.ok(doc.includes('workspace.owner_principal_id'));
+  assert.ok(doc.includes('require_agent_owner'));
+  assert.ok(doc.includes('Owner changes invalidate pending requests and active sessions'));
+});
+
+test('ownership boundary examples reject every identity fallback and invalidate old authority', () => {
+  const { source, cases } = fixture.desktopOwners;
+  assert.equal(source, 'workspace.owner_principal_id');
+  assert.equal(new Set(cases.map(c => c.id)).size, cases.length);
+  for (const c of cases) {
+    const allowed = Boolean(c.workspaceOwner) && c.workspaceOwner === c.connectionPrincipal;
+    assert.equal(c.expect.allowed, allowed, c.id);
+    assert.equal(c.expect.fallbackSelected, false, c.id);
+    if (allowed) assert.equal(c.expect.boundPrincipal, c.workspaceOwner, c.id);
+    else assert.equal(c.expect.errorCode, 'forbidden', c.id);
+    if (c.originalOwner) {
+      assert.notEqual(c.workspaceOwner, c.originalOwner, c.id);
+      assert.equal(c.expect.reason, 'owner_changed', c.id);
+      assert.equal(c.expect.grantTransferred, false, c.id);
+      if (c.stage === 'decision') assert.equal(c.expect.requestInvalidated, true, c.id);
+      else {
+        assert.deepEqual(c.expect.state, { status: 'inactive' }, c.id);
+        validateState(c.expect.state);
+      }
+    }
+    if (c.rememberedGrantPrincipal) {
+      assert.notEqual(c.workspaceOwner, c.rememberedGrantPrincipal);
+      assert.equal(c.expect.rememberedConsentApplies, false);
+      assert.equal(c.expect.status, 'pending_permission');
+    }
+  }
+  for (const id of ['workspace-owner-primary', 'delegate-uses-own-workspace-owner', 'manager-is-not-owner', 'administrator-is-not-owner', 'message-sender-is-not-owner', 'missing-persisted-owner', 'owner-changed-before-decision', 'owner-changed-before-renew', 'owner-changed-before-action', 'new-owner-needs-own-consent']) {
+    assert.ok(cases.some(c => c.id === id), id);
+  }
+});
