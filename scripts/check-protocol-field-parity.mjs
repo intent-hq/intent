@@ -30,7 +30,6 @@ export const PAIRS = [
     rust: { file: MODEL_RS, struct: 'AgentLite' },
     ts: { file: 'packages/cloudlands-fe/src/shared/types/agent-session.ts', type: 'AgentSession' },
     ignore: {
-      waitingOnScriptMonitors: 'documented optional monitor metadata; staged daemon-first adoption before https://github.com/intent-hq/cloudlands-fe/pull/3104; remove once the monorepo frontend pin includes that PR',
       contextUsage: 'not consumed by the FE today (no reader of the row field)',
       contextReferences: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
       fileBlocks: 'read untyped through the agent-session slice (DETAIL_ONLY_SESSION_FIELDS and data.fileBlocks in agent-session-slice.ts); accepted FE typing debt, not declared on the type',
