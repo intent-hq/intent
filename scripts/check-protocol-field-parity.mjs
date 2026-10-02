@@ -564,6 +564,9 @@ async function readManifestFile(root, { file, sub, dir, explicit }) {
     if (!explicit) return { skipped: true };
     return { error: { file, line: 1, message: `selected ${sub} root ${dir} is missing or not initialized (.git not found)` } };
   }
+  if (explicit && !describeCheckout(root, dir, { pinDir: sub }).checkout) {
+    return { error: { file, line: 1, message: `selected ${sub} root ${dir} is not a repository root with a readable HEAD` } };
+  }
   if (!(await exists(path.resolve(root, file)))) {
     const where = sub ? `submodule ${dir} is initialized` : 'not inside a submodule';
     return { error: { file, line: 1, message: `manifest path ${file} does not exist (${where}); update PAIRS in scripts/check-protocol-field-parity.mjs` } };

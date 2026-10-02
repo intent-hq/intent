@@ -652,6 +652,42 @@ test('real Makefile routes FE_DIR and both selected roots, including paths with 
 });
 
 for (const { sub, flag, variable, side } of COMPONENTS) {
+  for (const metadata of ['dangling', 'corrupt', 'unborn', 'wrong-root']) {
+    test(`explicit ${sub} rejects ${metadata} Git metadata through CLI and Make`, async (t) => {
+      const { root } = await makeRoutingRoot(t);
+      const selected = `.intent/worktrees/${side}-${metadata}`;
+      const selectedRoot = path.join(root, selected);
+      await fs.mkdir(selectedRoot, { recursive: true });
+      for (const file of new Set(PAIRS.map((pair) => pair[side].file))) {
+        const dest = path.join(selectedRoot, path.relative(sub, file));
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.copyFile(path.join(root, file), dest);
+      }
+      if (metadata === 'unborn') {
+        git(selectedRoot, 'init', '-q', '-b', 'main');
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      } else if (metadata === 'wrong-root') {
+        const canonical = path.join(root, sub);
+        git(canonical, 'config', 'core.worktree', canonical);
+        await fs.writeFile(path.join(selectedRoot, '.git'), `gitdir: ${canonical}/.git\n`);
+        assert.equal(git(selectedRoot, 'rev-parse', '--show-toplevel'), canonical);
+      } else {
+        const marker = metadata === 'dangling' ? `gitdir: ${root}/nonexistent-git-dir\n` : 'not valid Git metadata\n';
+        await fs.writeFile(path.join(selectedRoot, '.git'), marker);
+        assert.throws(() => git(selectedRoot, 'rev-parse', 'HEAD'));
+      }
+      // Run both entry points before asserting so the red evidence covers both.
+      const cli = await runCli(root, flag, selected);
+      const make = await runMake(root, `${variable}=${selected}`);
+      assert.deepEqual([cli.code, make.code], [1, 2], `invalid selected ${sub} must fail both entry points:\n${cli.stdout}\n${make.stdout}`);
+      for (const result of [cli, make]) {
+        assert.ok(result.stderr.includes(`selected ${sub} root ${selected} is not a repository root with a readable HEAD`), result.stderr);
+        assert.doesNotMatch(result.stdout, /skipped:|Protocol field parity holds/);
+      }
+      assert.equal((await runCli(root)).code, 0, 'omitted overrides still check the valid default pair');
+    });
+  }
+
   test(`explicit invalid or missing ${sub} roots fail instead of skipping or falling back`, async (t) => {
     const { root } = await makeRoutingRoot(t);
     const plain = '.intent/not-a-checkout';
