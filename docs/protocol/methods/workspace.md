@@ -859,8 +859,8 @@ workspace's guests and open invites, which archive removes:
   an agent is an explicit resurrection signal; automatic machinery is not. Since
   [intent-hq/intentd#1587](https://github.com/intent-hq/intentd/pull/1587) (behavior
   only, no wire-shape change; fixes intent-hq/intent#3883) the exemption has two
-  refinements. **Combined flush of parked archive notices**: under the `"all"` flush
-  mode (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
+  refinements. **Combined flush of parked archive notices**: with automatic batching
+  (§5.5 Queued-message flush), a user `agent.sendMessage` into an archived
   workspace whose queue holds parked ready-to-send entries (the consolidated
   `workspace_archive_wake` notice for cancelled hooks / PR monitors — see the two
   teardown bullets below — parked automatic sends) no longer runs a DIRECT turn
@@ -871,8 +871,7 @@ workspace's guests and open invites, which archive removes:
   turn as the user message, with the one-shot unarchive prompt notice trailing —
   so the model learns its hooks were cancelled in the same turn it is resumed,
   not in confusing later turns. The conversion is skipped when nothing is parked
-  (the common empty-queue direct send is untouched), under `"systemOnly"`/`"off"`
-  (no combined turn exists to carry the parked entries), and for a session parked
+  (the common empty-queue direct send is untouched) and for a session parked
   in `Error` (whose documented recovery is the direct fresh send). **The drain-gate
   exemption is time-tightened**: only a ready user-origin entry carrying a trusted
   human submission at or after the archive releases the archived gate. The daemon
