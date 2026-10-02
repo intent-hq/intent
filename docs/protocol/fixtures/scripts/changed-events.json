@@ -1,0 +1,990 @@
+{
+  "status": "synthetic-contract-model-not-component-proof",
+  "workspaceId": "ws-a",
+  "rows": {
+    "running": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "runtime": {
+        "status": "running",
+        "restartCount": 0,
+        "pid": 123,
+        "startedAt": "2026-10-02T00:01:00Z"
+      }
+    },
+    "complete": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "succeeded",
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      }
+    },
+    "failed": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "failed",
+        "exitCode": 2,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 2,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      }
+    },
+    "cancelled": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "cancelled",
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "stopped before spawn"
+      },
+      "runtime": {
+        "status": "idle",
+        "restartCount": 0
+      }
+    },
+    "saved": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "saved",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "lastRun": {
+        "outcome": "succeeded",
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      }
+    },
+    "restored": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "lastRun": {
+        "outcome": "succeeded",
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      }
+    },
+    "replacement": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Replacement",
+      "command": "make test",
+      "mode": "command",
+      "purpose": "saved",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "runtime": {
+        "status": "idle",
+        "restartCount": 0
+      }
+    },
+    "old": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "saved",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "failed",
+        "exitCode": 2,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 2,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "old diagnostic",
+        "detectedUrl": "http://localhost:3000",
+        "previouslyRunning": true
+      },
+      "cwd": "packages",
+      "env": {
+        "OLD": "yes"
+      },
+      "category": "test",
+      "autoStart": true,
+      "updatedAt": "2026-10-02T00:02:00Z"
+    },
+    "spawnFailure": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "failed",
+        "exitCode": -1,
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "spawn failed"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": -1,
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "spawn failed"
+      }
+    },
+    "interrupted": {
+      "id": "check",
+      "workspaceId": "ws-a",
+      "name": "Check",
+      "command": "make check",
+      "mode": "command",
+      "purpose": "oneOff",
+      "source": "user",
+      "createdAt": "2026-10-02T00:00:00Z",
+      "archivedAt": "2026-10-02T00:02:00Z",
+      "lastRun": {
+        "outcome": "interrupted",
+        "exitCode": -1,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "lost: the daemon stopped while the script was running"
+      },
+      "runtime": {
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": -1,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z",
+        "error": "lost: the daemon stopped while the script was running"
+      }
+    }
+  },
+  "events": {
+    "complete": {
+      "id": "evt-complete",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "archivedAt": "2026-10-02T00:02:00Z",
+          "lastRun": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "failed": {
+      "id": "evt-failed",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "archivedAt": "2026-10-02T00:02:00Z",
+          "lastRun": {
+            "outcome": "failed",
+            "exitCode": 2,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": 2,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "cancelled": {
+      "id": "evt-cancelled",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "archivedAt": "2026-10-02T00:02:00Z",
+          "lastRun": {
+            "outcome": "cancelled",
+            "stoppedAt": "2026-10-02T00:02:00Z",
+            "error": "stopped before spawn"
+          },
+          "runtime": {
+            "status": "idle",
+            "restartCount": 0
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "saved": {
+      "id": "evt-saved",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "saved",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "lastRun": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "restored": {
+      "id": "evt-restored",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "lastRun": {
+            "outcome": "succeeded",
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": 0,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "replacement": {
+      "id": "evt-replacement",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Replacement",
+          "command": "make test",
+          "mode": "command",
+          "purpose": "saved",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "runtime": {
+            "status": "idle",
+            "restartCount": 0
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "created": {
+      "id": "evt-created",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "created",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Replacement",
+          "command": "make test",
+          "mode": "command",
+          "purpose": "saved",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "runtime": {
+            "status": "idle",
+            "restartCount": 0
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "removed": {
+      "id": "evt-removed",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "removed"
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "legacy": {
+      "id": "evt-legacy",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated"
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "starting": {
+      "id": "evt-starting",
+      "type": "script:state",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "status": "starting",
+        "restartCount": 0
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "terminal": {
+      "id": "evt-terminal",
+      "type": "script:state",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "status": "exited",
+        "restartCount": 0,
+        "exitCode": 0,
+        "startedAt": "2026-10-02T00:01:00Z",
+        "stoppedAt": "2026-10-02T00:02:00Z"
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "spawnFailure": {
+      "id": "evt-spawnFailure",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "archivedAt": "2026-10-02T00:02:00Z",
+          "lastRun": {
+            "outcome": "failed",
+            "exitCode": -1,
+            "stoppedAt": "2026-10-02T00:02:00Z",
+            "error": "spawn failed"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": -1,
+            "stoppedAt": "2026-10-02T00:02:00Z",
+            "error": "spawn failed"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    },
+    "interrupted": {
+      "id": "evt-interrupted",
+      "type": "script:changed",
+      "workspaceId": "ws-a",
+      "data": {
+        "scriptId": "check",
+        "action": "updated",
+        "script": {
+          "id": "check",
+          "workspaceId": "ws-a",
+          "name": "Check",
+          "command": "make check",
+          "mode": "command",
+          "purpose": "oneOff",
+          "source": "user",
+          "createdAt": "2026-10-02T00:00:00Z",
+          "archivedAt": "2026-10-02T00:02:00Z",
+          "lastRun": {
+            "outcome": "interrupted",
+            "exitCode": -1,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z",
+            "error": "lost: the daemon stopped while the script was running"
+          },
+          "runtime": {
+            "status": "exited",
+            "restartCount": 0,
+            "exitCode": -1,
+            "startedAt": "2026-10-02T00:01:00Z",
+            "stoppedAt": "2026-10-02T00:02:00Z",
+            "error": "lost: the daemon stopped while the script was running"
+          }
+        }
+      },
+      "timestamp": "2026-10-02T00:02:00Z",
+      "actor": {
+        "type": "system"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "settlement-complete",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "complete"
+        }
+      ],
+      "expect": {
+        "row": "complete",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "settlement-failed",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "failed"
+        }
+      ],
+      "expect": {
+        "row": "failed",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "settlement-cancelled",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "cancelled"
+        }
+      ],
+      "expect": {
+        "row": "cancelled",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "settlement-saved",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "saved"
+        }
+      ],
+      "expect": {
+        "row": "saved",
+        "active": true,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "restore-preserves-result",
+      "initial": "complete",
+      "steps": [
+        {
+          "event": "restored"
+        }
+      ],
+      "expect": {
+        "row": "restored",
+        "active": true,
+        "listCalls": 0
+      }
+    },
+    {
+      "id": "replacement-clears-optionals",
+      "initial": "old",
+      "steps": [
+        {
+          "event": "replacement"
+        }
+      ],
+      "expect": {
+        "row": "replacement",
+        "active": true,
+        "listCalls": 0
+      }
+    },
+    {
+      "id": "create-unknown-row",
+      "initial": null,
+      "steps": [
+        {
+          "event": "created"
+        }
+      ],
+      "expect": {
+        "row": "replacement",
+        "active": true,
+        "listCalls": 0
+      }
+    },
+    {
+      "id": "legacy-refetch",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "legacy"
+        }
+      ],
+      "expect": {
+        "row": "running",
+        "active": true,
+        "listCalls": 1
+      }
+    },
+    {
+      "id": "remove-without-refetch",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "removed"
+        },
+        {
+          "event": "terminal"
+        }
+      ],
+      "expect": {
+        "row": null,
+        "active": false,
+        "listCalls": 0
+      }
+    },
+    {
+      "id": "state-does-not-retire",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "terminal"
+        }
+      ],
+      "expect": {
+        "row": "running",
+        "active": true,
+        "listCalls": 0,
+        "runtime": {
+          "status": "exited",
+          "restartCount": 0,
+          "exitCode": 0,
+          "startedAt": "2026-10-02T00:01:00Z",
+          "stoppedAt": "2026-10-02T00:02:00Z"
+        }
+      }
+    },
+    {
+      "id": "archive-keeps-output",
+      "initial": "complete",
+      "steps": [
+        {
+          "event": "terminal"
+        }
+      ],
+      "expect": {
+        "row": "complete",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "stale-list-cannot-unarchive",
+      "initial": "running",
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "event": "complete"
+        },
+        {
+          "resolveList": "a",
+          "rows": [
+            "running"
+          ]
+        }
+      ],
+      "expect": {
+        "row": "complete",
+        "active": false,
+        "listCalls": 1
+      }
+    },
+    {
+      "id": "stale-list-cannot-drop-new-row",
+      "initial": null,
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "event": "created"
+        },
+        {
+          "resolveList": "a",
+          "rows": []
+        }
+      ],
+      "expect": {
+        "row": "replacement",
+        "active": true,
+        "listCalls": 1
+      }
+    },
+    {
+      "id": "stale-list-cannot-resurrect-removal",
+      "initial": "running",
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "event": "removed"
+        },
+        {
+          "resolveList": "a",
+          "rows": [
+            "running"
+          ]
+        }
+      ],
+      "expect": {
+        "row": null,
+        "active": false,
+        "listCalls": 1
+      }
+    },
+    {
+      "id": "restore-then-live-state-over-stale-list",
+      "initial": "complete",
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "event": "restored"
+        },
+        {
+          "event": "starting"
+        },
+        {
+          "resolveList": "a",
+          "rows": []
+        }
+      ],
+      "expect": {
+        "row": "restored",
+        "active": true,
+        "listCalls": 1,
+        "runtime": {
+          "status": "starting",
+          "restartCount": 0
+        }
+      }
+    },
+    {
+      "id": "older-response-finishes-last",
+      "initial": "running",
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "beginList": "b"
+        },
+        {
+          "resolveList": "b",
+          "rows": [
+            "replacement"
+          ]
+        },
+        {
+          "resolveList": "a",
+          "rows": [
+            "running"
+          ]
+        }
+      ],
+      "expect": {
+        "row": "replacement",
+        "active": true,
+        "listCalls": 2
+      }
+    },
+    {
+      "id": "old-connection-response-and-event",
+      "initial": "running",
+      "steps": [
+        {
+          "beginList": "a"
+        },
+        {
+          "reconnect": true
+        },
+        {
+          "beginList": "b"
+        },
+        {
+          "resolveList": "b",
+          "rows": [
+            "replacement"
+          ]
+        },
+        {
+          "resolveList": "a",
+          "rows": [
+            "running"
+          ]
+        },
+        {
+          "event": "complete",
+          "generation": 0
+        }
+      ],
+      "expect": {
+        "row": "replacement",
+        "active": true,
+        "listCalls": 2
+      }
+    },
+    {
+      "id": "duplicate-after-successor",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "complete"
+        },
+        {
+          "event": "restored"
+        },
+        {
+          "event": "complete"
+        }
+      ],
+      "expect": {
+        "row": "restored",
+        "active": true,
+        "listCalls": 0
+      }
+    },
+    {
+      "id": "settlement-spawnFailure",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "spawnFailure"
+        }
+      ],
+      "expect": {
+        "row": "spawnFailure",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    },
+    {
+      "id": "settlement-interrupted",
+      "initial": "running",
+      "steps": [
+        {
+          "event": "interrupted"
+        }
+      ],
+      "expect": {
+        "row": "interrupted",
+        "active": false,
+        "listCalls": 0,
+        "output": "retained output\n",
+        "selected": true
+      }
+    }
+  ]
+}

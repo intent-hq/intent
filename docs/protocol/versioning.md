@@ -4,6 +4,18 @@
 
 **Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
 
+**Prepared self-contained script changes — additive, not shipped.**
+[`script:changed` (§5.8)](./methods/scripts.md#self-contained-script-changes-prepared-additive-extension)
+adds optional `data.script` as a complete list-row snapshot on create/update,
+including runtime, archive metadata and latest result. Removal keeps its existing
+ID-only shape. Consumers presence-detect each valid snapshot and apply it without
+refetching; older ID-only create/update events retain invalidation fallback.
+Omitted fields inside a present row clear previous values, unlike absence of the
+row itself. No new methods, event names, capability or wire revision are allocated;
+`scriptLifecycle: 1` alone does not identify this extension. Allocate the next
+minor against daemon main during implementation. Docs lead both consumers, daemon
+lands before frontend, and initial/reconnect reconciliation remains necessary.
+
 **Prepared 11.2 — single-node platform launch.** The
 [platform contract](./model-platform-routing.md) widens placement with independent
 optional OS/architecture, defines one named node with multi-agent capacity and
