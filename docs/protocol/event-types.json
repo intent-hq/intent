@@ -128,6 +128,7 @@
     "scriptMonitor:completed",
     "scriptMonitor:expired",
     "scriptMonitor:registered",
+    "scriptMonitor:triggered",
     "search:done",
     "search:result",
     "settings:changed",

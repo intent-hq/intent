@@ -567,6 +567,7 @@ test('prepared script monitor helpers are scoped and still validate options', as
   const file = 'docs/protocol/methods/script-monitors.md';
   const mention = text => collectDocMentions('`' + text + '`');
   assert.deepEqual(checkDoc(file, mention('ws.script.monitor(scriptId, { ttlMs, runId? })'), []), []);
+  assert.deepEqual(checkDoc(file, mention('ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? })'), []), []);
   assert.equal(checkDoc('docs/protocol/unrelated.md', mention('ws.script.monitor(scriptId, { ttlMs })'), []).length, 1);
   assert.equal(checkDoc(file, mention('ws.script.monitor(scriptId, { timeoutMs })'), []).length, 1);
   assert.equal(checkDoc(file, mention('ws.script.monotor(scriptId)'), []).length, 1);

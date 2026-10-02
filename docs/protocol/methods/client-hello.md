@@ -57,7 +57,8 @@ capability behavior below remains unchanged until this extension is implemented.
 **Script run monitoring (prepared additive extension).**
 `server.capabilities.scriptMonitors: 1` advertises the entire
 [§5.8a contract](./script-monitors.md): durable run identity, required one-shot
-TTL, single-owner registration, guarded run cancellation and silent lifecycle
+TTL, optional single-line regex/line-count triggers, single-owner registration,
+guarded run cancellation and silent lifecycle
 cleanup including queued wakes. Independent of scriptLifecycle/scriptReadiness;
 absence means unavailable, not permission to infer support from version numbers.
 

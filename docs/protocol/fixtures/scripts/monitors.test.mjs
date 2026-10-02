@@ -25,11 +25,21 @@ function assertCompact(value) {
 function assertRow(row) {
   for (const key of ['monitorId', 'workspaceId', 'agentId', 'scriptId', 'runId', 'scriptName']) assert.equal(typeof row[key], 'string');
   assert.ok(['command', 'service'].includes(row.mode));
-  assert.ok(['active', 'completed', 'expired', 'cancelled'].includes(row.state));
+  assert.ok(['active', 'completed', 'expired', 'triggered', 'cancelled'].includes(row.state));
   assert.ok(Date.parse(row.expiresAt) > Date.parse(row.createdAt));
   assert.equal(row.settledAt !== undefined, row.state !== 'active');
   assert.equal(row.reason !== undefined, row.state !== 'active');
   assert.equal(row.result !== undefined, row.state === 'completed');
+  assert.equal(row.trigger !== undefined, row.state === 'triggered');
+  if (row.trigger) {
+    assert.ok(Number.isInteger(row.trigger.observedLineCount) && row.trigger.observedLineCount > 0);
+    assert.equal(row.trigger.matchedLine !== undefined, row.reason === 'output-match');
+    if (row.trigger.matchedLine !== undefined) {
+      assert.equal(typeof row.trigger.matchedLine, 'string');
+      assert.ok(Buffer.byteLength(row.trigger.matchedLine) <= 4096);
+      assert.doesNotMatch(row.trigger.matchedLine, /[\r\n]/);
+    }
+  }
   if (row.result) {
     const r = row.result;
     assert.ok(['succeeded', 'failed', 'cancelled', 'interrupted'].includes(r.outcome));
@@ -45,7 +55,7 @@ test('prepared methods, capability and event inventory match canonical documents
   assert.deepEqual(fixture.capability, { scriptMonitors: 1 });
   for (const method of ['list', 'cancel', 'cancelRun']) assert.ok(doc.includes(`| scriptMonitor.${method} |`));
   assert.match(catalog, /\| scriptMonitor \| 3 \| cancel, cancelRun, list/);
-  for (const state of ['registered', 'completed', 'expired', 'cancelled']) {
+  for (const state of ['registered', 'completed', 'expired', 'triggered', 'cancelled']) {
     assert.ok(events.types.includes(`scriptMonitor:${state}`));
     assert.ok(doc.includes(`scriptMonitor:${state}`));
   }
@@ -73,6 +83,7 @@ for (const c of fixture.cases) test(`contract trace: ${c.id}`, () => {
     assert.equal(payload.type, 'script_monitor_wake');
     assert.equal(payload.source, 'system');
     assert.equal(payload.result !== undefined, payload.reason === 'finished');
+    assert.equal(payload.trigger !== undefined, ['output-match', 'line-count'].includes(payload.reason));
     const row = m.s.monitors.find(x => x.monitorId === payload.monitorId);
     assert.equal(payload.runId, row.runId);
     assert.equal(payload.agentId, row.agentId);
@@ -243,4 +254,143 @@ test('successor completion cannot supply an older bound monitor result', () => {
   const response = m.step({ op: 'cancelRun' });
   assert.equal(response.monitor.result.outcome, 'interrupted');
   assert.equal(response.runStopped, false);
+});
+
+const output = (text, extra = {}) => ({ op: 'output', runId: 'run-a', text, ...extra });
+const outputReady = options => { const m = model(); m.step(start); m.step({ ...register, ...options }); return m; };
+
+test('invalid output options fail before mutation or retry, independently of required TTL', () => {
+  for (const options of [
+    { outputPattern: null }, { outputPattern: '' }, { outputPattern: 123 },
+    { outputPattern: '(' }, { outputPattern: '(?=Ready)' }, { outputPattern: '(a)\\1' },
+    { outputPattern: 'a\nb' }, { outputPattern: 'a\rb' }, { outputPattern: 'x'.repeat(1025) },
+    { outputPattern: '€'.repeat(342) },
+    ...[null, 0, -1, 1.2, '2', false, 1000001].map(lineCount => ({ lineCount })),
+  ]) {
+    const m = ready(), before = structuredClone(m.s.monitors);
+    assert.equal(m.step({ ...register, ...options }).errorCode, -32602, JSON.stringify(options).slice(0, 90));
+    assert.deepEqual(m.s.monitors, before);
+  }
+  for (const options of [{ lineCount: 1 }, { lineCount: 1000000 }, { outputPattern: 'x'.repeat(1024) }, { outputPattern: '^$' }]) {
+    const m = model(); m.step(start);
+    assert.equal(m.step({ ...register, ...options }).ok, true);
+    assert.equal(m.step({ op: 'register', ...options }).errorCode, -32602, 'TTL remains mandatory');
+  }
+});
+
+test('output triggers fire on completed lines only, return only the requested evidence and keep execution running', () => {
+  for (const options of [{ outputPattern: '^Ready$' }, { lineCount: 1 }]) {
+    const m = outputReady(options); m.step(output('Ready'));
+    assert.equal(m.s.monitors[0].state, 'active');
+    m.step(output('\nmore\n')); m.step({ op: 'deliver' });
+    const row = m.s.monitors[0], wake = [...m.s.delivered.values()][0];
+    assertRow(row);
+    assert.equal(row.state, 'triggered');
+    assert.equal(row.result, undefined);
+    assert.deepEqual(wake.trigger, options.outputPattern ? { observedLineCount: 1, matchedLine: 'Ready' } : { observedLineCount: 1 });
+    assert.equal(m.s.runs.values().next().value.result, undefined);
+    assert.deepEqual(m.s.stops, []);
+    assert.equal(m.step({ op: 'cancelRun' }).runStopped, false, 'retired row cannot stop the still-running script');
+  }
+});
+
+test('every UTF-8/ANSI/CRLF chunk boundary preserves the same single-line match', () => {
+  const bytes = [...new TextEncoder().encode('\x1b[32mR€ady\x1b[0m\r\n')];
+  for (let split = 0; split <= bytes.length; split++) {
+    const m = outputReady({ outputPattern: '^R€ady$', lineCount: 1 });
+    m.step({ op: 'output', runId: 'run-a', bytes: bytes.slice(0, split) });
+    m.step({ op: 'output', runId: 'run-a', bytes: bytes.slice(split) });
+    assert.deepEqual(m.s.monitors[0].trigger, { observedLineCount: 1, matchedLine: 'R€ady' }, `split ${split}`);
+    assert.equal(m.s.events.length, 2);
+  }
+});
+
+test('control strings and cursor controls are stripped without screen emulation', () => {
+  const m = outputReady({ outputPattern: '^ab\tc$' });
+  m.step(output('a\x1b]title\nnot a line\x07\x1bPpayload\x1b'));
+  m.step(output('\\b\b\x1b[2K\tc\n'));
+  assert.deepEqual(m.s.monitors[0].trigger, { observedLineCount: 1, matchedLine: 'ab\tc' });
+  const empty = outputReady({ outputPattern: '^$' });
+  empty.step(output('\x1b[31m\n'));
+  assert.deepEqual(empty.s.monitors[0].trigger, { observedLineCount: 1, matchedLine: '' });
+});
+
+test('bare CR, empty lines and normalized CRLF count precisely without an extra EOF line', () => {
+  const m = outputReady({ lineCount: 5 });
+  m.step(output('one\r\ntwo\r\rthree\n')); m.step(finish);
+  assert.equal(m.s.monitors[0].state, 'completed', 'only four lines, EOF adds none');
+  const n = outputReady({ lineCount: 5 });
+  n.step(output('one\r\ntwo\r\rthree\nlast')); n.step(finish);
+  assert.deepEqual(n.s.monitors[0].trigger, { observedLineCount: 5 });
+});
+
+test('overlong lines cannot match a truncated prefix, but count once and recover at a delimiter', () => {
+  const m = outputReady({ outputPattern: '^a{4096}$', lineCount: 2 });
+  m.step(output('a'.repeat(4096)));
+  assert.equal(m.s.monitors[0].state, 'active', 'do not match partial prefix');
+  m.step(output('a'.repeat(8192) + '\nnext\n'));
+  assert.equal(m.s.monitors[0].reason, 'line-count');
+  assert.deepEqual(m.s.monitors[0].trigger, { observedLineCount: 2 });
+  const n = outputReady({ outputPattern: '^a{4096}$' });
+  n.step(output('a'.repeat(4096) + '\n'));
+  assert.equal(n.s.monitors[0].trigger.matchedLine.length, 4096);
+});
+
+test('overlong control strings retain bounded state and invalid UTF-8 is normalized', () => {
+  const m = outputReady({ outputPattern: '^�$' });
+  m.step(output('\x1b]' + 'secret'.repeat(3000)));
+  const parser = m.s.runs.values().next().value.lines;
+  assert.equal(parser.text, ''); assert.equal(parser.bytes, 0);
+  m.step({ op: 'output', runId: 'run-a', bytes: [7, 255, 10] });
+  assert.equal(m.s.monitors[0].trigger.matchedLine, '�');
+});
+
+test('same-owner retries preserve count/config and rearming starts a fresh window', () => {
+  const m = outputReady({ lineCount: 2 });
+  m.step(output('one\n'));
+  assert.equal(m.step({ ...register, lineCount: 99, outputPattern: '.*' }).monitor.lineCount, 2);
+  m.step(output('two\n'));
+  assert.deepEqual(m.s.monitors[0].trigger, { observedLineCount: 2 });
+  m.step({ ...register, lineCount: 2 }); m.step(output('three\n'));
+  assert.equal(m.s.monitors[1].state, 'active');
+  m.step(output('four\n'));
+  assert.deepEqual(m.s.monitors[1].trigger, { observedLineCount: 2 });
+});
+
+test('new output/completion/cancel lose to TTL at the exact deadline', () => {
+  for (const action of [output('Ready\n'), finish, { op: 'cancelRun' }]) {
+    const m = outputReady({ outputPattern: 'Ready', lineCount: 1 });
+    m.step({ op: 'time', now: 1000 }); m.step(action); m.step({ op: 'deliver' });
+    assert.equal(m.s.monitors[0].reason, 'ttl-expired');
+    assert.equal(m.s.delivered.size, 1);
+    assert.deepEqual(m.s.stops, []);
+  }
+});
+
+test('all output/completion/cancellation orders notify once; cleanup removes every pending output wake', () => {
+  for (const order of permutations([output('Ready\n'), finish, { op: 'cancelRun' }])) {
+    const m = outputReady({ outputPattern: 'Ready', lineCount: 1 });
+    for (const a of [...order, ...order]) m.step(a);
+    m.step({ op: 'deliver' }); m.step({ op: 'recover' }); m.step({ op: 'deliver' });
+    assert.equal(m.s.delivered.size, 1);
+    assert.equal(m.s.events.length, 2);
+  }
+  for (const order of permutations([output('Ready\n'), { op: 'cleanup', reason: 'owner-retired' }])) {
+    const m = outputReady({ outputPattern: 'Ready' });
+    for (const a of order) m.step(a);
+    m.step({ op: 'restore' }); m.step({ op: 'recover' }); m.step({ op: 'deliver' });
+    assert.equal(m.s.pending.size, 0); assert.equal(m.s.delivered.size, 0);
+  }
+});
+
+test('recovery preserves one pending output trigger, never replays a partial window', () => {
+  const m = outputReady({ outputPattern: 'Ready' });
+  m.step(output('Ready\n')); m.step({ op: 'recover' }); m.step({ op: 'deliver' });
+  m.step({ op: 'recover' }); m.step({ op: 'deliver' });
+  assert.equal(m.s.delivered.size, 1);
+  assert.equal([...m.s.delivered.values()][0].trigger.matchedLine, 'Ready');
+  const n = outputReady({ outputPattern: 'Ready' });
+  n.step(output('Ready')); n.step({ op: 'recover' }); n.step({ op: 'deliver' });
+  assert.equal(n.s.monitors[0].result.outcome, 'interrupted');
+  assert.equal(n.s.monitors[0].trigger, undefined);
 });

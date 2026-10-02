@@ -29,7 +29,7 @@ export const RENAMED_BINDINGS = new Map([
 // before they ship. Once help declares one, its real signature takes precedence.
 export const PREPARED_BINDINGS = new Map([
   ['docs/protocol/methods/script-monitors.md', [
-    '  ws.script.monitor(scriptId, { ttlMs, runId? }) → { ok, monitor? }',
+    '  ws.script.monitor(scriptId, { ttlMs, runId?, outputPattern?, lineCount? }) → { ok, monitor? }',
     '  ws.script.monitors() → [monitors]',
     '  ws.script.unmonitor(monitorId) → { ok, monitor }',
   ].join('\n')],
