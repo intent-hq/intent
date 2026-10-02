@@ -394,3 +394,39 @@ test('recovery preserves one pending output trigger, never replays a partial win
   assert.equal(n.s.monitors[0].result.outcome, 'interrupted');
   assert.equal(n.s.monitors[0].trigger, undefined);
 });
+
+test('observation cancel at the exact deadline expires once and wakes instead of silently unmonitoring', () => {
+  const m = outputReady({ outputPattern: 'Ready' });
+  m.step({ op: 'time', now: 1000 });
+  const response = m.step({ op: 'cancel' });
+  assert.equal(response.monitor.state, 'expired');
+  assert.equal(response.monitor.reason, 'ttl-expired');
+  m.step({ op: 'cancel' }); m.step({ op: 'expire' }); m.step({ op: 'deliver' });
+  assert.equal(m.s.delivered.size, 1);
+  assert.equal([...m.s.delivered.values()][0].reason, 'ttl-expired');
+  assert.deepEqual(m.s.stops, []);
+});
+
+test('same-owner registration retry is a stored-state read even when the timer is overdue', () => {
+  const m = outputReady({ lineCount: 2 });
+  const before = structuredClone(m.s.monitors[0]);
+  m.step({ op: 'time', now: 1000 });
+  assert.deepEqual(m.step({ ...register, ttlMs: 2000, lineCount: 9 }).monitor, before);
+  assert.equal(m.s.events.length, 1);
+  m.step({ op: 'expire' }); m.step({ op: 'deliver' });
+  assert.equal(m.s.monitors[0].reason, 'ttl-expired');
+  assert.equal(m.s.delivered.size, 1);
+});
+
+test('a previously durable run result wins over either cancellation control', () => {
+  for (const op of ['cancel', 'cancelRun']) {
+    const m = ready();
+    // Fault injection: final run write committed, monitor reconciliation pending.
+    m.s.runs.values().next().value.result = finish.result;
+    m.step({ op: 'time', now: 1000 });
+    assert.equal(m.step({ op }).monitor.state, 'completed');
+    m.step({ op: 'deliver' });
+    assert.equal([...m.s.delivered.values()][0].reason, 'finished');
+    assert.deepEqual(m.s.stops, []);
+  }
+});

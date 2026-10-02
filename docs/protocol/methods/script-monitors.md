@@ -117,6 +117,13 @@ is the intentional re-arm boundary, not an extension of the old watch. A missing
 runId cannot recover an older run after a successor is admitted. Retained-row
 idempotency ends when that row is pruned; it is not permanent request deduplication.
 
+List reads and valid same-owner active registration retries return stored state,
+without terminal reconciliation. They may briefly return an overdue active row
+while its timer is pending; retries never renew expiresAt, change options or reset
+the output window. This read-only exception does not apply to either cancellation
+control: those reconcile a previously durable result, then TTL, before considering
+the new cancellation as specified below.
+
 #### Canonical row and terminal result
 
 `ScriptMonitor` is the identical full object returned by helpers, wire methods
@@ -256,7 +263,7 @@ Expiry examines the bound run in the same arbitration step. If its final result
 was already durably recorded, completion wins; otherwise at/after expiresAt the
 monitor expires and wakes once, **leaving the script running**. No renewed TTL or
 automatic re-registration. A delayed timer cannot replace an already-final row.
-All run inputs/control operations enter one serialization order, not UI/event-bus
+All mutating run inputs/control operations enter one serialization order, not UI/event-bus
 arrival order. Before considering a new input: apply lifecycle fencing, honor an
 already-reserved cancellation/terminal transition, then use any **previously
 durable** final result, then expire if now is at/after expiresAt. At the exact TTL
@@ -284,8 +291,10 @@ A stale binding reconciles its predecessor's captured result (or `interrupted`
 with -1 and an explanatory error if it was lost), returns runStopped false, and
 never signals the replacement. A stop failure must not claim cancellation:
 return an RPC error and retain/reconcile the watch. The user can retry safely.
-Owner unmonitor and wire cancel stop observation only, silently, even if a
-process is still running; they release ownership and waiting-state deferrals.
+When owner unmonitor or wire cancel wins arbitration, it stops observation only,
+silently, even if a process is still running; it releases ownership and waiting-state
+deferrals. If a prior durable result or elapsed TTL wins instead, return that
+completed/expired row and retain its one wake; cancellation cannot suppress it.
 
 #### Events, wake queue and agent waiting state
 

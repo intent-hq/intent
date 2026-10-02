@@ -115,14 +115,15 @@ export function model() {
         if (a.asAgent && m.agentId !== owner) return error(`owned by ${m.agentId}`);
         let runStopped = false;
         if (m.state === 'active') {
-          if (a.op === 'cancel') settle(m, 'cancelled', 'unmonitored');
+          const bound = s.runs.get(key(ws, m.scriptId));
+          if (bound?.runId === m.runId && bound.result) settle(m, 'completed', 'finished', bound.result);
+          else if (Date.parse(m.expiresAt) <= Date.parse(iso(s.now))) settle(m, 'expired', 'ttl-expired');
+          else if (a.op === 'cancel') settle(m, 'cancelled', 'unmonitored');
           else {
-            if (Date.parse(m.expiresAt) <= Date.parse(iso(s.now))) { settle(m, 'expired', 'ttl-expired'); return { ok: true, monitor: structuredClone(m), runStopped: false }; }
-            const bound = s.runs.get(key(ws, m.scriptId));
-            if (bound?.runId === m.runId && !bound.result) {
+            if (bound?.runId === m.runId) {
               s.stops.push(m.runId); runStopped = true;
               complete(bound, terminal('cancelled', s.now, { error: 'cancelled by user' }));
-            } else settle(m, 'completed', 'finished', bound?.runId === m.runId && bound.result || terminal('interrupted', s.now, { exitCode: -1, error: 'bound run unavailable' }));
+            } else settle(m, 'completed', 'finished', terminal('interrupted', s.now, { exitCode: -1, error: 'bound run unavailable' }));
           }
         }
         return { ok: true, monitor: structuredClone(m), ...(a.op === 'cancelRun' ? { runStopped } : {}) };
