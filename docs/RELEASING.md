@@ -177,7 +177,7 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   alpha publish → dispatch → auto pin bump → chained fe cut; crons as backstop) and
   manual pin-bump PRs are not filed. A manual pin bump is the **emergency release**
   path, used when an intentd fix must ship immediately rather than waiting on the
-  event chain / hourly crons: the operator lands the fix in intentd, cuts the intentd
+  event chain / cron retries: the operator lands the fix in intentd, cuts the intentd
   release, then immediately pin-bumps `intentd.version` in cloudlands-fe via a manual
   PR (verify with `node scripts/fetch-sidecar.cjs` from that directory) and cuts the
   cloudlands-fe release.
@@ -191,34 +191,33 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   distribution repo, not the source repo. (intentd differs: cargo-dist publishes
   daemon archives to the source repo's releases, and its channel manifests are
   dual-published — see the intentd section above.)
-- The Release PR merge is automated by `auto-cut-alpha.yml`, which already triggers
+- The Release PR merge is automated by `auto-cut-alpha.yml`, which triggers
   on **any push to main**, including frontend changes and the pin-bump squash merge
   made with `RELEASE_PAT`. The cut's own `chore(release):` merge push skips the job.
-  Eligible push runs poll every 30 seconds for up to 15 minutes for release-please
-  to refresh the Release PR and for CI Gate to go green. A push touching
-  `intentd.version` also waits for the Release PR head to carry the pushed pin.
-  This starts a release attempt on landing; readiness, queue backlog, and the
-  subsequent alpha build and publication still determine when binaries ship.
-  The hourly cron at :30 retries deferred or missed attempts. Cron and
-  manual-dispatch runs check once and exit without polling.
-- Push and cron runs normally defer when the latest frontend `vX.Y.Z` tag is less
-  than 60 minutes old. A push gains an exemption **only from this throttle** when
-  `scripts/intentd-pin-advance.sh` proves that the actual pin version advanced
-  between the push's before/after commits, current main still carries that pin,
-  and the latest frontend release tag carries an older pin. Unchanged or
-  comment-only pins, rollbacks, superseded pins, already-carried pins, and missing
-  or unreadable proof gain no exemption. Immediately before merge, the workflow
-  reads the latest tag again and repeats the proof for an exempt run, even if the
-  tag has not changed. A tag that moved during readiness polling also requires
-  this proof; otherwise the cut defers. Existing tag/date lookup fail-open
-  behavior and the manual-dispatch throttle bypass remain unchanged.
+  A ten-minute cron (`*/10 * * * *`) retries deferred or missed attempts. Every
+  run type (push, cron, and manual dispatch) evaluates readiness once and exits
+  if it is not ready, without sleeping or polling. No open Release PR means no
+  cut; release-please owns the PR for unshipped releasable changes. Pushes with
+  releasable changes require a refreshed Release PR head, and a push touching
+  `intentd.version` requires that head to carry the pushed pin. A deferred run
+  leaves the next attempt to a later push or cron tick. GitHub scheduling, queue
+  backlog, readiness, and the subsequent alpha build and publication still
+  determine when binaries ship; the ten-minute schedule is an attempt cadence.
+- All automated push and cron runs defer when the latest frontend `vX.Y.Z` tag
+  is less than 60 minutes old, including automated sidecar-pin updates. Pin
+  advances do not bypass this hourly floor. At 60 minutes the cut is eligible
+  only if the remaining readiness guards pass. Immediately before merge, the
+  workflow reads the latest tag again and defers if it changed during the run.
+  Existing tag/date lookup fail-open behavior remains unchanged. An explicit
+  `workflow_dispatch` retains the manual throttle bypass; it does not bypass
+  the Release PR readiness checks.
 - All cut attempts share the `auto-cut-alpha` concurrency group with
   `cancel-in-progress: false` and `queue: max`: one runs at a time, and later
   ordinary pushes retain pending pin attempts. GitHub allows at most 100 pending
   runs and cancels additional arrivals when the queue is full; a backlog can delay
-  a cut, and the hourly cron remains the fallback. See
+  a cut, and the ten-minute cron remains the fallback. See
   [GitHub concurrency controls](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
-- The pin throttle exemption preserves every dependency and readiness check:
+- Every attempt preserves the existing dependency and readiness checks:
   in-flight intentd builds, backend freshness, open pin-bump PRs, `hold-release`,
   Release PR identity and pin/head freshness, draft and mergeability checks,
   CI Gate on the current head, and unresolved review threads with human
@@ -240,9 +239,9 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   comparison) the cut proceeds unrestricted; when intentd main is ahead and the
   cut would ship fe commits merged after that tag was cut, it defers — those
   commits may depend on intentd work in no published sidecar, and the next
-  intentd alpha's pin-bump push chains into a cut that re-evaluates (push runs
-  with polling budget left retry in-run). A confirmed release-plz no-op also
-  exempts this freshness deferral (intent-hq/intent#6045): the latest
+  intentd alpha's pin-bump push or a later cron tick re-evaluates readiness.
+  A confirmed release-plz no-op also exempts this freshness deferral
+  (intent-hq/intent#6045): the latest
   `release-plz.yml` main-push run must succeed for the **exact current intentd
   main SHA**, with a successful job named
   `Release-plz no release needed: <baseline-tag>@<baseline-commit-sha>` in its
@@ -326,14 +325,15 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
 
 ## Coordinated Release Ordering
 
-The pipeline is event-chained, with hourly crons as backstops: intentd release PR
+The pipeline is event-chained, with cron retries as backstops: intentd release PR
 merge → tag + cargo-dist build → alpha manifest publish →
 `intentd-alpha-published` dispatch → cloudlands-fe pin bump
 (`auto-pin-intentd.yml`) → pin push to `main` → chained cloudlands-fe cut
 (`auto-cut-alpha.yml` push trigger) → promote each component's stable → monorepo
 pins advance automatically via the auto-bump workflow (no manual bump PR). Every
 link is fail-soft: when one is missing (e.g. `FE_DISPATCH_TOKEN` unset on intentd),
-the crons (:15 pin bump, :30 cut) keep everything working at cron cadence. A
+the crons (hourly at :15 for pin bumps, every ten minutes for frontend cut
+attempts) retry, with automated cuts still subject to the hourly floor. A
 cloudlands-fe stable promotion is followed by a website release notes PR on
 `intent-hq/intentapp.dev`, proposed for human review and outside the pipeline (see
 [fe/RELEASING.md § Promoting to Stable](./fe/RELEASING.md#promoting-to-stable)).

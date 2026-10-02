@@ -319,9 +319,9 @@ guardrails) lives in [docs/RELEASING.md](./docs/RELEASING.md). The agent-facing 
 - Releases are per-component and channel-based: merging a release PR publishes to the
   rolling **alpha** channel automatically; **beta** and **stable** are manual
   promotions of existing releases (no new build).
-- The pipeline is fully automated and event-chained (intentd alpha publish →
-  cloudlands-fe pin bump → chained fe alpha cut), with hourly crons as fail-soft
-  backstops when an event link is missed.
+- The pipeline is event-chained (intentd alpha publish → cloudlands-fe pin bump →
+  fe alpha cut), with cron backstops: hourly pin bumps and ten-minute frontend
+  cut attempts, subject to the automated hourly release floor.
 - **Never file routine pin-bump PRs** — the workflows own pin advancement (the monorepo
   `submodule-pins` check enforces this; see Phase 2 above). The one sanctioned exception
   is the cloudlands-fe `intentd.version` pin under the emergency-release procedure
