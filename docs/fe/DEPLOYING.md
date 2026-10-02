@@ -265,18 +265,45 @@ Installers are uploaded as short-lived workflow artifacts (7-day retention),
 version-suffixed `-manual.<run_number>`; nothing is published to
 `intent-hq/cloudlands-releases` and no auto-updater feed is uploaded.
 
-`build_macos=true` starts **both** native Mac jobs; there is no Intel-only
-dispatch input. Download `manual-macos-dmg-x64` for Intel or
-`manual-macos-dmg-arm64` for Apple Silicon from the run's artifacts. Each
-contains only its DMG; ZIPs are built and checked but not uploaded by this
-manual workflow. The summary reports success/downloads only after build,
+`build_macos=true` enables Mac builds. The optional `macos_arch` choice selects
+`both` (default), `arm64` (Apple Silicon only), or `x64` (Intel only). Omitting
+`macos_arch` keeps both native Mac jobs; selecting one architecture starts only
+that architecture's build job. `macos_arch` has no effect when `build_macos=false`.
+
+Download the selected architecture's artifact from the run:
+
+| `macos_arch` | Mac artifacts |
+| --- | --- |
+| `both` (default) | `manual-macos-dmg-arm64` and `manual-macos-dmg-x64` |
+| `arm64` | `manual-macos-dmg-arm64` |
+| `x64` | `manual-macos-dmg-x64` |
+
+Each artifact contains only its DMG; ZIPs are built and checked but not uploaded
+by this manual workflow. The summary reports success/downloads only after build,
 verification and upload succeed. `sign=false` keeps architecture checks but
 skips signature, Gatekeeper and stapled-ticket checks.
 
 ```bash
+# Both architectures (default; equivalent to -f macos_arch=both)
 gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
   --ref <feature-branch> -f build_macos=true -f sign=true
+
+# Apple Silicon only
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <feature-branch> -f build_macos=true -f macos_arch=arm64 -f sign=true
+
+# Intel only
+gh workflow run manual-signed-build.yml --repo intent-hq/cloudlands-fe \
+  --ref <feature-branch> -f build_macos=true -f macos_arch=x64 -f sign=true
 ```
+
+Add `-f smoke_macos=true` to run packaged fixture journeys on a separate
+disposable Mac runner; this requires `build_macos=true` and `sign=true`. Smoke
+runs once on Apple Silicon using `manual-macos-dmg-arm64` for `both` or `arm64`,
+or on Intel using `manual-macos-dmg-x64` for `x64`. `smoke_macos_scope` defaults
+to `full`; `fixture-correction` runs only the mock-provider/worktree-capture
+follow-up. Results and process receipts are uploaded as `packaged-macos-smoke`
+with 7-day retention.
 
 Leave Windows and Linux inputs false for a Mac-only run. This dispatch creates
 test installers, not a public release or an end-to-end updater test. See the
