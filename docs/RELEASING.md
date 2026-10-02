@@ -191,14 +191,38 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   distribution repo, not the source repo. (intentd differs: cargo-dist publishes
   daemon archives to the source repo's releases, and its channel manifests are
   dual-published — see the intentd section above.)
-- The Release PR merge is automated by `auto-cut-alpha.yml`, which is event-chained
-  with an hourly cron backstop: the pin-bump squash merge (a push to `main` touching
-  `intentd.version`, made with `RELEASE_PAT` so it triggers workflows) chains straight
-  into a cut run that polls (30s interval, up to 15 min) for release-please to refresh
-  the Release PR and for CI Gate to go green, then merges — so an intentd change ships
-  in the **same fe alpha cycle**. The hourly cron at :30 is the backstop and the
-  normal path for fe-only changes; cron and manual-dispatch runs keep the
-  check-once-and-exit behavior (no polling). An open pin-bump PR (branch
+- The Release PR merge is automated by `auto-cut-alpha.yml`, which already triggers
+  on **any push to main**, including frontend changes and the pin-bump squash merge
+  made with `RELEASE_PAT`. The cut's own `chore(release):` merge push skips the job.
+  Eligible push runs poll every 30 seconds for up to 15 minutes for release-please
+  to refresh the Release PR and for CI Gate to go green. A push touching
+  `intentd.version` also waits for the Release PR head to carry the pushed pin.
+  This starts a release attempt on landing; readiness, queue backlog, and the
+  subsequent alpha build and publication still determine when binaries ship.
+  The hourly cron at :30 retries deferred or missed attempts. Cron and
+  manual-dispatch runs check once and exit without polling.
+- Push and cron runs normally defer when the latest frontend `vX.Y.Z` tag is less
+  than 60 minutes old. A push gains an exemption **only from this throttle** when
+  `scripts/intentd-pin-advance.sh` proves that the actual pin version advanced
+  between the push's before/after commits, current main still carries that pin,
+  and the latest frontend release tag carries an older pin. Unchanged or
+  comment-only pins, rollbacks, superseded pins, already-carried pins, and missing
+  or unreadable proof gain no exemption. Immediately before merge, the workflow
+  reads the latest tag again and repeats the proof for an exempt run, even if the
+  tag has not changed. A tag that moved during readiness polling also requires
+  this proof; otherwise the cut defers. Existing tag/date lookup fail-open
+  behavior and the manual-dispatch throttle bypass remain unchanged.
+- All cut attempts share the `auto-cut-alpha` concurrency group with
+  `cancel-in-progress: false` and `queue: max`: one runs at a time, and later
+  ordinary pushes retain pending pin attempts. GitHub allows at most 100 pending
+  runs and cancels additional arrivals when the queue is full; a backlog can delay
+  a cut, and the hourly cron remains the fallback. See
+  [GitHub concurrency controls](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+- The pin throttle exemption preserves every dependency and readiness check:
+  in-flight intentd builds, backend freshness, open pin-bump PRs, `hold-release`,
+  Release PR identity and pin/head freshness, draft and mergeability checks,
+  CI Gate on the current head, and unresolved review threads with human
+  participation. An open pin-bump PR (branch
   `auto/intentd-pin`) defers the cut — the pin must land first so the alpha carries
   the new sidecar, and its merge push then chains into a cut. In-flight guardrail: when
   `intent-hq/intentd` has a semver tag newer than the published alpha manifest and
