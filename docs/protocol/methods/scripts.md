@@ -2,6 +2,10 @@
 
 ### 5.8 `script.*`
 
+The prepared [script monitor extension (§5.8a)](./script-monitors.md) adds
+run identity, one-shot agent monitoring and guarded user cancellation under
+`scriptMonitors: 1`. Existing script controls keep their current semantics.
+
 The [prepared service readiness extension](#service-readiness-prepared-additive-extension)
 adds optional `healthUrl` / `readyPattern` definition inputs and `ready` /
 `readiness` runtime fields. These are capability-gated, not yet shipped.

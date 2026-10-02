@@ -62,6 +62,7 @@ structural integrity only, not executed native capture or durable ACK acceptance
 | §5.6 `git.*` | [methods/git.md](./methods/git.md) |
 | §5.7 `pr.*` | [methods/pr.md](./methods/pr.md) |
 | §5.8 `script.*` | [methods/scripts.md](./methods/scripts.md) |
+| §5.8a Script run monitors (prepared) | [methods/script-monitors.md](./methods/script-monitors.md) |
 | §5.9 `browser.*`, `terminal.*`, `file.*` | [methods/files-terminal-browser.md](./methods/files-terminal-browser.md) |
 | §5.10 `event.*` (query/aggregation) | [methods/events-query.md](./methods/events-query.md) |
 | §5.11 `crossWorkspace.*`, `primitive.*`, `specialist.*`, `repo.*` | [methods/misc-namespaces.md](./methods/misc-namespaces.md) |
