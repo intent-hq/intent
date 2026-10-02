@@ -448,16 +448,16 @@ ${prMonitors ? '  waitingOnPrMonitors?: { monitorId: string }[];\n' : ''}${scrip
   return files;
 }
 
-test('CLI: AgentLite.waitingOnScriptMonitors allows daemon-first adoption with the pinned frontend', async (t) => {
+test('CLI: missing AgentLite.waitingOnScriptMonitors is rejected after frontend adoption', async (t) => {
   const root = await fixture(t, scriptMonitorFixtureFiles());
-  const { code, stdout, stderr } = await runCli(root);
-  assert.equal(code, 0, stderr);
-  assert.match(stdout, /Protocol field parity holds .*AgentLite → AgentSession/);
-  assert.doesNotMatch(stderr, /: error: |stale ignore entry waitingOnScriptMonitors/);
+  const { code, stderr } = await runCli(root);
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /emitted field AgentLite\.waitingOnScriptMonitors \(Rust waiting_on_script_monitors\) is missing from AgentSession/);
+  assert.match(stderr, /check-protocol-field-parity: 1 error\(s\)/);
 });
 
-test('CLI: staged script monitor adoption still rejects another missing optional agent field', async (t) => {
-  const root = await fixture(t, scriptMonitorFixtureFiles({ prMonitors: false }));
+test('CLI: adopted script monitors still reject another missing optional agent field', async (t) => {
+  const root = await fixture(t, scriptMonitorFixtureFiles({ scriptMonitors: true, prMonitors: false }));
   const { code, stderr } = await runCli(root);
   assert.equal(code, 1);
   assert.match(stderr, /emitted field AgentLite\.waitingOnPrMonitors \(Rust waiting_on_pr_monitors\) is missing from AgentSession/);
@@ -465,21 +465,20 @@ test('CLI: staged script monitor adoption still rejects another missing optional
   assert.doesNotMatch(stderr, /emitted field AgentLite\.waitingOnScriptMonitors/);
 });
 
-test('CLI: frontend script monitor adoption warns to retire its manifest entry', async (t) => {
+test('CLI: adopted script monitors pass without a retired manifest warning', async (t) => {
   const root = await fixture(t, scriptMonitorFixtureFiles({ scriptMonitors: true }));
-  const { code, stderr } = await runCli(root);
+  const { code, stdout, stderr } = await runCli(root);
   assert.equal(code, 0, stderr);
-  assert.match(stderr, /: warning: AgentLite → AgentSession: stale ignore entry waitingOnScriptMonitors .*https:\/\/github\.com\/intent-hq\/cloudlands-fe\/pull\/3104.*AgentSession now declares it; remove the entry from PAIRS/);
-  assert.doesNotMatch(stderr, /: error: /);
+  assert.match(stdout, /Protocol field parity holds .*AgentLite → AgentSession/);
+  assert.doesNotMatch(stderr, /: error: |stale ignore entry waitingOnScriptMonitors/);
 });
 
-test('CLI: daemon without script monitors warns about the staged manifest entry', async (t) => {
+test('CLI: daemon without script monitors has no retired manifest warning', async (t) => {
   const { files } = cliFixtureFiles();
   const root = await fixture(t, files);
   const { code, stderr } = await runCli(root);
   assert.equal(code, 0, stderr);
-  assert.match(stderr, /: warning: AgentLite → AgentSession: stale ignore entry waitingOnScriptMonitors .*AgentLite no longer emits it; remove the entry from PAIRS/);
-  assert.doesNotMatch(stderr, /: error: /);
+  assert.doesNotMatch(stderr, /: error: |stale ignore entry waitingOnScriptMonitors/);
 });
 
 test('CLI: stale ignore entries print warnings to stderr and exit 0', async (t) => {
