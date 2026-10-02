@@ -14,6 +14,26 @@ const MODES = ['direct', 'history', 'prefix', 'auto'];
 const DEFAULT_ROOT = fileURLToPath(new URL('../docs/protocol/fixtures/transfer-selection/', import.meta.url));
 const GENERATOR = 'intent-services/transfer-selection-contract';
 const TIME = '2000-01-01T00:00:00Z';
+export const GOLDEN_FILES = Object.freeze(['public-sessions.json', 'public-sessions.desktop-control-v1.json']);
+
+// Old harnesses predate the declaration. New expectations must be selected by
+// committed source, never guessed from the response or supplied by the caller.
+export async function resolveGoldenPath({ fixtureRoot, intentdRoot }) {
+  const marker = path.join(intentdRoot, 'scripts/transfer-selection-expectation.json');
+  let stat;
+  try { stat = await fs.lstat(marker); }
+  catch (error) {
+    if (error.code === 'ENOENT') return path.join(fixtureRoot, GOLDEN_FILES[0]);
+    throw error;
+  }
+  requireValue(stat.isFile(), `transfer-selection expectation must be a regular file: ${marker}`);
+  let declaration;
+  try { declaration = JSON.parse(await fs.readFile(marker, 'utf8')); }
+  catch { throw new Error(`invalid JSON in transfer-selection expectation ${marker}`); }
+  keys(declaration, 'version', 'transfer-selection expectation');
+  equal(declaration.version, 'desktop-control-v1', 'transfer-selection expectation version');
+  return path.join(fixtureRoot, GOLDEN_FILES[1]);
+}
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(message);
@@ -240,6 +260,13 @@ async function main() {
     generated: { type: 'string' }, fresh: { type: 'string' },
     'intentd-revision': { type: 'string' }, 'generator-sha256': { type: 'string' },
   } });
+  if (Object.keys(values).every((key) => key === 'fixture-root')) {
+    const fixtureRoot = resolveFixtureRoot({ fixtureRoot: values['fixture-root'] });
+    for (const file of GOLDEN_FILES) {
+      console.log(`${file}: ${await inspectFixtures({ fixtureRoot, generated: path.join(fixtureRoot, file) })}`);
+    }
+    return;
+  }
   console.log(await inspectFixtures({
     fixtureRoot: values['fixture-root'], inputsOnly: values['inputs-only'],
     generated: values.generated, fresh: values.fresh,
