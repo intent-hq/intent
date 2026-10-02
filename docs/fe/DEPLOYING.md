@@ -50,8 +50,10 @@ version number by hand.
    including sidecar-pin updates, defer while the latest frontend release
    tag is less than 60 minutes old; manual `workflow_dispatch` retains its
    throttle override. Existing tag/date lookup fail-open behavior is unchanged.
-   Release PR freshness, the pushed pin, CI Gate, and other readiness guards
-   must still pass. Every run type defers the cut while an intentd release
+   Scheduled retries also require the Release PR to carry main's current pin
+   and a head no older than the newest unshipped releasable commit. Release PR
+   freshness, pin checks, CI Gate, and other readiness guards must still pass.
+   Every run type defers the cut while an intentd release
    build is in flight (a semver tag on
    `intent-hq/intentd` newer than the published alpha manifest and younger
    than 90 minutes; fails open on any lookup error). The `hold-release`

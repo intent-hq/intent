@@ -199,8 +199,13 @@ triggered by pushing a `sitter-vX.Y.Z` tag.
   if it is not ready, without sleeping or polling. No open Release PR means no
   cut; release-please owns the PR for unshipped releasable changes. Pushes with
   releasable changes require a refreshed Release PR head, and a push touching
-  `intentd.version` requires that head to carry the pushed pin. A deferred run
-  leaves the next attempt to a later push or cron tick. GitHub scheduling, queue
+  `intentd.version` requires that head to carry the pushed pin. Scheduled retries
+  require the Release PR pin to match current main and its head to be at least
+  as recent as the newest unshipped releasable commit. The latter check scans
+  every page of the latest-release-to-main comparison, so later docs or CI
+  commits do not hide a pending release-worthy change. Manual-dispatch and
+  lookup-failure policies remain unchanged. A deferred run leaves the next
+  attempt to a later push or cron tick. GitHub scheduling, queue
   backlog, readiness, and the subsequent alpha build and publication still
   determine when binaries ship; the ten-minute schedule is an attempt cadence.
 - All automated push and cron runs defer when the latest frontend `vX.Y.Z` tag
