@@ -2,7 +2,19 @@
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `11.1` — registered-root file reads, additive prepared contract; not a shipped-version claim.
+**Documented version:** `11.2` — single-node platform launch, additive prepared contract; not a shipped-version claim.
+
+**Prepared 11.2 — single-node platform launch.** The
+[platform contract](./model-platform-routing.md) widens placement with independent
+optional OS/architecture, defines one named node with multi-agent capacity and
+atomic launch identity, and adds safe model discovery/errors. Complete
+old placement objects and no-policy omission remain valid. Advertise
+`agentPlatformRouting: 1` only with `agentNodes: 1` and complete implementation;
+clients cannot infer support from the numeric version. No new methods/events or
+private node/checkpoint/journal versions are allocated. The prior prepared 11.1
+registered-root file-read contract remains independent and unchanged. Additive
+docs precede consumer merges; recheck allocations against main before implementation
+merge, and land daemon protocol consumers before frontend consumers.
 
 **Private nodeProtocol 3 — prepared capture contract.** This is separate from the
 public documented version above. The [private capture agreement](./node-link.md#private-checkpoint-capture)

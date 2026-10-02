@@ -22,7 +22,10 @@ microVM proposal's 10.10 number. CoW API removal requires a separate major bump
 and advertises `agentIsolation: 2` only when retirement is complete. That value
 requires both node flags. No version/flag is advertised by this docs change.
 
-Clients gate placement and hub controls on those flags. The existing client→head
+Clients gate existing complete placement and hub controls on those flags.
+The [widened platform contract](../model-platform-routing.md) additionally requires
+`agentPlatformRouting: 1`; its public 11.2 reservation changes no private formats.
+The existing client→head
 WSS transport, subscription recovery, principal identity and workspace membership
 rules remain intact. The FE never connects to the node-link endpoint.
 
@@ -101,82 +104,53 @@ identity, but no network credential, listener or second daemon process.
 
 #### Placement and creation
 
-The current wire entry point is `agent.create`, **not** `agent.spawn`. Add optional
-`placement` to `agent.create`, single-task `agent.delegate`, batch delegation
-defaults/per-task entries, `agent.wakeOrCreate.create.placement` when creating, and
-`workspace.create.initialAgent`. MCP create/delegate forward the same object;
-no new spawn binding is introduced. Existing agents retain their resolved placement
-on wake; changing defaults never migrates them.
+The current wire entry point is `agent.create`, **not** `agent.spawn`.
+[Single-node platform launch](../model-platform-routing.md) defines the
+prepared 11.2 additive extension: optional independent placement.os/arch, whole-
+object defaults, one named configured node and atomic multi-agent capacity/launch
+ownership. Architecture-only requests such as `{"placement":{"arch":"x86_64"}}`
+require `agentPlatformRouting: 1` in addition to `agentNodes: 1`; old complete
+`{target,checkout,os?,nodeId?,exclusive?}` objects remain valid. Older supporting
+daemons accept only the complete shape. Unknown-field tolerance is not support.
 
-```json
-{
-  "target": "remote",
-  "checkout": "isolated",
-  "os": "linux",
-  "nodeId": "node-build",
-  "exclusive": true
-}
-```
+The extension applies to create, single/batch delegate, wakeOrCreate's creation
+branch and workspace initial-agent creation. Specialist runsOn and manager-owned
+Workspace.defaultAgentPlacement use the same whole-object validation. The linked
+contract specifies exact precedence, legacy isolation conflict rules and head
+single-node admission. Omission preserves local shared/worktree/CoW behavior
+unless an existing specialist/workspace default applies, without a prompt. Existing
+assigned agents retain placement when woken. Workspace checkoutMode cow remains.
 
-`target` is required (`local | remote`); `checkout` is required (`shared | worktree
-| isolated`); `os` and `nodeId` are optional exact filters; `exclusive` defaults
-false. Unknown/empty objects are errors. `target: local` selects only the built-in
-node; OS mismatch fails. `target: remote` selects only registered static nodes,
-never the local node. A remote checkout must be `isolated` in phase 1. Shared and
-worktree preserve existing local semantics. Local isolated requires
-`localNodeIsolation: 1`, creates a new checkout and never shares the parent.
-An isolated checkout is filesystem separation by path, **not** an OS security
-boundary on a multi-agent static host. `exclusive: true` additionally reserves all
-Intent placement capacity on that static node (must be remote/isolated) and requires no other placed agents;
-even idle agents hold this reservation. It does not create a VM or separate user.
-It grants no ownership of the physical host and does not prevent the operator's
-unrelated processes from running there.
+An isolated checkout is filesystem separation, not an OS security boundary.
+Exclusive reserves Intent capacity on a remote node, not ownership of the user's
+physical host. Multiple-node ordering and pools are deferred.
+Admission reserves configured-node capacity durably before dispatch; uncertain
+issuance retains identity and charge. Hydration failure does not itself prove
+cleanup or free reservations. Existing first-message preparation and live admission
+gates remain mandatory. No queue or local/shared fallback is added. A later
+hydration failure leaves the created agent in error with placementError, emits
+agent:failed and resolves the first-message gate to failure. Its reservation stays
+charged until actual native/private/capture cleanup settles. The
+[private preparation gate](../node-link.md#private-preparation-lifecycle) waits for
+verified recursive hydration/attachments and actual provider setup, then rechecks
+live authority; a ready receipt is not admission. Retained same-node resources
+cannot be reused, while separately fenced last-checkpoint recovery on another
+node retains the existing loss contract without waiting for unreachable old-node
+cleanup. Errors/discovery preserve correlated OS+arch alternatives
+and existing availableOs, without exposing administrator node inventory.
 
-Precedence is per-task explicit placement → call-level explicit placement →
-specialist `runsOn` → workspace `defaultAgentPlacement` → today's local
-shared/worktree resolution. Each layer supplies a whole validated object; fields
-are never merged across layers. `defaultAgentPlacement` is an optional persisted
-Workspace field set through `workspace.update`, default absent; null clears it.
-Only workspace managers may change it. An explicit local object overrides a remote
-default. Omitted placement does not itself request isolation or remote execution.
-Legacy `isolation` and an effective placement object cannot both select a mode:
-reject that combination. During the additive stage only, absence of placement
-retains existing CoW resolution; at retirement the old selection is rejected.
-
-Choose among eligible, connected, non-draining nodes with matching version,
-credential support, agent slots and memory reservation. Prefer greatest free
-agent slots, then an existing reusable checkout for this agent, then lexical node
-ID. Head serializes reservations and node independently admits them before spawn;
-failed admission releases its reservation only after confirmed cleanup and capture
-settlement. No match returns `-32602` with
-`data: { code: "placement-unavailable", availableOs: [...], retryable: true }`
-without creating an agent. No queue and no local/shared fallback. A later hydrate
-failure leaves the created agent in `error` with `placementError` and emits
-`agent:failed`; the first-message gate resolves to failure. Release its reservation
-only after actual native/private/capture cleanup settles; uncertain cleanup retains
-ownership and charge. The [private preparation gate](../node-link.md#private-preparation-lifecycle)
-waits for verified recursive hydration/attachments and actual provider setup, then
-rechecks live authority before delivery. A ready receipt is not admission. Retained
-same-node resources cannot be reused, but separately fenced last-checkpoint recovery
-on another node follows the existing loss contract without waiting for unreachable
-old-node cleanup. This adds no public lifecycle method.
-Batch tasks retain normal dependency/conflict classification and expose placement
-failure per attempted entry; one failed entry never starts against another mode.
-
-Every placed agent's create/get/list/subscription projection includes `nodeId`,
-`leaseId`, `placement` (fully resolved), `effectiveIsolation` and `nodeState`.
-Provisioning reports `effectiveIsolation: "pending"`; settled isolated placement
-reports `"isolated"` on **both** local and remote nodes (location is `placement.target`,
-not an isolation value); shared/worktree keep their existing values. Optional
-`checkpoint: { id, assignmentEpoch, captureRevision, capturedAt, committedAt }`
-means the last **successful current** hub
-checkpoint, and `placementError: { code, detail }` appears only on failure.
-Epoch/revision are decimal u64 strings with the freshness ordering defined in the
-checkpoint contract; replayed fields with a lower pair cannot replace newer state.
-`nodePath?` is diagnostic opaque text; no frontend/head API resolves it as a local
-path. UI offers local shared/worktree, local isolated and available remote
-isolated placement, labels capacity failures, and uses hub merge/discard instead
-of CoW actions. No Nodes management or credential administration UI is required.
+Placed agent projections carry nodeId, leaseId, resolved placement,
+effectiveIsolation, nodeState and genuine nodeName. Provisioning reports
+`effectiveIsolation: "pending"`; settled isolated placement reports `"isolated"`
+on local and remote nodes; shared/worktree retain their existing values.
+Optional `checkpoint: { id, assignmentEpoch, captureRevision, capturedAt,
+committedAt }` is the last successful current hub checkpoint; stale numeric
+epoch/revision observations cannot replace newer state. Failure adds
+`placementError: { code, detail }`. nodePath is diagnostic opaque text, never a
+frontend/head-local filesystem path. Models request constraints; clients show real
+node names when available and retain neutral identity otherwise. No manual
+placement picker or required-choice dialog is specified. Existing management and
+hub merge/discard remain available.
 
 #### Lifecycle and events
 

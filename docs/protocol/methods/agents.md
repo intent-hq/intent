@@ -1647,3 +1647,22 @@ paths, node/lease/checkpoint fields, new halted/resuming statuses, and replaceme
 hub operations. These fields are not implemented at the pin. Current CoW methods
 and behavior above remain until the separately versioned removal lands; the final
 removal has no alias or live-sandbox migration.
+
+### Prepared model platform routing (11.2)
+
+[Model-directed routing](../model-platform-routing.md) specifies the widened
+placement object on create/delegate/batch and wakeOrCreate.create, optional durable
+idempotency keys, exact batch retry behavior and actual MCP forwarding (including
+the compatible trailing wake options argument). It preserves existing model/provider
+resolution and assigned-agent wake semantics. Architecture-only inputs require
+agentPlatformRouting 1, not merely agentNodes 1. Discovery/errors must render safe
+correlated platform pairs through the model-visible String boundary.
+
+For effective placed operations under agentPlatformRouting 1, the exact
+[per-method launch responses](../model-platform-routing.md#per-method-launch-responses)
+retain all required success fields in the tables above. Without a real persisted
+agent, pending/failed/uncertain is a structured -32603 error, never an invented
+agent or partial success. Batch error rows carry typed launch correlation; keyed
+retries preserve held/skipped classification and only reconcile already owned
+pending rows, overriding stateless batch reclassification for that scoped path.
+Legacy unplaced calls retain their existing envelopes and retry behavior.
