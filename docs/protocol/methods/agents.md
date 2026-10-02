@@ -764,7 +764,10 @@ controls authorization; the alias itself grants no rights. Reaffirming a migrate
 hold, saving or cancelling it must address that `editingMessageId`, rather than
 another absorbed ID or the survivor's different canonical ID. Repeated holds keep
 the same alias. Releasing the hold removes the field, and daemon restart clears
-it with the existing editing-hold reset.
+it with the existing editing-hold reset. A client without an existing local draft
+for the mapped identity disables new edit initiation on a migrated held row until
+release: the combined canonical content is not the original contribution's draft
+baseline. A client already editing that exact mapped identity may continue.
 
 For example, with A2 held for editing, A1's handback produces a single row
 `{ id: "A1", editing: true, editingMessageId: "A2", ... }`. The A2 editor keeps
@@ -888,6 +891,7 @@ evidence.
 | Two distinct held rows combine while their editors contain unsaved text | Oldest held identity remains mapped; unmapped local draft is recoverable under its original ID; unsafe save is blocked by client and daemon, even for its author |
 | Same principal, two clients editing the same unchanged canonical identity | Shared hold and existing last-save-wins behavior; repeated holds do not consume surrounding text |
 | Two clients share migrated A2 alias; first client releases, second saves | Alias field is absent after release; second save returns the stale-edit conflict without mutation and keeps the local draft recoverable |
+| New client sees a migrated held row without an existing mapped draft | New edit initiation is disabled until release; existing correctly mapped local editors continue |
 | Restart while a migrated edit hold exists | Editing hold and editor alias reset together; an old absorbed edit alias cannot overwrite the combined canonical entry |
 | Foreign caller, displaced alias, removed survivor, or deleted original editor row | No unauthorized mutation, draft resurrection or guessed migration; a stale alias never targets an unrelated row |
 | Persisted failed-turn row restored beside fresh human input | Delivered history stays immutable and cannot become a merge target or a skipped human barrier |
