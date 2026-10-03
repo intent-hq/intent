@@ -23,6 +23,7 @@ continue to grant `collaborator`, not `owner`.
 
 | Flag | Value | Complete contract advertised |
 | --- | --- | --- |
+| `invitationAccountSearch` | `1` | Bounded owner-authorized `host.invite.searchAccounts` for GitHub and the selected GitLab instance, independent of repository connection |
 | `hostMembership` | `1` | Host roles, effective workspace management, scoped host invitations, removal and live invalidation in this section |
 | `collaborationIdentity` | `1` | The separate `identity.*` auth surface and purpose-aware proof calls below |
 | `personalPairing` | `1` | Persistent current-principal `pairing.getSelfInfo`, including live credential revocation |
@@ -151,12 +152,19 @@ execution read documented later. No host method takes a `workspaceId`.
 | host.members.list | — | `{ members: HostMember[], revision }` — primary first, then active members by `addedAt`, tie-break `principalId`; no workspace-only guests |
 | host.members.remove | principalId (req) | `{ removed: boolean }` — idempotent when not an active host member; the primary is `-32602 { code: "invalid-params" }`. A real removal performs the revocation transaction below |
 | host.invite.create *(fast path)* | pinLogin (req), pinProvider (req, `"github"` or `"gitlab"`), pinHost? | `{ invite: HostInvite, secret, url, hosts: [], port, fingerprint, version: 1, tcAddress }` — a pinned, single-use invitation to be a host member, expiring exactly seven days after creation |
+| host.invite.searchAccounts | provider (req, `"github"` or `"gitlab"`), host?, query (req), limit? | `{ users: InvitationAccountSuggestion[] }` — bounded public account suggestions, never identity proof or invitation admission |
 | host.invite.list | — | `{ invites: HostInvite[] }` — open host invites, ordered by `createdAt`, tie-break `id`; optional `url` follows the existing stored-secret/envelope availability rule |
 | host.invite.revoke | inviteId (req) | `{ revoked: boolean }` — false if already closed; unknown/wrong-scope ID is `-32602 { code: "not-found" }` |
 
 ```ts
 type HostRole = "owner" | "member" | "guest";
 type Identity = { provider: "github" | "gitlab"; host: string; externalUserId: string };
+type InvitationAccountSuggestion = {
+  identity: Identity;
+  login: string;
+  name: string | null;
+  avatarUrl: string | null;
+};
 type HostMember = {
   principalId: string;
   hostRole: "owner" | "member";
@@ -173,6 +181,60 @@ type HostInvite = {
   url?: string; // always present on create; never serialize secret/hash as row fields
 };
 ```
+
+##### Invitation account search (additive, prepared)
+
+`host.invite.searchAccounts` is a daemon-global read. It uses the same
+administrator authorization as `host.invite.create`: owner wire callers and
+trusted internal daemon/agent callers are allowed; wire members, workspace guests
+and unbound callers are refused before provider lookup (`-32003`). It requires
+neither repository authentication nor a linked collaboration identity. It emits
+no event, creates no invitation and writes or refreshes no credential.
+
+Clients enable autocomplete only when the `client.hello` result advertises
+`server.capabilities.invitationAccountSearch: 1`. Missing/unknown support or an
+unexpected `-32601` keeps manual account entry. Debounce typing (about 250 ms),
+request only after two characters, and discard replies when provider, canonical
+host, query or connection changes. A selected result is only a suggestion:
+`host.invite.create` still definitively resolves and pins the entered account.
+
+`provider` is explicit. Omitted `host` defaults to `github.com` or `gitlab.com`,
+independently of repository settings. GitHub accepts only `github.com`; GitLab
+accepts the existing bare `host[:port]` spelling (trimmed and lowercased), not a
+URL, path, query, fragment or userinfo. Only the selected provider/host is searched;
+no cross-provider fallback occurs. Daemon-configured API origin overrides keep
+existing invite semantics and are never accepted as a search request parameter.
+
+`query` is trimmed and one leading `@` removed. GitHub allows up to 39 ASCII
+letters, digits or hyphens; GitLab up to 255 ASCII letters, digits, dots,
+underscores or hyphens. Empty/single-character queries return `{ users: [] }`
+without provider I/O. Invalid characters, overlong queries, malformed hosts or
+unsupported providers are `-32602`. `limit` is an integer from 1 to 10, default 8;
+a supplied null, non-integer or out-of-range value is `-32602`.
+
+GitHub uses public `GET /search/users` restricted to `in:login type:user`.
+GitLab uses `GET /api/v4/users?search=…&per_page=…&page=1`, whose username/name
+matching is fuzzy. Requests encode the query, fetch one page, cap returned rows
+at `limit`, bound the upstream body to 256 KiB and retain the existing 10-second
+connect / 30-second request timeout. Redirects are refused. Rows contain only the
+qualified stable positive numeric ID (as `externalUserId` string), canonical
+host, login and nullable name/avatar. Duplicate IDs and invalid usernames/IDs
+are omitted; emails, credentials and provider response bodies are never returned.
+
+GitHub search is anonymous. GitLab searches publicly first; only a 401/403 may
+retry once with the daemon's existing credential for the same bound canonical
+instance, under the existing invite credential-origin policy. No credential is
+sent to a different selected host or redirect target. A restricted directory
+that still refuses access yields `-32603` with
+`data: { code: "identity-unverifiable", host }`. Rate limiting yields `-32603`
+with `data: { code: "rate-limited" }`. Disabled/absent directories, network errors,
+oversized or malformed replies remain `-32603` errors, never successful empty
+results. Clients show a localized search error and keep manual entry available;
+search failure does not instruct the user to connect a repository account.
+
+Provider references: [GitLab Users API](https://docs.gitlab.com/api/users/),
+[GitLab REST authentication](https://docs.gitlab.com/api/rest/authentication/),
+and [GitHub user search](https://docs.github.com/en/rest/search/search#search-users).
 
 The creator's **Intent authority** suffices. Neither host nor workspace invitation
 issuance requires a repository connection, working repository token, or external

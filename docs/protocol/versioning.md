@@ -11,6 +11,13 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `13.2` — prepared Home backend additions; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
 
+**Invitation account search (additive, prepared).** `host.invite.searchAccounts`
+(§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
+`client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;
+older daemons retain manual invitation account entry. Search never replaces
+create-time identity pinning or owner authorization. This is one additional router
+method; the historical version counts below describe their respective snapshots.
+
 **Version 13.2 — Home backend prerequisites (additive, prepared).**
 Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
 (§5.27): three read-only router methods, for **407 / 352 / 55** implemented
