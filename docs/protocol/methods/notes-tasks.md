@@ -436,9 +436,10 @@ behavior is preserved, not replaced with new fatal errors.
 examines the entire post-write source, including a pre-existing distant `@@@task`
 fence; reanchoring can repair orphan/partial anchors and scrub distant phantom UUID
 markers. The partial path preserves these semantics, not a false promise that the
-caller range is the complete authoritative footprint. Define three immutable source
-states: `base`, `callerResult` (only addressed splices), and `final` (existing canonical
-effects). Effects pages enumerate every additional replacement as `{ kind:
+caller range is the complete authoritative footprint. Define immutable source states:
+`base`, `callerResult` (only addressed splices), `preConversionCanonical` (completed
+initial anchor repair/phantom scrub), and `final` (all existing canonical effects).
+Effects pages enumerate every additional replacement as `{ kind:
 "sourceEffect", reason: "task-conversion" | "anchor-repair" | "phantom-scrub" |
 "task-marker-projection", inputState, outputState, range, insertedLength,
 beforeDigest, afterDigest, detailRef }`. Intermediate state tokens allow multiple
@@ -451,9 +452,17 @@ are not permission for formatting normalization or arbitrary rewriting. Live mar
 IDs with valid comments and non-UUID lookalike documentation remain intact.
 
 A task conversion business warning preserves existing convert-with-warning behavior.
-A recoverable conversion failure uses a transaction savepoint, rolls back that
-conversion/children and retains callerResult with the legacy no-conversion outcome;
-no half-created child can commit. Fatal source/index/receipt transaction failure
+A recoverable conversion failure uses a transaction savepoint **after** initial
+reanchoring/phantom scrub and its canonical write, version snapshot and comment
+orphan-state updates. It rolls back only conversion/children and any subsequent
+conversion-specific repair, effects and version snapshots. The final source is
+`preConversionCanonical`, never the uncleaned callerResult; completed initial repair
+effects, annotation invalidations and history remain. This matches the existing
+write path's cleaned-content fallback when auto-conversion returns no refetched note.
+No half-created child can commit. The receipt's mapping/effects/inverse references
+describe this actual final source, and epochs describe only committed changes;
+no transient conversion revision or child ID escapes the savepoint. Publication
+and receipt remain atomic with the outer write. Fatal source/index/receipt transaction failure
 rolls back everything. Existing version snapshots (including a distinct conversion
 snapshot where applicable) retain their meaning inside the transaction; **one
 logical editor history operation** does not mean deleting an existing version-history
@@ -840,7 +849,13 @@ Implementation locations and required evidence (not implemented by these docs):
 Measure backend query work and renderer transient/resident allocations separately.
 The machine-readable [notes fixtures](../fixtures/notes/contract.json) and
 `make check-note-pagination-contract` (also in `make consumer-checks`) validate this
-prepared contract. Component tests must execute the same cases against actual RPCs,
+prepared contract. `fixtureRepresentations` distinguishes full JSON-RPC frames from
+result objects and record-only scenarios. Result objects are wrapped in complete
+response frames before wire-budget checks; staged `appendFrames` are mandatory
+inputs to stream validation, so payload hash checks cannot bypass envelope budgets.
+Reply validation includes required fields and ordering across page boundaries;
+subscription fixtures use the exact pageState frame in §6.
+Component tests must execute the same cases against actual RPCs,
 storage fault injection and FE reducers before capability advertisement.
 Fixture arithmetic, encoded JSON sizes and same-process models are
 **specification validation**, not proof of database isolation, heap limits, bounded
@@ -1282,4 +1297,3 @@ clients can ask "who is working on this task?".
   "agentId":"agent-alpha","createdAt":1750000000000
 } } }
 ```
-

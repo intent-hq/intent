@@ -523,7 +523,16 @@ Both require one note and return the existing subscription ID/seq envelope.
 Unknown projection values are invalid on supporting daemons. Omission preserves
 all existing snapshot/delta behavior; `slim` remains its existing list projection.
 
-The pageState seq-0 snapshot and subsequent payloads are the same bounded state:
+For this projection, seq-0 and **every subsequent push** use `params.kind:
+"snapshot"` and a single object in `params.snapshot` (not a collection array).
+There is no `params.payload` or `params.delta`. Each push replaces the state tuple,
+subject to the generation guard below. The complete frame is:
+
+```json
+{"jsonrpc":"2.0","method":"subscription.push","params":{"subscriptionId":"sub-a","kind":"snapshot","seq":0,"snapshot":{"kind":"notePageState","scope":{"backendId":"db-a","workspaceId":"ws-a","noteId":"spec","noteInstanceId":"inc-a"},"stateGeneration":"10","sourceRevision":"r:7","attributionGeneration":"a:2","attributionState":"ready","commentRevision":"c:4","deleted":false,"invalidation":"all"}}}
+```
+
+Both channels use this frame, with their own subscriptionId/seq. The bounded state is:
 `{ kind: "notePageState", scope, stateGeneration, sourceRevision, attributionGeneration,
 commentRevision, deleted, invalidation: "all" }`. Scope is the complete NoteScope
 from §5.2. Epochs are opaque strings; pending attribution uses its current generation
@@ -556,7 +565,7 @@ An equal-generation/different-tuple frame is a protocol error: retain drafts,
 invalidate clean data and reacquire an authoritative snapshot. Page responses never
 advance this shared tuple; they populate only their matching epoch/generation-owned
 request cache. Thus a delayed comment-channel snapshot cannot restore an old source
-revision after a newer note-channel delta, and an attribution-only update cannot
+revision after a newer note-channel state snapshot, and an attribution-only update cannot
 roll comments backward. After reconnect, subscribe/snapshot and compare this same
 persisted generation before admitting cached responses.
 

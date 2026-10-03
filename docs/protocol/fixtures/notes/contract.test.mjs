@@ -6,6 +6,7 @@ import {
   utf8, wireBytes, digest, boundary, spliceError, applySourceSplices, mapPoint,
   assertSourcePage, cursorError, overlapIds, assertRanges, assertOperationTrace,
   admitState, assertStream, frozenSource, assertUnchangedGaps,
+  assertAppendFrame, assertMetadataFrame, assertReplyFrames, assertPageStateFrame,
 } from './contract.mjs';
 
 const f = JSON.parse(await readFile(new URL('./contract.json', import.meta.url), 'utf8'));
@@ -190,16 +191,16 @@ test('annotation summaries, reply pages, fragments and events remain bounded', (
       assert.ok(row.bodyRef);
     }
   }
-  assert.deepEqual(c.pages.flatMap(p => p.result.items.map(r => r.commentId)), ['root', 'reply-1', 'reply-2']);
+  assert.deepEqual(c.pages.flatMap(p => p.result.items.map(r => r.commentId)), ['reply-1', 'reply-2', 'root']);
   assert.equal(c.pages.at(-1).result.nextCursor, null);
   assert.equal(c.fragments.map(p => p.text).join(''), c.expectedBody);
   assert.ok(c.fragments.every(p => utf8(p.text) <= f.limits.sourceBytes));
   for (const event of c.events) {
     assert.ok(wireBytes(event) <= f.limits.receiptBytes);
-    assert.equal(event.params.payload.invalidation, 'all');
-    for (const field of ['content', 'note', 'attributions', 'threads', 'comments']) assert.equal(event.params.payload[field], undefined);
+    assert.equal(event.params.snapshot.invalidation, 'all');
+    for (const field of ['content', 'note', 'attributions', 'threads', 'comments']) assert.equal(event.params.snapshot[field], undefined);
   }
-  const states = c.events.map(e => e.params.payload);
+  const states = c.events.map(e => e.params.snapshot);
   assert.equal(states[0].sourceRevision, states[1].sourceRevision);
   assert.notEqual(states[0].attributionGeneration, states[1].attributionGeneration);
   assert.equal(states[1].commentRevision, states[0].commentRevision);
@@ -326,7 +327,7 @@ test('distant canonical effects have explicit footprints without widening caller
   assert.ok(source.includes(c.canonicalChildId));
   assert.ok(!source.includes('@@@task'));
   assert.throws(() => assertUnchangedGaps(c.base, c.expect, c.caller));
-  // Recoverable conversion failure retains the caller edit and creates no child.
+  // The caller-only intermediate still contains the unconverted task fence.
   assert.ok(c.callerResult.includes('@@@task'));
   assert.ok(!c.callerResult.includes('task-1'));
 });
@@ -349,7 +350,7 @@ test('staged header and sealed manifest bind stable identity and all five stream
   assert.equal(digest(c.begin), c.headerDigest);
   assert.equal(digest({ headerDigest: c.headerDigest, manifest: c.manifest }), c.payloadDigest);
   assert.deepEqual(c.manifest.map(m => m.stream), ['text', 'dirty', 'selection', 'mutation', 'live']);
-  for (const m of c.manifest) assertStream(c.streams[m.stream], m, f.limits);
+  for (const m of c.manifest) assertStream(c.streams[m.stream], m, f.limits, c.appendFrames[m.stream]);
   for (const method of ['begin', 'append', 'seal', 'read', 'commit', 'cancel']) assert.ok(docs.includes(`| note.operation.${method} |`));
   assert.ok(events.includes('stateGeneration'));
   const reordered = [...c.manifest].reverse();
@@ -396,9 +397,9 @@ test('staged gaps, reordered chunks, corrupt hashes and mismatched totals fail c
     chunks => { chunks[0].sequence = 1; },
   ]) {
     const chunks = structuredClone(c.streams.text); mutate(chunks);
-    assert.throws(() => assertStream(chunks, manifest, f.limits));
+    assert.throws(() => assertStream(chunks, manifest, f.limits, chunks.map(appendFrame)));
   }
-  assert.throws(() => assertStream(c.streams.text, { ...manifest, records: manifest.records + 1 }, f.limits));
+  assert.throws(() => assertStream(c.streams.text, { ...manifest, records: manifest.records + 1 }, f.limits, c.streams.text.map(appendFrame)));
   // Exact chunk retransmission matches its ack; a different payload cannot.
   const first = c.streams.text[0];
   assert.deepEqual(structuredClone(first), first);
@@ -481,4 +482,180 @@ test('receipt-owned inverse text addressing outlives staging without crossing ow
   for (const patch of [{ operationId: 'another' }, { noteId: 'another' }, { ref: 'another' },
     { textId: 'another' }, { kind: 'source' }, { offset: 4 }]) assert.equal(valid({ ...read, ...patch }, 2000), false);
   assert.ok(docs.includes('Receipt-owned reads do not require a still-live staged view'));
+});
+
+// Independent review regressions: assertions first recorded against a27af5ff.
+test('review F1: recoverable conversion failure keeps completed canonical cleanup', () => {
+  assert.doesNotMatch(docs, /retains callerResult with the legacy no-conversion outcome/);
+  const c = f.conversionFailure;
+  assert.ok(c, 'combined cleanup/conversion-failure scenario is required');
+  let source = applySourceSplices(c.base, c.caller);
+  assert.equal(source, c.callerResult);
+  for (const phase of c.preConversionEffects) {
+    assertUnchangedGaps(source, phase.expect, phase.splices);
+    source = applySourceSplices(source, phase.splices);
+    assert.equal(source, phase.expect);
+  }
+  assert.equal(source, c.preConversionCanonical);
+  assert.equal(c.final, source);
+  assert.ok(c.final.includes('@@@task'));
+  assert.ok(!c.final.includes(c.phantomId));
+  assert.ok(c.final.includes(`anchor:${c.liveMarkerId}:end`));
+  assert.deepEqual(c.committedEffects, c.preConversionEffects);
+  assert.equal(c.createdChildren, 0);
+  assert.equal(c.conversionSnapshots, 0);
+  assert.deepEqual(c.epochs.before, { sourceRevision: 'r:7', attributionGeneration: 'a:2', commentRevision: 'c:4', stateGeneration: '10' });
+  assert.deepEqual(c.epochs.after, { sourceRevision: 'r:8', attributionGeneration: 'a:3', commentRevision: 'c:5', stateGeneration: '11' });
+  assert.deepEqual(c.versionSnapshots, [c.preConversionCanonical]);
+  assertOperationTrace(c.trace);
+});
+
+test('review F2: equal-time replies are ordered by canonical ID across pages', () => {
+  const rows = f.annotationPages.pages.flatMap(p => p.result.items);
+  const keys = rows.map(r => `${r.createdAt}\0${r.commentId}`);
+  assert.deepEqual(keys, [...keys].sort());
+});
+
+test('review F2: reply summaries include status', () => {
+  for (const row of f.annotationPages.pages.flatMap(p => p.result.items)) {
+    assert.ok(['open', 'resolved'].includes(row.status));
+  }
+});
+
+test('review F2: metadata pages carry their source snapshot identity', () => {
+  for (const p of f.metadataPages) {
+    assert.deepEqual(p.scope, f.scope);
+    assert.equal(p.sourceRevision, 'r:7');
+    assert.equal(p.snapshotId, 'snapshot-a');
+    assert.equal(p.expiresAt, '2026-10-03T00:05:00.000Z');
+  }
+});
+
+test('review F2: pageState uses the subscription snapshot envelope', () => {
+  for (const e of f.annotationPages.events) {
+    assert.equal(e.params.kind, 'snapshot');
+    assert.equal(e.params.snapshot.kind, 'notePageState');
+    assert.equal(e.params.payload, undefined);
+  }
+});
+
+test('review F3: backward exhaustion at zero is a valid empty page', () => {
+  assertSourcePage('abc', frame('', 0, 0, 3), f.limits, { direction: 'backward', at: 0 });
+  assert.throws(() => assertSourcePage('abc', frame('', 1, 1, 3), f.limits, { direction: 'backward', at: 1 }));
+  assert.throws(() => assertSourcePage('abc', frame('', 0, 0, 3), f.limits, { direction: 'forward', at: 0 }));
+});
+
+test('review F3: JSON member order does not change scope identity', () => {
+  const current = f.crossedChannels.expected;
+  const incoming = { ...current, scope: Object.fromEntries(Object.entries(current.scope).reverse()), stateGeneration: '13' };
+  assert.equal(admitState(current, incoming), incoming);
+});
+
+const appendFrame = chunk => ({ jsonrpc: '2.0', id: 1, method: 'note.operation.append', params: {
+  ...f.scope, operationId: f.staged.begin.operationId, headerDigest: f.staged.headerDigest, ...chunk,
+} });
+const textChunk = text => {
+  const payload = { stream: 'text', sequence: 0, previousDigest: null, records: [{ kind: 'text', id: 'text', offset: 0, text }] };
+  return { ...payload, chunkDigest: digest(payload) };
+};
+const singleManifest = chunk => ({ stream: 'text', chunks: 1, records: 1, lastDigest: chunk.chunkDigest });
+
+test('review F3: escaped append payload fitting alone cannot overflow its RPC', () => {
+  let chunk = textChunk('');
+  const count = Math.floor((f.limits.wireBytes - wireBytes(chunk)) / 6);
+  chunk = textChunk('\u0001'.repeat(count));
+  assert.ok(utf8(chunk.records[0].text) < f.limits.sourceBytes);
+  assert.ok(wireBytes(chunk) <= f.limits.wireBytes);
+  assert.ok(wireBytes(appendFrame(chunk)) > f.limits.wireBytes);
+  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits, [appendFrame(chunk)]));
+});
+
+test('review F2: full wire validators reject missing page identity and reply fields', () => {
+  assertReplyFrames(f.annotationPages.pages, f.limits);
+  for (const page of f.metadataPages) assertMetadataFrame({ jsonrpc: '2.0', id: 1, result: page }, f.limits);
+  for (const field of ['scope', 'sourceRevision', 'snapshotId', 'expiresAt', 'items', 'nextCursor']) {
+    const bad = structuredClone(f.metadataPages[0]); delete bad[field];
+    assert.throws(() => assertMetadataFrame({ jsonrpc: '2.0', id: 1, result: bad }, f.limits), field);
+    const replies = structuredClone(f.annotationPages.pages); delete replies[0].result[field];
+    assert.throws(() => assertReplyFrames(replies, f.limits), field);
+  }
+  for (const field of ['status', 'commentId', 'createdAt', 'preview', 'truncated', 'bodyRef', 'detailRef']) {
+    const bad = structuredClone(f.annotationPages.pages); delete bad[0].result.items[0][field];
+    assert.throws(() => assertReplyFrames(bad, f.limits), field);
+  }
+  const wrongOrder = structuredClone(f.annotationPages.pages);
+  [wrongOrder[0].result.items[0], wrongOrder[1].result.items[0]] =
+    [wrongOrder[1].result.items[0], wrongOrder[0].result.items[0]];
+  assert.throws(() => assertReplyFrames(wrongOrder, f.limits));
+  const mixedSnapshot = structuredClone(f.annotationPages.pages);
+  mixedSnapshot[1].result.commentRevision = 'c:5';
+  assert.throws(() => assertReplyFrames(mixedSnapshot, f.limits));
+});
+
+test('review F2: concrete event frame matches docs and rejects ambiguous containers', () => {
+  for (const e of f.annotationPages.events) assertPageStateFrame(e, f.limits);
+  const documented = events.split('\n').find(line => line.startsWith('{"jsonrpc":"2.0","method":"subscription.push"'));
+  assert.deepEqual(JSON.parse(documented), f.annotationPages.events[0]);
+  for (const mutate of [
+    e => { delete e.params.kind; },
+    e => { e.params.kind = 'delta'; },
+    e => { e.params.payload = e.params.snapshot; delete e.params.snapshot; },
+    e => { e.params.snapshot = [e.params.snapshot]; },
+    e => { delete e.params.snapshot.attributionState; },
+    e => { e.params.snapshot.comments = []; },
+    e => { e.params.snapshot.scope = {}; },
+  ]) {
+    const bad = structuredClone(f.annotationPages.events[0]); mutate(bad);
+    assert.throws(() => assertPageStateFrame(bad, f.limits));
+  }
+});
+
+test('review F3: complete escaped append RPC fits exactly and rejects one-byte overflow', () => {
+  // Maximum legal RPC ID and all four scope IDs, with multibyte source and escaping.
+  const wrap = chunk => {
+    const request = appendFrame(chunk);
+    request.id = 'i'.repeat(64);
+    for (const key of Object.keys(f.scope)) request.params[key] = 's'.repeat(256);
+    return request;
+  };
+  const base = '😀中\\"';
+  const available = f.limits.wireBytes - wireBytes(wrap(textChunk(base)));
+  const text = base + '\u0001'.repeat(Math.floor(available / 6)) + 'a'.repeat(available % 6);
+  const chunk = textChunk(text), request = wrap(chunk);
+  assert.equal(wireBytes(request), 65536);
+  assert.ok(utf8(text) < 16384);
+  assertStream([chunk], singleManifest(chunk), f.limits, [request]);
+  const overflow = textChunk(text + 'a');
+  assert.equal(wireBytes(wrap(overflow)), 65537);
+  assert.throws(() => assertStream([overflow], singleManifest(overflow), f.limits, [wrap(overflow)]));
+  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits));
+  assert.throws(() => assertStream([chunk], singleManifest(chunk), f.limits, []));
+  for (const mutate of [
+    r => { r.id += 'x'; },
+    r => { r.params.noteId += 'x'; },
+    r => { r.method = 'other'; },
+    r => { delete r.params.headerDigest; },
+    r => { r.params.records[0].text = '\ud800'; },
+  ]) {
+    const bad = structuredClone(request); mutate(bad);
+    assert.throws(() => assertAppendFrame(bad, f.limits));
+  }
+});
+
+test('review F1: cleanup history, orphan state and final receipt survive only conversion rollback', () => {
+  const c = f.conversionFailure;
+  assert.equal(c.savepointAfter, 'preConversionCanonical');
+  assert.deepEqual(c.rolledBack, ['conversion-source', 'conversion-children', 'conversion-version', 'conversion-effects']);
+  assert.equal(c.commentsBefore[1].isOrphaned, false);
+  assert.equal(c.commentsAfter[1].isOrphaned, true);
+  const first = c.trace.steps[0], replay = c.trace.steps.at(-1);
+  assert.equal(first.receipt.sourceLength, c.final.length);
+  assert.equal(first.receipt.afterRevision, c.epochs.after.sourceRevision);
+  assert.deepEqual(replay.receipt, first.receipt);
+  assert.equal(replay.historyCount, 0);
+  assert.equal(replay.writeCount, 0);
+  assert.equal(replay.eventCount, 0);
+  assert.equal(c.trace.steps[1].outcome, 'unknown');
+  assert.equal(c.trace.steps[1].clearDraft, false);
+  assert.ok(wireBytes({ jsonrpc: '2.0', id: 1, result: first.receipt }) <= f.limits.receiptBytes);
 });

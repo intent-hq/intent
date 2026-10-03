@@ -44,7 +44,7 @@ export function mapPoint(point, affinity, changes) {
   return { offset: point + delta, deleted: false };
 }
 
-export function assertSourcePage(source, frame, limits) {
+export function assertSourcePage(source, frame, limits, request = { direction: 'forward' }) {
   const p = frame.result;
   assert.equal(p.kind, 'noteSourcePage');
   assert.equal(p.note, undefined);
@@ -56,7 +56,12 @@ export function assertSourcePage(source, frame, limits) {
   assert.ok(validText(p.text));
   assert.equal(p.nextCursor === null, p.range.end === source.length);
   assert.equal(p.previousCursor === null, p.range.start === 0);
-  assert.ok(p.text.length > 0 || p.range.start === source.length);
+  assert.ok(['forward', 'backward'].includes(request.direction));
+  if (request.at !== undefined) {
+    assert.ok(boundary(source, request.at));
+    assert.equal(request.direction === 'backward' ? p.range.end : p.range.start, request.at);
+  }
+  assert.ok(p.text.length > 0 || p.range.start === (request.direction === 'backward' ? 0 : source.length));
   assert.ok(utf8(p.text) <= limits.sourceBytes);
   assert.ok(wireBytes(frame) <= limits.wireBytes);
 }
@@ -131,7 +136,8 @@ export function assertOperationTrace(trace) {
 }
 
 export function admitState(current, incoming) {
-  if (JSON.stringify(incoming.scope) !== JSON.stringify(current?.scope ?? incoming.scope)) return current;
+  assertScope(incoming.scope);
+  if (current && scopeKeys.some(k => incoming.scope[k] !== current.scope[k])) return current;
   assert.match(incoming.stateGeneration, /^(0|[1-9][0-9]*)$/);
   const generation = BigInt(incoming.stateGeneration);
   assert.ok(generation <= 18446744073709551615n);
@@ -141,9 +147,18 @@ export function admitState(current, incoming) {
 }
 
 // Validate finite staged fixtures, not a durable staging server.
-export function assertStream(chunks, expected, limits) {
+export function assertStream(chunks, expected, limits, frames) {
+  assert.ok(Array.isArray(frames), 'complete append RPC frames are required');
+  assert.equal(frames.length, chunks.length);
   let previousDigest = null, records = 0;
   for (const [sequence, chunk] of chunks.entries()) {
+    const frame = frames[sequence];
+    assertAppendFrame(frame, limits);
+    const { backendId, workspaceId, noteId, noteInstanceId, operationId, headerDigest, ...wireChunk } = frame.params;
+    assert.deepEqual(wireChunk, chunk);
+    if (sequence) for (const key of [...scopeKeys, 'operationId', 'headerDigest']) {
+      assert.equal(frame.params[key], frames[0].params[key]);
+    }
     assert.equal(chunk.sequence, sequence);
     assert.equal(chunk.stream, expected.stream);
     assert.equal(chunk.previousDigest, previousDigest);
@@ -151,7 +166,6 @@ export function assertStream(chunks, expected, limits) {
     assert.equal(digest(payload), chunkDigest);
     assert.ok(chunk.records.length <= limits.items);
     assert.ok(chunk.records.reduce((n, r) => n + utf8(r.text ?? ''), 0) <= limits.sourceBytes);
-    assert.ok(wireBytes(chunk) <= limits.wireBytes);
     previousDigest = chunkDigest;
     records += chunk.records.length;
   }
@@ -184,4 +198,98 @@ export function assertUnchangedGaps(before, after, splices) {
     input = s.end;
   }
   assert.equal(after.slice(output), before.slice(input));
+}
+
+const scopeKeys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId'];
+const token = value => assert.ok(typeof value === 'string' && value.length > 0 && utf8(value) <= 256);
+export function assertScope(scope) {
+  assert.ok(scope && typeof scope === 'object');
+  for (const key of scopeKeys) token(scope[key]);
+}
+const rpcId = id => assert.ok(Number.isSafeInteger(id) || (typeof id === 'string' && utf8(id) <= 64));
+const timestamp = value => assert.ok(typeof value === 'string' && Number.isFinite(Date.parse(value)));
+const cursor = value => value === null ? undefined : token(value);
+
+// Complete wire validation is mandatory; hash-chain arithmetic alone is insufficient.
+export function assertAppendFrame(frame, limits) {
+  assert.equal(frame.jsonrpc, '2.0');
+  assert.equal(frame.method, 'note.operation.append');
+  rpcId(frame.id);
+  const p = frame.params;
+  assertScope(p);
+  assert.match(p.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  for (const key of ['headerDigest', 'chunkDigest']) assert.match(p[key], /^[0-9a-f]{64}$/);
+  assert.ok(['text', 'dirty', 'selection', 'mutation', 'live'].includes(p.stream));
+  assert.ok(Number.isSafeInteger(p.sequence) && p.sequence >= 0);
+  if (p.previousDigest !== null) assert.match(p.previousDigest, /^[0-9a-f]{64}$/);
+  assert.ok(Array.isArray(p.records) && p.records.length <= limits.items);
+  if (p.stream === 'text') for (const row of p.records) {
+    assert.equal(row.kind, 'text'); token(row.id);
+    assert.ok(Number.isSafeInteger(row.offset) && row.offset >= 0);
+    assert.ok(validText(row.text));
+  }
+  assert.ok(p.records.reduce((n, r) => n + utf8(r.text ?? ''), 0) <= limits.sourceBytes);
+  assert.ok(wireBytes(frame) <= limits.wireBytes, 'complete append RPC exceeds wire budget');
+}
+
+export function assertSnapshotResult(page) {
+  assertScope(page.scope);
+  token(page.sourceRevision); token(page.snapshotId); timestamp(page.expiresAt);
+  cursor(page.nextCursor);
+  assert.ok(Array.isArray(page.items));
+}
+
+export function assertMetadataFrame(frame, limits) {
+  assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
+  const p = frame.result;
+  assert.equal(p.kind, 'noteMetadataPage'); assertSnapshotResult(p);
+  assert.ok(p.items.length <= limits.items);
+  assert.ok(wireBytes(frame) <= limits.wireBytes);
+}
+
+export function assertReplyFrames(frames, limits) {
+  let previous, first;
+  const seen = new Set();
+  for (const frame of frames) {
+    assert.equal(frame.jsonrpc, '2.0'); rpcId(frame.id);
+    const p = frame.result;
+    assert.equal(p.kind, 'noteReplyPage'); assertSnapshotResult(p);
+    for (const key of ['commentRevision', 'threadId', 'rootCommentId']) token(p[key]);
+    assert.ok(Number.isSafeInteger(p.totalComments) && p.totalComments >= 0);
+    const { items, nextCursor, ...identity } = p;
+    if (first) assert.deepEqual(identity, first); else first = identity;
+    assert.ok(items.length <= limits.annotationItems);
+    assert.ok(wireBytes(frame) <= limits.wireBytes);
+    for (const row of items) {
+      for (const key of ['commentId', 'bodyRef', 'detailRef']) token(row[key]);
+      timestamp(row.createdAt);
+      assert.ok(['open', 'resolved', 'pending'].includes(row.status));
+      assert.ok(typeof row.preview === 'string' && utf8(row.preview) <= 512);
+      assert.equal(typeof row.truncated, 'boolean');
+      assert.equal(row.comments, undefined); assert.equal(row.replies, undefined);
+      const key = [Date.parse(row.createdAt), row.commentId];
+      if (previous) assert.ok(previous[0] < key[0] || (previous[0] === key[0] && previous[1] < key[1]));
+      assert.ok(!seen.has(row.commentId)); seen.add(row.commentId); previous = key;
+    }
+  }
+  assert.ok(seen.size <= first.totalComments);
+}
+
+export function assertPageStateFrame(frame, limits) {
+  assert.equal(frame.jsonrpc, '2.0'); assert.equal(frame.method, 'subscription.push');
+  const p = frame.params;
+  token(p.subscriptionId);
+  assert.ok(Number.isSafeInteger(p.seq) && p.seq >= 0);
+  assert.equal(p.kind, 'snapshot');
+  assert.equal(p.payload, undefined); assert.equal(p.delta, undefined);
+  const s = p.snapshot;
+  assert.equal(s.kind, 'notePageState'); assertScope(s.scope);
+  for (const key of ['sourceRevision', 'attributionGeneration', 'commentRevision']) token(s[key]);
+  assert.match(s.stateGeneration, /^(0|[1-9][0-9]*)$/);
+  assert.ok(BigInt(s.stateGeneration) <= 18446744073709551615n);
+  assert.ok(['pending', 'ready'].includes(s.attributionState));
+  assert.equal(typeof s.deleted, 'boolean'); assert.equal(s.invalidation, 'all');
+  assert.deepEqual(Object.keys(s).sort(), ['kind', 'scope', 'stateGeneration', 'sourceRevision',
+    'attributionGeneration', 'attributionState', 'commentRevision', 'deleted', 'invalidation'].sort());
+  assert.ok(wireBytes(frame) <= limits.receiptBytes);
 }

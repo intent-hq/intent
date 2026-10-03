@@ -819,20 +819,22 @@
           "totalComments": 3,
           "items": [
             {
-              "commentId": "root",
-              "createdAt": "2026-10-03T00:00:00.000Z",
-              "preview": "preview",
-              "truncated": true,
-              "bodyRef": "body-root",
-              "detailRef": "detail-root"
-            },
-            {
               "commentId": "reply-1",
               "createdAt": "2026-10-03T00:00:00.000Z",
               "preview": "preview",
               "truncated": true,
               "bodyRef": "body-reply-1",
-              "detailRef": "detail-reply-1"
+              "detailRef": "detail-reply-1",
+              "status": "open"
+            },
+            {
+              "commentId": "reply-2",
+              "createdAt": "2026-10-03T00:00:00.000Z",
+              "preview": "preview",
+              "truncated": true,
+              "bodyRef": "body-reply-2",
+              "detailRef": "detail-reply-2",
+              "status": "open"
             }
           ],
           "nextCursor": "next-replies"
@@ -858,12 +860,13 @@
           "totalComments": 3,
           "items": [
             {
-              "commentId": "reply-2",
+              "commentId": "root",
               "createdAt": "2026-10-03T00:00:00.000Z",
               "preview": "preview",
               "truncated": true,
-              "bodyRef": "body-reply-2",
-              "detailRef": "detail-reply-2"
+              "bodyRef": "body-root",
+              "detailRef": "detail-root",
+              "status": "open"
             }
           ],
           "nextCursor": null
@@ -890,7 +893,8 @@
         "params": {
           "subscriptionId": "sub-a",
           "seq": 0,
-          "payload": {
+          "kind": "snapshot",
+          "snapshot": {
             "kind": "notePageState",
             "scope": {
               "backendId": "db-a",
@@ -914,7 +918,8 @@
         "params": {
           "subscriptionId": "sub-a",
           "seq": 1,
-          "payload": {
+          "kind": "snapshot",
+          "snapshot": {
             "kind": "notePageState",
             "scope": {
               "backendId": "db-a",
@@ -938,7 +943,8 @@
         "params": {
           "subscriptionId": "sub-a",
           "seq": 2,
-          "payload": {
+          "kind": "snapshot",
+          "snapshot": {
             "kind": "notePageState",
             "scope": {
               "backendId": "db-a",
@@ -1314,9 +1320,27 @@
     "callerResult": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
     "phases": [
       {
-        "reason": "task-conversion",
+        "reason": "phantom-scrub",
         "inputState": "callerResult",
-        "outputState": "converted",
+        "outputState": "preConversionCanonical",
+        "splices": [
+          {
+            "start": 33,
+            "end": 89,
+            "text": ""
+          },
+          {
+            "start": 94,
+            "end": 148,
+            "text": ""
+          }
+        ],
+        "expect": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      },
+      {
+        "reason": "task-conversion",
+        "inputState": "preConversionCanonical",
+        "outputState": "final",
         "splices": [
           {
             "start": 8,
@@ -1324,30 +1348,13 @@
             "text": "- [ ] [Work](intent://local/task/task-1)"
           }
         ],
-        "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
-      },
-      {
-        "reason": "phantom-scrub",
-        "inputState": "converted",
-        "outputState": "final",
-        "splices": [
-          {
-            "start": 50,
-            "end": 106,
-            "text": ""
-          },
-          {
-            "start": 111,
-            "end": 165,
-            "text": ""
-          }
-        ],
         "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
       }
     ],
     "expect": "Title!\n\n- [ ] [Work](intent://local/task/task-1)\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
     "liveMarkerId": "11111111-1111-4111-8111-111111111111",
-    "canonicalChildId": "task-1"
+    "canonicalChildId": "task-1",
+    "preConversionCanonical": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
   },
   "crossedChannels": {
     "frames": [
@@ -1756,7 +1763,268 @@
         "provenanceRef": "inverse-provenance"
       }
     ],
-    "inverseText": "TWO"
+    "inverseText": "TWO",
+    "appendFrames": {
+      "text": [
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 0,
+            "previousDigest": null,
+            "records": [
+              {
+                "kind": "text",
+                "id": "prefix",
+                "offset": 0,
+                "text": "ONE"
+              }
+            ],
+            "chunkDigest": "4076ca841e63f74913f251b5858cebce5e033b7a43cfc76da0486319969fdf61"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 1,
+            "previousDigest": "4076ca841e63f74913f251b5858cebce5e033b7a43cfc76da0486319969fdf61",
+            "records": [
+              {
+                "kind": "text",
+                "id": "second",
+                "offset": 0,
+                "text": "TWO"
+              }
+            ],
+            "chunkDigest": "3bdd2e71645e4d42ce07f0edd4208e08d35cfa718596379bc24585967d0ebd6c"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 3,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 2,
+            "previousDigest": "3bdd2e71645e4d42ce07f0edd4208e08d35cfa718596379bc24585967d0ebd6c",
+            "records": [
+              {
+                "kind": "text",
+                "id": "paste",
+                "offset": 0,
+                "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ],
+            "chunkDigest": "fb2288ae3ef03f7ce44a0a36d5e88d8df1621ff5a1497b5847c93b91d3e1217d"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 4,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 3,
+            "previousDigest": "fb2288ae3ef03f7ce44a0a36d5e88d8df1621ff5a1497b5847c93b91d3e1217d",
+            "records": [
+              {
+                "kind": "text",
+                "id": "paste",
+                "offset": 4096,
+                "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ],
+            "chunkDigest": "79a5cf60c5c2a40928a94c5400165856cd34a6a240b917eeb616f0d0fedfd56e"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 5,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 4,
+            "previousDigest": "79a5cf60c5c2a40928a94c5400165856cd34a6a240b917eeb616f0d0fedfd56e",
+            "records": [
+              {
+                "kind": "text",
+                "id": "paste",
+                "offset": 8192,
+                "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ],
+            "chunkDigest": "0d614cd5ea0a490d2cc622b1d108dc0a03fc95df1e0fb96ff179922da49c5d23"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 6,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 5,
+            "previousDigest": "0d614cd5ea0a490d2cc622b1d108dc0a03fc95df1e0fb96ff179922da49c5d23",
+            "records": [
+              {
+                "kind": "text",
+                "id": "paste",
+                "offset": 12288,
+                "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ],
+            "chunkDigest": "9cd453745e5cb2c8969bf60bc685da03cb696413173ad2a44cde27347cb9890f"
+          }
+        },
+        {
+          "jsonrpc": "2.0",
+          "id": 7,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "text",
+            "sequence": 6,
+            "previousDigest": "9cd453745e5cb2c8969bf60bc685da03cb696413173ad2a44cde27347cb9890f",
+            "records": [
+              {
+                "kind": "text",
+                "id": "paste",
+                "offset": 16384,
+                "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ],
+            "chunkDigest": "24a6dff8355037bb61da6efe85e47cca518a4e1c763486bb9be116e13a86f104"
+          }
+        }
+      ],
+      "dirty": [
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "dirty",
+            "sequence": 0,
+            "previousDigest": null,
+            "records": [
+              {
+                "kind": "splice",
+                "localSequence": 1,
+                "ordinal": 0,
+                "start": 0,
+                "end": 3,
+                "replacement": {
+                  "textId": "prefix",
+                  "length": 3,
+                  "utf8Bytes": 3,
+                  "sha256": "2192e8955d5e1ad1651f2f0c637e6f1ac82855747a5f42f978db28669595dc21"
+                }
+              },
+              {
+                "kind": "splice",
+                "localSequence": 2,
+                "ordinal": 0,
+                "start": 4,
+                "end": 7,
+                "replacement": {
+                  "textId": "second",
+                  "length": 3,
+                  "utf8Bytes": 3,
+                  "sha256": "a1a8a8cbbed4eb53ae62ee4fb0787504087232c29aa4d817757d06b68d0501ca"
+                }
+              }
+            ],
+            "chunkDigest": "60892180c1b70ca2982f99c0de64af2707aa2f61687f80b0f2af15dcd35c5014"
+          }
+        }
+      ],
+      "selection": [],
+      "mutation": [
+        {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "note.operation.append",
+          "params": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a",
+            "operationId": "33333333-3333-4333-8333-333333333333",
+            "headerDigest": "453d8d1c44e82b0a071e16d332d999ef6d9a30f7742c39a00a3db1eda075c054",
+            "stream": "mutation",
+            "sequence": 0,
+            "previousDigest": null,
+            "records": [
+              {
+                "kind": "splice",
+                "ordinal": 0,
+                "start": 4,
+                "end": 7,
+                "replacement": {
+                  "textId": "paste",
+                  "length": 20000,
+                  "utf8Bytes": 40000,
+                  "sha256": "78dfb1e3bf380877eabe3f26f19ec8ddc2e441a1dcdfc3b9d515f1ea6900f7ff"
+                }
+              }
+            ],
+            "chunkDigest": "fb941f606fc516c0ab8ff6a7a95de01d2978083a056ffba3afa8611cd1163cf6"
+          }
+        }
+      ],
+      "live": []
+    }
   },
   "stagedOutcomes": [
     {
@@ -1947,27 +2215,45 @@
           "childrenRef": "root-children"
         }
       ],
-      "nextCursor": null
+      "nextCursor": null,
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
     },
     {
       "kind": "noteMetadataPage",
       "items": [
-        {
-          "id": "title",
-          "parentId": "root",
-          "key": "title",
-          "type": "string",
-          "valueRef": "large-title"
-        },
         {
           "id": "tags",
           "parentId": "root",
           "key": "tags",
           "type": "array",
           "childrenRef": "tag-page"
+        },
+        {
+          "id": "title",
+          "parentId": "root",
+          "key": "title",
+          "type": "string",
+          "valueRef": "large-title"
         }
       ],
-      "nextCursor": null
+      "nextCursor": null,
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
     },
     {
       "kind": "noteMetadataPage",
@@ -1980,7 +2266,246 @@
           "valueRef": "large-tag"
         }
       ],
-      "nextCursor": "tag-page-2"
+      "nextCursor": "tag-page-2",
+      "scope": {
+        "backendId": "db-a",
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "noteInstanceId": "inc-a"
+      },
+      "sourceRevision": "r:7",
+      "snapshotId": "snapshot-a",
+      "expiresAt": "2026-10-03T00:05:00.000Z"
     }
-  ]
+  ],
+  "fixtureRepresentations": {
+    "wireFrames": [
+      "requests",
+      "annotationPages.pages",
+      "annotationPages.events",
+      "staged.appendFrames"
+    ],
+    "resultObjects": [
+      "metadataPages",
+      "contextPages",
+      "attributionPages",
+      "commentSummaryPage"
+    ],
+    "recordsOnly": [
+      "annotationPages.fragments",
+      "sideEffects",
+      "conversionFailure",
+      "crossedChannels",
+      "staged.streams",
+      "searchPages"
+    ],
+    "note": "Result objects are wrapped in JSON-RPC response envelopes before wire validation. Records-only scenarios are not complete RPC examples."
+  },
+  "conversionFailure": {
+    "base": "title\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "caller": [
+      {
+        "start": 0,
+        "end": 5,
+        "text": "Title!"
+      }
+    ],
+    "callerResult": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "preConversionEffects": [
+      {
+        "reason": "anchor-repair",
+        "inputState": "callerResult",
+        "outputState": "anchorsRepaired",
+        "splices": [
+          {
+            "start": 209,
+            "end": 209,
+            "text": "<!--anchor:11111111-1111-4111-8111-111111111111:end-->"
+          }
+        ],
+        "expect": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      },
+      {
+        "reason": "phantom-scrub",
+        "inputState": "anchorsRepaired",
+        "outputState": "preConversionCanonical",
+        "splices": [
+          {
+            "start": 33,
+            "end": 89,
+            "text": ""
+          },
+          {
+            "start": 94,
+            "end": 148,
+            "text": ""
+          }
+        ],
+        "expect": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      }
+    ],
+    "preConversionCanonical": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "final": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend",
+    "phantomId": "99999999-9999-4999-8999-999999999999",
+    "liveMarkerId": "11111111-1111-4111-8111-111111111111",
+    "committedEffects": [
+      {
+        "reason": "anchor-repair",
+        "inputState": "callerResult",
+        "outputState": "anchorsRepaired",
+        "splices": [
+          {
+            "start": 209,
+            "end": 209,
+            "text": "<!--anchor:11111111-1111-4111-8111-111111111111:end-->"
+          }
+        ],
+        "expect": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\n<!--anchor:99999999-9999-4999-8999-999999999999:start-->ghost<!--anchor:99999999-9999-4999-8999-999999999999:end-->\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      },
+      {
+        "reason": "phantom-scrub",
+        "inputState": "anchorsRepaired",
+        "outputState": "preConversionCanonical",
+        "splices": [
+          {
+            "start": 33,
+            "end": 89,
+            "text": ""
+          },
+          {
+            "start": 94,
+            "end": 148,
+            "text": ""
+          }
+        ],
+        "expect": "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+      }
+    ],
+    "createdChildren": 0,
+    "conversionSnapshots": 0,
+    "versionSnapshots": [
+      "Title!\n\n@@@task\n# Work\nKeep\n@@@\n\nghost\n<!--anchor:11111111-1111-4111-8111-111111111111:start-->live<!--anchor:11111111-1111-4111-8111-111111111111:end-->\n<!--anchor:demo:start-->literal<!--anchor:demo:end-->\nend"
+    ],
+    "savepointAfter": "preConversionCanonical",
+    "rolledBack": [
+      "conversion-source",
+      "conversion-children",
+      "conversion-version",
+      "conversion-effects"
+    ],
+    "commentsBefore": [
+      {
+        "commentId": "11111111-1111-4111-8111-111111111111",
+        "isOrphaned": false,
+        "anchorBefore": "",
+        "anchorAfter": "\n<!--anchor:demo:start-->literal"
+      },
+      {
+        "commentId": "22222222-2222-4222-8222-222222222222",
+        "isOrphaned": false
+      }
+    ],
+    "commentsAfter": [
+      {
+        "commentId": "11111111-1111-4111-8111-111111111111",
+        "isOrphaned": false
+      },
+      {
+        "commentId": "22222222-2222-4222-8222-222222222222",
+        "isOrphaned": true
+      }
+    ],
+    "epochs": {
+      "before": {
+        "sourceRevision": "r:7",
+        "attributionGeneration": "a:2",
+        "commentRevision": "c:4",
+        "stateGeneration": "10"
+      },
+      "after": {
+        "sourceRevision": "r:8",
+        "attributionGeneration": "a:3",
+        "commentRevision": "c:5",
+        "stateGeneration": "11"
+      }
+    },
+    "trace": {
+      "expectedCommits": 1,
+      "steps": [
+        {
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "committed",
+          "receipt": {
+            "kind": "noteCommitReceipt",
+            "outcome": "committed",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "operationId": "11111111-1111-4111-8111-111111111111",
+            "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "beforeRevision": "r:7",
+            "afterRevision": "r:8",
+            "sourceLength": 211,
+            "mappingRef": "cleanup-map",
+            "effectsRef": "cleanup-effects",
+            "receiptExpiresAt": "2026-10-11T00:00:00.000Z",
+            "invalidation": "all",
+            "inverseRef": "cleanup-inverse"
+          },
+          "writeCount": 1,
+          "historyCount": 1,
+          "eventCount": 1,
+          "atomicReceipt": true,
+          "acknowledged": false,
+          "clearDraft": false
+        },
+        {
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "unknown",
+          "writeCount": 0,
+          "historyCount": 0,
+          "eventCount": 0,
+          "draftRetained": true,
+          "clearDraft": false,
+          "reason": "ack-lost-after-commit"
+        },
+        {
+          "operationId": "11111111-1111-4111-8111-111111111111",
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "outcome": "committed",
+          "receipt": {
+            "kind": "noteCommitReceipt",
+            "outcome": "committed",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "operationId": "11111111-1111-4111-8111-111111111111",
+            "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "beforeRevision": "r:7",
+            "afterRevision": "r:8",
+            "sourceLength": 211,
+            "mappingRef": "cleanup-map",
+            "effectsRef": "cleanup-effects",
+            "receiptExpiresAt": "2026-10-11T00:00:00.000Z",
+            "invalidation": "all",
+            "inverseRef": "cleanup-inverse"
+          },
+          "writeCount": 0,
+          "historyCount": 0,
+          "eventCount": 0,
+          "atomicReceipt": true,
+          "acknowledged": true,
+          "clearDraft": true
+        }
+      ]
+    }
+  }
 }
