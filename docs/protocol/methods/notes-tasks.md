@@ -284,7 +284,7 @@ budgets are inapplicable. Context has separate item and wire budgets and is neve
 hidden inside a source page. Items are discriminated:
 
 - `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
-  continuationAfter, detailRef? }`. `construct` is a syntax category, not an editor
+  continuationAfter, detailRef?, tablePosition? }`. `construct` is a syntax category, not an editor
   node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
 - `span`: `{ id, sourceRange, role, parentRef?, detailRef? }` for marks, delimiters, literals,
   comment markers and structural seams. IDs are snapshot-local; identical text at
@@ -324,6 +324,66 @@ The transport preserves unknown future construct/role values opaquely; a rendere
 that cannot interpret one must declare it unsupported, never silently drop it or
 claim that arbitrary parser grammar has been implemented. Notes primitives require
 an explicit renderer mapping; this vocabulary alone is not that mapping.
+
+**Absolute table addresses.** Version-1 `tableHead`, `tableRow` and `tableCell`
+boundaries also require an inline `tablePosition`; other constructs omit it:
+
+```typescript
+type TableRowPosition = { tableRef: string; rowIndex: number };
+type TableCellPosition = TableRowPosition & {
+  columnIndex: number; alignment: "none" | "left" | "center" | "right";
+};
+// tableHead/tableRow use TableRowPosition; tableCell uses TableCellPosition.
+```
+
+All ordinals are nonnegative safe-integer JSON numbers (not decimal strings).
+`rowIndex` is absolute within the owning canonical table: its one `tableHead` is
+row 0, the first body `tableRow` is row 1, and later body rows increment by one.
+The Markdown delimiter/alignment line is not a row. `columnIndex` is zero-based
+within that row, resets on each new row, and counts canonical parser cell events,
+including empty cells that the existing GFM parser projects for short rows.
+A cell in the header has rowIndex 0. Independent tables reset row/column ordinals;
+nested/outer owners, where represented, never share counters. Repeated cell text,
+source-piece boundaries, viewport seeks and continuation flags do not change an
+address. Scalar-safe sourceRange still identifies this cell's source extent; it
+may be empty for an empty cell and cannot be used to infer an ordinal.
+
+`tableRef` is a bounded opaque **context reference to the owning table boundary**,
+not its item ID, a source offset, a mutable global block ID or a preceding-row
+cursor. Read it with `note.get { ..., page: { kind: "context", contextRef:
+tableRef, ... } }`. Every address of that table in the same snapshot/window uses
+the same tableRef; all refer to the same boundary identity. Reference bytes may
+differ between windows; resolve the table boundary id within the same scope and
+snapshot to compare those owners, never compare against a live editor node ID. A reference cannot
+cross scope, sourceRevision, snapshot, principal or expiry; any continuation cursor
+must agree with the supplied reference. ParentRef remains the direct structural
+parent (a cell's row/header), with its existing semantics. A tableRef may resolve a
+huge table range, but does not include the table's children, row sources, alignment
+array or body. Revision advance invalidates both position and reference, even if
+source happens to look identical. Reacquire the context; do not patch ordinals
+from another snapshot or renumber only the currently loaded rows.
+
+Cell-local `alignment` is the owning table's canonical column alignment, equal to
+its `alignment:N` detail for N=columnIndex. `none` means no explicit alignment;
+clients must not relabel it as explicit left alignment. This fixed-size value is
+inline so a far column never requires enumerating earlier alignment fields.
+Together, tableRef/rowIndex/columnIndex/alignment identify a far cell without
+loading its earlier siblings, preceding row source, header source, whole table or
+full alignment directory. The producer maintains this metadata when indexing the
+revision, not by scanning a prefix on each read. TablePosition and its enclosing
+frame still count toward item/token/complete escaped-wire budgets. It cannot grow
+with the unloaded prefix, and page construction must shrink items if necessary.
+
+This address contract describes the existing canonical GFM **unit-cell** table
+representation. It introduces no rowSpan/colSpan fields, merged-cell grammar,
+synthetic covered cells or new canonical ownership. Raw HTML/custom constructs
+remain their existing literal/htmlBlock representation unless independently
+supported by a defined canonical contract; do not infer merged-cell spans from
+HTML attributes or live editor geometry. A reader missing a required position or
+unable to handle the represented grammar must report the unsupported projection,
+not fetch a preceding/full source fallback or silently guess column zero. Legacy
+complete Note reads and writer/canonical-reload behavior are unchanged. Native
+session seams/owners remain separate from these revision-local source addresses.
 
 Each detail directory item is `{ kind: "fragment", id, field, offset: 0, text:
 "", nextRef }`; it is an indirection descriptor (empty text is not the value).

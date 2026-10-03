@@ -4075,5 +4075,371 @@
         }
       }
     ]
+  },
+  "tablePositions": {
+    "recipe": {
+      "header": "|A|B|C|\r\n|---|:---:|---:|\r\n",
+      "precedingBodyRow": "|same|same|same|\r\n",
+      "precedingBodyRows": 100000,
+      "giantFirstCellScalar": "😀",
+      "giantFirstCellRepeats": 300000,
+      "lastRowTail": "|same|目标😀|\r\n",
+      "afterFirstTable": "\r\n|D|E|\r\n|:---|---|\r\n|z|q|\r\n"
+    },
+    "expected": {
+      "rowIndex": 100001,
+      "columnIndex": 2,
+      "alignment": "right",
+      "cellStart": 2400034,
+      "cellEnd": 2400038,
+      "sourceLength": 2400069,
+      "alignments": [
+        "none",
+        "center",
+        "right"
+      ]
+    },
+    "sourceRequest": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "method": "note.get",
+      "params": {
+        "workspaceId": "ws-a",
+        "noteId": "spec",
+        "page": {
+          "kind": "source",
+          "at": 2400035,
+          "maxSourceBytes": 16,
+          "maxWireBytes": 4096
+        }
+      }
+    },
+    "sourceFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteSourcePage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "sourceLength": 2400069,
+        "range": {
+          "start": 2400035,
+          "end": 2400038
+        },
+        "text": "标😀",
+        "nextCursor": "after-cell",
+        "previousCursor": "before-cell",
+        "contextRef": "far-cell-context",
+        "metadataRef": "metadata-ref"
+      }
+    },
+    "cellFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "cell-100001-2",
+            "sourceRange": {
+              "start": 2400034,
+              "end": 2400038
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "far-row-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 100001,
+              "columnIndex": 2,
+              "alignment": "right"
+            },
+            "detailRef": "far-cell-details"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "rowFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "row-100001",
+            "sourceRange": {
+              "start": 1800027,
+              "end": 2400041
+            },
+            "construct": "tableRow",
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "parentRef": "first-table-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 100001
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "tableFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "table-1",
+            "sourceRange": {
+              "start": 0,
+              "end": 2400041
+            },
+            "construct": "table",
+            "continuationBefore": true,
+            "continuationAfter": true,
+            "detailRef": "table-details"
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "headerFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "header",
+            "sourceRange": {
+              "start": 0,
+              "end": 9
+            },
+            "construct": "tableHead",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "first-table-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 0
+            }
+          },
+          {
+            "kind": "boundary",
+            "id": "head-cell",
+            "sourceRange": {
+              "start": 1,
+              "end": 2
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "header-ref",
+            "tablePosition": {
+              "tableRef": "first-table-ref",
+              "rowIndex": 0,
+              "columnIndex": 0,
+              "alignment": "none"
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "secondTableFrame": {
+      "jsonrpc": "2.0",
+      "id": "far-cell",
+      "result": {
+        "kind": "noteContextPage",
+        "scope": {
+          "backendId": "db-a",
+          "workspaceId": "ws-a",
+          "noteId": "spec",
+          "noteInstanceId": "inc-a"
+        },
+        "sourceRevision": "r:table",
+        "snapshotId": "table-snapshot",
+        "expiresAt": "2026-10-03T00:05:00.000Z",
+        "items": [
+          {
+            "kind": "boundary",
+            "id": "second-header",
+            "sourceRange": {
+              "start": 2400043,
+              "end": 2400050
+            },
+            "construct": "tableHead",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "second-table-ref",
+            "tablePosition": {
+              "tableRef": "second-table-ref",
+              "rowIndex": 0
+            }
+          },
+          {
+            "kind": "boundary",
+            "id": "second-cell",
+            "sourceRange": {
+              "start": 2400063,
+              "end": 2400064
+            },
+            "construct": "tableCell",
+            "continuationBefore": true,
+            "continuationAfter": false,
+            "parentRef": "second-row-ref",
+            "tablePosition": {
+              "tableRef": "second-table-ref",
+              "rowIndex": 1,
+              "columnIndex": 0,
+              "alignment": "left"
+            }
+          }
+        ],
+        "nextCursor": null
+      }
+    },
+    "cellDetails": {
+      "directory": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-openingSource-descriptor",
+              "field": "openingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": "cell-openingSource-ref"
+            },
+            {
+              "kind": "fragment",
+              "id": "cell-closingSource-descriptor",
+              "field": "closingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": "cell-closingSource-ref"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "openingSource": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-openingSource-value",
+              "field": "openingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "closingSource": {
+        "jsonrpc": "2.0",
+        "id": "far-cell",
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:table",
+          "snapshotId": "table-snapshot",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "fragment",
+              "id": "cell-closingSource-value",
+              "field": "closingSource",
+              "offset": 0,
+              "text": "",
+              "nextRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
   }
 }

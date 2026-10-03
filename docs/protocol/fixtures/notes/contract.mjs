@@ -68,7 +68,7 @@ export function assertSourcePage(source, frame, limits, request = { direction: '
 
 // Test-only decoded cursor claims, never an on-wire token format.
 export function cursorError(claim, request, current, now) {
-  const keys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId', 'principalId', 'kind', 'budgets', 'ranges', 'threadId'];
+  const keys = ['backendId', 'workspaceId', 'noteId', 'noteInstanceId', 'principalId', 'kind', 'budgets', 'ranges', 'threadId', 'contextRef'];
   if (keys.some(k => canonicalJson(claim[k] ?? null) !== canonicalJson(request[k] ?? null))) {
     return 'note-page-cursor-invalid';
   }
@@ -406,6 +406,20 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
       assert.ok(typeof vocabulary === 'string' && vocabulary.length > 0 && utf8(vocabulary) <= 1024);
       assert.equal(item.text, undefined);
       if (item.kind === 'boundary') {
+        if (['tableHead', 'tableRow', 'tableCell'].includes(item.construct)) {
+          const position = item.tablePosition;
+          assert.ok(position && typeof position === 'object'); token(position.tableRef);
+          assert.ok(Number.isSafeInteger(position.rowIndex) && position.rowIndex >= 0);
+          assert.equal(position.rowSpan, undefined); assert.equal(position.colSpan, undefined);
+          if (item.construct === 'tableHead') assert.equal(position.rowIndex, 0);
+          if (item.construct === 'tableRow') assert.ok(position.rowIndex >= 1);
+          if (item.construct === 'tableCell') {
+            assert.ok(Number.isSafeInteger(position.columnIndex) && position.columnIndex >= 0);
+            assert.ok(['none', 'left', 'center', 'right'].includes(position.alignment));
+          } else {
+            assert.equal(position.columnIndex, undefined); assert.equal(position.alignment, undefined);
+          }
+        } else assert.equal(item.tablePosition, undefined);
         assert.equal(typeof item.continuationBefore, 'boolean');
         assert.equal(typeof item.continuationAfter, 'boolean');
       } else if (item.role === 'projection') assert.equal(r.start, r.end);

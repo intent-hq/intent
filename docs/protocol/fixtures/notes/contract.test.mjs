@@ -994,3 +994,121 @@ test('link detail validator rejects Debug enum strings and misplaced or malforme
     assert.throws(() => summaryContract.assertLinkFields({ ...base, ...patch }));
   }
 });
+
+// Specification source materialization is an oracle only, not a production reader.
+const tableFixture = f.tablePositions;
+const tableRecipe = tableFixture.recipe;
+const tableSource = tableRecipe.header + tableRecipe.precedingBodyRow.repeat(tableRecipe.precedingBodyRows)
+  + '|' + tableRecipe.giantFirstCellScalar.repeat(tableRecipe.giantFirstCellRepeats) + tableRecipe.lastRowTail + tableRecipe.afterFirstTable;
+test('far table cell has an absolute address without preceding row or cell source', () => {
+  const x = tableFixture;
+  assert.equal(tableSource.length, x.expected.sourceLength);
+  assert.ok(utf8(tableSource.slice(0, x.expected.cellStart)) > 2_000_000);
+  assert.equal(tableSource.slice(x.expected.cellStart, x.expected.cellEnd), '目标😀');
+  assertSourcePage(tableSource, x.sourceFrame, { ...f.limits, sourceBytes: 16, wireBytes: 4096 },
+    { direction: 'forward', at: x.sourceRequest.params.page.at });
+  for (const frame of [x.cellFrame, x.rowFrame, x.tableFrame]) summaryContract.assertContextFrame(frame, f.limits);
+  const cell = x.cellFrame.result.items[0];
+  assert.deepEqual(cell.tablePosition, { tableRef: 'first-table-ref', rowIndex: 100001, columnIndex: 2, alignment: 'right' });
+  assert.equal(cell.tablePosition.alignment, x.expected.alignments[cell.tablePosition.columnIndex]);
+  assert.equal(x.cellFrame.result.items.length, 1);
+  assert.equal(cell.sourceRange.start, x.expected.cellStart);
+  assert.equal(cell.text, undefined);
+  assert.equal(cell.parentRef, 'far-row-ref');
+  assert.equal(cell.detailRef, 'far-cell-details');
+  summaryContract.assertContextFrame(x.cellDetails.directory, f.limits, { directory: true });
+  for (const field of ['openingSource', 'closingSource']) {
+    assert.equal(summaryContract.assertTextFragments([x.cellDetails[field]], field, f.limits), '');
+  }
+  assert.ok([x.cellFrame, x.rowFrame, x.tableFrame].every(p => wireBytes(p) <= 4096));
+});
+test('table positions are mandatory and distinguish row, header and cell shapes', () => {
+  const x = tableFixture;
+  for (const frame of [x.cellFrame, x.rowFrame, x.headerFrame]) {
+    const absent = structuredClone(frame); delete absent.result.items[0].tablePosition;
+    assert.throws(() => summaryContract.assertContextFrame(absent, f.limits));
+  }
+  for (const corrupt of [
+    p => { p.rowIndex = -1; }, p => { p.rowIndex = Number.MAX_SAFE_INTEGER + 1; },
+    p => { p.columnIndex = 1.5; }, p => { delete p.columnIndex; },
+    p => { p.rowIndex = '100001'; }, p => { p.alignment = 'justify'; },
+    p => { delete p.alignment; }, p => { p.tableRef = ''; },
+    p => { p.tableRef = 'x'.repeat(257); }, p => { p.rowSpan = 2; },
+    p => { p.colSpan = 2; },
+  ]) {
+    const bad = structuredClone(x.cellFrame); corrupt(bad.result.items[0].tablePosition);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  const row = structuredClone(x.rowFrame); row.result.items[0].tablePosition.columnIndex = 0;
+  assert.throws(() => summaryContract.assertContextFrame(row, f.limits));
+  const header = structuredClone(x.headerFrame); header.result.items[0].tablePosition.rowIndex = 1;
+  assert.throws(() => summaryContract.assertContextFrame(header, f.limits));
+  const body = structuredClone(x.rowFrame); body.result.items[0].tablePosition.rowIndex = 0;
+  assert.throws(() => summaryContract.assertContextFrame(body, f.limits));
+});
+test('table reference continuations reject cross-table, cross-note and changed revision use', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'first-table-ref',
+    sourceRevision: 'r:table', boot: 'boot', expiresAt: 100, budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  assert.equal(cursorError(claim, { ...claim, contextRef: 'second-table-ref' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'r:next' }, 1), 'note-page-stale');
+});
+test('header/body ordinals reset per table and are independent of viewport continuation', () => {
+  const x = tableFixture;
+  for (const frame of [x.headerFrame, x.secondTableFrame]) summaryContract.assertContextFrame(frame, f.limits);
+  assert.equal(x.headerFrame.result.items[1].tablePosition.columnIndex, 0);
+  assert.equal(x.secondTableFrame.result.items[0].tablePosition.rowIndex, 0);
+  assert.equal(x.secondTableFrame.result.items[1].tablePosition.rowIndex, 1);
+  assert.notEqual(x.cellFrame.result.items[0].tablePosition.tableRef,
+    x.secondTableFrame.result.items[1].tablePosition.tableRef);
+  const before = structuredClone(x.cellFrame);
+  before.result.items[0].continuationBefore = false;
+  before.result.items[0].continuationAfter = true;
+  assert.deepEqual(before.result.items[0].tablePosition, x.cellFrame.result.items[0].tablePosition);
+});
+test('table position frames honor exact full-wire limits even with maximally escaped references', () => {
+  const frame = structuredClone(tableFixture.cellFrame);
+  frame.id = 'i'.repeat(64);
+  for (const k of Object.keys(frame.result.scope)) frame.result.scope[k] = 's'.repeat(256);
+  frame.result.sourceRevision = 'r'.repeat(256); frame.result.snapshotId = 'v'.repeat(256);
+  frame.result.items = Array.from({ length: 17 }, (_, i) => ({
+    kind: 'boundary', id: '\u0001'.repeat(128) + i, construct: 'tableCell',
+    sourceRange: { start: i * 5, end: i * 5 + 4 }, continuationBefore: false, continuationAfter: false,
+    parentRef: '\u0001'.repeat(128) + i, detailRef: '\u0001'.repeat(128) + i,
+    tablePosition: { tableRef: '\u0001'.repeat(128) + i, rowIndex: 1, columnIndex: 2, alignment: 'right' },
+  }));
+  const slots = frame.result.items.flatMap(item => [[item, 'id'], [item, 'parentRef'],
+    [item, 'detailRef'], [item.tablePosition, 'tableRef']]);
+  assert.ok(wireBytes(frame) < 65536);
+  while (wireBytes(frame) < 65536) {
+    const slot = slots.find(([owner, key]) => utf8(owner[key]) < 256);
+    assert.ok(slot, 'fixture must reach the wire ceiling before token capacity');
+    slot[0][slot[1]] += 'x';
+  }
+  assert.equal(wireBytes(frame), 65536);
+  summaryContract.assertContextFrame(frame, f.limits);
+  const slot = slots.find(([owner, key]) => utf8(owner[key]) < 256);
+  assert.ok(slot); slot[0][slot[1]] += 'x';
+  assert.equal(wireBytes(frame), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+});
+test('table address metadata stays bounded as unloaded prefix extent grows', () => {
+  const near = structuredClone(tableFixture.cellFrame);
+  near.result.items[0].tablePosition.rowIndex = 1;
+  near.result.items[0].sourceRange = { start: 30, end: 34 };
+  assert.ok(wireBytes(tableFixture.cellFrame) - wireBytes(near) < 32);
+  const nearCell = near.result.items[0];
+  const empty = structuredClone(near);
+  empty.result.items[0].sourceRange.end = nearCell.sourceRange.start;
+  summaryContract.assertContextFrame(empty, f.limits);
+  assert.equal(empty.result.items[0].tablePosition.columnIndex, 2);
+  const tooMany = structuredClone(near);
+  tooMany.result.items = Array.from({ length: 129 }, () => nearCell);
+  assert.throws(() => summaryContract.assertContextFrame(tooMany, f.limits));
+  const split = structuredClone(tableFixture.sourceFrame);
+  split.result.range.start = tableFixture.expected.cellStart + 3;
+  split.result.text = tableSource.slice(split.result.range.start, split.result.range.end);
+  assert.throws(() => assertSourcePage(tableSource, split, f.limits,
+    { direction: 'forward', at: split.result.range.start }));
+});
