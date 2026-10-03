@@ -1267,28 +1267,24 @@ wins** (deliberate tie-break: the FE puts the primary link first). Semantics, in
   the PR's **base branch** — so ahead/behind and diffs reflect the merge target — and
   `prStatus` + the `activePullRequest` snapshot (+ `pullRequests`) fill from the lookup.
   **Explicit `branch`/`baseRef` params always win** over the PR-derived values.
-- **Graceful fallback.** A failed or timed-out lookup — or no source-control provider —
-  is **non-fatal** (warn log only): the create proceeds without the PR-derived git setup,
-  keeping the `prNumber`/`prUrl` linkage from the link (the PR-refresh sweep heals status
-  later). Non-PR creates (no links, or issue-kind only) are byte-for-byte unchanged.
-- **Checkout.** The PR-derived head branch is treated as an EXISTING branch (no slug
-  generation, no uniquification — see Branch naming above); a head existing only as a
-  remote-tracking ref is materialized at the remote tip with upstream tracking (see
-  Worktree provisioning above — the materialization applies across worktree / CoW /
-  direct modes).
-- **`baseCommitSha` = merge-base boundary.** A PR-derived branch checks out at the PR
-  head, not the base, so the row records the **merge-base** of the checked-out HEAD with
-  `baseRef` — preserving the contract that `baseCommitSha` is the base boundary — falling
-  back to the checked-out tip when the boundary cannot be resolved (e.g. the head
-  degraded to a fresh branch at the base commit, where tip = boundary anyway).
-- **Fork-hosted heads degrade loudly.** `PullRequest` carries no head-repo info, so a
-  head living in a fork has no `refs/remotes/<remote>/<branch>` in the base-repo clone —
-  the checkout falls back to a **fresh branch at the base commit** (named like the head,
-  without its commits) while `prNumber`/`prUrl` keep the linkage. The same applies to a
-  never-fetched branch on a local-repo create (provisioning does no network fetch;
-  cache-hydrated creates are fine — the cache refresh fetches). The daemon WARNs before
-  provisioning when a PR-derived head has no local or remote-tracking ref, so the
-  degradation is visible.
+- **Lookup failure.** Registry-only rows retain best-effort linkage. A real checkout
+  requires a resolved head branch (from the lookup or an explicit caller prefill);
+  otherwise creation fails instead of generating a branch at the base commit.
+- **Canonical PR checkout.** For a derived head or an explicit branch matching the PR
+  head, the daemon fetches `refs/pull/<number>/head` from the selected base-repository
+  remote (default `origin`). This supports fork heads without fetching a fork remote.
+  Fetch failure is fatal; there is no fallback to base commits. When the forge supplies
+  a head SHA, a moved head is rejected with a refresh-and-retry error.
+- **Local work is preserved.** The requested head branch name is retained. An existing
+  local branch at a different commit causes an explicit error, including a fork head
+  named `main` that conflicts with local `main`; local branches are never overwritten.
+  Preparation and provisioning share the repository lock. Skipped isolation or supplied
+  checkout paths are refused for PR starts. An explicit branch differing from a
+  successfully resolved PR head retains the existing caller-override semantics.
+- **`baseCommitSha` = merge-base boundary.** The checkout uses the PR head while
+  `baseRef` remains the diff target. `baseCommitSha` records the merge-base boundary,
+  falling back to the checked-out tip only when that boundary cannot be resolved.
+  Non-PR and issue-only creates are unchanged.
 
 **`statusImageAssetId` (new in intentd, migration `0062`).** An agent-authored workspace
 status screenshot reference (intent-hq/monorepo#997). The value is a content-addressed
@@ -1361,6 +1357,34 @@ The sidebar always offers Set primary client; its machine label appears only for
 active desktop control or agent-owned tabs (including hidden tabs), not an idle pin
 or user-only tabs. See the desktop contract for exact targeting, consent races and
 activity-label rules. This is a prepared addition, not shipped behavior at the pins.
+
+**`lastContentActivity` (optional, read-only).** `Workspace.lastContentActivity` is
+the latest **recorded content activity**: the maximum valid timestamp from
+user/assistant message `timestamp` (stored `created_at`) and note `updatedAt` values, compared as instants
+(including timezone offsets and fractional seconds). System/tool messages,
+workspace/session metadata edits, PR refreshes, and token-usage scans do not advance
+it. Notes include agent-authored and automatically created notes; this is not a
+claim that a human edited the workspace. It is absent, never `null`, when no valid
+content timestamp is known, on older daemons, and on the virtual Assistant workspace.
+
+The daemon materializes this field transactionally when content is written and
+reads the stored column on list/get and the lite subscription snapshot: no transcript
+hydration or history scan on these hot reads. It is a high-water mark; deleting or
+replacing content does not move it backwards. Schema upgrade seeds it from retained
+messages/notes only, excluding the possibly polluted workspace `updatedAt`, stored
+`lastActivity`, and session `updatedAt`. It does **not** reconstruct historical
+metadata edits or deleted pre-upgrade content, and does not repair those older
+columns. Archive transfers preserve the recorded mark; imported retained content
+can advance it. Ordinary `workspace.update` cannot set it.
+
+Clients may use it for a **conversation/note activity** label or sort. They must not
+present it as the exact last workspace edit. If absent, use `createdAt` with a
+**Created** label or show content activity as unavailable. An explicitly separate
+**Workspace metadata activity** fallback may use legacy `lastActivity`, but must
+explain that it includes automated maintenance and is not evidence of recent work;
+it must not stand in for content activity in filters or recency claims. Absence
+alone does not distinguish older daemons from an upgraded workspace without content.
+Existing content events can prompt a fresh list/get; no new push cadence is added.
 
 **`lastActivity` (BE-derived, always populated).** `Workspace.lastActivity` is the
 authoritative "most recent thing that happened in this workspace" timestamp. The daemon

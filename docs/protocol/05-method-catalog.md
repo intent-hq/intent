@@ -29,22 +29,22 @@ The prepared [desktop control contract (§5.51)](./methods/desktop.md) adds four
 user/executor router methods and one daemon-only reverse RPC. Agent lifecycle
 and actions are MCP-only; `desktopControl: 1` gates support independently at both ends.
 
-The documented surface reserves **419 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
+The documented surface reserves **422 dispatchable method names** across the following categories (including prepared additions, not all implemented at the pin):
 
-- **Router methods:** 364 methods dispatched via the main router (`router::dispatch`)
+- **Router methods:** 367 methods dispatched via the main router (`router::dispatch`)
 - **Fast-path methods:** 55 methods intercepted before the router for performance or per-connection state
 - **Method aliases:** 0; use canonical Git read names
 
 Additionally, the protocol includes:
 
 - **Server→client notifications:** 1 notification (`events.event`, §6.3), plus the `subscription.push` frames of the snapshot+delta channels (§6.9)
-- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 419 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
+- **Client-served reverse RPCs:** 6 methods total — 2 are **dual-role** and counted within the 422 dispatchable names (`browser.exec`, `host.openInEditor`), and 4 are **daemon→client-only** reverse RPCs not in the dispatchable catalog (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) — see §5.9, §5.14 and the reverse-RPC list below
 
-**Total:** 419 dispatchable names + 1 notification. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
+**Total:** 422 dispatchable names + 1 notification. Of the 6 reverse-RPC names, 2 (`browser.exec`, `host.openInEditor`) are dual-role — dispatchable client→server methods that are also issued daemon→client as reverse RPCs on remote connections — and 4 (`host.openExternal`, `host.pickApplication`, `providers.setup.openLogin`, `desktop.control`) are daemon→client-only reverse RPCs, never dispatched client→server.
 
 The method surface is enforced by the golden tests in `crates/intent-transport/src/catalog.rs`; the per-namespace subsections below (§5.1–§5.51) carry each method's parameter and result contract. The hyphenated `accept-changes` / `file-tracking` namespaces were previously omitted from this catalog because intentd's golden extractor ignored hyphenated method names; [intent-hq/intentd#1883](https://github.com/intent-hq/intentd/pull/1883) fixes the extractor and freezes them in `ROUTER_METHODS`.
 
-### Router methods by namespace (364 total)
+### Router methods by namespace (367 total)
 
 | Namespace | Count | Methods |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ The method surface is enforced by the golden tests in `crates/intent-transport/s
 | file-tracking | 5 | getAgentLocks, getChanges, loadCommits, stage, unstage — the per-file audit-trail reads with agent attribution (§5.19; `workspaceId` req). The attribution writer `trackChange` is internal (no wire method), per the §6.8 principle |
 | git | 27 | agentCommit, branchDiff, branchStatus, changes, checkMergeConflicts, checkoutBranch, clone, commitDetails, commits, createBranch, diffs, discard, fetch, getBranches, getConfig, getRemoteUrl, numstat, pull, push, removeLockFile, renameBranch, showFile, stage, stageHunk, status, unstage, unstageHunk |
 | gitRoot | 1 | list — the workspace's registered secondary git roots (§5.6; v6.15, `workspaceId` req). No wire register/unregister method: registration is MCP-only (`ws.git.registerRoot` / `ws.git.unregisterRoot`), per the §6.8 principle |
-| github | 29 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, identityProof.create, identityProof.delete, issues.get, issues.list, issues.search, listReviewComments, pulls.create, pulls.get, pulls.list, pulls.merge, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search — `identityProof.create` / `identityProof.delete` (§5.27; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), daemon-global — no `workspaceId`) are the **guest half** of the gist identity-proof join (§5.48): the guest's own daemon publishes a host-issued nonce in a secret gist made with its stored GitHub token (`gist` scope) and deletes it after the join; owner-client only, the token never crosses the wire |
+| github | 32 | authStatus, branches.list, branches.listCached, cancelAuth, connect, getReviewThreads, getUser, identityProof.create, identityProof.delete, issues.get, issues.list, issues.search, listReviewComments, pulls.checks, pulls.create, pulls.files, pulls.get, pulls.list, pulls.merge, pulls.reviews, pulls.search, pulls.updateBranch, relatedRepos.list, replyReviewComment, repoConfig.get, repos.get, repos.list, repos.search, resolveThread, revoke, unresolveThread, users.search — `identityProof.create` / `identityProof.delete` (§5.27; [intent-hq/intentd#1965](https://github.com/intent-hq/intentd/pull/1965), daemon-global — no `workspaceId`) are the **guest half** of the gist identity-proof join (§5.48): the guest's own daemon publishes a host-issued nonce in a secret gist made with its stored GitHub token (`gist` scope) and deletes it after the join; owner-client only, the token never crosses the wire |
 | hook | 3 | cancel, list, runNow — background-hook management (§5.40; v2.10). No `hook.schedule` on the wire: scheduling is MCP-only (`ws.hook.schedule`), per the §6.8 principle |
 | host (router) | 5 | executionContext, invite.list, invite.revoke, members.list, members.remove — additive shared-host contract (§5.49); host administration stays owner-only; executionContext is a safe owner/member read |
 | hub | 3 | discard, merge, publish — prepared node execution contract (§5.50) |

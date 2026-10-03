@@ -8,8 +8,17 @@ capability; documentation alone does not identify a carrying desktop release.
 
 ## Protocol Version & Compatibility
 
-**Documented version:** `13.1` — implemented explicit queue batch candidate; not a shipped-version claim.
+**Documented version:** `13.2` — prepared Home backend additions; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
+
+**Version 13.2 — Home backend prerequisites (additive, prepared).**
+Adds `github.pulls.checks`, `github.pulls.reviews`, and `github.pulls.files`
+(§5.27): three read-only router methods, for **407 / 352 / 55** implemented
+dispatchable / router / fast-path names once the backend lands. Including other
+prepared additions the documented surface is **422 / 367 / 55**. Owner-wide
+`github.pulls.search({org, ...})` and optional `Workspace.lastContentActivity`
+extend existing shapes; older daemons cannot serve those additions. Exact PR-head
+checkout is a behavior fix to workspace creation, with no additional method.
 
 **Version 13.1 — explicit queue batch sending (additive, implemented candidate).**
 `agent.sendQueuedMessagesNow` (§5.5) accepts a snapshot of distinct ready message
