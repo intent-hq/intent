@@ -103,6 +103,7 @@ ws.app.workspaces.delete(id) → ProposalCard
 ws.app.workspaces.get(id) → workspace
 ws.app.workspaces.list({ filter?, sort? }) → workspaces[]
 ws.app.workspaces.open(id, { openInNewWindow? }?) → { ok, queued }
+ws.app.workspaces.transfer(id, { destination? }?) → ProposalCard
 ```
 
 ### ws.browser
