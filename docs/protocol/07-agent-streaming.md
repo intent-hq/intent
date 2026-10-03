@@ -106,9 +106,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   for direct callers; workspace clients capture it with the subscription and
   retain it for reconnects and `chat.unsubscribe { subscriptionId, workspaceId? }`.
   It does not change which agent's transcript is returned or connection ownership.
-- **Snapshot message limit (prepared additive contract ahead of backend implementation).**
+- **Snapshot message limit.**
   The optional `limit` accepts an integer from **1 through 200**, inclusive.
-  Absent / `null` selects **5**, preserving existing callers. Wrong types (including
+  Absent / `null` selects **20**. Wrong types (including
   strings, booleans and fractional numbers), zero, negative values and values above 200
   return `-32602`; the daemon never coerces or clamps them. The chosen limit is fixed
   for the subscription's lifetime and applies to initial, resume, transcript-invalidation
@@ -116,9 +116,9 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   upper bound, not a guaranteed page size: shorter histories or the existing slim byte
   budget can yield fewer messages. For example, `limit: 50` requests the newest 50
   messages in transcript order when enough history fits the budget. No automatic
-  history backfill is added. Older daemons ignore this unknown parameter and retain
-  their five-message window; sending it alone does not guarantee a larger snapshot
-  until the backend implementation is available.
+  history backfill is added. Daemons predating configurable limits ignore this parameter and retain
+  their five-message window; daemons with configurable limits predating the default
+  increase also default to five, but honor an explicit `limit`.
 - **Slim projection (the wire default since v8.0; introduced opt-in within v7.1 —
   [intent-hq/intentd#1304](https://github.com/intent-hq/intentd/pull/1304)).** Every
   subscription serves the same bounded tool/image block projection as
@@ -226,7 +226,7 @@ observe the same bus, and `events.subscribe(["agent:stream:*"])` is unchanged.
   crosses an authoritative frame.
 - **Snapshot granularity = messages; delta granularity = blocks.** Fresh, stale-resume,
   invalidation and lag-recovery snapshots contain the newest **at most `limit` messages**
-  (default **5**), including any merged live-turn row. The daemon requests
+  (default **20**), including any merged live-turn row. The daemon requests
   `agent.getConversation` with the chosen subscription limit, then counts a merged live row
   inside that same window. Unrelated paginated methods retain their defaults.
   The response keeps the conversation `messages[]` object shape and transcript-wide
