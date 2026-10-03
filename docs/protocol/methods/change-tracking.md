@@ -64,6 +64,342 @@ so `execute` rejects `action:"export"`. A step that fails sets `success:false` a
   stored inside the backend; never returned by a `diffs.*` RPC.
   Diff content reaches the client only via the `file-tracking.*` reads and the §6.5 change events.
 
+#### Native review preparation and receipts
+
+| Method | Params | Result |
+| --- | --- | --- |
+| accept-changes.reconcile | workspaceId, operationId, root | Original pending/settled native-review attempt, subject to current disclosure checks |
+| accept-changes.release | workspaceId, operationId, root | {released: true}; retires admission without erasing a committed effect |
+
+**Prepared additive contract.** Detect support through the original
+connection's [`nativeReview: 1` capability](client-hello.md#native-review-capability).
+The capability does not establish a configured provider connection. Admission is conditional
+on current original ownership and provider configuration. Prepared facts and the
+capability alone are not permission to execute.
+
+The **presence** of `review` selects the qualified branch of the existing
+`accept-changes.prepare` and `accept-changes.execute` operations. Omitting it keeps
+the ordinary unqualified contract above, including GitHub, unchanged. A null or
+malformed `review`, or any unknown field in a qualified request or its nested
+records, is rejected; it never falls back to the ordinary branch. Qualified
+actions are only `commit`, `push` and `create-pr`.
+
+**Requests and original identity.** The root is explicit and workspace-bound:
+`{ workspaceId, kind: "primary" }` or
+`{ workspaceId, kind: "registered", gitRootId }`. Its workspace must match the
+outer `workspaceId`. A root path, copied scope or context/selection ID is not a
+substitute for the original captured root and socket.
+
+- Preparation accepts `{ workspaceId, action, files?, options?, review }`.
+  `files` is an optional array of strings. `options` permits only
+  `stageUnstaged`, `pushAfterCommit` and `createPRAfterPush`, each a boolean that
+  defaults to false. `review` is `{ root, choice, targetBranch?, pushRemote? }`.
+  Choice is `{ kind: "saved" }` or `{ kind: "explicitTarget", target }`, where
+  target is `{ provider, instanceBaseUrl, projectPath }`. An explicit choice is
+  per preparation; it does not save or reset repository selection.
+- Execution accepts `{ workspaceId, action, review, commitMessage?, prTitle?,
+  prBody? }`, with `review: { operationId, root }` from the received preparation.
+  It does not accept replacement files, options, branch, provider, credential or
+  scope. The action must match the original preparation. Commit requires a
+  nonblank `commitMessage`.
+- The `accept-changes.reconcile` and `accept-changes.release` operations
+  each accept exactly `{ workspaceId, operationId, root }` on that same socket.
+  Reconcile observes the retained attempt; it does not dispatch another stage.
+  Release returns `{ released: true }`, retires future stage admission and is
+  idempotent for an absent or released ID after original-root authorization.
+  It is not a cross-connection existence lookup or receipt deletion.
+
+Optional `files`, `targetBranch`, `pushRemote`, `commitMessage`, `prTitle` and
+`prBody` accept omission or null. Omitted `options` supplies defaults; null
+`options` or null option booleans are invalid. Root, choice and operation identity
+are required. Unknown provider enum values fail decoding; the shared enum also
+contains GitHub, but this qualified implementation supports **GitLab only**.
+
+**Independent stages.** Files and `stageUnstaged` apply only to commit. Both
+chaining flags also apply only to commit: `pushAfterCommit: true` adds push;
+`createPRAfterPush: true` adds create and does **not** implicitly add push. A
+standalone create adds no Git stage. Separate sidebar commit and create calls
+have independent preparations and receipts; the latter cannot claim the former's
+commit. A changed command cannot reuse an earlier operation.
+
+A push plan requires explicit `pushRemote`; HTTPS push binds the exact original
+source ref/SHA and all approved destinations. It does not permit SSH push, ambient
+credential helpers, URL rewrites, force or redirects. Create supports ready,
+same-project GitLab merge requests. It requires a valid target branch different
+from the original source branch and already present remotely. Omitting
+`targetBranch` resolves to the source branch, which cannot satisfy create. An
+exact existing match is returned as reused without editing it. Ambiguous targets,
+unsupported transports and changed authority are refused before a new effect;
+there is no silent origin/trunk or provider fallback.
+
+For example, this requests an explicit commit/push/create plan. It assumes the
+captured GitLab source branch differs from `main` and the original `origin`
+destinations satisfy admission; the JSON itself supplies no authority:
+
+```json
+{"jsonrpc":"2.0","id":150,"method":"accept-changes.prepare","params":{"workspaceId":"ws-example","action":"commit","options":{"stageUnstaged":true,"pushAfterCommit":true,"createPRAfterPush":true},"review":{"root":{"workspaceId":"ws-example","kind":"primary"},"choice":{"kind":"saved"},"targetBranch":"main","pushRemote":"origin"}}}
+```
+
+A standalone create can instead name a registered root and explicit project.
+This per-call choice is not persisted and performs no implicit commit or push:
+
+```json
+{"jsonrpc":"2.0","id":151,"method":"accept-changes.prepare","params":{"workspaceId":"ws-example","action":"create-pr","review":{"root":{"workspaceId":"ws-example","kind":"registered","gitRootId":"root-example"},"choice":{"kind":"explicitTarget","target":{"provider":"gitlab","instanceBaseUrl":"https://gitlab.example","projectPath":"group/project"}},"targetBranch":"main"}}}
+```
+
+For the first preparation, execution binds the original operation and root. The
+files, options and branch plan are not resubmitted:
+
+```json
+{"jsonrpc":"2.0","id":152,"method":"accept-changes.execute","params":{"workspaceId":"ws-example","action":"commit","review":{"operationId":"operation-example","root":{"workspaceId":"ws-example","kind":"primary"}},"commitMessage":"Record the prepared changes","prTitle":"Review the changes"}}
+```
+
+**Preparation result.** The ordinary display shape is augmented, not replaced:
+`valid`, `warnings`, `errors`, `filesCount`, `additions`, `deletions`, `files` and
+the three suggestion strings remain. Qualified display suggestions are currently
+empty strings. The two added objects are:
+
+| Field | Qualified response |
+| --- | --- |
+| `reviewOperation` | `{ operationId, root, retirementSequence, expiresAfterMs: 300000 }` |
+| `reviewPreparation` | `{ operationId, scope, contextRevision, root, worktreeId, source, target, localHeadSha, transport }` |
+| `scope` | `{ daemonId, authorityScopeId, authorityGeneration }`; derived by the server, not an authorization parameter |
+| `contextRevision` | `{ epoch, sequence }`; comparable only within matching scope/epoch |
+| `source`, `target` | `{ repository, providerProjectId, connection?, branch }`; repository is the qualified provider/instance/project identity, project ID is string or null |
+| `connection` | `{ connectionId, accountId, connectionGeneration }` when disclosed; **omitted** from each branch target for a non-administrator |
+| `localHeadSha` | String or null, reflecting the original observation |
+| `transport` | Null or `{ remoteName, fetchUrls: string[], pushUrls: string[] }`, with sanitized complete destination lists; fetch does not imply push |
+
+Scope and connection generations, revision sequences and retirement cursors are
+canonical decimal u64 **strings**, including values beyond JavaScript's safe
+integer range. Project IDs are also strings. `expiresAfterMs` and the existing
+review `resource.number` remain JSON numbers; do not change their wire types.
+
+Actual host Owner/Member permission, workspace membership, credential and root
+checks govern execution. Administrator permission is separate: public
+source/target connection fields are omitted for other callers, including inside
+retained executions. If included, administrator permission is checked again at
+final disclosure. Private account/credential facts stay server-owned; a missing
+public connection field does not itself deny a permitted Member operation.
+
+**Execution and reconciliation.** Execution returns
+`{ operationId, root, state: "pending"|"settled", reviewExecution?, success,
+steps, result?, error? }`. Reconcile returns
+`{ operationId, root, state: "prepared"|"pending"|"settled", reviewExecution? }`.
+The execution payload appears only after actual settlement. Pending execution is
+not success and includes no fabricated result:
+
+```json
+{"jsonrpc":"2.0","id":152,"result":{"operationId":"operation-example","root":{"workspaceId":"ws-example","kind":"primary"},"state":"pending","success":false,"steps":[],"error":"Repository review outcome is pending; reconcile the original socket"}}
+```
+
+Reconciliation uses the original bound identity, without a new write:
+
+```json
+{"jsonrpc":"2.0","id":153,"method":"accept-changes.reconcile","params":{"workspaceId":"ws-example","operationId":"operation-example","root":{"workspaceId":"ws-example","kind":"primary"}}}
+```
+
+Release uses that same bound identity; its success does not certify that an
+admitted worker has stopped:
+
+```json
+{"jsonrpc":"2.0","id":155,"method":"accept-changes.release","params":{"workspaceId":"ws-example","operationId":"operation-example","root":{"workspaceId":"ws-example","kind":"primary"}}}
+```
+
+`reviewExecution` is `{ requestId, preparation, gitReceipts, outcome, publication }`.
+Its preparation has the full shape and disclosure rules above. The three kinds
+of evidence are independent:
+
+| Field | Variants and meaning |
+| --- | --- |
+| `gitReceipts` | Completed primitives only: `{ stage: "commit", commitHash }` or `{ stage: "push", pushedSha }`. Missing receipt means missing completion evidence, not proof of no effect. |
+| `outcome` | `{ status: "not-attempted" }`; `{ status: "created"|"reused", review }`; `{ status: "failed", stage, code, message }`; or `{ status: "uncertain", stage, message }`. `code` may be null; stage uses the three qualified action spellings. |
+| `publication` | `{ state: "included"|"local-ahead"|"diverged", localHeadSha, remoteSourceSha }`; `{ state: "remote-branch-missing", localHeadSha }`; or `{ state: "unknown", localHeadSha, remoteSourceSha }`. SHAs may be null in the last two variants. |
+
+`not-attempted` can accompany a successful commit/push-only call. A permitted
+refusal before a consuming stage claim can retain a failed outcome for that
+stage, preserving earlier receipts. Known commit/push/review completion is
+recorded at the primitive before later bookkeeping or reply delivery. A later
+failure or disclosure refusal does not erase it. Legacy `steps`/`result` retain
+completed Git stages (`commitHash`, `pushedSha`) and observed review
+`prNumber`/`prUrl` even if another stage fails; `success: false` does not imply
+rollback. An ambiguous or lost provider write remains uncertain, without
+automatic retry. Later matching provider state cannot establish that the old
+operation created it.
+
+An observed `review` has required `resource`, `url` and `title`, and nullable
+`body`, `state`, `draft`, `sourceBranch`, `targetBranch`, `source`, `target`,
+`author`, `mergeable`, `mergeableState`, `headSha`, `createdAt`, `updatedAt`.
+Resource is `{ repository, kind: "merge-request", number }`. Confirmed state is
+`open|locked|closed|merged`; unknown state/draft remains null. Branch identity is
+null as a whole or `{ provider, instanceBaseUrl, projectId, projectPath, branch }`,
+where `projectPath` may be null. These are provider observations, not values
+filled from a submitted title/body or selected branch. Nonempty normalized
+authors, including literal `ghost`, are retained; empty becomes null, without
+asserting raw author presence. Publication requires actual source-ref evidence:
+a review head SHA, successful create/push or different SHAs alone cannot prove
+inclusion, local-ahead or divergence.
+
+**Ownership, limits and failures.** One original execute frame claims one
+immutable command before queueing. An identical repeat observes that attempt;
+a changed command is invalid. Cancellation, timeout or release retires future
+admission, while an already-owned worker keeps its worktree lock and capacity
+until actual completion. Retained effects and current permission to disclose
+them are separate. Reconcile/release never rebind to another socket, host, caller
+or root; loss before a known receipt leaves uncertainty, not safe write replay.
+There is no durable cross-socket receipt lookup.
+
+| Bound | Meaning |
+| --- | --- |
+| 32 records/socket; 256 per Services instance | Retained original operations |
+| 2 active jobs/socket; 8 per Services instance | Original acquisition/execution work, held through actual completion |
+| 64 queued notices; 64 observations/operation | Private feed and repeat-execute/reconcile budget |
+| 65,536 bytes | Serialized qualified command bound |
+| 5 seconds | Acquisition response and individual private-notice send budgets |
+| 15 seconds | Fixed deadline from the original execute frame until its **first successful consuming stage claim**, including queue/source/lock waits; it is not restarted at a wait or source observation |
+| 120 seconds | Retirement timer for an entered stage; after the first claim, the old 15-second queue alarm cannot retire that admitted work |
+| 360 seconds | Execute's observation wait before returning pending if it can still disclose; earlier lifecycle/transport refusal remains possible |
+| 300 seconds | Original write lease; stable prepared facts do not renew it |
+| 600 seconds | Receipt retention measured from **actual settlement**, subject to original disclosure authority |
+
+Create-stage lock waiting also has a separate 15-second bound. No timer proves
+worker completion: admitted work is joined before its capacity/lock is released.
+Server checks at entry, each stage and consuming reply remain authoritative;
+neither notification delivery nor an unexpired preparation guarantees admission.
+
+Malformed strict decoding returns `-32602`, message
+`Invalid native review parameters`, data `{ code: "invalid-params" }`.
+Unsupported/changed Services parameters use the same code/data with message
+`invalid params: Unsupported or changed native review parameters`. Original
+ownership/unavailability refusal is sanitized:
+
+```json
+{"jsonrpc":"2.0","id":154,"error":{"code":-32003,"message":"Forbidden","data":{"code":"forbidden","detail":"Repository review unavailable"}}}
+```
+
+Unchanged connection/transport permissions can still return their existing
+errors. A settled failed/uncertain execution is data, distinct from these RPC
+errors. Use the [private feed](../06-events.md#private-native-review-retirement)
+and [client lifecycle](../10-thin-client.md#native-review-lifecycle)
+to preserve receipts without treating a stale handle as new authority.
+
+#### Commit companion preparation
+
+**Prepared additive contract.** This adds an opt-in, separately confirmed
+create after a staged-only commit. It requires the original physical
+connection's [`nativeReviewCompanion: 1` capability](client-hello.md#commit-companion-capability)
+alongside `nativeReview: 1`. This extends the existing qualified operations;
+it adds no method or public eligibility field. The native-review contract above
+still governs unmarked requests, responses, permissions and errors. Ordinary
+unqualified behavior, including GitHub, remains unchanged. This describes
+conditional admission, not a frontend rollout or deployed provider guarantee.
+
+**Marked parent preparation.** Use `action: "commit"` and
+`review.companion: { kind: "create-pr" }`, with the existing explicit root and
+`saved` or `explicitTarget` project choice. `targetBranch` is required and must
+be a nonempty, valid branch different from the original source branch, already
+present in the same ready GitLab project. The server validates that intended
+target before the commit. Outer `files` and `options`, and `review.pushRemote`,
+must be **absent**, including null; even `options: {}` is invalid. This commits
+only already-staged changes, without staging unstaged files, pushing or creating
+a review. A null/unknown companion, wrong action or unknown nested field is
+rejected without falling back to an ordinary request.
+
+The following illustrative request assumes the source branch differs from the
+validated remote target `trunk`. Its public fields confer no authority:
+
+```json
+{"jsonrpc":"2.0","id":160,"method":"accept-changes.prepare","params":{"workspaceId":"ws-example","action":"commit","review":{"root":{"workspaceId":"ws-example","kind":"primary"},"choice":{"kind":"saved"},"targetBranch":"trunk","companion":{"kind":"create-pr"}}}}
+```
+
+After separate user confirmation, use the unchanged text-only execute shape.
+Here `00000000-0000-4000-8000-000000000001` represents the returned parent
+operation; no target, files or flags are resubmitted:
+
+```json
+{"jsonrpc":"2.0","id":161,"method":"accept-changes.execute","params":{"workspaceId":"ws-example","action":"commit","review":{"operationId":"00000000-0000-4000-8000-000000000001","root":{"workspaceId":"ws-example","kind":"primary"}},"commitMessage":"Record the staged changes"}}
+```
+
+**Fresh child preparation.** Only after eligible completion and original reply
+transfer may the retained original main-process session construct
+`choice: { kind: "afterCommit", operationId, captureId }` on that same socket.
+`operationId` identifies its marked parent; `captureId` identifies the one capture
+owned by that session. Both are canonical lowercase, hyphenated, 36-character
+UUID strings, not execution grants. The child action must be `create-pr`.
+Outer `files`/`options` and `review.targetBranch`/`pushRemote`/`companion` must be
+**absent**, including null. The original target is inherited privately. Account,
+SHA, path, display text and other unknown preparation fields are not accepted.
+These presence rules are stricter than the older unmarked forms' null defaults.
+
+```json
+{"jsonrpc":"2.0","id":162,"method":"accept-changes.prepare","params":{"workspaceId":"ws-example","action":"create-pr","review":{"root":{"workspaceId":"ws-example","kind":"primary"},"choice":{"kind":"afterCommit","operationId":"00000000-0000-4000-8000-000000000001","captureId":"00000000-0000-4000-8000-000000000002"}}}}
+```
+
+The child has its own returned operation, preparation, lease and receipt. Confirm
+it separately before executing the unchanged text-only create command, using the
+child's ID, not the parent's. For example, if that ID is
+`00000000-0000-4000-8000-000000000003`:
+
+```json
+{"jsonrpc":"2.0","id":163,"method":"accept-changes.execute","params":{"workspaceId":"ws-example","action":"create-pr","review":{"operationId":"00000000-0000-4000-8000-000000000003","root":{"workspaceId":"ws-example","kind":"primary"}},"prTitle":"Review the staged changes","prBody":"Review the separately prepared change."}}
+```
+
+The existing `reviewOperation`, `reviewPreparation`, `reviewExecution`, bound
+reconcile/release and private-notice shapes are unchanged. There is no returned
+companion-eligibility boolean or new `captureId` response field. The child's
+`gitReceipts` do not copy the parent's commit. Neither request implicitly pushes;
+the committed local branch may remain `local-ahead` of the provider source.
+Unmarked commits and independently prepared creates do not acquire this link.
+
+**Eligibility is separate from the receipt.** The backend requires the actual
+primitive commit SHA, successful original helper/classification and attribution,
+a matching index and witnessed post-state under the original worktree lock,
+normal owned completion with worker capacity released, and an eligible successful
+**original guarded reply transfer**. A known commit or a success-looking result
+alone is insufficient. Pending, abandoned, uncertain, failed-after-commit or
+unavailable post-state cannot establish continuation eligibility. Retained
+effects, permission to disclose them and client observation remain independent;
+successful server transfer does not prove the client received it.
+
+The original opt-in reply attempt is reserved synchronously before its delivery
+future can await guards. Refusal, cancellation or overlapping attempts cannot
+reopen eligibility after that attempt is lost. Reconciliation can disclose the
+original historical receipt under current authority; it cannot mint a replacement
+grant, infer success from current HEAD or replay the write. Preserve known effects
+even if attribution, later bookkeeping or disclosure prevents a child.
+
+**Private continuity and new authorization.** Child acquisition, publication and
+stage entry check the original root/path/incarnation, Git directories/source ref,
+selection binding/revision, private provider/project/account generation,
+configuration, effective destinations and intended target. Only the parent's
+witnessed HEAD advance is allowed. Full private Git/index observations occur in
+the owned locked worker before the consuming comparison; that comparison adds no
+I/O, await or extra queue. Current original Member/workspace and credential checks
+remain authoritative, with administrator-only public connection disclosure
+checked separately at final transfer. Public IDs, account data or known SHAs
+cannot replace those checks. Observation equality is not a mutation journal and
+cannot rule out a wholly unobserved change followed by restoration.
+
+**One capture and distinct leases.** There is one backend capture per parent,
+including identical or concurrent duplicate requests. A failed capture keeps its
+claim as a tombstone. Coalesce client-local duplicates to the original promise;
+do not retry a capture, renew it or create a grandchild. The parent's intent lasts
+300 seconds from original operation creation. Child acquisition **and reply
+publication** must finish before that fixed deadline. A published child receives
+its own fixed 300-second lease from publication; parent expiry alone does not
+expire it. Explicit parent release, context/authority or socket loss still retires
+linked future admission. Already-admitted work remains owned through completion.
+
+The existing bounds still apply: 32 records/socket and 256/Services instance;
+2 workers/socket and 8/Services instance; 64 notices and 64 observations/operation;
+65,536-byte commands; 5-second acquisition/notice budgets; 15-second first-stage
+admission, 120-second entered-stage retirement and 360-second execute observation;
+600-second receipt retention from actual settlement. None proves worker termination
+or rollback. Malformed forms retain `-32602`; original ownership/unavailability
+retains the sanitized `-32003` refusal described above. Missing original receipts
+remain uncertain. See the [companion retirement rules](../06-events.md#commit-companion-retirement)
+and [client obligations](../10-thin-client.md#commit-companion-lifecycle).
+
 ### 5.19 `file-tracking.*` (reads)
 
 A per-file audit trail as changes move through the git stages
@@ -137,4 +473,3 @@ Metrics are durable (the `workspace_metrics` / `agent_metrics` tables).
 // ← response
 { "jsonrpc":"2.0","id":52,"result":{ "additions":140,"deletions":12,"filesChanged":3 } }
 ```
-

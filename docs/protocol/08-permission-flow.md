@@ -116,3 +116,30 @@ answers never authorize desktop control. Its dedicated request IDs, authenticate
 assigned-primary or same-owner candidate decisions, remembered permission and
 grant-after-readiness wakes
 do not change the existing ACP permission methods or their pending snapshots.
+
+### Explicit resource-read authorization
+
+The [capability-gated GitLab resource-read contract](methods/repository-resources.md)
+uses native desktop read authorization, separate from the interactive tool
+permission flow above. The existing Host Owner/Member execution gate must admit
+the original caller, and the original workspace must still exist and admit that
+caller. Host Guests are refused. A workspace Guest row, visible resource URL,
+Git remote, public connected status or earlier receipt cannot grant this access.
+
+An eligible member may read an explicit project outside the workspace's selected
+review target through the connected host-approved account. The provider's primary
+resource read decides access to that project; a token-free instance descriptor
+does not. Capture binds the original physical socket, Services allocation, caller,
+credential and durable authorization/settings/connection revisions. The server
+revalidates before cache exposure, provider dispatch, cache installation and final
+protected reply transfer. Warm cache hits retain the same admission requirements.
+
+Expiry, cancellation, release, workspace/credential/account retirement and socket
+loss invalidate the original lifetime. Reconnecting or restoring equal-looking
+settings cannot revive it. Sanitized public refusal must not disclose private
+account or target facts. This grants no selection, Git/write, authentication
+setup or model/tool permission. The contract returns only connected,
+token-free instance descriptors; missing or unavailable capture facts yield
+sanitized `-32003 Forbidden`, not a descriptor fallback. Typed outcomes and limits
+follow the resource-read contract; this
+does not establish deployed support. Capability detection alone is insufficient.

@@ -46,6 +46,9 @@ The namespace holds the workspace-scoped `pr.refresh` method, which establishes 
   "prUrl":null,"prStatus":null,"pullRequests":[] } }
 ```
 
+The following snapshot description and the monitoring rules in §5.42 describe
+the existing GitHub behavior.
+
 > **`ws.pr.snapshot(prNumber, { repo? })` — agent MCP binding *(new in intentd,
 > [intentd#887](https://github.com/intent-hq/intentd/pull/887); repo override + echo
 > [intentd#911](https://github.com/intent-hq/intentd/pull/911))*.** Since
@@ -131,6 +134,80 @@ The namespace holds the workspace-scoped `pr.refresh` method, which establishes 
 > error *(intentd, [intentd#949](https://github.com/intent-hq/intentd/pull/949);
 > the omit-when-unreadable contract supersedes #949's "every thread counts as
 > unresolved" inflation)*.
+
+#### Qualified GitLab snapshot response
+
+Qualified GitLab merge request reads preserve the existing snapshot fields and
+add the identity and availability fields below. The original request and private
+output boundaries still apply. Explicit native resource reads use the same
+projection; see [resource detail](repository-resources.md#detail-and-errors).
+This shape adds no wire method and does not extend the monitoring contract in §5.42.
+
+The existing arguments remain unchanged. Routing preserves the ordinary
+GitHub path, including its output and errors, for an explicit legacy
+`repo: "owner/name"` override or an implicitly selected repository positively
+identified as GitHub. Positive identification uses the original repository
+context; a bare owner/name string alone is insufficient. Ambiguous or unavailable
+implicit discovery returns a fixed refusal, without choosing GitHub as a fallback.
+Binding names and aliases do not select a provider. Returned resource identity
+describes the selected review; it is neither permission nor a provider-selection
+input.
+
+The qualified response retains the flat snapshot fields listed above and adds
+only `resource`, `details` and `availability`. Their qualified meanings are:
+
+| Field | Qualified response |
+| --- | --- |
+| `repo`, `prNumber`, `resource` | `repo` is the full canonical project path, preserving case and nested groups. `prNumber` is the observed positive MR iid, equal to the requested number. `resource` is `{ repository: { provider: "gitlab", instanceBaseUrl, projectPath }, kind: "merge-request", number }`; retain the full instance root, including its effective port and installation prefix. |
+| `title`, `url`, `headSha`, `updatedAt`, `mergeable`, `mergeableState` | Values from the supplied provider detail, with nullable values preserved. Identity is not inferred from the URL. |
+| `state`, `isDraft`, `isMerged`, `isClosed` | Use confirmed provider values. Lifecycle is `open`, `locked`, `closed`, `merged`, or `unknown`; only confirmed open plus confirmed draft becomes `draft`. `isDraft` is `null` without a confirmed boolean; merged/closed flags are `null` without a confirmed state. |
+| `details` | `{ resource, url, title, body, state, draft, sourceBranch, targetBranch, source, target, author, mergeable, mergeableState, headSha, createdAt, updatedAt }`. Its `state` is `open`, `locked`, `closed`, `merged`, or `null`; `draft` is the confirmed boolean or `null`. Optional values remain `null`. |
+| `details.source`, `details.target` | Each confirmed branch identity is `{ provider, instanceBaseUrl, projectId, projectPath, branch }`. An unknown whole identity is `null`; an unknown path inside a known identity is `null`. `projectId` is an exact decimal string, including values above 2^53, with no JavaScript numeric rounding. Branch names or selected targets cannot fill missing identity. |
+| `availability` | Independent `policy`, `approvals`, `checks` and `discussions` states: `available`, `restricted`, `unavailable`, `transient`, `rate-limited`, or `unknown`. |
+| `checks`, `requirements.checks` | Coherent, available rollup evidence supplies the existing totals, items and required flags. Unknown totals/items/names are `null`, with `requiredKnown: false`; a known empty rollup has zero totals and empty arrays. A reported check head that differs from the actual review head makes projected check availability `unknown`, without a refresh. |
+| `reviews`, `requirements.approvals` | Aggregate supplied reviews with the existing latest-actionable-review rules. Missing review counts and an absent provider decision are `null`, never an inferred `approved` or `none`. Unknown policy leaves `needed` omitted. |
+| `comments`, `requirements.threads` | Unknown conversation/review-comment counts are `null`; `totalCount` is `null` unless both counts are known. Unknown `unresolvedThreadCount`, `unresolved` and policy-dependent `resolutionRequired` are omitted; known zero remains zero. |
+| Other `requirements` fields | Unknown conflict/behind/draft facts are `null`; unknown policy gives `rulesKnown: false`. Missing facts do not imply readiness or a blocked reason. Optional mergeability/status/reason and queue/ejection fields remain omitted when absent; top-level nullable fields remain present. |
+
+`details.author` preserves the existing normalized nonempty author; an empty
+string becomes `null`. The provider may already have normalized a missing raw
+author to `ghost`, so that value cannot prove raw presence. A real username
+`ghost` remains unchanged.
+
+A quota-only failure of an optional read preserves valid primary details and
+other available components. This partial-data rule cannot suppress authority or
+credential errors. Projection uses the supplied observation, without hidden
+legacy fallback reads or the global monitor quota gate, and omits `pausedUntil`.
+The existing GitHub deadline and quota-failure rules remain unchanged. An
+incompatible provider/kind/number or malformed required detail is an error,
+without downgrading the read to the ordinary path.
+
+For example, this **excerpt** retains primary data and known empty check/comment
+counts when the optional approvals read is rate-limited; omitted fields in this
+excerpt still follow the full shape above:
+
+```json
+{
+  "repo": "Team/SubGroup/Project",
+  "prNumber": 17,
+  "title": "Provider title",
+  "state": "open",
+  "isDraft": false,
+  "resource": {
+    "repository": {
+      "provider": "gitlab",
+      "instanceBaseUrl": "https://forge.example:8443/install",
+      "projectPath": "Team/SubGroup/Project"
+    },
+    "kind": "merge-request",
+    "number": 17
+  },
+  "checks": { "total": 0, "passed": 0, "failed": 0, "pending": 0, "failedNames": [] },
+  "reviews": { "decision": null, "approvals": null, "changesRequested": null },
+  "comments": { "conversationCount": 0, "reviewCommentCount": 0, "unresolvedThreadCount": 0, "totalCount": 0 },
+  "availability": { "policy": "available", "approvals": "rate-limited", "checks": "available", "discussions": "available" }
+}
+```
 
 ### 5.42 Centralized PR monitoring — `prMonitor.*` *(v6.1)*
 
