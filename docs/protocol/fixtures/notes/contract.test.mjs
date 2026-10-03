@@ -1112,3 +1112,327 @@ test('table address metadata stays bounded as unloaded prefix extent grows', () 
   assert.throws(() => assertSourcePage(tableSource, split, f.limits,
     { direction: 'forward', at: split.result.range.start }));
 });
+
+
+test('canonical HTML continuation requires owner metadata when identical windows have different columns', () => {
+  const { recipe: r, expected: e } = f.htmlContinuation;
+  const a = r.open + r.repeat.repeat(r.count) + r.tail;
+  const b = r.open + r.extra + r.repeat.repeat(r.count - r.extra.length) + r.tail;
+  assert.equal(a.length, b.length);
+  assert.equal(a.indexOf(e.target), b.indexOf(e.target));
+  const start = a.indexOf(e.target), end = start + e.target.length;
+  assert.equal(a.slice(start, end), b.slice(start, end));
+  assert.notEqual(e.columnIndexA, e.columnIndexB);
+  for (const source of [a, b]) assertSourcePage(source,
+    frame(source.slice(start, end), start, end, source.length), f.limits,
+    { direction: 'forward', at: start });
+  const incomplete = structuredClone(tableFixture.cellFrame);
+  incomplete.result.items[0].construct = 'htmlTableCell';
+  delete incomplete.result.items[0].tablePosition;
+  assert.throws(() => summaryContract.assertContextFrame(incomplete, f.limits));
+});
+
+test('canonical HTML cell descriptors cannot silently promote raw spans to live geometry', () => {
+  const invalid = structuredClone(tableFixture.cellFrame);
+  const cell = invalid.result.items[0];
+  cell.construct = 'htmlTableCell'; delete cell.tablePosition;
+  cell.htmlPosition = { profile: 'canonicalNote', tableRef: 'html-table', rowIndex: 0,
+    columnIndex: 1, cellRole: 'data', rowSpan: 2, colSpan: 2 };
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+});
+
+test('HTML table owners and raw body addresses distinguish identical far source windows', () => {
+  const x = f.htmlContinuation;
+  const source = x.recipe.open + x.recipe.repeat.repeat(x.recipe.count) + x.recipe.tail;
+  for (const [variant, column] of [['a', 1], ['b', 2]]) {
+    const frames = x.frames[variant];
+    for (const kind of ['cell', 'row', 'table', 'map', 'text'])
+      summaryContract.assertContextFrame(frames[kind], f.limits);
+    assertMetadataFrame(frames.attributes, f.limits);
+    const cell = frames.cell.result.items[0], row = frames.row.result.items[0];
+    assert.equal(cell.htmlPosition.columnIndex, column);
+    assert.equal(cell.htmlPosition.rowIndex, 0);
+    assert.equal(row.htmlPosition.rowIndex, 0);
+    assert.equal(cell.htmlPosition.tableRef, row.htmlPosition.tableRef);
+    assert.deepEqual(cell.htmlSource.bodyRange, x.expected.targetRange);
+    assert.equal(source.slice(cell.htmlSource.bodyRange.start, cell.htmlSource.bodyRange.end), 'TARGET');
+    assert.equal(source.slice(cell.htmlSource.openingRange.start, cell.htmlSource.openingRange.end), '<td>');
+    assert.equal(source.slice(cell.htmlSource.closingRange.start, cell.htmlSource.closingRange.end), '</td>');
+    const text = summaryContract.assertTextFragments([frames.text], 'renderedText', f.limits);
+    const map = frames.map.result.items[0];
+    assert.equal(text.length, map.renderedRange.end - map.renderedRange.start);
+    assert.equal(text, source.slice(map.sourceRange.start, map.sourceRange.end));
+    assert.ok(Object.values(frames).every(frame => wireBytes(frame) < 4096));
+  }
+  assert.equal(x.expected.sourceLength, source.length);
+  assert.ok(source.length > 2_000_000);
+  assert.notEqual(x.frames.a.cell.result.sourceRevision, x.frames.b.cell.result.sourceRevision);
+  assert.ok(docs.includes('htmlTableCell') && docs.includes('context.attributes'));
+});
+
+test('canonical HTML address validation rejects spans, roles, unsafe offsets and cross-profile claims', () => {
+  for (const change of [
+    c => { c.htmlPosition.profileVersion = 2; },
+    c => { c.htmlPosition.rowSpan = 2; }, c => { c.htmlPosition.colSpan = 2; },
+    c => { c.htmlPosition.rowIndex = -1; }, c => { c.htmlPosition.columnIndex = 0.5; },
+    c => { c.htmlPosition.columnIndex = Number.MAX_SAFE_INTEGER + 1; },
+    c => { c.htmlPosition.cellRole = 'td'; }, c => { c.htmlPosition.profile = 'liveSession'; },
+    c => { c.htmlPosition.tableRef = 'x'.repeat(257); }, c => { delete c.parentRef; },
+    c => { delete c.attributesRef; }, c => { delete c.sourceMapRef; },
+    c => { c.htmlSource.bodyRange.end = c.sourceRange.end + 1; },
+    c => { c.htmlSource.openingRange = null; },
+    c => { c.htmlSource.provenance = 'implicit'; },
+  ]) {
+    const bad = structuredClone(f.htmlContinuation.frames.a.cell);
+    change(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  const header = structuredClone(f.htmlContinuation.frames.a.cell);
+  header.result.items[0].htmlPosition.cellRole = 'header';
+  header.result.items[0].htmlPosition.rowIndex = 7;
+  summaryContract.assertContextFrame(header, f.limits);
+  for (const type of ['row', 'table']) {
+    const bad = structuredClone(f.htmlContinuation.frames.a[type]);
+    bad.result.items[0].htmlPosition.columnIndex = 0;
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+});
+
+test('source-less HTML projections have explicit anchors and no fabricated syntax', () => {
+  const implicit = structuredClone(f.htmlContinuation.frames.a.row);
+  const node = implicit.result.items[0];
+  node.sourceRange.end = node.sourceRange.start;
+  node.htmlSource = { provenance: 'implicit', openingRange: null, bodyRange: null, closingRange: null };
+  summaryContract.assertContextFrame(implicit, f.limits);
+  node.htmlSource.bodyRange = { ...node.sourceRange };
+  assert.throws(() => summaryContract.assertContextFrame(implicit, f.limits));
+  node.htmlSource.provenance = 'repaired'; node.htmlSource.piecesRef = 'repair-pieces';
+  summaryContract.assertContextFrame(implicit, f.limits);
+});
+
+test('HTML rendered offsets are leaf-local and mapping modes constrain source ownership', () => {
+  const frame = structuredClone(f.htmlContinuation.frames.a.map);
+  const item = frame.result.items[0];
+  assert.equal(item.renderedRange.start, 0);
+  assert.ok(item.sourceRange.start > 2_000_000);
+  for (const mutate of [
+    m => { m.profileVersion = 2; }, m => { m.profile = 'liveSession'; }, m => { m.mapping = 'guess'; },
+    m => { m.renderedRange.end++; }, m => { m.textRef = null; },
+    m => { m.ownerRef = ''; }, m => { m.textNodeId = 'x'.repeat(257); },
+    m => { m.mapping = 'projection'; }, m => { m.mapping = 'omitted'; },
+    m => { m.renderedRange.start = -1; },
+  ]) {
+    const bad = structuredClone(frame); mutate(bad.result.items[0]);
+    assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+  }
+  item.mapping = 'omitted'; item.renderedRange.end = 0; item.textRef = null;
+  summaryContract.assertContextFrame(frame, f.limits);
+  item.mapping = 'projection'; item.sourceRange.end = item.sourceRange.start;
+  item.renderedRange.end = 1; item.textRef = 'projection-text';
+  summaryContract.assertContextFrame(frame, f.limits);
+});
+
+test('HTML mapping refs retain window, owner, revision and expiration guards', () => {
+  const claim = { ...f.scope, kind: 'context', contextRef: 'a-cell-window-map',
+    sourceRevision: 'r:html-a', boot: 'boot', profileRevision: 'canonical-build-a', expiresAt: 100,
+    budgets: { maxWireBytes: 4096 } };
+  assert.equal(cursorError(claim, claim, claim, 1), null);
+  for (const contextRef of ['b-cell-window-map', 'a-other-window-map', 'live-session-map', 'a-table'])
+    assert.equal(cursorError(claim, { ...claim, contextRef }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, { ...claim, noteId: 'other' }, claim, 1), 'note-page-cursor-invalid');
+  assert.equal(cursorError(claim, claim, { ...claim, sourceRevision: 'r:html-b' }, 1), 'note-page-stale');
+  assert.equal(cursorError(claim, claim, claim, 100), 'note-page-expired');
+  assert.equal(cursorError(claim, claim, { ...claim, profileRevision: 'canonical-build-b' }, 1), 'note-page-expired');
+});
+
+test('HTML maps use the complete escaped-wire budget with no inline source exceptions', () => {
+  const frame = structuredClone(f.htmlContinuation.frames.a.map);
+  frame.id = 'i'.repeat(64);
+  for (const key of Object.keys(frame.result.scope)) frame.result.scope[key] = 's'.repeat(256);
+  frame.result.items = Array.from({ length: 12 }, (_, i) => ({
+    ...frame.result.items[0], id: '\u0001'.repeat(127) + i,
+    ownerRef: '\u0001'.repeat(127) + i, textNodeId: '\u0001'.repeat(127) + i,
+    textRef: '\u0001'.repeat(127) + i,
+  }));
+  const slots = frame.result.items.flatMap(item => ['id', 'ownerRef', 'textNodeId', 'textRef'].map(key => [item, key]));
+  // Escaped legal controls grow six wire bytes each; then fill the exact residual with ASCII.
+  for (const [item, key] of slots) {
+    const room = Math.min(256 - utf8(item[key]), Math.floor((65536 - wireBytes(frame)) / 6));
+    if (room > 0) item[key] += '\u0001'.repeat(room);
+  }
+  const remaining = 65536 - wireBytes(frame);
+  const [item, key] = slots.find(([item, key]) => utf8(item[key]) + remaining + 1 <= 256);
+  item[key] += 'x'.repeat(remaining);
+  assert.equal(wireBytes(frame), 65536);
+  summaryContract.assertContextFrame(frame, f.limits);
+  item[key] += 'x';
+  assert.equal(wireBytes(frame), 65537);
+  assert.throws(() => summaryContract.assertContextFrame(frame, f.limits));
+});
+
+test('same HTML owner survives two admitted windows with separately retained map bindings', () => {
+  const one = structuredClone(f.htmlContinuation.frames.a.cell);
+  const two = structuredClone(one);
+  two.result.items[0].sourceMapRef = 'a-same-cell-second-window-map';
+  two.result.items[0].continuationBefore = !one.result.items[0].continuationBefore;
+  const immutable = ({ sourceMapRef, continuationBefore, continuationAfter, ...owner }) => owner;
+  assert.deepEqual(immutable(one.result.items[0]), immutable(two.result.items[0]));
+  assert.notEqual(one.result.items[0].sourceMapRef, two.result.items[0].sourceMapRef);
+  const bindings = new Map([['window-1', one.result.items[0].sourceMapRef], ['window-2', two.result.items[0].sourceMapRef]]);
+  assert.equal(bindings.size, 2);
+  for (const frame of [one, two]) summaryContract.assertContextFrame(frame, f.limits);
+});
+
+test('direct native leaf references preserve rendered ancestry without earlier sibling reads', () => {
+  const x = f.htmlContinuation.frames.b;
+  summaryContract.assertContextFrame(x.native, f.limits);
+  const nodes = new Map(x.native.result.items.map(n => [n.nodeClass === 'text' ? 'b-native-leaf' : n.id, n]));
+  const map = x.map.result.items[0];
+  let node = nodes.get(map.textNodeRef);
+  assert.equal(node.id, map.textNodeId);
+  const chain = [], seen = new Set();
+  while (node) {
+    assert.ok(!seen.has(node.id)); seen.add(node.id); chain.push(node.nodeType);
+    if (node.nodeType === 'tableCell') assert.equal(node.childIndex, 2);
+    node = node.parentRef === null ? undefined : nodes.get(node.parentRef);
+  }
+  assert.deepEqual(chain, ['text', 'paragraph', 'tableCell', 'tableRow', 'table', 'doc']);
+  const paragraph = nodes.get('b-native-paragraph');
+  assert.equal(paragraph.sourceRange.start, paragraph.sourceRange.end);
+  // Ancestor closure returns this implicit node even though an interior seek does not overlap it.
+  assert.ok(paragraph.sourceRange.end < map.sourceRange.start + 1);
+  assert.equal(x.native.result.items.filter(n => n.nodeType === 'tableCell').length, 1);
+  const invalid = structuredClone(x.native);
+  invalid.result.items.at(-1).childIndex = -1;
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+  invalid.result.items.at(-1).childIndex = 0;
+  invalid.result.items.at(-1).children = [{ text: 'unbounded hidden subtree' }];
+  assert.throws(() => summaryContract.assertContextFrame(invalid, f.limits));
+});
+
+test('entity and whitespace segments reconstruct actual canonical leaves without source-prefix reads', () => {
+  const x = f.htmlContinuation.entityMapping;
+  summaryContract.assertContextFrame(x.maps, f.limits);
+  summaryContract.assertContextFrame(x.atom, f.limits);
+  const resources = new Map(x.textResources.map(r => [r.ref, r.frame]));
+  const leaves = ['', ''];
+  for (const item of x.maps.result.items) {
+    assert.ok(boundary(x.source, item.sourceRange.start) && boundary(x.source, item.sourceRange.end));
+    const leaf = Number(item.textNodeId.at(-1));
+    const text = item.textRef === null ? '' : summaryContract.assertTextFragments([resources.get(item.textRef)], 'renderedText', f.limits);
+    assert.equal(item.renderedRange.start, leaves[leaf].length);
+    assert.equal(item.renderedRange.end, leaves[leaf].length + text.length);
+    const raw = x.source.slice(item.sourceRange.start, item.sourceRange.end);
+    if (item.mapping === 'identity') assert.equal(text, raw);
+    if (item.mapping === 'entity') assert.equal(text, { '&amp;': '&', '&#x1f680;': '🚀', '&nbsp;': '\u00a0' }[raw]);
+    if (item.mapping === 'normalized') assert.ok(['\r\n  ', '\t '].includes(raw) && text === ' ');
+    leaves[leaf] += text;
+  }
+  assert.deepEqual(leaves, x.expectedLeaves);
+  const oracle = f.htmlContinuation.canonicalOracleCases.find(c => c.id === 'entitiesAndWhitespace');
+  const paragraph = oracle.native.content[0].content[0].content[0].content[0];
+  assert.deepEqual(paragraph.content.map(n => n.text ?? n.type), [leaves[0], 'hardBreak', leaves[1]]);
+  const entity = x.maps.result.items.find(m => x.source.slice(m.sourceRange.start, m.sourceRange.end) === '&amp;');
+  const seek = entity.sourceRange.start + 2;
+  assert.equal(x.source.slice(seek, entity.sourceRange.end), 'mp;');
+  assert.equal(summaryContract.assertTextFragments([resources.get(entity.textRef)], 'renderedText', f.limits), '&');
+  const atom = x.atom.result.items[0];
+  assert.equal(x.source.slice(atom.sourceRange.start, atom.sourceRange.end), '<br>');
+  assert.equal(atom.childIndex, 1);
+  assert.equal(atom.nodeClass, 'atom');
+});
+
+test('recorded canonical parser outcomes retain roles, nested order and sanitized atomic attributes', () => {
+  const cases = Object.fromEntries(f.htmlContinuation.canonicalOracleCases.map(c => [c.id, c]));
+  const cells = cases.cellRoles.native.content[0].content[0].content;
+  assert.deepEqual(cells.map(n => n.type), ['tableHeader', 'tableCell']);
+  const repaired = cases.implicitBodiesAndEnds.native.content[0];
+  assert.deepEqual(repaired.content.map(r => r.content.length), [2, 1]);
+  const nested = cases.nestedTable.native.content[0].content[0].content[0].content;
+  assert.deepEqual(nested.map(n => n.type), ['paragraph', 'table', 'paragraph']);
+  assert.equal(nested[1].content[0].content[0].type, 'tableHeader');
+  const malformed = cases.malformedSpans.native.content[0].content[0].content;
+  assert.ok(malformed.every(n => n.attrs.colspan === 1 && n.attrs.rowspan === 1));
+  const unsafe = JSON.stringify(cases.unsafeAttributes.native);
+  for (const removed of ['javascript:', 'alert(', 'evil()', 'display:none']) assert.ok(!unsafe.includes(removed));
+  const retained = cases.retainedAttributes.native.content[0].content[0].content[0].content;
+  assert.deepEqual(retained.map(n => n.type), ['paragraph', 'image']);
+  assert.equal(retained[0].content[0].marks[0].attrs.href, 'https://example.test/long');
+  assert.equal(retained[1].attrs.src, 'https://example.test/image.png');
+  assert.ok(cases.retainedAttributes.source.includes('t'.repeat(256)));
+  assert.ok(!JSON.stringify(retained).includes('t'.repeat(256)), 'schema drops the raw link title');
+});
+
+test('repaired HTML provenance preserves absent syntax and separately paged exact source pieces', () => {
+  const x = f.htmlContinuation.repairedProvenance;
+  summaryContract.assertContextFrame(x.cell, f.limits);
+  summaryContract.assertContextFrame(x.pieces, f.limits);
+  const cell = x.cell.result.items[0], parts = x.pieces.result.items;
+  assert.equal(cell.htmlSource.closingRange, null);
+  assert.deepEqual(parts.map(p => x.source.slice(p.sourceRange.start, p.sourceRange.end)), ['<td>', 'ONE']);
+  assert.ok(parts.every(p => p.nodeRef === cell.nativeRef));
+  assert.equal(cell.sourceRange.start, Math.min(...parts.map(p => p.sourceRange.start)));
+  assert.equal(cell.sourceRange.end, Math.max(...parts.map(p => p.sourceRange.end)));
+  const missing = structuredClone(x.cell); delete missing.result.items[0].htmlSource.piecesRef;
+  assert.throws(() => summaryContract.assertContextFrame(missing, f.limits));
+  const bad = structuredClone(x.pieces); bad.result.items[0].sourceRange.end = bad.result.items[0].sourceRange.start;
+  assert.throws(() => summaryContract.assertContextFrame(bad, f.limits));
+});
+
+test('native graph references reject duplicate rendered positions, missing parents and cycles', () => {
+  const frame = f.htmlContinuation.frames.a.native;
+  const links = Object.fromEntries(frame.result.items.map(n => [n.nodeClass === 'text' ? 'a-native-leaf' : n.id, n.id]));
+  const nodes = summaryContract.assertNativeGraph([frame], links, f.limits);
+  assert.equal(nodes.get(links['a-native-leaf']).nodeClass, 'text');
+  assert.equal(nodes.get(links['a-native-leaf']).id, f.htmlContinuation.frames.a.map.result.items[0].textNodeId);
+  const duplicated = structuredClone(frame);
+  duplicated.result.items.push({ ...duplicated.result.items.at(-1), id: 'different-leaf-same-position' });
+  assert.throws(() => summaryContract.assertNativeGraph([duplicated], links, f.limits));
+  const cyclic = structuredClone(frame);
+  cyclic.result.items.find(n => n.id === 'a-native-paragraph').parentRef = 'a-native-leaf';
+  assert.throws(() => summaryContract.assertNativeGraph([cyclic], links, f.limits));
+  const missing = structuredClone(frame); missing.result.items.pop();
+  missing.result.items.find(n => n.id === 'a-native-paragraph').parentRef = 'missing';
+  assert.throws(() => summaryContract.assertNativeGraph([missing], links, f.limits));
+  const foreign = structuredClone(frame); foreign.result.snapshotId = 'other-snapshot';
+  assert.throws(() => summaryContract.assertNativeGraph([frame, foreign], links, f.limits));
+});
+
+test('repaired native text preserves disjoint raw pieces and never treats hull gaps as displayed content', () => {
+  const example = f.htmlContinuation.canonicalOracleCases.find(c => c.id === 'unsafeAttributes');
+  const expected = example.native.content[0].content[0].content[0].content[0].content[0].text;
+  const first = example.source.indexOf('LINK'), last = example.source.lastIndexOf('TEXT');
+  const frame = structuredClone(f.htmlContinuation.frames.a.native);
+  frame.result.items = [{ kind: 'nativeNode', id: 'repaired-leaf', profile: 'canonicalNote', profileVersion: 1,
+    nodeType: 'text', nodeClass: 'text', parentRef: 'repaired-paragraph', childIndex: 0,
+    sourceRange: { start: first, end: last + 4 }, provenance: 'repaired',
+    sourcePiecesRef: 'leaf-pieces', attributesRef: 'leaf-attrs' }];
+  summaryContract.assertContextFrame(frame, f.limits);
+  const pieces = structuredClone(f.htmlContinuation.repairedProvenance.pieces);
+  pieces.result.items = [first, last].map((start, i) => ({ kind: 'sourcePiece', id: `part-${i}`,
+    nodeRef: 'repaired-leaf-ref', sourceRange: { start, end: start + 4 }, role: 'body' }));
+  summaryContract.assertContextFrame(pieces, f.limits);
+  assert.equal(pieces.result.items.map(p => example.source.slice(p.sourceRange.start, p.sourceRange.end)).join(''), expected);
+  assert.ok(example.source.slice(first + 4, last).includes('<script>evil()</script>'));
+  assert.ok(!expected.includes('evil'));
+});
+
+test('HTML attribute resources page long raw values without confusing them with effective attributes', () => {
+  const value = '😀\r\n"'.repeat(20_000);
+  const source = `<table><tr><td title='${value}'>TARGET</td></tr></table>`;
+  const cell = structuredClone(f.htmlContinuation.frames.a.cell);
+  cell.result.items[0].sourceRange = { start: source.indexOf('<td'), end: source.indexOf('</td>') + 5 };
+  cell.result.items[0].htmlSource = { provenance: 'explicit',
+    openingRange: { start: source.indexOf('<td'), end: source.indexOf('TARGET') },
+    bodyRange: { start: source.indexOf('TARGET'), end: source.indexOf('TARGET') + 6 },
+    closingRange: { start: source.indexOf('</td>'), end: source.indexOf('</td>') + 5 } };
+  summaryContract.assertContextFrame(cell, f.limits);
+  assert.ok(wireBytes(cell) < 2048);
+  const first = structuredClone(f.htmlContinuation.frames.a.text);
+  first.result.items[0] = { kind: 'fragment', id: 'raw-attribute-part', field: 'rawAttributeValue:0',
+    offset: 0, text: value.slice(0, 5120), nextRef: 'raw-attribute-next' };
+  summaryContract.assertContextFrame(first, f.limits);
+  assert.ok(utf8(first.result.items[0].text) <= f.limits.sourceBytes);
+  assert.ok(first.result.items[0].text.length < value.length);
+  assert.notEqual(cell.result.items[0].attributesRef, first.result.items[0].nextRef);
+});

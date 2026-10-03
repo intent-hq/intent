@@ -284,12 +284,16 @@ budgets are inapplicable. Context has separate item and wire budgets and is neve
 hidden inside a source page. Items are discriminated:
 
 - `boundary`: `{ id, sourceRange, construct, parentRef?, continuationBefore,
-  continuationAfter, detailRef?, tablePosition? }`. `construct` is a syntax category, not an editor
+  continuationAfter, detailRef?, tablePosition?, htmlPosition?, htmlSource?, attributesRef?, nativeRef?, sourceMapRef? }`. `construct` is a syntax category, not an editor
   node ID; `detailRef` pages large opening syntax, attributes and ancestor chains.
 - `span`: `{ id, sourceRange, role, parentRef?, detailRef? }` for marks, delimiters, literals,
   comment markers and structural seams. IDs are snapshot-local; identical text at
   another address has another ID. `role` distinguishes source-bearing text from
   zero-width editor projections; it never fabricates source bytes.
+- `sourceMap`: the window-bound canonical HTML raw-to-rendered mapping described
+  below; it never replaces canonical source pages.
+- `nativeNode` and `sourcePiece`: the bounded canonical tree and provenance
+  descriptors below, distinct from text mappings and session-native editor IDs.
 - `fragment`: `{ id, field, offset, text, nextRef }` pages descriptor strings,
   including huge URLs/languages/attributes, with scalar-safe UTF-16 field offsets.
   `nextRef` is null at field exhaustion. Fragment text obeys the source-text limit.
@@ -310,7 +314,7 @@ Context version 1 uses these wire spellings (not library enum/debug strings):
 
 | Field | Vocabulary / meaning |
 | --- | --- |
-| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock` |
+| boundary.construct | `paragraph`, `heading`, `blockquote`, `codeBlock`, `list`, `listItem`, `table`, `tableHead`, `tableRow`, `tableCell`, `emphasis`, `strong`, `strikethrough`, `link`, `image`, `htmlBlock`, `footnoteDefinition`, `definitionList`, `definitionListTitle`, `definitionListDefinition`, `superscript`, `subscript`, `metadataBlock`, `htmlTable`, `htmlTableRow`, `htmlTableCell` |
 | span.role | `text` (source text), `code` (inline code), `literal` (raw HTML/literal syntax), `commentMarker` (canonical anchor marker syntax), `lineBreak` (soft/hard break syntax), `rule`, `taskMarker` (checkbox syntax), `delimiter` (explicit syntax delimiter), `projection` (zero-width editor seam) |
 
 Every item has its `kind` discriminator. Ranges address original source even when
@@ -375,15 +379,214 @@ frame still count toward item/token/complete escaped-wire budgets. It cannot gro
 with the unloaded prefix, and page construction must shrink items if necessary.
 
 This address contract describes the existing canonical GFM **unit-cell** table
-representation. It introduces no rowSpan/colSpan fields, merged-cell grammar,
-synthetic covered cells or new canonical ownership. Raw HTML/custom constructs
-remain their existing literal/htmlBlock representation unless independently
-supported by a defined canonical contract; do not infer merged-cell spans from
-HTML attributes or live editor geometry. A reader missing a required position or
-unable to handle the represented grammar must report the unsupported projection,
+representation. It introduces no rowSpan/colSpan fields, merged-cell grammar or
+synthetic covered cells. HTML uses the separate canonical profile below; never
+reuse GFM header/body ordinals for HTML or infer canonical spans from raw
+HTML attributes or live editor geometry.
+A reader missing a required position or unable to handle the represented grammar
+must report the unsupported projection,
 not fetch a preceding/full source fallback or silently guess column zero. Legacy
 complete Note reads and writer/canonical-reload behavior are unchanged. Native
 session seams/owners remain separate from these revision-local source addresses.
+
+**Canonical HTML continuation.** The separate `canonicalNote` profile describes
+the existing `NoteWithComments` load path: `processMarkdownToHTML` with anchor
+preservation and workspace identity, `sanitizeMarkdownHTML`, then the registered
+`createEditorConfig` schema. It is not unsanitized DOM parsing or a new Markdown
+dialect. Version 1 is explicit as `profileVersion: 1` on HTML positions and maps; it
+preserves the entry-path outcomes in these fixtures. Unknown versions are not
+interpreted as version 1. The index also records the concrete parser/sanitizer/schema
+build identity and relevant options in its internal profile revision; changing the
+parser, sanitizer, schema or their relevant options invalidates that index and its
+references before serving the new profile (`note-page-expired` for retired profile
+resources, even if raw sourceRevision is unchanged). A change to the normative
+projection behavior requires a new profileVersion, not silent reuse of version 1.
+Producer/consumer implementations must pin and differentially test this profile,
+including the existing conditional note
+primitive extensions. Naming the profile does not establish implementation parity.
+
+The current canonical sanitizer removes `colspan`/`rowspan`; canonical cells are
+unit cells. Native `mergeCells` may produce spans in the live editor, while the
+existing HTML-to-Markdown serializer emits GFM and fresh reload loses those spans.
+This contract preserves those distinct outcomes. It never promotes a raw HTML span
+attribute to canonical geometry or promises new durable merged-table persistence.
+Even unit cells need indexed context: an extra earlier cell can change a far cell's
+column while its source offset, source length and visible literal text are identical.
+
+HTML table boundaries use `htmlTable`, `htmlTableRow`, and `htmlTableCell` rather
+than GFM constructs. They require these bounded fields:
+
+```typescript
+type HtmlPosition = {
+  profile: "canonicalNote"; profileVersion: 1;
+  tableRef: string; // direct context reference, including on the table itself
+  rowIndex?: number; // required on row/cell, absent on table
+  columnIndex?: number; // required only on cell
+  cellRole?: "data" | "header"; // required only on cell: native td / th role
+};
+type HtmlSource = {
+  provenance: "explicit" | "implicit" | "repaired";
+  openingRange: { start: number; end: number } | null;
+  bodyRange: { start: number; end: number } | null;
+  closingRange: { start: number; end: number } | null;
+  piecesRef?: string; // required for repaired/noncontiguous source provenance
+};
+// Required on each HTML table boundary, alongside parentRef/detailRef:
+// htmlPosition, htmlSource, attributesRef, nativeRef, sourceMapRef.
+```
+
+Ordinals are nonnegative safe integers in the **canonical schema output**, with
+every row starting at 0 regardless of header/data role. `thead`/`tbody`/`tfoot`
+wrappers are not rows; a header cell need not be in row 0. Column ordinals reset
+per row and table owners reset for independent or nested tables. Direct tableRef
+resolves exactly that table boundary; a cell's parentRef resolves its row. No raw
+tag count, preceding-row scan, whole-grid enumeration or range-order inference is
+a substitute for these indexed addresses. The canonical address has no span fields.
+
+`sourceRange` is the exact raw envelope of an explicit source construct. An
+implicit source-less node instead has an explicitly identified empty projection
+anchor, not fabricated markup. Its anchor is the least source start among mapped
+canonical descendants; if none exists, the end of the nearest source-bearing
+ancestor's opening syntax, or 0 if no such ancestor exists. This rule is resolved
+at indexing time, not by descendant traversal during reads. `htmlSource` ranges address original scalar-safe
+UTF-16 source and are contained in that envelope. `bodyRange` excludes opening and
+closing syntax, but includes original child markup; it is not decoded text. Null
+means no corresponding contiguous literal range exists. Missing end tags and
+reparented/implicit schema nodes must carry their actual provenance; a repaired
+envelope never licenses rewriting that source. For repaired/noncontiguous nodes,
+sourceRange is only the hull of mapped source pieces, not ownership of every byte
+in that hull. Required piecesRef pages `sourcePiece` records with `{ id, nodeRef,
+sourceRange, role }`, where role is `opening`, `body`, `closing`, `attribute` or
+`omitted`. Ranges are exact, scalar-safe, nonempty source pieces, ordered by
+`(sourceRange.start, sourceRange.end, id)`; parent/child provenance may overlap but
+one node's traversal never duplicates a piece. Missing literal syntax has no piece.
+When no piece exists, the repaired node uses the same empty-anchor rule as an
+implicit node. Explicit/implicit nodes omit piecesRef. Attribute source ranges and values
+page through detail references separately from effective attributes. Unknown or
+unsupported projections must be reported explicitly, never silently represented
+as successfully rendered literal text. This diagnostic does not satisfy native
+rendering acceptance; supported malformed-input behavior follows the same existing
+pipeline, not a new coercion or rejection policy invented by this transport.
+
+`attributesRef` resolves with `page: { kind: "metadata", ref: attributesRef, ... }`
+to the existing bounded metadata-tree shape. It has the distinct resource namespace
+`context.attributes`, never the note metadata root. It contains effective schema
+attributes after sanitization, not raw opening tags. Large primitive payloads,
+column-width arrays, URLs and strings remain separately pageable tree branches;
+clients may not drain the entire tree to admit a window. These resources share
+source snapshot lifetime; the existing conservative metadata-write invalidation
+still applies. Raw attribute spelling, quotes and stripped values remain exact
+source provenance and must not be reconstructed from these effective values.
+
+`sourceMapRef` resolves through `page.kind: "context"` to source-map items for the
+**original admitted source window**, including necessary seam segments. Its opaque
+identity binds window, owner, profile and source snapshot. Resolving it does not
+enumerate a whole giant body or its preceding text. A subsequent seek obtains a
+new window-bound reference; an owner identity alone is not a map-page selector.
+The HTML boundary id, table/parent/native/attribute/detail references and provenance
+are immutable and reusable within the snapshot. Only sourceMapRef and continuation
+flags vary by admitted window. Consumers compare immutable owner fields separately
+and retain map bindings under `(snapshot, window, owner)` even after owner deduplication.
+Two windows in the same giant cell must neither conflict on owner identity nor
+reuse the other's map binding. This HTML rule does not change GFM reference semantics.
+
+```typescript
+type HtmlSourceMapItem = {
+  kind: "sourceMap"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  ownerRef: string; textNodeId: string | null; textNodeRef: string | null;
+  sourceRange: { start: number; end: number };
+  renderedRange: { start: number; end: number };
+  mapping: "identity" | "entity" | "normalized" | "omitted" | "projection";
+  textRef: string | null;
+};
+```
+
+ownerRef identifies the snapshot-stable **source-container boundary** whose
+window issued the mapping. It is not a claim that the text remains a canonical
+descendant of that source container: HTML repair/foster parenting can move it.
+textNodeRef, parentRef and childIndex supply canonical ownership independently;
+neither raw containment nor the old source table determines that ancestry.
+Rendered offsets are scalar-safe UTF-16 within **one immutable canonical TipTap
+text leaf after schema/whitespace normalization**, identified by textNodeId and
+ownerRef. They are neither raw DOM textContent offsets nor document-wide ProseMirror
+positions. The latter include atoms and wrapper positions and remain session-owned.
+An identity segment preserves text and length; an entity segment is an indivisible
+raw-to-decoded mapping; normalized segments record actual canonical normalization.
+Omitted source has an empty rendered range and null textRef; when there is no
+corresponding text leaf, textNodeId is null and renderedRange is `[0,0)` rather
+than naming a fabricated leaf; textNodeRef is also null in that case. All
+non-omitted segments require a real textNodeId and a direct textNodeRef resolving
+its `nativeNode` descriptor (the returned id equals textNodeId).
+A source-less projection has an empty source range. Nonempty rendered segments use a bounded context fragment
+resource `field: "renderedText"` whose offset 0 is the start of that segment, not
+the whole leaf. The resolved text length equals renderedRange length. Repeated
+strings have distinct source identities; source-copy/search/edit coordinates always
+use raw ranges. Selection affinities choose declared segment endpoints for
+non-bijective mappings, never interpolate an offset inside an entity or invent
+source bytes. Maps enumerate by `(sourceRange.start, sourceRange.end, id)`; browser
+repair may reorder rendered leaves, so rendered order must not be inferred from it.
+Map references reject other owners/windows/profiles/snapshots and stale revisions;
+stable node, attribute and provenance references remain reusable in that snapshot.
+item, token, decoded-fragment and complete escaped-wire limits are unchanged.
+
+`nativeRef` resolves through `page.kind: "context"` to exactly the associated
+canonical node descriptor, without expanding its children:
+
+```typescript
+type CanonicalNativeNode = {
+  kind: "nativeNode"; id: string; profile: "canonicalNote"; profileVersion: 1;
+  nodeType: string; nodeClass: "container" | "text" | "atom";
+  parentRef: string | null; childIndex: number;
+  sourceRange: { start: number; end: number };
+  provenance: "explicit" | "implicit" | "repaired"; sourcePiecesRef?: string;
+  attributesRef: string; marksRef?: string;
+};
+```
+
+nodeType is the existing schema name (at most 1,024 UTF-8 bytes); nodeClass follows
+that schema. parentRef is another direct native-node reference, null only on the
+canonical `doc` root (childIndex 0). childIndex is a nonnegative safe integer in
+the parent's **rendered schema children**, including text and atomic nodes. It is
+not a raw-source ordinal or an offset into only loaded children. Together with
+parentRef it establishes rendered ancestry/order without scanning siblings, even
+when repairs reorder source. id is snapshot-local, never an editor-session node ID.
+Canonical parent references are acyclic, and each `(parent node id, childIndex)`
+has one child. They are distinct from lexical boundary.parentRef (for example,
+HTML cell to table row versus text leaf to schema paragraph). Empty-anchor
+fallback walks strictly toward a source-bearing ancestor/root at index build time;
+it cannot cycle through projected children.
+Provenance/envelope/anchor/sourcePiecesRef obey the same rules as HTML boundaries.
+attributesRef and optional marksRef use `context.attributes` metadata trees; marks
+are the ordered schema mark array, including each mark's type and attributes.
+Atoms carry their real nodeType and paged attributes and have no fabricated text
+leaf, rendered-text map or recursive inline payload. Text nodes resolve their
+admitted text through window maps rather than a complete-leaf text property.
+
+The original source-context query includes canonical owners of intersecting mapped
+pieces, text/atomic descendants admitted by that window, and the necessary ancestor
+closure. Membership is indexed by projection ownership, **not** solely by overlap
+with descriptor sourceRange. Thus an implicit row/paragraph outside the far window,
+or a reparented ancestor with no overlapping literal range, remains discoverable.
+All descriptors still paginate under the same item/wire bounds; direct refs permit
+targeted resolution without loading sibling directories or a whole subtree.
+
+Native descendants, marks, ancestors and atomic note primitives retain their
+existing typed schema ownership and paged detail/attribute resources. A cell body
+range alone is not permission to flatten block content or drain a large primitive
+attribute. Incomplete tags, implicit nodes, nested tables, empty/repaired cells,
+entities, CRLF and sanitizer removals require differential source-map fixtures
+against the actual profile before an adapter claims support. Index construction
+and invalidation cost are measured separately; ordinary reads must use indexed
+owners, interval overlap and checkpoints rather than scanning unloaded prefixes.
+
+Session-native merged ownership remains in the frozen operation `live` stream,
+bound to editorSessionId/localEditSequence/liveGeneration. Its effective grid
+origin, covered-cell ownership and span attributes must come from that frozen
+native state, never canonical HTML attribute guesses. Covered positions identify
+the real owner, including spans originating above a window; bounded intersecting
+owner queries must not expand rows times columns or fabricate covered source cells.
+Existing session history/eviction guarantees and fresh reload differences remain
+unchanged. Canonical context cannot be silently relabelled as live context.
 
 Each detail directory item is `{ kind: "fragment", id, field, offset: 0, text:
 "", nextRef }`; it is an indirection descriptor (empty text is not the value).
@@ -405,6 +608,7 @@ and item budgets still apply, including directories and escaped fragment bodies.
 | Detail field(s), in directory order | Encoding |
 | --- | --- |
 | `openingSource`, `closingSource` (every boundary, first) | Exact raw prefix before the first direct child event and suffix after the last direct child event, within the full boundary range. Without children, openingSource is the full range and closingSource is empty. Not rendered text and not an entire child/body serialization. Large prefixes still page. |
+| HTML boundary: `rawAttributeStart:N`, `rawAttributeEnd:N`, `rawAttributeName:N`, `rawAttributeValue:N?` | Zero-based lexical attribute order. Start/end are unsigned decimal UTF-16 offsets of the complete original attribute spelling, excluding surrounding inter-attribute whitespace. Names/values are raw slices, not entity-decoded effective schema attributes; value excludes its quotes and is omitted when absent, including boolean attributes. Each family is ordered as listed, then by N. Large values page normally; consumers do not drain unrelated fields. |
 | codeBlock: `codeStyle`, `info` (info only if fenced) | `fenced` or `indented`; info is parsed fence info text, not JSON |
 | list: `listStart` | `unordered` or unsigned decimal initial ordinal |
 | table: `alignment:N` | Zero-based column; `none`, `left`, `center`, `right` |

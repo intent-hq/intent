@@ -72,7 +72,8 @@ export function cursorError(claim, request, current, now) {
   if (keys.some(k => canonicalJson(claim[k] ?? null) !== canonicalJson(request[k] ?? null))) {
     return 'note-page-cursor-invalid';
   }
-  if (claim.expiresAt <= now || claim.boot !== current.boot) return 'note-page-expired';
+  if (claim.expiresAt <= now || claim.boot !== current.boot
+    || claim.profileRevision !== current.profileRevision) return 'note-page-expired';
   if (claim.sourceRevision !== current.sourceRevision
     || (claim.attributionGeneration !== undefined && claim.attributionGeneration !== current.attributionGeneration)
     || (claim.commentRevision !== undefined && claim.commentRevision !== current.commentRevision)) {
@@ -387,7 +388,8 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
   let textBytes = 0;
   for (const item of p.items) {
     token(item.id);
-    for (const key of ['parentRef', 'detailRef']) if (item[key] !== undefined) token(item[key]);
+    for (const key of ['parentRef', 'detailRef']) if (item[key] !== undefined
+      && !(item.kind === 'nativeNode' && key === 'parentRef' && item[key] === null)) token(item[key]);
     assert.equal(item.content, undefined);
     if (item.kind === 'fragment') {
       assert.ok(typeof item.field === 'string' && item.field.length > 0 && utf8(item.field) <= 1024);
@@ -396,6 +398,52 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
       if (directory) {
         assert.equal(item.offset, 0); assert.equal(item.text, ''); token(item.nextRef);
       }
+    } else if (item.kind === 'nativeNode' || item.kind === 'sourcePiece') {
+      assert.ok(!directory);
+      const r = item.sourceRange;
+      assert.ok(Number.isSafeInteger(r?.start) && Number.isSafeInteger(r?.end)
+        && r.start >= 0 && r.end >= r.start);
+      assert.equal(item.text, undefined);
+      if (item.kind === 'sourcePiece') {
+        token(item.nodeRef); assert.ok(r.end > r.start);
+        assert.ok(['opening', 'body', 'closing', 'attribute', 'omitted'].includes(item.role));
+      } else {
+        assert.equal(item.profile, 'canonicalNote'); assert.equal(item.profileVersion, 1);
+        assert.ok(typeof item.nodeType === 'string' && item.nodeType.length > 0 && utf8(item.nodeType) <= 1024);
+        assert.ok(['container', 'text', 'atom'].includes(item.nodeClass));
+        assert.equal(item.nodeClass === 'text', item.nodeType === 'text');
+        assert.ok(Number.isSafeInteger(item.childIndex) && item.childIndex >= 0);
+        if (item.parentRef === null) {
+          assert.equal(item.nodeType, 'doc'); assert.equal(item.childIndex, 0);
+        } else token(item.parentRef);
+        token(item.attributesRef);
+        if (item.marksRef !== undefined) token(item.marksRef);
+        assert.ok(['explicit', 'implicit', 'repaired'].includes(item.provenance));
+        if (item.provenance === 'implicit') assert.equal(r.start, r.end);
+        if (item.provenance === 'repaired') token(item.sourcePiecesRef);
+        else assert.equal(item.sourcePiecesRef, undefined);
+        assert.equal(item.children, undefined); assert.equal(item.attributes, undefined);
+      }
+    } else if (item.kind === 'sourceMap') {
+      assert.ok(!directory);
+      assert.equal(item.profile, 'canonicalNote'); assert.equal(item.profileVersion, 1);
+      token(item.ownerRef);
+      if (item.textNodeId !== null) { token(item.textNodeId); token(item.textNodeRef); }
+      else assert.equal(item.textNodeRef, null);
+      const a = item.sourceRange, b = item.renderedRange;
+      for (const r of [a, b]) assert.ok(Number.isSafeInteger(r?.start)
+        && Number.isSafeInteger(r?.end) && r.start >= 0 && r.end >= r.start);
+      assert.ok(['identity', 'entity', 'normalized', 'omitted', 'projection'].includes(item.mapping));
+      if (item.mapping === 'identity') assert.equal(a.end - a.start, b.end - b.start);
+      if (item.mapping === 'projection') assert.equal(a.start, a.end);
+      else assert.ok(a.end > a.start);
+      if (item.mapping === 'omitted') {
+        assert.equal(b.start, b.end); assert.equal(item.textRef, null);
+        if (item.textNodeId === null) assert.equal(b.start, 0);
+      } else {
+        assert.ok(b.end > b.start); token(item.textNodeId); token(item.textRef);
+      }
+      assert.equal(item.text, undefined);
     } else {
       assert.ok(!directory);
       assert.ok(['boundary', 'span'].includes(item.kind));
@@ -406,6 +454,39 @@ export function assertContextFrame(frame, limits, { directory = false } = {}) {
       assert.ok(typeof vocabulary === 'string' && vocabulary.length > 0 && utf8(vocabulary) <= 1024);
       assert.equal(item.text, undefined);
       if (item.kind === 'boundary') {
+        if (['htmlTable', 'htmlTableRow', 'htmlTableCell'].includes(item.construct)) {
+          const position = item.htmlPosition, source = item.htmlSource;
+          assert.equal(position?.profile, 'canonicalNote'); assert.equal(position.profileVersion, 1); token(position.tableRef);
+          const keys = ['profile', 'profileVersion', 'tableRef'];
+          if (item.construct !== 'htmlTable') {
+            keys.push('rowIndex');
+            assert.ok(Number.isSafeInteger(position.rowIndex) && position.rowIndex >= 0);
+            token(item.parentRef);
+          }
+          if (item.construct === 'htmlTableCell') {
+            keys.push('columnIndex', 'cellRole');
+            assert.ok(Number.isSafeInteger(position.columnIndex) && position.columnIndex >= 0);
+            assert.ok(['data', 'header'].includes(position.cellRole));
+          }
+          assert.deepEqual(Object.keys(position).sort(), keys.sort());
+          token(item.attributesRef); token(item.sourceMapRef); token(item.nativeRef);
+          assert.ok(['explicit', 'implicit', 'repaired'].includes(source?.provenance));
+          for (const key of ['openingRange', 'bodyRange', 'closingRange']) {
+            const part = source[key];
+            assert.ok(part === null || (Number.isSafeInteger(part?.start)
+              && Number.isSafeInteger(part?.end) && part.start >= r.start
+              && part.end >= part.start && part.end <= r.end));
+          }
+          if (source.provenance === 'explicit') assert.notEqual(source.openingRange, null);
+          if (source.provenance === 'repaired') token(source.piecesRef);
+          else assert.equal(source.piecesRef, undefined);
+          if (source.provenance === 'implicit') {
+            assert.equal(r.start, r.end);
+            for (const key of ['openingRange', 'bodyRange', 'closingRange']) assert.equal(source[key], null);
+          }
+        } else {
+          assert.equal(item.htmlPosition, undefined); assert.equal(item.htmlSource, undefined);
+        }
         if (['tableHead', 'tableRow', 'tableCell'].includes(item.construct)) {
           const position = item.tablePosition;
           assert.ok(position && typeof position === 'object'); token(position.tableRef);
@@ -434,4 +515,35 @@ export function assertLinkFields(fields) {
   for (const key of ['destination', 'title', 'referenceId']) assert.ok(validText(fields[key]));
   if (fields.linkType === 'WikiLink') assert.ok(['true', 'false'].includes(fields.hasPothole));
   else assert.equal(fields.hasPothole, undefined);
+}
+
+// Validate a bounded fixture's admitted native nodes plus ancestor closure.
+// links are fixture-local opaque-ref -> node-id claims, not a token format or index.
+export function assertNativeGraph(frames, links, limits) {
+  const nodes = new Map(), positions = new Map();
+  let identity;
+  for (const frame of frames) {
+    assertContextFrame(frame, limits);
+    const { items, nextCursor, ...current } = frame.result;
+    if (identity) assert.deepEqual(current, identity); else identity = current;
+    for (const node of items) {
+      assert.equal(node.kind, 'nativeNode');
+      if (nodes.has(node.id)) assert.deepEqual(node, nodes.get(node.id));
+      nodes.set(node.id, node);
+    }
+  }
+  for (const node of nodes.values()) {
+    const parentId = node.parentRef === null ? null : links[node.parentRef];
+    if (node.parentRef !== null) assert.ok(nodes.has(parentId), 'missing admitted ancestor');
+    const position = JSON.stringify([parentId, node.childIndex]);
+    if (positions.has(position)) assert.equal(positions.get(position), node.id);
+    positions.set(position, node.id);
+    const seen = new Set();
+    let current = node;
+    while (current) {
+      assert.ok(!seen.has(current.id), 'cyclic canonical parent'); seen.add(current.id);
+      current = current.parentRef === null ? undefined : nodes.get(links[current.parentRef]);
+    }
+  }
+  return nodes;
 }

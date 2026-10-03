@@ -4441,5 +4441,1974 @@
         }
       }
     }
+  },
+  "htmlContinuation": {
+    "profile": "canonicalNote",
+    "recipe": {
+      "open": "<table><tbody><tr><td>",
+      "extra": "PREVIOUS</td><td>",
+      "repeat": "x",
+      "count": 2000000,
+      "tail": "</td><td>TARGET</td></tr></tbody></table>"
+    },
+    "expected": {
+      "rowIndex": 0,
+      "columnIndexA": 1,
+      "columnIndexB": 2,
+      "target": "TARGET",
+      "cellRole": "data",
+      "targetRange": {
+        "start": 2000031,
+        "end": 2000037
+      },
+      "sourceLength": 2000063
+    },
+    "rolePair": {
+      "data": "<table><tr><td>BODY</td></tr></table>",
+      "header": "<table><tr><th>BODY</th></tr></table>"
+    },
+    "frames": {
+      "a": {
+        "cell": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTableCell",
+                "construct": "htmlTableCell",
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "a-row",
+                "detailRef": "a-htmlTableCell-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "rowIndex": 0,
+                  "columnIndex": 1,
+                  "cellRole": "data",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 2000027,
+                    "end": 2000031
+                  },
+                  "bodyRange": {
+                    "start": 2000031,
+                    "end": 2000037
+                  },
+                  "closingRange": {
+                    "start": 2000037,
+                    "end": 2000042
+                  }
+                },
+                "attributesRef": "a-htmlTableCell-attrs",
+                "sourceMapRef": "a-htmlTableCell-window-map",
+                "nativeRef": "a-native-cell"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "row": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTableRow",
+                "construct": "htmlTableRow",
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "a-table",
+                "detailRef": "a-htmlTableRow-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "rowIndex": 0,
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 14,
+                    "end": 18
+                  },
+                  "bodyRange": {
+                    "start": 18,
+                    "end": 2000042
+                  },
+                  "closingRange": {
+                    "start": 2000042,
+                    "end": 2000047
+                  }
+                },
+                "attributesRef": "a-htmlTableRow-attrs",
+                "sourceMapRef": "a-htmlTableRow-window-map",
+                "nativeRef": "a-native-row"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "table": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "a-htmlTable",
+                "construct": "htmlTable",
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "html-block-a",
+                "detailRef": "a-htmlTable-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "a-table",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 0,
+                    "end": 7
+                  },
+                  "bodyRange": {
+                    "start": 7,
+                    "end": 2000055
+                  },
+                  "closingRange": {
+                    "start": 2000055,
+                    "end": 2000063
+                  }
+                },
+                "attributesRef": "a-htmlTable-attrs",
+                "sourceMapRef": "a-htmlTable-window-map",
+                "nativeRef": "a-native-table"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "map": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "sourceMap",
+                "id": "a-map",
+                "profile": "canonicalNote",
+                "ownerRef": "a-cell",
+                "textNodeId": "a-target-leaf",
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "renderedRange": {
+                  "start": 0,
+                  "end": 6
+                },
+                "mapping": "identity",
+                "textRef": "a-text",
+                "profileVersion": 1,
+                "textNodeRef": "a-native-leaf"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "text": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "a-text-fragment",
+                "field": "renderedText",
+                "offset": 0,
+                "text": "TARGET",
+                "nextRef": null
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "attributes": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteMetadataPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "id": "a-attrs-root",
+                "parentId": null,
+                "type": "object",
+                "childrenRef": "a-attrs-children"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "native": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-a",
+            "snapshotId": "html-a",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "nativeNode",
+                "id": "a-native-doc",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "doc",
+                "nodeClass": "container",
+                "parentRef": null,
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 0
+                },
+                "provenance": "implicit",
+                "attributesRef": "a-native-doc-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-table",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "table",
+                "nodeClass": "container",
+                "parentRef": "a-native-doc",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-table-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-row",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableRow",
+                "nodeClass": "container",
+                "parentRef": "a-native-table",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-row-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-cell",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableCell",
+                "nodeClass": "container",
+                "parentRef": "a-native-row",
+                "childIndex": 1,
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-cell-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-native-paragraph",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "paragraph",
+                "nodeClass": "container",
+                "parentRef": "a-native-cell",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000031
+                },
+                "provenance": "implicit",
+                "attributesRef": "a-native-paragraph-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "a-target-leaf",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "text",
+                "nodeClass": "text",
+                "parentRef": "a-native-paragraph",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "provenance": "explicit",
+                "attributesRef": "a-native-leaf-attrs",
+                "marksRef": "a-leaf-marks"
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "b": {
+        "cell": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTableCell",
+                "construct": "htmlTableCell",
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "b-row",
+                "detailRef": "b-htmlTableCell-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "rowIndex": 0,
+                  "columnIndex": 2,
+                  "cellRole": "data",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 2000027,
+                    "end": 2000031
+                  },
+                  "bodyRange": {
+                    "start": 2000031,
+                    "end": 2000037
+                  },
+                  "closingRange": {
+                    "start": 2000037,
+                    "end": 2000042
+                  }
+                },
+                "attributesRef": "b-htmlTableCell-attrs",
+                "sourceMapRef": "b-htmlTableCell-window-map",
+                "nativeRef": "b-native-cell"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "row": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTableRow",
+                "construct": "htmlTableRow",
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "b-table",
+                "detailRef": "b-htmlTableRow-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "rowIndex": 0,
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 14,
+                    "end": 18
+                  },
+                  "bodyRange": {
+                    "start": 18,
+                    "end": 2000042
+                  },
+                  "closingRange": {
+                    "start": 2000042,
+                    "end": 2000047
+                  }
+                },
+                "attributesRef": "b-htmlTableRow-attrs",
+                "sourceMapRef": "b-htmlTableRow-window-map",
+                "nativeRef": "b-native-row"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "table": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "boundary",
+                "id": "b-htmlTable",
+                "construct": "htmlTable",
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "continuationBefore": true,
+                "continuationAfter": true,
+                "parentRef": "html-block-b",
+                "detailRef": "b-htmlTable-raw-details",
+                "htmlPosition": {
+                  "profile": "canonicalNote",
+                  "tableRef": "b-table",
+                  "profileVersion": 1
+                },
+                "htmlSource": {
+                  "provenance": "explicit",
+                  "openingRange": {
+                    "start": 0,
+                    "end": 7
+                  },
+                  "bodyRange": {
+                    "start": 7,
+                    "end": 2000055
+                  },
+                  "closingRange": {
+                    "start": 2000055,
+                    "end": 2000063
+                  }
+                },
+                "attributesRef": "b-htmlTable-attrs",
+                "sourceMapRef": "b-htmlTable-window-map",
+                "nativeRef": "b-native-table"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "map": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "sourceMap",
+                "id": "b-map",
+                "profile": "canonicalNote",
+                "ownerRef": "b-cell",
+                "textNodeId": "b-target-leaf",
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "renderedRange": {
+                  "start": 0,
+                  "end": 6
+                },
+                "mapping": "identity",
+                "textRef": "b-text",
+                "profileVersion": 1,
+                "textNodeRef": "b-native-leaf"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "text": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "fragment",
+                "id": "b-text-fragment",
+                "field": "renderedText",
+                "offset": 0,
+                "text": "TARGET",
+                "nextRef": null
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "attributes": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteMetadataPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "id": "b-attrs-root",
+                "parentId": null,
+                "type": "object",
+                "childrenRef": "b-attrs-children"
+              }
+            ],
+            "nextCursor": null
+          }
+        },
+        "native": {
+          "jsonrpc": "2.0",
+          "id": 1,
+          "result": {
+            "kind": "noteContextPage",
+            "scope": {
+              "backendId": "db-a",
+              "workspaceId": "ws-a",
+              "noteId": "spec",
+              "noteInstanceId": "inc-a"
+            },
+            "sourceRevision": "r:html-b",
+            "snapshotId": "html-b",
+            "expiresAt": "2026-10-03T00:05:00.000Z",
+            "items": [
+              {
+                "kind": "nativeNode",
+                "id": "b-native-doc",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "doc",
+                "nodeClass": "container",
+                "parentRef": null,
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 0
+                },
+                "provenance": "implicit",
+                "attributesRef": "b-native-doc-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-table",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "table",
+                "nodeClass": "container",
+                "parentRef": "b-native-doc",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 0,
+                  "end": 2000063
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-table-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-row",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableRow",
+                "nodeClass": "container",
+                "parentRef": "b-native-table",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 14,
+                  "end": 2000047
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-row-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-cell",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "tableCell",
+                "nodeClass": "container",
+                "parentRef": "b-native-row",
+                "childIndex": 2,
+                "sourceRange": {
+                  "start": 2000027,
+                  "end": 2000042
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-cell-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-native-paragraph",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "paragraph",
+                "nodeClass": "container",
+                "parentRef": "b-native-cell",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000031
+                },
+                "provenance": "implicit",
+                "attributesRef": "b-native-paragraph-attrs"
+              },
+              {
+                "kind": "nativeNode",
+                "id": "b-target-leaf",
+                "profile": "canonicalNote",
+                "profileVersion": 1,
+                "nodeType": "text",
+                "nodeClass": "text",
+                "parentRef": "b-native-paragraph",
+                "childIndex": 0,
+                "sourceRange": {
+                  "start": 2000031,
+                  "end": 2000037
+                },
+                "provenance": "explicit",
+                "attributesRef": "b-native-leaf-attrs",
+                "marksRef": "b-leaf-marks"
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      }
+    },
+    "profileVersion": 1,
+    "canonicalOracleCases": [
+      {
+        "id": "cellRoles",
+        "source": "<table><tr><th>HEADER</th><td>DATA</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "HEADER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableHeader"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "DATA",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "implicitBodiesAndEnds",
+        "source": "<table><tr><td>ONE<td>TWO<tr><td>THREE</table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "ONE",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "TWO",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                },
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "THREE",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "entitiesAndWhitespace",
+        "source": "<table><tr><td> A &amp; B&#x1f680;\r\n  C\t D&nbsp;E<br>F </td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "A & B\ud83d\ude80 C D\u00a0E",
+                              "type": "text"
+                            },
+                            {
+                              "type": "hardBreak"
+                            },
+                            {
+                              "text": "F",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "nestedTable",
+        "source": "<table><tr><td>OUTER<table><tr><th>INNER</th></tr></table>AFTER</td><td>LAST</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "OUTER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        },
+                        {
+                          "content": [
+                            {
+                              "content": [
+                                {
+                                  "attrs": {
+                                    "align": null,
+                                    "colspan": 1,
+                                    "colwidth": null,
+                                    "rowspan": 1
+                                  },
+                                  "content": [
+                                    {
+                                      "content": [
+                                        {
+                                          "text": "INNER",
+                                          "type": "text"
+                                        }
+                                      ],
+                                      "type": "paragraph"
+                                    }
+                                  ],
+                                  "type": "tableHeader"
+                                }
+                              ],
+                              "type": "tableRow"
+                            }
+                          ],
+                          "type": "table"
+                        },
+                        {
+                          "content": [
+                            {
+                              "text": "AFTER",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "LAST",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "malformedSpans",
+        "source": "<table><tr><td rowspan=\"0\" colspan=\"-2\">ZERO</td><td rowspan=\"wat\" colspan=\"999999999999999999999\">BAD</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "ZERO",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "BAD",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "unsafeAttributes",
+        "source": "<table onclick=\"alert(1)\" style=\"color:red\"><tr><td data-unknown=\"raw\" title=\"cell\" onmouseover=\"alert(2)\"><a href=\"javascript:alert(3)\" title=\"link\">LINK</a><script>evil()</script><style>body{display:none}</style>TEXT</td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "LINKTEXT",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      },
+      {
+        "id": "retainedAttributes",
+        "source": "<table><tr><td><a href=\"https://example.test/long\" title=\"tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt\">LINK</a><img src=\"https://example.test/image.png\" alt=\"ALT\" title=\"IMAGE\"></td></tr></table>",
+        "native": {
+          "content": [
+            {
+              "content": [
+                {
+                  "content": [
+                    {
+                      "attrs": {
+                        "align": null,
+                        "colspan": 1,
+                        "colwidth": null,
+                        "rowspan": 1
+                      },
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "marks": [
+                                {
+                                  "attrs": {
+                                    "class": "text-primary-ink underline cursor-pointer",
+                                    "href": "https://example.test/long",
+                                    "rel": "noopener noreferrer nofollow",
+                                    "target": "_blank"
+                                  },
+                                  "type": "link"
+                                }
+                              ],
+                              "text": "LINK",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        },
+                        {
+                          "attrs": {
+                            "alt": "ALT",
+                            "height": null,
+                            "mediaUnsupported": null,
+                            "src": "https://example.test/image.png",
+                            "title": "IMAGE",
+                            "width": null
+                          },
+                          "type": "image"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        }
+      }
+    ],
+    "entityMapping": {
+      "source": "<table><tr><td> A &amp; B&#x1f680;\r\n  C\t D&nbsp;E<br>F </td></tr></table>",
+      "maps": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-entities",
+          "snapshotId": "html-entities",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-0",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 15,
+                "end": 16
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 0
+              },
+              "mapping": "omitted",
+              "textRef": null
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-1",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 16,
+                "end": 18
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 2
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-1"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-2",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 18,
+                "end": 23
+              },
+              "renderedRange": {
+                "start": 2,
+                "end": 3
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-2"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-3",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 23,
+                "end": 25
+              },
+              "renderedRange": {
+                "start": 3,
+                "end": 5
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-3"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-4",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 25,
+                "end": 34
+              },
+              "renderedRange": {
+                "start": 5,
+                "end": 7
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-4"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-5",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 34,
+                "end": 38
+              },
+              "renderedRange": {
+                "start": 7,
+                "end": 8
+              },
+              "mapping": "normalized",
+              "textRef": "entity-text-5"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-6",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 38,
+                "end": 39
+              },
+              "renderedRange": {
+                "start": 8,
+                "end": 9
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-6"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-7",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 39,
+                "end": 41
+              },
+              "renderedRange": {
+                "start": 9,
+                "end": 10
+              },
+              "mapping": "normalized",
+              "textRef": "entity-text-7"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-8",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 41,
+                "end": 42
+              },
+              "renderedRange": {
+                "start": 10,
+                "end": 11
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-8"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-9",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 42,
+                "end": 48
+              },
+              "renderedRange": {
+                "start": 11,
+                "end": 12
+              },
+              "mapping": "entity",
+              "textRef": "entity-text-9"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-10",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-0",
+              "textNodeRef": "entities-native-leaf-0",
+              "sourceRange": {
+                "start": 48,
+                "end": 49
+              },
+              "renderedRange": {
+                "start": 12,
+                "end": 13
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-10"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-12",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-1",
+              "textNodeRef": "entities-native-leaf-1",
+              "sourceRange": {
+                "start": 53,
+                "end": 54
+              },
+              "renderedRange": {
+                "start": 0,
+                "end": 1
+              },
+              "mapping": "identity",
+              "textRef": "entity-text-12"
+            },
+            {
+              "kind": "sourceMap",
+              "id": "entity-map-13",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "ownerRef": "entities-cell",
+              "textNodeId": "entities-leaf-1",
+              "textNodeRef": "entities-native-leaf-1",
+              "sourceRange": {
+                "start": 54,
+                "end": 55
+              },
+              "renderedRange": {
+                "start": 1,
+                "end": 1
+              },
+              "mapping": "omitted",
+              "textRef": null
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "textResources": [
+        {
+          "ref": "entity-text-1",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-1-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "A ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-2",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-2-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "&",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-3",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-3-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " B",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-4",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-4-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "\ud83d\ude80",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-5",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-5-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-6",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-6-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "C",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-7",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-7-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": " ",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-8",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-8-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "D",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-9",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-9-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "\u00a0",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-10",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-10-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "E",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        },
+        {
+          "ref": "entity-text-12",
+          "frame": {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+              "kind": "noteContextPage",
+              "scope": {
+                "backendId": "db-a",
+                "workspaceId": "ws-a",
+                "noteId": "spec",
+                "noteInstanceId": "inc-a"
+              },
+              "sourceRevision": "r:html-entities",
+              "snapshotId": "html-entities",
+              "expiresAt": "2026-10-03T00:05:00.000Z",
+              "items": [
+                {
+                  "kind": "fragment",
+                  "id": "entity-text-12-0",
+                  "field": "renderedText",
+                  "offset": 0,
+                  "text": "F",
+                  "nextRef": null
+                }
+              ],
+              "nextCursor": null
+            }
+          }
+        }
+      ],
+      "atom": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-entities",
+          "snapshotId": "html-entities",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "nativeNode",
+              "id": "hard-break",
+              "profile": "canonicalNote",
+              "profileVersion": 1,
+              "nodeType": "hardBreak",
+              "nodeClass": "atom",
+              "parentRef": "entities-paragraph",
+              "childIndex": 1,
+              "sourceRange": {
+                "start": 49,
+                "end": 53
+              },
+              "provenance": "explicit",
+              "attributesRef": "hard-break-attrs"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "expectedLeaves": [
+        "A & B\ud83d\ude80 C D\u00a0E",
+        "F"
+      ]
+    },
+    "repairedProvenance": {
+      "source": "<table><tr><td>ONE<td>TWO<tr><td>THREE</table>",
+      "cell": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-repaired",
+          "snapshotId": "html-repaired",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "boundary",
+              "id": "repaired-cell",
+              "construct": "htmlTableCell",
+              "sourceRange": {
+                "start": 11,
+                "end": 18
+              },
+              "continuationBefore": true,
+              "continuationAfter": true,
+              "parentRef": "repaired-row",
+              "detailRef": "a-htmlTableCell-raw-details",
+              "htmlPosition": {
+                "profile": "canonicalNote",
+                "tableRef": "repaired-table",
+                "rowIndex": 0,
+                "columnIndex": 0,
+                "cellRole": "data",
+                "profileVersion": 1
+              },
+              "htmlSource": {
+                "provenance": "repaired",
+                "openingRange": {
+                  "start": 11,
+                  "end": 15
+                },
+                "bodyRange": {
+                  "start": 15,
+                  "end": 18
+                },
+                "closingRange": null,
+                "piecesRef": "repaired-pieces"
+              },
+              "attributesRef": "repaired-attrs",
+              "sourceMapRef": "repaired-map",
+              "nativeRef": "repaired-native-cell"
+            }
+          ],
+          "nextCursor": null
+        }
+      },
+      "pieces": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "kind": "noteContextPage",
+          "scope": {
+            "backendId": "db-a",
+            "workspaceId": "ws-a",
+            "noteId": "spec",
+            "noteInstanceId": "inc-a"
+          },
+          "sourceRevision": "r:html-repaired",
+          "snapshotId": "html-repaired",
+          "expiresAt": "2026-10-03T00:05:00.000Z",
+          "items": [
+            {
+              "kind": "sourcePiece",
+              "id": "repair-opening",
+              "nodeRef": "repaired-native-cell",
+              "sourceRange": {
+                "start": 11,
+                "end": 15
+              },
+              "role": "opening"
+            },
+            {
+              "kind": "sourcePiece",
+              "id": "repair-body",
+              "nodeRef": "repaired-native-cell",
+              "sourceRange": {
+                "start": 15,
+                "end": 18
+              },
+              "role": "body"
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
   }
 }
