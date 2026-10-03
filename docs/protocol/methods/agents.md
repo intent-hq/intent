@@ -25,7 +25,7 @@ The largest namespace. Every `agent.*` method is served daemon-primary by `inten
 | agent.resolveProposal *(v8.7, [intentd#1581](https://github.com/intent-hq/intentd/pull/1581))* | agentId (req), proposalId (req), outcome (req: `"applied"` \| `"dismissed"`), detail?, workspaceId (req) | { success: true, proposalId, outcome } — record the user's resolution of a pending proposal (see §5.5 "Pending proposals" below). Persists the `proposalId -> outcome` entry in the `proposalResolutions` session-metadata map, THEN removes the entry from the session's `pendingProposals` list (two atomic single-key writes in that order, so a failure between them leaves the entry pending with its outcome recorded and a retry converges instead of losing the resolution; sibling metadata keys preserved), emits `agent:updated` carrying both (`{ agentId, pendingProposals, proposalResolutions }`), and delivers the **proposal-resolved system notice** to the model for BOTH outcomes — applied: "User applied the proposal 'Title'." (with the caller-supplied `detail` appended verbatim when present — e.g. the created workspace id); dismissed: "User dismissed the proposal 'Title' without applying it. This is an informative notice only — do not re-propose it; continue with your other work or end your turn." The notice names the proposal by its `preview.title` recovered from the carrying message's proposal resource block at bounded cost (index seek + single-row page, mirroring the `agent.dismissQuestions` count derivation), falling back to the proposal id when the message is gone or carries no title. The notice carries `messageMetadata { "type": "proposal_resolved", "source": "system", "proposalId": "<id>", "outcome": "<outcome>" }` and follows the `agent.dismissQuestions` delivery mechanics: an **idle** agent receives it as an immediate turn (the wake-delivery path); a busy agent gets the entry promoted to the queue front. **Fail-soft**: notice delivery errors are logged, never surfaced to the RPC — the persisted resolution is the source of truth. **The Apply itself stays client-driven**: the daemon executes nothing on `outcome: "applied"` — the client runs its own apply flow first and calls this RPC to record the outcome and notify the model. **Idempotent**: re-resolving an id that is no longer pending but present in the resolutions map succeeds, echoing the CURRENT persisted outcome (no rewrite, no duplicate notice or event); the whole read-modify-write is serialized per agent on the same mutation lock as the pending-proposals writers, so a concurrent double-resolve races to a single winner and the loser takes the idempotent path. **Bounded retention**: the `proposalResolutions` map is capped at 100 entries — past the cap the OLDEST entries are evicted on insert (the map is insertion-ordered), so the persisted blob and the `AgentLite` projection lifting it into hot `agent.list` / `agent.get` payloads never grow without bound; re-resolving an evicted id degrades to not-found (acceptable — the entry is long-resolved and no longer renderable as a pending card). A re-proposed id re-enters the pending list; its re-resolution overwrites the earlier outcome (latest wins). Validation: the `proposalId` is matched VERBATIM against the recorded pending entries (recording preserves `applyToolCallId` / `preview.title` exactly as proposed, so no normalization); an empty/whitespace-only `proposalId` or one exceeding 256 bytes is `-32602`, an `outcome` other than the two literals is `-32602`, and `detail` is trimmed (empty collapses to absent) and capped at 2000 bytes (`-32602` past it — it is appended verbatim to the applied notice, so it is bounded against oversized payloads riding into the transcript). An id that was never pending and never resolved, a nonexistent `agentId`, or a workspace mismatch is a not-found error |
 | agent.markSeen *(v4.5)* | agentId (req), messageId (req), workspaceId (req) | { success: true, lastSeenMessageId } — advance the per-conversation **seen marker** to `messageId` (the newest transcript message the user has seen): persists `lastSeenMessageId` in the session metadata (survives daemon restarts), emits `agent:updated` with `{ agentId, lastSeenMessageId }` (§6.5), and serves the marker as `metadata.lastSeenMessageId?` on the `AgentLite` projection (`agent.list` / `agent.get`) and `agent.getSession` (omitted when nothing was marked seen). Clients use it to render a "New messages" divider after the last-seen message on conversation entry; marker updates from other clients converge via `agent:updated`. The marker is also one side of the client-side per-agent **unread** derivation against `lastMessageId` (intentd#1039 — see the `agent.list` row above): `hasUnread = lastMessageRole === "assistant" && lastMessageId != null && lastMessageId !== lastSeenMessageId`, with an **absent marker counting as unread**; because the newest user/assistant id can differ from the marker via system/tool rows, clients should mark user/assistant row ids seen where possible — equality is the only sound comparison; id ordering is NOT a valid fallback (ids are not uniformly UUIDv7 and v7 mint time is not persist order — see the `agent.list` row above). **Monotonic**: when both the named message and the current marker resolve to transcript positions and the named one is OLDER, the call is a no-op returning the CURRENT marker (`lastSeenMessageId` in the result is the unchanged current value; no write, no event) — the marker never moves backwards, including under concurrent callers (the persist is an atomic single-key compare-and-set on the marker's current value; a raced write re-reads and re-applies the gate). **Idempotent**: re-marking the already-persisted id succeeds without a write or a duplicate event. **Dangling ids are tolerated** (same laxity as `agent.dismissQuestions`): the `messageId` is NOT checked against the transcript — an unknown id (or one whose row was truncated by `agent.editAndRegenerate`) is persisted as a dangling marker (clients fall back to their no-marker behavior when the id no longer resolves), and a dangling CURRENT marker never blocks an advance (the monotonicity comparison only applies when both sides resolve). Bounded cost: a metadata-only session lookup plus at most two index seeks — no transcript hydration. Validation: an empty `messageId` or one exceeding 256 bytes is `-32602`; a nonexistent `agentId` or a workspace mismatch is a not-found error (fail closed, no metadata write). **Settles the derived workspace `unread`** (§5.1): after a marker write the daemon re-derives the workspace-level unread state (any top-level non-background non-deleted non-retired non-muted session with an unseen assistant last message — a soft-retired session, `retiredAt` set, or a muted one, `notificationsMuted`, never counts) and, when this advance read the LAST unread session — an unread→none transition — clears the stored legacy flag (guarded on `unread`; `review_required` survives; the clear re-checks the derivation atomically inside the guarded write, so an assistant message racing the settlement is never retired) and emits ONE `workspace:attention-changed { none }`; partial reads (other sessions still unread) and no-op calls (monotonic/idempotent — no marker write) stay silent at the workspace level. `workspace.markSeen` (§5.1) is the mark-ALL-conversations-seen composite built on this op |
 | agent.editAndRegenerate | agentId (req), messageId (req), content (req), workspaceId (req), imageBlocks?, fileBlocks? *(attachment references only since v10.0; see the file-block contract on `agent.sendMessage`)*, model? | { success, queued: false, messageId, truncatedCount } — edit a past **user** message and regenerate from that point (additive `agent.*` extension). The result `messageId` is the freshly-minted server id of the NEW regenerated user message — NOT the input `messageId`, which names the edit target whose row (and everything after it) is dropped by the truncation; the two are never the same id. Orchestrated daemon-side, in order: (1) `messageId` is validated FIRST (must reference an existing user message in the transcript — unknown or non-user ids are rejected with `-32602` before any state changes; the transcript is untouched); (2) any in-flight turn is stopped (hard-cancel: the worker is aborted and the agent process killed) and the pending queue is discarded (a previously non-empty queue republishes `agent:queue:updated` as empty); (3) with `model` supplied — a **bare** model id; a compound `provider:model` value is rejected with `-32602` before any of these effects ([intent-hq/intentd#1647](https://github.com/intent-hq/intentd/pull/1647)) — the session model is switched (same semantics as `agent.setModel`) before the regenerated turn; (4) the transcript is truncated to just BEFORE the edited message — the edited message and everything after it are dropped (destructive, suffix-only: only rows at or after the edited message are deleted, in one write transaction; the kept prefix **retains its `messageId`s and `seq`** and every stored side row — full tool bodies, retention `*_replay` previews, thumbnails — as-is, and the session's last-message preview columns are recomputed from the surviving rows; since intentd#1757 — previously the kept prefix was reminted through the `agent.replaceMessages` store path with fresh ids / 0-based `seq`, which `agent.replaceMessages` itself still does) and `agent:updated` is emitted with `{ truncatedCount, remainingCount }`; (5) the agent's ACP session is flagged for forced recreation — the next prompt SKIPS the `session/load` resume, opens a fresh `session/new`, and prepends the truncated prior history as `<supervisor>` XML (the provider must not retain the truncated turns in context; the forced-recreate flag survives intervening `agent.stop`s and is only consumed when a fresh session opens); (6) `content` is sent as a fresh user message (normal `agent.sendMessage` semantics; `imageBlocks`/`fileBlocks` ride along; the usual `agent:message` / `agent:stream:*` events follow) |
-| agent.queueMessage | agentId (req), content (req), imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — May append to an existing pending human entry; `queuedMessage` and `turnId` then identify the surviving entry, not a new entry. See [Shared pending human queue](#shared-pending-human-queue). **Unknown agent → fail closed.** A nonexistent `agentId` is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE enqueueing — no phantom queue entry that can never drain, no `agent:queue:updated` event (same guard contract as `agent.sendMessage`). QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority?, editing?, editingMessageId? } — `fileBlocks` echoes the entry's captured attachment-reference blocks (reference-only since v10.0; the seam rejects inline `data`, so no queue row minted on a 10.0 daemon carries file bytes); `interruptPriority: true` (additive, v2.8) marks an entry that entered the queue via an interrupt-priority fallback (a parked — archived-workspace, quarantine, append-failure — or slot-raced `priority: "interrupt"` send): a newly created entry is inserted at the FRONT of the queue, **behind any existing interrupt-priority entries and ahead of every normal entry** (interrupts stay arrival-ordered among themselves); a same-author append retains its survivor's priority and position instead. The flag is omitted (never `false`) on normal entries. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is the entry's turn correlation id: equal to the entry `id` for a fresh enqueue, but a terminal-failure requeue mints a NEW entry `id` while KEEPING the failed turn's original `turnId`, so a retry redrive's lifecycle events still correlate with the turn the client keyed at send time. Omitted only when the entry has no id set (every enqueue path mints one today; legacy pre-#1022 persisted rows rehydrate with `turnId = id`), never `null`. `messageMetadata` is only present when the entry was enqueued with per-message metadata — the caller's own `messageMetadata` param (additive within v9.11; previously dropped, so user-typed entries never carried it), an internal wake's `event_notification` payload, or an agent-to-agent send's `agent_message` sender-attribution tag captured while the agent was busy. **Caller `messageMetadata` (within v9.11).** Same contract as the `agent.sendMessage` param: an opaque JSON object captured on the queued entry (echoed on the result's `queuedMessage` and by `agent.getQueue`), subject to the reserved attribution and daemon-owned aggregate rules below; appends preserve conflicting originals in `mergedMessageMetadata`, with the reserved attribution fields `fromAgentId` / `fromAgentName` stripped at this user-origin front door; `null` / omitted reads as absent (no `messageMetadata` key on the entry); any other non-object value is `-32602` (`messageMetadata must be an object`) before any state change. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send — and because the answer intake runs on every user-row persist path, an entry queued with `{ type: "question_answers", answeredQuestionsMessageId }` naming the marked assistant message resolves the pending question set on drain exactly as a direct tagged `agent.sendMessage` does (§5.5 "Pending questions"). **User-origin.** `agent.queueMessage` is the FE's front door for a reply typed while the agent is mid-turn, so its entries are recorded **user-origin**: the drained entry retires a pending attention request exactly like a direct `agent.sendMessage` (the "Attention requests" block, step 1) and qualifies for the archived-workspace drain exemption ([intent-hq/intent#3883](https://github.com/intent-hq/intent/issues/3883)) |
+| agent.queueMessage | agentId (req), content (req), messageId? *(prepared submission correlation v1, below)*, imageBlocks?, fileBlocks? *(attachment references only since v10.0; an inline-`data` entry is `-32602` naming the index BEFORE enqueueing — see the file-block contract on `agent.sendMessage`)*, messageMetadata?, workspaceId? | { success, queuedMessage, turnId } — May append to an existing pending human entry; `queuedMessage` and `turnId` then identify the surviving entry, not a new entry. See [Shared pending human queue](#shared-pending-human-queue). **Unknown agent → fail closed.** A nonexistent `agentId` is rejected with `-32602` naming the id (`unknown agent id: <id>`) BEFORE enqueueing — no phantom queue entry that can never drain, no `agent:queue:updated` event (same guard contract as `agent.sendMessage`). QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority?, editing?, editingMessageId? } — `fileBlocks` echoes the entry's captured attachment-reference blocks (reference-only since v10.0; the seam rejects inline `data`, so no queue row minted on a 10.0 daemon carries file bytes); `interruptPriority: true` (additive, v2.8) marks an entry that entered the queue via an interrupt-priority fallback (a parked — archived-workspace, quarantine, append-failure — or slot-raced `priority: "interrupt"` send): a newly created entry is inserted at the FRONT of the queue, **behind any existing interrupt-priority entries and ahead of every normal entry** (interrupts stay arrival-ordered among themselves); a same-author append retains its survivor's priority and position instead. The flag is omitted (never `false`) on normal entries. `turnId` ([monorepo#1022](https://github.com/intent-hq/monorepo/issues/1022)) is the entry's turn correlation id: equal to the entry `id` for a fresh enqueue, but a terminal-failure requeue mints a NEW entry `id` while KEEPING the failed turn's original `turnId`, so a retry redrive's lifecycle events still correlate with the turn the client keyed at send time. Omitted only when the entry has no id set (every enqueue path mints one today; legacy pre-#1022 persisted rows rehydrate with `turnId = id`), never `null`. `messageMetadata` is only present when the entry was enqueued with per-message metadata — the caller's own `messageMetadata` param (additive within v9.11; previously dropped, so user-typed entries never carried it), an internal wake's `event_notification` payload, or an agent-to-agent send's `agent_message` sender-attribution tag captured while the agent was busy. **Caller `messageMetadata` (within v9.11).** Same contract as the `agent.sendMessage` param: an opaque JSON object captured on the queued entry (echoed on the result's `queuedMessage` and by `agent.getQueue`), subject to the reserved attribution and daemon-owned aggregate rules below; appends preserve conflicting originals in `mergedMessageMetadata`, with the reserved attribution fields `fromAgentId` / `fromAgentName` stripped at this user-origin front door; `null` / omitted reads as absent (no `messageMetadata` key on the entry); any other non-object value is `-32602` (`messageMetadata must be an object`) before any state change. The drain-time persist writes it onto the user message row (`agent_message.metadata`) so the transcript matches a directly-delivered send — and because the answer intake runs on every user-row persist path, an entry queued with `{ type: "question_answers", answeredQuestionsMessageId }` naming the marked assistant message resolves the pending question set on drain exactly as a direct tagged `agent.sendMessage` does (§5.5 "Pending questions"). **User-origin.** `agent.queueMessage` is the FE's front door for a reply typed while the agent is mid-turn, so its entries are recorded **user-origin**: the drained entry retires a pending attention request exactly like a direct `agent.sendMessage` (the "Attention requests" block, step 1) and qualifies for the archived-workspace drain exemption ([intent-hq/intent#3883](https://github.com/intent-hq/intent/issues/3883)) |
 | agent.editQueuedMessage | agentId (req), messageId (req), content (req), editing?, workspaceId? | { success, queuedMessage } (QueuedMessage shape as above). **Author-only for human entries**, independently of shared queue visibility; a displaced editor alias additionally fails the stale-edit conflict check described below: another principal's entry cannot be edited or restamped, including by an owner. Unknown-human entries cannot establish authorship and are refused to every wire caller. Unauthorized edits have no side effects: a non-host-owner wire caller gets `-32602` (`queued message not found: <id>`), even though the entry is visible; a host owner gets `-32602` (`queued message <id> can only be edited by its author`). Agent/daemon callers and genuinely automatic/agent entries retain their existing rules; imported-human delivery restrictions are separate. An unbound wire request fails the membership gate ahead of this check with `-32003 Forbidden` (§5.48). A nonexistent id keeps its existing error. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.removeQueuedMessage | agentId (req), messageId (req), workspaceId? | { success: true }. **Human entries: author or owner only**, independently of shared queue visibility. Other participants cannot remove someone else's entry, even when its id and content are visible. Unauthorized removal is `-32602` (`queued message not found: <id>`) with no side effects. Automatic/agent entries keep their existing mutation policy. Removal of a nonexistent id remains an idempotent success. See [Shared pending human queue](#shared-pending-human-queue) |
 | agent.getQueue | agentId (req), workspaceId? | { success, queue: QueuedMessage[] } — QueuedMessage = { id, content, queuedAt, position, turnId?, imageBlocks?, fileBlocks?, messageMetadata?, interruptPriority?, editing?, editingMessageId?, author? } (shape as `agent.queueMessage`, including attachment-reference-only `fileBlocks` and the multiplayer `author` projection, §5.48). **Shared queue:** every caller with access to the workspace receives the full queue, including other participants' messages and the owner's. `position` is the zero-based index in the full queue. `agent.diagnostics` queue entries and the `agent:queue:updated` / `agent:queue:processing` events use the same shared-read policy (§6.5). Reading an entry does not authorize editing, removal or immediate delivery; see [Shared pending human queue](#shared-pending-human-queue). Attribution still distinguishes a resolved principal, an unknown human and an automatic/agent entry; missing identity never grants authorship. [Imported unbound human queues](./workspace.md#human-authorship-in-workspace-transfers) retain their historical author, remain held against automatic delivery, and require affirmative current host-owner authorization for an explicit send. A parked dismissal notice (intentd#892, within v4.3) surfaces here with its `questions_dismissed` `messageMetadata` and `interruptPriority: true` at the queue head — promoted to position 0 ahead of even pre-existing interrupt-priority entries, unlike the normal interrupt insertion order; see `agent.dismissQuestions` |
@@ -981,9 +981,10 @@ editing holds or imported-human delivery holds. Absorbed submission IDs are kept
 with the surviving pending entry for retry deduplication: enqueueing the same
 stable ID again returns that entry without appending its content or attachments
 twice, including after queue rehydration. This is a pending-entry guarantee,
-not a global exactly-once delivery promise. `agent.queueMessage` has no
-client-supplied message ID, so repeating that RPC is a new submission; identical
-text alone is never a deduplication key. The JSON-RPC request `id` is only
+not a global exactly-once delivery promise. Without the prepared submission
+correlation capability below, `agent.queueMessage` has no client-supplied message
+ID, so repeating that RPC is a new submission; identical text alone is never a
+deduplication key. The JSON-RPC request `id` is only
 request/response correlation and does not provide this retry identity.
 
 **Shared reads and separate mutation authority.** All authorized workspace
@@ -1260,6 +1261,256 @@ front-of-queue with `interruptPriority: true`), and the turn-startup fallback (a
 landing while the target's turn is starting queues keep-alive instead of preempting —
 `agent.sendMessage` row above). The question hold that formerly parked automatic interrupts
 behind a pending Q&A was retired in v9.5 ("Pending questions" below).
+
+#### Submission correlation and optimistic display (prepared additive extension)
+
+**Support gate.** `client.hello.server.capabilities.submissionCorrelation: 1`
+advertises this complete contract, including every human send/queue ingress,
+mutation reply, resolved queue snapshot, processing snapshot and transcript
+persist/echo path described here (runtime and store-only paths alike). Enable
+queue optimism only for the exact integer `1`; absent, null, malformed, `true`
+and unknown future versions mean unsupported. Allocate the next public protocol
+minor against daemon main at implementation merge time; numeric protocol version
+alone never enables this feature. These docs do not claim a carrying release.
+No method/event names, queue scheduling rules or mutation permissions change.
+
+**Wire additions.** Optional fields preserve old payloads. Under the capability,
+new human submissions carry the correlation fields on all applicable surfaces;
+legacy rows lacking trustworthy data may omit them and must remain recognizable
+as uncorrelated. A partial implementation must not advertise the capability.
+
+| Surface | Additive field | Meaning |
+|---|---|---|
+| `agent.queueMessage` params | `messageId?: string` | Caller-generated, nonempty opaque submission ID, like `agent.sendMessage.messageId`; omission keeps server allocation. Invalid supplied values return `-32602` before mutation. |
+| `QueuedMessage` | `submissionIds?: string[]` | For an ordinary single-source row, the complete, nonempty set of nonempty opaque strings: its canonical ID and absorbed submission aliases, without duplicates. Omitted on a combined recovery row; use `recoverySources` below. Array order has no meaning. Reuse internal `submission_ids()` / `merged_submission_ids`; do not derive IDs from text or metadata. |
+| Combined recovery `QueuedMessage`, deduplicated `agent.sendMessage` result, persisted row `metadata`, and `agent:message.data` | `recoverySources?: RecoverySource[]` | Nonempty flat list of original sources, each retaining its own aliases, trusted author and lifecycle origin; mutually exclusive with top-level `submissionIds`. See normalization below. |
+| `QueuedMessage` in `agent.getQueue` and `agent:queue:updated.data.queue` | `mergeEligible?: boolean` | Daemon-computed eligibility for a future submission by this row's trusted author. At most one row is true in a coherent full snapshot; false is explicit, omission means unknown. |
+| `agent.sendMessage` success result | `submissionIds?: string[]` | Direct delivery: singleton submitted/server-allocated message ID. Ordinary queued fallback: complete surviving entry alias set, including the submitted ID, even when result `messageId` names an older survivor. A combined recovery acknowledgement uses `recoverySources` instead. Existing `queued`, `messageId`, `turnId` and result arms remain unchanged. |
+| Persisted human transcript row `metadata` | `submissionIds?: string[]` | Direct delivery: singleton ID. Ordinary queue delivery: complete consumed entry alias set, captured before removal; each batch row keeps its own set. Combined recovery uses `recoverySources` instead. Round-trips on `agent.getConversation`, `agent.getSession` and `chat.subscribe` reads. |
+| Human `agent:message.data` | `submissionIds?: string[]` | Same alias set as the persisted row, alongside existing `messageId`, `appMessageId?`, `queuedMessageId?`, `turnId?` and resolved author. |
+
+`QueuedMessage.submissionIds` applies uniformly to the existing `queuedMessage`
+mutation results (enqueue/edit), full queue reads/updates and every consumed row
+in `agent:queue:processing.data.queuedMessages`. No top-level processing alias
+union is introduced: a batch can have different authors. Processing snapshots
+carry `mergeEligible: false`; they are not live merge targets. Mutation replies
+may omit `mergeEligible` and keep the existing raw `author: null` projection;
+clients never replace a resolved author or a full snapshot's eligibility using
+these partial replies. Do not add arrival timestamps, a second alias registry,
+or a public submission-order counter. `userAppMessageId` / `appMessageId` retain
+their existing single-row behavior; the new alias set correlates *all* absorbed
+submissions and does not replace that compatibility field.
+
+**Trusted scope.** Generate a fresh high-entropy ID once per accepted local
+submission, before uploads, session preparation or RPC dispatch, and retain it
+across a direct-send-to-queue fallback. Two identical texts or attachment lists
+are separate submissions with different IDs. Match evidence within the same
+daemon authority, workspace, agent and authenticated principal; principal
+identity is the daemon-resolved `author.principalId`, never a display name,
+forge identity, `clientId`, metadata label or caller-supplied author. A reply can
+correlate its own request using that captured authenticated scope despite raw
+`author: null`; shared events/reads require a matching non-null trusted principal.
+Identity changes clear the old scope's optimistic projection.
+
+Caller-supplied `messageMetadata.submissionIds` and `messageMetadata.recoverySources`
+(also inside `mergedMessageMetadata`) cannot create correlation: strip both on
+human and automatic ingress and stamp only daemon-owned data on persistence.
+Top-level caller copies are never used as authority either. Automatic/agent input
+cannot acquire human correlation or merge authority by supplying these fields. Preserve unknown and
+imported historical humans as barriers with `mergeEligible: false`, never infer
+the current principal from null authorship. A supplied ID already owned by a
+*different* principal in the pending/draining alias registry returns `-32602`
+without appending, returning a deduplicated success, or changing that entry.
+Same-principal replay against a retained pending/draining alias returns the
+survivor without a second append or fresh human-arrival time. For a combined
+recovery row, check the matching source principal rather than the head author;
+the reply uses `recoverySources` instead of a flat `submissionIds` on any surface
+that returns this row or its correlation (including a deduplicated send result).
+This acknowledgement grants no right to mutate or send the combined entry.
+This scoped pending replay protection does not promise deduplication after delivery/removal.
+
+**Combined failure recovery.** Keep the existing ordinary failed-flush policy:
+one combined retry entry, with the head entry's execution/mutation authority,
+combined prompt, attachments and original turn identity. Do not split execution
+or grant another source's author edit/remove/send rights. The new correlation
+field is presentation evidence only, not an ACL or a replacement for the entry's
+existing metadata/origin. Context-size and partial-persist failures retain their
+existing individual-entry restoration behavior.
+
+```typescript
+type RecoverySource = {
+  messageId: string;             // original source entry ID, not retry wrapper ID
+  submissionIds?: string[];      // complete aliases; absent for unknown legacy data
+  author: MessageAuthor | null;  // existing trusted author projection for THIS source
+  origin: "user" | "automatic"; // stored MessageOrigin / user_origin, not a metadata label
+};
+```
+
+Build `recoverySources` from the consumed `flushed_entries` before discarding
+individual entries. An ordinary source contributes its canonical ID, complete
+aliases, trusted author snapshot and stored lifecycle origin. `author: null`
+means genuine nonhuman input; unknown/imported humans keep the existing author
+object with null principal, never the retry head's principal. Authorship and
+origin are independent: a trusted human-authored wake can have
+`origin: "automatic"`. The origin values mirror existing `MessageOrigin::User/Automatic`
+and do not change wake/archive or access rules. Source author projections retain
+their captured principal/snapshot even in raw mutation replies whose outer
+`author` is null. Imported provenance follows the existing unbound historical
+human rules for each source, never importing a foreign principal as current.
+
+Normalize in source delivery order. If an entry already has `recoverySources`,
+flatten those original leaves instead of wrapping them or adding the retry
+entry ID as a new submission. Preserve distinct leaves even for the same author.
+Repeated occurrences of the same original `messageId`, trusted principal/unknown
+human identity and origin coalesce at their first position with the union of
+known aliases; duplicates never grow on each failure. If any occurrence has an
+unknown alias set, the result stays uncorrelated (omit its `submissionIds`). Never
+combine different principals/origins, restamp sources to the head, or recover
+identity from text. The aliases are those captured by the source, not the new
+retry entry's ID. No nested recovery list, source content copy or per-attempt
+wrapper history is retained. If legacy data cannot establish provenance, retain
+an uncorrelated legacy source rather than claiming complete matching.
+
+Persist the normalized leaves with the retry's existing durable queue payload;
+thread them through turn options, restart, redrive, subsequent batching, failure
+and processing snapshots. Internal requeue copies these captured leaves; it does
+not reconstruct them from caller metadata. Repeated ordinary failure may allocate a new retry
+entry ID but preserves the same leaves. A successful redrive of an already
+persisted entry creates no duplicate transcript row. If existing recovery policy
+requires a new transcript row (for example a context-size recovery marker), stamp
+its `metadata.recoverySources` and echo `data.recoverySources`, omitting inherited
+head `submissionIds`. All ordinary queue/read/reply/processing projections of the
+combined entry expose that same normalized field and omit top-level
+`submissionIds`; never flatten A/B/automatic aliases under A's author. Original
+per-source transcript rows and aliases remain unchanged. This retention is tied
+to owning queue/transcript rows, not a separate global ledger. Match a human
+pending submission against a recovery leaf only via that leaf's non-null trusted
+`author.principalId` and the surrounding daemon/workspace/agent scope. Recovery
+metadata is never client-authored and never changes queue permissions.
+
+**Merge eligibility.** Full `agent.getQueue` / `agent:queue:updated` snapshots
+include draining overlays first, then live entries, as today. Deduplicate an
+overlay already represented by a restored/coalesced live row using the existing
+canonical/absorbed-ID or turn-ID rule; the live row wins. Compute the snapshot and
+flags under the same draining-then-live queue synchronization used for selection.
+Every overlay row has `mergeEligible: false`, even when its provisional flag has
+settled but its guard has not yet been dropped. Select candidates ONLY from LIVE
+human entries by internal `submission_order`, skipping genuine nonhuman entries,
+not humans carrying custom/system-looking metadata. Only that live human can be
+true: it must have a trusted current principal, not be imported/unbound, and not
+already be persisted to the transcript. A later provisional human in the draining
+registry blocks it; a settled draining row does not. Combined persisted retries
+are not merge targets. Unknown/incomplete legacy ordering is conservative: mark
+false until eligibility is established. This reuses `can_merge_pending()` and
+the existing provisional-barrier rule. An editing hold alone does **not** prevent
+append; existing draft/prefix/suffix protection still applies.
+
+Recompute flags after enqueue/append, pop, restore/coalesce, edit and removal,
+including when a provisional barrier settles without changing visible text.
+A renderer may provisionally append only to a true row whose resolved principal
+matches its submitting principal, using the existing two-newline separator and
+ordered attachment concatenation. Keep every pending contribution separately;
+never mutate confirmed content to achieve the visual merge. A newer foreign
+human may split that projection on confirmation. Queue position, original
+`queuedAt`, alias-array order and text equality are never arrival evidence.
+A flag predicts eligibility at its snapshot instant; it reserves no queue slot.
+
+**Evidence and races.** A submission has one provisional location across chat
+and queue. Initial intent is not the final destination. Apply correlated queue
+acceptance and removal of the conversation placeholder together; rebuild the
+queue from confirmed entries plus still-unconfirmed contributions. The following
+precedence is per submission, not a global ordering of unrelated turns:
+
+| Evidence order | Required display result |
+|---|---|
+| Queue event containing alias, then enqueue/send reply | One canonical queue contribution; reply acknowledges but does not append again or overwrite a newer snapshot. |
+| Reply, then queue event containing alias | Replace provisional content with the canonical aggregate; never duplicate its absorbed contributions. |
+| Conversation placeholder, then `queued: true` or matching queue event | Move the same submission to queue, honoring the confirmed survivor and author; later evidence can split a provisional same-author merge. |
+| Processing snapshot, then late enqueue reply | Retain the consumed snapshot/aliases; do not recreate an ordinary queued entry from that reply. Processing is an attempt, not proof of transcript persistence or provider success. |
+| Persisted transcript echo/read, then late enqueue reply or known-stale read | Keep history; suppress duplicate optimistic content and stale mutation seeds. Do not delete confirmed queue entries just because their aliases occur in history. |
+| Processing, failed persistence, authoritative restoration | Restore the actual queued entry and its aliases; processing alone must not suppress that recovery. |
+| Persisted transcript row, then a current full queue containing that source | Preserve BOTH history and confirmed queue/retry state, even for the same entry ID with no `requeuedAfterFailure` marker. Remove only the duplicate optimistic contribution. |
+| Mixed-author batch persisted, then ordinary failure | Retain every original history row plus ONE combined retry entry with per-source `recoverySources`; a late original ACK cannot replace that entry. |
+| Transport timeout/disconnect, then matching queue or transcript evidence | Mark delivery uncertain until evidence arrives; reconcile by scoped aliases without resending. |
+
+**Observable recovery and freshness.** Keep confirmed transcript rows, confirmed
+queue entries/controls and local optimistic contributions as separate state.
+Correlation removes only the last of these; it does not prove that confirmed
+queue work is obsolete. A `requeuedAfterFailure: true` row positively describes a
+retry, but absence is not proof against restoration: partial flush persistence
+can restore an already-persisted head under its original ID, with no retry flag,
+while a tail remains unpersisted. Both rows must remain queued. A full queue can
+also contain an overlay whose history row just persisted; the existing later
+queue shrink retires that overlay, not alias-based deletion by the renderer.
+
+There is no new restoration event, queue revision or public live/overlay bit.
+Use actual `agent:queue:updated`, `agent:queue:processing`, `agent:message`, existing
+turn failure/end/status signals, and `agent.getQueue` / history reads. A lifecycle
+failure alone neither invents a retry row nor proves restoration complete. After
+processing/persistence, a queue update that might be an old overlay or a restored
+same-ID row triggers a fresh queue read; preserve the last confirmed queue while
+resolving that ambiguity and disable unsafe controls/speculative merges. Capture
+a local observation generation when issuing each read after the triggering event;
+if a relevant queue/processing/history/lifecycle event arrives while that read is
+outstanding, do not let its result replace newer observed state: repeat the read.
+A full read issued after those observations, with no intervening invalidation,
+establishes current queue membership at the read instant, including overlapping
+history and any remaining overlays. Keep every returned row. If an attempt is
+still active or live-versus-overlay remains unknown, retain its processing/checking
+presentation and gate unsafe controls until lifecycle settlement/current refresh;
+`mergeEligible: false` does not itself distinguish an overlay from live retry work.
+This is local request fencing, not a claim of global snapshot/event ordering.
+
+Delayed mutation replies only acknowledge their original submissions once queue,
+processing or history evidence has been seen; they cannot seed or replace the
+confirmed queue. Old read responses whose requests preceded these observations
+are similarly fenced. Event timestamps/IDs are not revisions. Ambiguous event
+arrival order requires refresh, not erasing a row with known history. Queue
+absence alone is not delivery proof: removal, pop and failed persistence also
+cause absence. Never use an empty snapshot to declare an uncertain send rejected.
+After reconnect, get current queue AND history before speculative merging; those
+reads may legitimately contain the same source IDs. Persist-before-queue-shrink
+ordering remains unchanged; processing precedes persistence on ordinary drain
+and follows it on send-now. No globally exactly-once delivery guarantee is added.
+
+**Failure and retention.** A proven pre-acceptance rejection or local preparation
+failure affects only its pending submission and preserves earlier confirmed
+content and newer drafts. A timeout, lost acknowledgement, disconnect or
+unclassified server error is uncertain delivery, not success or proven rejection.
+Keep its recoverable content visible; do not automatically resend, even with the
+same ID. Explicit retry after proven rejection starts a fresh submission ID.
+For uncertain delivery, first reconcile; if the user explicitly chooses to resend
+without confirmation, warn of possible duplicate delivery and use a fresh ID.
+Queue edit/remove/send-now controls must wait or operate on a confirmed snapshot
+that includes every affected contribution; they must not discard unconfirmed text.
+
+Pending daemon alias sets live only with their owning queued/draining entries
+and their existing durable queue payloads. Preserve the complete set through
+append, handback/coalescing, persistence, restart and failure requeue (using
+per-source recovery leaves for combined retries); never trim live aliases and
+then advertise complete correlation. Delivered sets live on ordinary transcript rows under existing transcript retention, not in a new
+permanent deduplication ledger. Older delivered/requeued rows may remain
+uncorrelated; do not fabricate historical aliases. The renderer keeps terminal
+correlation tombstones for at most 10 minutes and at most 1024 submissions per
+agent/scope, evicting oldest first; protect unresolved RPC callbacks separately
+with their original operation identity so eviction cannot let an old reply
+create a new optimistic entry. Bound unsettled local submissions with admission
+backpressure (preserve the unsent draft when full), never silent eviction or
+automatic retry. No durable frontend outbox or global exactly-once guarantee is
+introduced. On retention loss/reload, refresh authoritative data and leave
+unproven delivery uncertain rather than claiming successful deduplication.
+
+**Legacy fallback and verification.** On unsupported daemons retain confirmed
+queue rendering and existing direct-send optimism; never infer this contract
+from an ignored request field, an isolated alias array or a numeric version.
+On a supporting daemon, an uncorrelated legacy row renders normally but cannot
+absorb an optimistic contribution. Synthetic examples and invariant checks live
+in `docs/protocol/fixtures/submission-correlation/` and run in `make consumer-checks`.
+They specify wire/display expectations, not runtime acceptance: component tests
+must exercise actual locking, trusted identity, persistence, restart, batches,
+send-now/store-only paths and delayed response/event permutations before the
+capability is advertised. Docs land first, then daemon, then dependent frontend,
+with separate human authorization for each merge.
 
 #### Per-turn agent state snapshot *(new in intentd, [intentd#971](https://github.com/intent-hq/intentd/pull/971))*
 

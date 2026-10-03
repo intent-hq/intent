@@ -11,6 +11,16 @@ capability; documentation alone does not identify a carrying desktop release.
 **Documented version:** `13.3` — prepared GitLab repository additions; not a shipped-version claim.
 Prepared extensions below remain independently capability-gated.
 
+**Prepared submission correlation — additive, independently gated.**
+[Submission correlation and optimistic display](./methods/agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension)
+adds optional queue `messageId`, public `submissionIds` on queue/reply/delivery
+surfaces, per-source `recoverySources` for combined retries and daemon-computed
+`mergeEligible` on full queue snapshots (false on draining overlays). Advertise
+`submissionCorrelation: 1` only for complete trusted, persisted end-to-end support;
+clients accept exactly integer `1`, independently of protocol version. Allocate
+the next minor against daemon main at implementation merge time. No method/event
+names or catalog counts change; these prepared docs make no shipping claim.
+
 **Invitation account search (additive, prepared).** `host.invite.searchAccounts`
 (§5.49) adds bounded public suggestions for GitHub and the selected GitLab host.
 `client.hello.server.capabilities.invitationAccountSearch: 1` advertises support;

@@ -11,6 +11,15 @@ contract, not caller authority. The legacy examples below remain valid for older
 daemons. On each connection, read `principal.me` before activating member controls;
 never infer the role from this client's capabilities or its saved registry category.
 
+**Submission correlation (prepared).**
+`server.capabilities.submissionCorrelation: 1` gates the complete
+[optimistic submission contract](./agents.md#submission-correlation-and-optimistic-display-prepared-additive-extension):
+optional queue `messageId`, full submission alias sets across replies/queue/delivery,
+per-source `recoverySources` for combined retries, and trustworthy live-row merge
+eligibility with false flags on draining overlays. Enable queue optimism only for exact integer
+`1`; missing, malformed and unknown versions use confirmed queue display.
+The numeric protocol version and a partially present field are not support tests.
+
 **Direct agent retirement (10.10).** `server.capabilities.agentRetire: 1` advertises
 support for [§5.5 `agent.retire`](./agents.md#direct-user-retirement), including stopping
 a running target and cancelling its wake sources. Clients enable the retirement action
